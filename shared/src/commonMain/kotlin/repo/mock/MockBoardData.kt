@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.model.ThreadPage
  *
  * - Catalog entries mirror `example/catalog.txt` (Shift_JIS catalog dump)
  * - Thread content mirrors `example/thread.txt`
+ * - ローカル画像は `app-android/src/main/assets/fixtures/` 配下を `file:///android_asset/fixtures/...` で参照
  *
  * Keeping these values in sync with the captured sources allows Compose previews, tests, and Hilt
  * fakes to reflect the markup documented in codex.md without hitting the real network.
@@ -18,54 +19,63 @@ internal object MockBoardData {
     private const val BOARD_PATH = "/t"
     private const val BOARD_BASE_URL = "$HOST$BOARD_PATH"
     private const val THREAD_BASE_URL = "$BOARD_BASE_URL/res"
+    private const val ASSET_BASE_URL = "file:///android_asset/fixtures"
 
     val catalogItems: List<CatalogItem> = listOf(
         CatalogItem(
             id = "354621",
             threadUrl = "$THREAD_BASE_URL/354621.htm",
-            thumbnailUrl = "$HOST/t/cat/1762145224666s.jpg",
+            title = "モックカタログ-Compose",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_1.png",
             replyCount = 17
         ),
         CatalogItem(
             id = "354711",
             threadUrl = "$THREAD_BASE_URL/354711.htm",
-            thumbnailUrl = "$HOST/t/cat/1762436883775s.jpg",
+            title = "Mock Thread #1",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
             replyCount = 1
         ),
         CatalogItem(
             id = "354693",
             threadUrl = "$THREAD_BASE_URL/354693.htm",
-            thumbnailUrl = "$HOST/t/cat/1762427960314s.jpg",
+            title = "Preview Sandbox",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
             replyCount = 2
         ),
         CatalogItem(
             id = "353918",
             threadUrl = "$THREAD_BASE_URL/353918.htm",
-            thumbnailUrl = "$HOST/t/cat/1760015031365s.jpg",
+            title = "Shift_JIS Mock",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
             replyCount = 2
         ),
         CatalogItem(
             id = "353821",
             threadUrl = "$THREAD_BASE_URL/353821.htm",
-            thumbnailUrl = "$HOST/t/cat/1759745960206s.jpg",
+            title = "Assets Preview",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
             replyCount = 8
         ),
         CatalogItem(
             id = "352870",
             threadUrl = "$THREAD_BASE_URL/352870.htm",
-            thumbnailUrl = "$HOST/t/cat/1756861565648s.jpg",
+            title = "Thread UX Test",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
             replyCount = 2
         ),
         CatalogItem(
             id = "353755",
             threadUrl = "$THREAD_BASE_URL/353755.htm",
-            thumbnailUrl = "$HOST/t/cat/1759629852875s.jpg",
+            title = "Image Slot Sample",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
             replyCount = 27
         ),
         CatalogItem(
             id = "354446",
             threadUrl = "$THREAD_BASE_URL/354446.htm",
-            thumbnailUrl = "$HOST/t/cat/1761686613651s.jpg",
+            title = "レス番号テスト",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_1.png",
             replyCount = 1
         )
     )
@@ -80,8 +90,8 @@ internal object MockBoardData {
                     subject = "Compose試作メモ",
                     timestamp = "24/11/03(日)13:47:04 IP:10.0.*.*",
                     messageHtml = "Compose 版クライアントの要件まとめ。<br>1) カタログの #cattable td をすべて拾う<br>2) 画像リンクは <code>/t/src/</code> と <code>/t/thumb/</code> を紐付ける<br>3) Shift_JIS を KMP 側で UTF-8 に揃える",
-                    imageUrl = "$BOARD_BASE_URL/src/mock_catalog_header.png",
-                    thumbnailUrl = "$BOARD_BASE_URL/thumb/mock_catalog_header.png"
+                    imageUrl = "$ASSET_BASE_URL/mock_catalog_header.png",
+                    thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_header.png"
                 ),
                 Post(
                     id = "354622",
@@ -125,8 +135,8 @@ internal object MockBoardData {
                     subject = "画像レス",
                     timestamp = "24/11/03(日)14:53:15 IP:10.0.*.*",
                     messageHtml = "画像プレビュー用サンプル。",
-                    imageUrl = "$BOARD_BASE_URL/src/mock_preview_image.jpg",
-                    thumbnailUrl = "$BOARD_BASE_URL/thumb/mock_preview_image.jpg"
+                    imageUrl = "$ASSET_BASE_URL/mock_preview_image.jpg",
+                    thumbnailUrl = "$ASSET_BASE_URL/mock_preview_image.jpg"
                 ),
                 Post(
                     id = "354627",
@@ -206,8 +216,8 @@ internal object MockBoardData {
                     subject = null,
                     timestamp = "24/11/04(月)17:53:15 IP:10.0.*.*",
                     messageHtml = "画像その2。実データに倣い PNG を指定。",
-                    imageUrl = "$BOARD_BASE_URL/src/mock_catalog_badge.png",
-                    thumbnailUrl = "$BOARD_BASE_URL/thumb/mock_catalog_badge.png"
+                    imageUrl = "$ASSET_BASE_URL/mock_catalog_badge.png",
+                    thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_badge.png"
                 ),
                 Post(
                     id = "354655",
@@ -233,8 +243,8 @@ internal object MockBoardData {
                     subject = "まとめ",
                     timestamp = "24/11/07(木)08:22:30 IP:10.0.*.*",
                     messageHtml = "レス終端。ここでは thumbnail + image を再度セットし、一覧側での差分を確認する。",
-                    imageUrl = "$BOARD_BASE_URL/src/mock_summary.png",
-                    thumbnailUrl = "$BOARD_BASE_URL/thumb/mock_summary.png"
+                    imageUrl = "$ASSET_BASE_URL/mock_summary.png",
+                    thumbnailUrl = "$ASSET_BASE_URL/mock_summary.png"
                 )
             )
         )
