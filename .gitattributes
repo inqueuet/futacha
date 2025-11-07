@@ -1,1 +1,19 @@
 * text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.webm binary
+*.ttf binary
+*.otf binary
+*.jar binary
+
+# Keep Shift_JIS fixture dumps untouched
+example/*.txt binary
+
+# Gradle wrapper should keep original line endings
+gradlew text eol=lf
+gradlew.bat text eol=crlf
