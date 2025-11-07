@@ -8,6 +8,7 @@
 .kotlin/
 **/.gradle/
 **/.kotlin/
+.gradle-local/
 
 ### Build outputs ###
 build/
