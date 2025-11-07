@@ -23,60 +23,116 @@ internal object MockBoardData {
 
     val catalogItems: List<CatalogItem> = listOf(
         CatalogItem(
-            id = "354621",
-            threadUrl = "$THREAD_BASE_URL/354621.htm",
-            title = "モックカタログ-Compose",
+            id = "1762447153292",
+            threadUrl = "$THREAD_BASE_URL/1762447153292.htm",
+            title = "テスト1",
             thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_1.png",
-            replyCount = 17
+            replyCount = 1000
         ),
         CatalogItem(
-            id = "354711",
-            threadUrl = "$THREAD_BASE_URL/354711.htm",
-            title = "Mock Thread #1",
+            id = "1762447191833",
+            threadUrl = "$THREAD_BASE_URL/1762447191833.htm",
+            title = "テスト2",
             thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
-            replyCount = 1
+            replyCount = 980
         ),
         CatalogItem(
-            id = "354693",
-            threadUrl = "$THREAD_BASE_URL/354693.htm",
-            title = "Preview Sandbox",
+            id = "1762447227319",
+            threadUrl = "$THREAD_BASE_URL/1762447227319.htm",
+            title = "テスト3",
             thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
-            replyCount = 2
+            replyCount = 764
         ),
         CatalogItem(
-            id = "353918",
-            threadUrl = "$THREAD_BASE_URL/353918.htm",
-            title = "Shift_JIS Mock",
+            id = "1762447385737",
+            threadUrl = "$THREAD_BASE_URL/1762447385737.htm",
+            title = "テスト4",
             thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
-            replyCount = 2
+            replyCount = 632
         ),
         CatalogItem(
-            id = "353821",
-            threadUrl = "$THREAD_BASE_URL/353821.htm",
-            title = "Assets Preview",
-            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
-            replyCount = 8
-        ),
-        CatalogItem(
-            id = "352870",
-            threadUrl = "$THREAD_BASE_URL/352870.htm",
-            title = "Thread UX Test",
-            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
-            replyCount = 2
-        ),
-        CatalogItem(
-            id = "353755",
-            threadUrl = "$THREAD_BASE_URL/353755.htm",
-            title = "Image Slot Sample",
-            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
-            replyCount = 27
-        ),
-        CatalogItem(
-            id = "354446",
-            threadUrl = "$THREAD_BASE_URL/354446.htm",
-            title = "レス番号テスト",
+            id = "1762447404525",
+            threadUrl = "$THREAD_BASE_URL/1762447404525.htm",
+            title = "テスト5",
             thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_1.png",
-            replyCount = 1
+            replyCount = 620
+        ),
+        CatalogItem(
+            id = "1762447579073",
+            threadUrl = "$THREAD_BASE_URL/1762447579073.htm",
+            title = "テスト6",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
+            replyCount = 578
+        ),
+        CatalogItem(
+            id = "1762447742611",
+            threadUrl = "$THREAD_BASE_URL/1762447742611.htm",
+            title = "テスト7",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
+            replyCount = 544
+        ),
+        CatalogItem(
+            id = "1762447945405",
+            threadUrl = "$THREAD_BASE_URL/1762447945405.htm",
+            title = "テスト8",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
+            replyCount = 512
+        ),
+        CatalogItem(
+            id = "1762447961108",
+            threadUrl = "$THREAD_BASE_URL/1762447961108.htm",
+            title = "テスト9",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_1.png",
+            replyCount = 447
+        ),
+        CatalogItem(
+            id = "1762448115097",
+            threadUrl = "$THREAD_BASE_URL/1762448115097.htm",
+            title = "テスト10",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
+            replyCount = 398
+        ),
+        CatalogItem(
+            id = "1762448337733",
+            threadUrl = "$THREAD_BASE_URL/1762448337733.htm",
+            title = "テスト11",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
+            replyCount = 355
+        ),
+        CatalogItem(
+            id = "1762448450095",
+            threadUrl = "$THREAD_BASE_URL/1762448450095.htm",
+            title = "テスト12",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
+            replyCount = 334
+        ),
+        CatalogItem(
+            id = "1762448577081",
+            threadUrl = "$THREAD_BASE_URL/1762448577081.htm",
+            title = "テスト13",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_1.png",
+            replyCount = 289
+        ),
+        CatalogItem(
+            id = "1762448688021",
+            threadUrl = "$THREAD_BASE_URL/1762448688021.htm",
+            title = "テスト14",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_2.png",
+            replyCount = 182
+        ),
+        CatalogItem(
+            id = "1762448891200",
+            threadUrl = "$THREAD_BASE_URL/1762448891200.htm",
+            title = "テスト15",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_3.png",
+            replyCount = 128
+        ),
+        CatalogItem(
+            id = "1762449120001",
+            threadUrl = "$THREAD_BASE_URL/1762449120001.htm",
+            title = "テスト16",
+            thumbnailUrl = "$ASSET_BASE_URL/mock_catalog_thumb_4.png",
+            replyCount = 64
         )
     )
 

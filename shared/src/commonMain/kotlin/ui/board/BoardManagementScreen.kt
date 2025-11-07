@@ -1,13 +1,16 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,50 +18,65 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Reply
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -67,23 +85,33 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.hostLabel
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
@@ -201,8 +229,7 @@ private fun HistoryDrawerContent(
     history: List<ThreadHistoryEntry>,
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit
 ) {
-    val configuration = LocalConfiguration.current
-    val drawerWidth = configuration.screenWidthDp.dp * 0.8f
+    val drawerWidth = 320.dp
     ModalDrawerSheet(
         modifier = Modifier
             .width(drawerWidth)
@@ -494,54 +521,105 @@ sealed interface CatalogUiState {
 @Composable
 fun CatalogScreen(
     board: BoardSummary?,
+    history: List<ThreadHistoryEntry>,
     onBack: () -> Unit,
-    repository: BoardRepository = remember { FakeBoardRepository() }
+    onThreadSelected: (CatalogItem) -> Unit,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    repository: BoardRepository? = null,
+    modifier: Modifier = Modifier
 ) {
-    val uiState: MutableState<CatalogUiState> = remember { mutableStateOf(CatalogUiState.Loading) }
+    val activeRepository = remember(repository) {
+        repository ?: FakeBoardRepository()
+    }
+    val uiState: MutableState<CatalogUiState> =
+        remember { mutableStateOf(CatalogUiState.Loading) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val isDrawerOpen by remember {
+        derivedStateOf {
+            drawerState.currentValue == DrawerValue.Open ||
+                drawerState.targetValue == DrawerValue.Open
+        }
+    }
+    var catalogMode by rememberSaveable { mutableStateOf(CatalogMode.default) }
 
-    LaunchedEffect(board?.id) {
+    LaunchedEffect(board?.id, catalogMode) {
         if (board == null) {
             uiState.value = CatalogUiState.Error
             return@LaunchedEffect
         }
-        runCatching { repository.getCatalog(board.id) }
+        uiState.value = CatalogUiState.Loading
+        runCatching { activeRepository.getCatalog(board.id, catalogMode) }
             .onSuccess { catalog -> uiState.value = CatalogUiState.Success(catalog) }
             .onFailure { uiState.value = CatalogUiState.Error }
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.Rounded.ArrowBack,
-                            contentDescription = "戻る"
-                        )
-                    }
-                },
-                title = {
-                    Text(text = board?.name ?: "カタログ")
-                }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = isDrawerOpen,
+        drawerContent = {
+            HistoryDrawerContent(
+                history = history,
+                onHistoryEntryDismissed = onHistoryEntryDismissed
             )
         }
-    ) { innerPadding ->
-        when (val state = uiState.value) {
-            CatalogUiState.Loading -> LoadingCatalog(modifier = Modifier
+    ) {
+        Scaffold(
+            modifier = modifier,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                CatalogTopBar(
+                    board = board,
+                    mode = catalogMode,
+                    onNavigationClick = { coroutineScope.launch { drawerState.open() } },
+                    onModeSelected = { catalogMode = it },
+                    onSearchClick = {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("検索はモック動作です")
+                        }
+                    },
+                    onMenuAction = { action ->
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                        }
+                    }
+                )
+            },
+            bottomBar = {
+                CatalogNavigationBar(
+                    current = CatalogNavDestination.Catalog,
+                    onNavigate = { destination ->
+                        when (destination) {
+                            CatalogNavDestination.Boards -> onBack()
+                            CatalogNavDestination.Catalog -> Unit
+                            else -> coroutineScope.launch {
+                                snackbarHostState.showSnackbar("${destination.label} は未実装です")
+                            }
+                        }
+                    }
+                )
+            }
+        ) { innerPadding ->
+            val contentModifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding))
-            CatalogUiState.Error -> CatalogError(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
-            is CatalogUiState.Success -> CatalogSuccessContent(
-                board = board,
-                items = state.items,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
+                .padding(innerPadding)
+                .pointerInput(isDrawerOpen) {
+                    if (!isDrawerOpen) return@pointerInput
+                    awaitPointerEventScope {
+                        awaitFirstDown()
+                        coroutineScope.launch { drawerState.close() }
+                    }
+                }
+            when (val state = uiState.value) {
+                CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
+                CatalogUiState.Error -> CatalogError(modifier = contentModifier)
+                is CatalogUiState.Success -> CatalogSuccessContent(
+                    items = catalogMode.applyLocalSort(state.items),
+                    onThreadSelected = onThreadSelected,
+                    modifier = contentModifier
+                )
+            }
         }
     }
 }
@@ -576,91 +654,892 @@ private fun CatalogError(modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CatalogSuccessContent(
-    board: BoardSummary?,
     items: List<CatalogItem>,
+    onThreadSelected: (CatalogItem) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    CatalogGrid(
+        items = items,
+        onThreadSelected = onThreadSelected,
+        modifier = modifier
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CatalogGrid(
+    items: List<CatalogItem>,
+    onThreadSelected: (CatalogItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
-        modifier = modifier.padding(horizontal = 16.dp),
-        columns = GridCells.Adaptive(minSize = 160.dp),
+        modifier = modifier.padding(horizontal = 8.dp),
+        columns = GridCells.Adaptive(120.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(vertical = 16.dp)
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
     ) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.medium
-                    )
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = board?.name ?: "カタログ",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = board?.url.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                AssistChip(
-                    onClick = {},
-                    enabled = false,
-                    label = { Text("Mock Catalog") }
-                )
-            }
-        }
-        items(items) { catalogItem ->
-            CatalogCard(item = catalogItem)
+        items(
+            items = items,
+            key = { it.id }
+        ) { catalogItem ->
+            CatalogCard(
+                item = catalogItem,
+                onClick = { onThreadSelected(catalogItem) }
+            )
         }
     }
 }
 
 @Composable
-private fun CatalogCard(item: CatalogItem) {
+private fun CatalogCard(
+    item: CatalogItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val platformContext = LocalPlatformContext.current
+    val status = CatalogTileStatus.fromReplies(item.replyCount)
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .border(
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                ),
+                shape = MaterialTheme.shapes.small
+            ),
+        onClick = onClick,
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(
-                text = item.title ?: "No Title",
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = item.threadUrl,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            BadgedBox(
-                badge = {
-                    Badge { Text(text = "${item.replyCount}") }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box {
+                if (item.thumbnailUrl.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Image,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    AsyncImage(
+                        model = ImageRequest.Builder(platformContext)
+                            .data(item.thumbnailUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = item.title ?: "サムネイル",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    )
                 }
+                CatalogTileCounters(
+                    status = status,
+                    replyCount = item.replyCount,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                )
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "レス数",
-                    style = MaterialTheme.typography.labelMedium
+                    text = item.title ?: "無題",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "No.${item.id}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = item.hostLabel(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogTileCounters(
+    status: CatalogTileStatus,
+    replyCount: Int,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            color = status.color.copy(alpha = 0.9f),
+            shape = MaterialTheme.shapes.extraSmall
+        ) {
+            Text(
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                text = status.label,
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            shape = MaterialTheme.shapes.extraSmall
+        ) {
+            Text(
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                text = replyCount.toString(),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Black
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CatalogTopBar(
+    board: BoardSummary?,
+    mode: CatalogMode,
+    onNavigationClick: () -> Unit,
+    onModeSelected: (CatalogMode) -> Unit,
+    onSearchClick: () -> Unit,
+    onMenuAction: (CatalogMenuAction) -> Unit
+) {
+    var isMenuExpanded by remember { mutableStateOf(false) }
+    var isSortExpanded by remember { mutableStateOf(false) }
+
+    TopAppBar(
+        navigationIcon = {
+            IconButton(onClick = onNavigationClick) {
+                Icon(
+                    imageVector = Icons.Outlined.Menu,
+                    contentDescription = "履歴を開く"
+                )
+            }
+        },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = board?.name ?: "カタログ",
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = mode.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    board?.category
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { category ->
+                            Text(
+                                text = category,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    Box {
+                        AssistChip(
+                            onClick = { isSortExpanded = true },
+                            label = { Text("モード") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Timeline,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.15f),
+                                labelColor = MaterialTheme.colorScheme.onPrimary,
+                                leadingIconContentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        )
+                        DropdownMenu(
+                            expanded = isSortExpanded,
+                            onDismissRequest = { isSortExpanded = false }
+                        ) {
+                            CatalogMode.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    onClick = {
+                                        isSortExpanded = false
+                                        onModeSelected(option)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        actions = {
+            IconButton(onClick = onSearchClick) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "検索"
+                )
+            }
+            Box {
+                IconButton(onClick = { isMenuExpanded = true }) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "メニュー"
+                    )
+                }
+                DropdownMenu(
+                    expanded = isMenuExpanded,
+                    onDismissRequest = { isMenuExpanded = false }
+                ) {
+                    CatalogMenuAction.entries.forEach { action ->
+                        DropdownMenuItem(
+                            text = { Text(action.label) },
+                            onClick = {
+                                isMenuExpanded = false
+                                onMenuAction(action)
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            titleContentColor = MaterialTheme.colorScheme.onPrimary,
+            navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+            actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+        )
+    )
+}
+
+@Composable
+private fun CatalogNavigationBar(
+    current: CatalogNavDestination,
+    onNavigate: (CatalogNavDestination) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    NavigationBar(modifier = modifier) {
+        CatalogNavDestination.entries.forEach { destination ->
+            NavigationBarItem(
+                selected = destination == current,
+                onClick = { onNavigate(destination) },
+                icon = {
+                    Icon(
+                        imageVector = destination.icon,
+                        contentDescription = destination.label
+                    )
+                },
+                label = { Text(destination.label) }
+            )
+        }
+    }
+}
+
+private enum class CatalogMenuAction(val label: String) {
+    Display("表示オプション"),
+    Toolbar("ツールバー編集"),
+    Settings("設定"),
+    Help("ヘルプ")
+}
+
+private enum class CatalogNavDestination(val label: String, val icon: ImageVector) {
+    Boards("板一覧", Icons.Outlined.Menu),
+    Catalog("ｶﾀﾛｸﾞ", Icons.Outlined.Image),
+    Trend("勢い", Icons.Rounded.Timeline),
+    Settings("設定", Icons.Rounded.Settings),
+    Favorites("お気に入り", Icons.Rounded.Favorite)
+}
+
+private enum class CatalogTileStatus(
+    val label: String,
+    val color: Color
+) {
+    Overflow("勢", Color(0xFFD84315)),
+    Hot("注", Color(0xFFFBC02D)),
+    Active("巡", Color(0xFF1E88E5)),
+    Calm("落", Color(0xFFD32F2F));
+
+    companion object {
+        fun fromReplies(replyCount: Int): CatalogTileStatus = when {
+            replyCount >= 900 -> Overflow
+            replyCount >= 500 -> Hot
+            replyCount >= 200 -> Active
+            else -> Calm
+        }
+    }
+}
+
+sealed interface ThreadUiState {
+    data object Loading : ThreadUiState
+    data object Error : ThreadUiState
+    data class Success(val page: ThreadPage) : ThreadUiState
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ThreadScreen(
+    board: BoardSummary,
+    history: List<ThreadHistoryEntry>,
+    threadId: String,
+    threadTitle: String?,
+    initialReplyCount: Int?,
+    onBack: () -> Unit,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    repository: BoardRepository? = null,
+    modifier: Modifier = Modifier
+) {
+    val activeRepository = remember(repository) {
+        repository ?: FakeBoardRepository()
+    }
+    val uiState = remember { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val isDrawerOpen by remember {
+        derivedStateOf {
+            drawerState.currentValue == DrawerValue.Open ||
+                drawerState.targetValue == DrawerValue.Open
+        }
+    }
+
+    val refreshThread: () -> Unit = remember(board.id, threadId, activeRepository) {
+        {
+            coroutineScope.launch {
+                uiState.value = ThreadUiState.Loading
+                runCatching { activeRepository.getThread(board.id, threadId) }
+                    .onSuccess { page -> uiState.value = ThreadUiState.Success(page) }
+                    .onFailure {
+                        uiState.value = ThreadUiState.Error
+                        snackbarHostState.showSnackbar("スレッドを読み込めませんでした")
+                    }
+            }
+            Unit
+        }
+    }
+
+    LaunchedEffect(board.id, threadId) {
+        refreshThread()
+    }
+
+    val resolvedReplyCount = when (val state = uiState.value) {
+        is ThreadUiState.Success -> state.page.posts.size
+        else -> initialReplyCount
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = isDrawerOpen,
+        drawerContent = {
+            HistoryDrawerContent(
+                history = history,
+                onHistoryEntryDismissed = onHistoryEntryDismissed
+            )
+        }
+    ) {
+        Scaffold(
+            modifier = modifier,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                ThreadTopBar(
+                    boardName = board.name,
+                    threadTitle = threadTitle ?: "スレッド",
+                    replyCount = resolvedReplyCount,
+                    onBack = onBack,
+                    onOpenHistory = { coroutineScope.launch { drawerState.open() } },
+                    onSearch = {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("検索はモック動作です")
+                        }
+                    },
+                    onRefresh = refreshThread
+                )
+            },
+            bottomBar = {
+                ThreadActionBar(
+                    onAction = { action ->
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                        }
+                    }
+                )
+            }
+        ) { innerPadding ->
+            val contentModifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .pointerInput(isDrawerOpen) {
+                    if (!isDrawerOpen) return@pointerInput
+                    awaitPointerEventScope {
+                        awaitFirstDown()
+                        coroutineScope.launch { drawerState.close() }
+                    }
+                }
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                .padding(horizontal = 8.dp)
+
+            when (val state = uiState.value) {
+                ThreadUiState.Loading -> ThreadLoading(modifier = contentModifier)
+                ThreadUiState.Error -> ThreadError(
+                    modifier = contentModifier,
+                    onRetry = refreshThread
+                )
+
+                is ThreadUiState.Success -> ThreadContent(
+                    page = state.page,
+                    board = board,
+                    threadTitle = threadTitle ?: "スレッド",
+                    replyCount = state.page.posts.size,
+                    modifier = contentModifier,
+                    onPostAction = { action, post ->
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("「${action.label}」はモック動作です (No.${post.id})")
+                        }
+                    }
                 )
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadTopBar(
+    boardName: String,
+    threadTitle: String,
+    replyCount: Int?,
+    onBack: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onSearch: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    TopAppBar(
+        navigationIcon = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.Rounded.ArrowBack,
+                        contentDescription = "カタログに戻る"
+                    )
+                }
+                IconButton(onClick = onOpenHistory) {
+                    Icon(
+                        imageVector = Icons.Outlined.Menu,
+                        contentDescription = "履歴を開く"
+                    )
+                }
+            }
+        },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = threadTitle,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = boardName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                    )
+                    replyCount?.let {
+                        Text(
+                            text = "  /  ${it}レス",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+        },
+        actions = {
+            IconButton(onClick = onSearch) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "スレ内検索"
+                )
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(
+                    imageVector = Icons.Rounded.Refresh,
+                    contentDescription = "更新"
+                )
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            titleContentColor = MaterialTheme.colorScheme.onPrimary,
+            navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+            actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+        )
+    )
+}
+
+@Composable
+private fun ThreadLoading(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.material3.CircularProgressIndicator()
+    }
+}
+
+@Composable
+private fun ThreadError(
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "スレッドを読み込めませんでした",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Button(onClick = onRetry) {
+                Text("再読み込み")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadContent(
+    page: ThreadPage,
+    board: BoardSummary,
+    threadTitle: String,
+    replyCount: Int,
+    modifier: Modifier = Modifier,
+    onPostAction: (ThreadPostAction, Post) -> Unit
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
+    ) {
+        item(key = "thread-header") {
+            ThreadHeader(
+                board = board,
+                title = threadTitle,
+                replyCount = replyCount
+            )
+        }
+        itemsIndexed(
+            items = page.posts,
+            key = { _, post -> post.id }
+        ) { index, post ->
+            ThreadPostCard(
+                index = index,
+                post = post,
+                isOp = index == 0,
+                onPostAction = onPostAction
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThreadHeader(
+    board: BoardSummary,
+    title: String,
+    replyCount: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = board.name,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "${replyCount}レス / ${board.description}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThreadPostCard(
+    index: Int,
+    post: Post,
+    isOp: Boolean,
+    onPostAction: (ThreadPostAction, Post) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val platformContext = LocalPlatformContext.current
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        shape = MaterialTheme.shapes.small,
+        tonalElevation = if (isOp) 4.dp else 1.dp,
+        shadowElevation = if (isOp) 2.dp else 0.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!post.subject.isNullOrBlank()) {
+                    Text(
+                        text = post.subject,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                ThreadPostMetadata(
+                    index = index,
+                    post = post
+                )
+            }
+            post.imageUrl?.let { imageUrl ->
+                AsyncImage(
+                    model = ImageRequest.Builder(platformContext)
+                        .data(imageUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "添付画像",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            ThreadMessageText(messageHtml = post.messageHtml)
+            ThreadPostActions(onAction = { action -> onPostAction(action, post) })
+        }
+    }
+}
+
+@Composable
+private fun ThreadPostMetadata(
+    index: Int,
+    post: Post
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = "${index} ${post.author.orEmpty().ifBlank { "名無しさん" }}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = post.timestamp,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = "No.${post.id}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun ThreadMessageText(
+    messageHtml: String,
+    modifier: Modifier = Modifier
+) {
+    val annotated: AnnotatedString = remember(messageHtml) {
+        parseHtmlToAnnotatedString(messageHtml)
+    }
+    Text(
+        modifier = modifier,
+        text = annotated,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurface
+    )
+}
+
+private fun parseHtmlToAnnotatedString(html: String): AnnotatedString {
+    val normalized = html
+        .replace(Regex("(?i)<br\\s*/?>"), "\n")
+        .replace(Regex("(?i)</p>"), "\n\n")
+    val withoutTags = normalized.replace(Regex("<[^>]+>"), "")
+    val decoded = withoutTags
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+    val lines = decoded.lines()
+    return buildAnnotatedString {
+        lines.forEachIndexed { index, line ->
+            val content = line.trimEnd()
+            if (content.startsWith(">")) {
+                withStyle(
+                    style = SpanStyle(color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
+                ) {
+                    append(content)
+                }
+            } else {
+                append(content)
+            }
+            if (index != lines.lastIndex) {
+                append("\n")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadPostActions(
+    onAction: (ThreadPostAction) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        threadPostActions.forEach { action ->
+            AssistChip(
+                onClick = { onAction(action) },
+                label = { Text(action.label) },
+                leadingIcon = {
+                    Icon(imageVector = action.icon, contentDescription = action.label)
+                }
+            )
+        }
+    }
+}
+
+private data class ThreadPostAction(
+    val label: String,
+    val icon: ImageVector
+)
+
+private val threadPostActions = listOf(
+    ThreadPostAction("レス", Icons.Rounded.Reply),
+    ThreadPostAction("そうだね", Icons.Rounded.ThumbUp),
+    ThreadPostAction("削除", Icons.Rounded.Delete)
+)
+
+@Composable
+private fun ThreadActionBar(
+    onAction: (ThreadActionBarItem) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        tonalElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ThreadActionBarItem.entries.forEach { action ->
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    IconButton(onClick = { onAction(action) }) {
+                        Icon(
+                            imageVector = action.icon,
+                            contentDescription = action.label,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(
+                        text = action.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+private enum class ThreadActionBarItem(
+    val label: String,
+    val icon: ImageVector
+) {
+    Reply("返信", Icons.Rounded.Edit),
+    Refresh("更新", Icons.Rounded.Refresh),
+    Gallery("画像", Icons.Outlined.Image),
+    Share("共有", Icons.Rounded.Share),
+    Favorite("お気に入り", Icons.Rounded.BookmarkAdd),
+    Settings("設定", Icons.Rounded.Settings)
 }

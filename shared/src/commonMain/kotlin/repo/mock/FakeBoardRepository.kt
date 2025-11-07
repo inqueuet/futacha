@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.repo.mock
 
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.numericId
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
 
@@ -12,9 +14,22 @@ import com.valoser.futacha.shared.repo.BoardRepository
 class FakeBoardRepository(
     private val onAccess: suspend () -> Unit = {}
 ) : BoardRepository {
-    override suspend fun getCatalog(board: String): List<CatalogItem> {
+    override suspend fun getCatalog(
+        board: String,
+        mode: CatalogMode
+    ): List<CatalogItem> {
         onAccess()
-        return MockBoardData.catalogItems
+        val base = MockBoardData.catalogItems
+        return when (mode) {
+            CatalogMode.New -> base.sortedByDescending { it.numericId() }
+            CatalogMode.Old -> base.sortedBy { it.numericId() }
+            CatalogMode.Few -> base.sortedBy { it.replyCount }
+            CatalogMode.Momentum -> base.sortedByDescending { it.replyCount / (it.numericId() % 10 + 1) }
+            CatalogMode.So -> base.filterIndexed { index, _ -> index % 2 == 0 }
+            CatalogMode.Seen -> base.take(4)
+            CatalogMode.History -> base.takeLast(4)
+            CatalogMode.Catalog, CatalogMode.Many -> base.sortedByDescending { it.replyCount }
+        }
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
