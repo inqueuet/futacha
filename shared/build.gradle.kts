@@ -1,11 +1,9 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
 plugins {
-    kotlin("multiplatform")
+    id("org.jetbrains.kotlin.multiplatform")
     id("com.android.library")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("org.jetbrains.compose")
 }
 
 kotlin {
@@ -22,12 +20,12 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                implementation(compose.runtime)
-                implementation(compose.foundation)
-                implementation(compose.material3)
-                implementation(compose.materialIconsExtended)
-                implementation(compose.components.resources)
-                implementation(compose.components.uiToolingPreview)
+                implementation(libs.jetbrains.compose.runtime)
+                implementation(libs.jetbrains.compose.foundation)
+                implementation(libs.jetbrains.compose.material3)
+                implementation(libs.jetbrains.compose.material.icons)
+                implementation(libs.jetbrains.compose.components.resources)
+                implementation(libs.jetbrains.compose.components.ui.tooling.preview)
                 implementation(libs.kotlinx.serialization.json)
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.datetime)
@@ -45,18 +43,16 @@ kotlin {
             dependencies {
                 implementation(libs.androidx.datastore.preferences)
                 implementation(libs.ktor.client.okhttp)
-                implementation(compose.preview)
-                implementation(compose.uiTooling)
+                implementation(libs.androidx.activity.compose)
+                implementation(libs.jetbrains.compose.preview)
+                implementation(libs.jetbrains.compose.ui.tooling)
             }
         }
         val androidUnitTest by getting
+
         val iosX64Main by getting
         val iosArm64Main by getting
         val iosSimulatorArm64Main by getting
-        val iosX64Test by getting
-        val iosArm64Test by getting
-        val iosSimulatorArm64Test by getting
-
         val iosMain by creating {
             dependsOn(commonMain)
             iosX64Main.dependsOn(this)
@@ -66,6 +62,10 @@ kotlin {
                 implementation(libs.ktor.client.darwin)
             }
         }
+
+        val iosX64Test by getting
+        val iosArm64Test by getting
+        val iosSimulatorArm64Test by getting
         val iosTest by creating {
             dependsOn(commonTest)
             iosX64Test.dependsOn(this)

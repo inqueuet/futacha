@@ -15,6 +15,7 @@ data class BoardSummary(
 @Serializable
 data class ThreadHistoryEntry(
     val threadId: String,
+    val boardId: String = "",
     val title: String,
     val titleImageUrl: String,
     val boardName: String,

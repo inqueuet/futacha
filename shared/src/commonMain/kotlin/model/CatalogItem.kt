@@ -5,5 +5,6 @@ data class CatalogItem(
     val threadUrl: String,
     val title: String?,
     val thumbnailUrl: String?,
-    val replyCount: Int
+    val replyCount: Int,
+    val expiresAtEpochMillis: Long? = null
 )

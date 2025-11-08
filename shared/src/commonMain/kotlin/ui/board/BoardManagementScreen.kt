@@ -3,13 +3,17 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -32,18 +37,16 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Reply
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.AssistChip
@@ -54,6 +57,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
@@ -93,14 +97,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
@@ -112,10 +121,15 @@ import com.valoser.futacha.shared.model.hostLabel
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
+import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.time.Duration.Companion.minutes
+import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -127,6 +141,7 @@ fun BoardManagementScreen(
     history: List<ThreadHistoryEntry>,
     onBoardSelected: (BoardSummary) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     modifier: Modifier = Modifier,
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {}
 ) {
@@ -140,6 +155,10 @@ fun BoardManagementScreen(
                 drawerState.targetValue == DrawerValue.Open
         }
     }
+    val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
+        scope.launch { drawerState.close() }
+        onHistoryEntrySelected(entry)
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -147,7 +166,8 @@ fun BoardManagementScreen(
         drawerContent = {
             HistoryDrawerContent(
                 history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed
+                onHistoryEntryDismissed = onHistoryEntryDismissed,
+                onHistoryEntrySelected = handleHistorySelection
             )
         }
     ) {
@@ -227,7 +247,8 @@ fun BoardManagementScreen(
 @Composable
 private fun HistoryDrawerContent(
     history: List<ThreadHistoryEntry>,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit
 ) {
     val drawerWidth = 320.dp
     ModalDrawerSheet(
@@ -252,7 +273,8 @@ private fun HistoryDrawerContent(
                 ) { entry ->
                     DismissibleHistoryEntry(
                         entry = entry,
-                        onDismissed = onHistoryEntryDismissed
+                        onDismissed = onHistoryEntryDismissed,
+                        onClicked = { onHistoryEntrySelected(entry) }
                     )
                 }
             }
@@ -315,7 +337,8 @@ private fun HistoryBottomIcon(icon: ImageVector, label: String) {
 @Composable
 private fun DismissibleHistoryEntry(
     entry: ThreadHistoryEntry,
-    onDismissed: (ThreadHistoryEntry) -> Unit
+    onDismissed: (ThreadHistoryEntry) -> Unit,
+    onClicked: () -> Unit
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -332,7 +355,7 @@ private fun DismissibleHistoryEntry(
         enableDismissFromEndToStart = false,
         backgroundContent = { HistoryDismissBackground() }
     ) {
-        HistoryEntryCard(entry = entry)
+        HistoryEntryCard(entry = entry, onClick = onClicked)
     }
 }
 
@@ -365,13 +388,19 @@ private fun HistoryDismissBackground() {
 }
 
 @Composable
-private fun HistoryEntryCard(entry: ThreadHistoryEntry) {
+private fun HistoryEntryCard(
+    entry: ThreadHistoryEntry,
+    onClick: () -> Unit
+) {
     val platformContext = LocalPlatformContext.current
     val formattedLastVisited = remember(entry.lastVisitedEpochMillis) {
         formatLastVisited(entry.lastVisitedEpochMillis)
     }
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
         tonalElevation = 2.dp
     ) {
@@ -524,6 +553,7 @@ fun CatalogScreen(
     history: List<ThreadHistoryEntry>,
     onBack: () -> Unit,
     onThreadSelected: (CatalogItem) -> Unit,
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
@@ -544,6 +574,13 @@ fun CatalogScreen(
     }
     var catalogMode by rememberSaveable { mutableStateOf(CatalogMode.default) }
 
+    PlatformBackHandler(enabled = isDrawerOpen) {
+        coroutineScope.launch { drawerState.close() }
+    }
+    PlatformBackHandler(enabled = !isDrawerOpen) {
+        onBack()
+    }
+
     LaunchedEffect(board?.id, catalogMode) {
         if (board == null) {
             uiState.value = CatalogUiState.Error
@@ -555,13 +592,20 @@ fun CatalogScreen(
             .onFailure { uiState.value = CatalogUiState.Error }
     }
 
+    val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
+        coroutineScope.launch { drawerState.close() }
+        onHistoryEntrySelected(entry)
+    }
+    val currentState = uiState.value
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = isDrawerOpen,
         drawerContent = {
             HistoryDrawerContent(
                 history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed
+                onHistoryEntryDismissed = onHistoryEntryDismissed,
+                onHistoryEntrySelected = handleHistorySelection
             )
         }
     ) {
@@ -611,7 +655,7 @@ fun CatalogScreen(
                         coroutineScope.launch { drawerState.close() }
                     }
                 }
-            when (val state = uiState.value) {
+            when (val state = currentState) {
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
                 CatalogUiState.Error -> CatalogError(modifier = contentModifier)
                 is CatalogUiState.Success -> CatalogSuccessContent(
@@ -700,7 +744,7 @@ private fun CatalogCard(
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
-    val status = CatalogTileStatus.fromReplies(item.replyCount)
+    val status = CatalogTileStatus.fromExpiration(item.expiresAtEpochMillis)
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
@@ -772,7 +816,7 @@ private fun CatalogCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "No.${item.id}",
+                        text = item.id,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -791,28 +835,30 @@ private fun CatalogCard(
 
 @Composable
 private fun CatalogTileCounters(
-    status: CatalogTileStatus,
+    status: CatalogTileStatus?,
     replyCount: Int,
     modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = modifier
-            .fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Surface(
-            color = status.color.copy(alpha = 0.9f),
-            shape = MaterialTheme.shapes.extraSmall
-        ) {
-            Text(
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                text = status.label,
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White,
-                fontWeight = FontWeight.Bold
-            )
+        if (status != null) {
+            Surface(
+                color = status.color.copy(alpha = 0.9f),
+                shape = MaterialTheme.shapes.extraSmall
+            ) {
+                Text(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    text = status.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
         }
+        Spacer(modifier = Modifier.weight(1f))
         Surface(
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
             shape = MaterialTheme.shapes.extraSmall
@@ -995,17 +1041,17 @@ private enum class CatalogTileStatus(
     val label: String,
     val color: Color
 ) {
-    Overflow("勢", Color(0xFFD84315)),
-    Hot("注", Color(0xFFFBC02D)),
-    Active("巡", Color(0xFF1E88E5)),
-    Calm("落", Color(0xFFD32F2F));
+    DropSoon("落", Color(0xFFD32F2F));
 
     companion object {
-        fun fromReplies(replyCount: Int): CatalogTileStatus = when {
-            replyCount >= 900 -> Overflow
-            replyCount >= 500 -> Hot
-            replyCount >= 200 -> Active
-            else -> Calm
+        private val DROP_WARNING_WINDOW = 30.minutes
+
+        fun fromExpiration(expiresAtEpochMillis: Long?): CatalogTileStatus? {
+            val expiresAt = expiresAtEpochMillis?.let(Instant::fromEpochMilliseconds) ?: return null
+            val now = Clock.System.now()
+            val remaining = expiresAt - now
+            if (remaining.isNegative()) return null
+            return if (remaining <= DROP_WARNING_WINDOW) DropSoon else null
         }
     }
 }
@@ -1025,6 +1071,7 @@ fun ThreadScreen(
     threadTitle: String?,
     initialReplyCount: Int?,
     onBack: () -> Unit,
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
@@ -1041,6 +1088,13 @@ fun ThreadScreen(
             drawerState.currentValue == DrawerValue.Open ||
                 drawerState.targetValue == DrawerValue.Open
         }
+    }
+
+    PlatformBackHandler(enabled = isDrawerOpen) {
+        coroutineScope.launch { drawerState.close() }
+    }
+    PlatformBackHandler(enabled = !isDrawerOpen) {
+        onBack()
     }
 
     val refreshThread: () -> Unit = remember(board.id, threadId, activeRepository) {
@@ -1062,9 +1116,34 @@ fun ThreadScreen(
         refreshThread()
     }
 
-    val resolvedReplyCount = when (val state = uiState.value) {
-        is ThreadUiState.Success -> state.page.posts.size
+    val currentState = uiState.value
+    val resolvedReplyCount: Int? = when (currentState) {
+        is ThreadUiState.Success -> initialReplyCount ?: currentState.page.posts.size
         else -> initialReplyCount
+    }
+    val resolvedThreadTitle = when (currentState) {
+        is ThreadUiState.Success -> threadTitle ?: currentState.page.posts.firstOrNull()?.subject ?: "スレッド"
+        else -> threadTitle ?: "スレッド"
+    }
+    val expiresLabel = (currentState as? ThreadUiState.Success)
+        ?.page
+        ?.expiresAtLabel
+        ?.takeIf { it.isNotBlank() }
+    val statusLabel = buildString {
+        resolvedReplyCount?.let { append("${it}レス") }
+        if (!expiresLabel.isNullOrBlank()) {
+            if (isNotEmpty()) append(" / ")
+            append(expiresLabel)
+        }
+    }.ifBlank { null }
+
+    val density = LocalDensity.current
+    val backSwipeEdgePx = remember(density) { with(density) { 48.dp.toPx() } }
+    val backSwipeTriggerPx = remember(density) { with(density) { 96.dp.toPx() } }
+
+    val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
+        coroutineScope.launch { drawerState.close() }
+        onHistoryEntrySelected(entry)
     }
 
     ModalNavigationDrawer(
@@ -1073,7 +1152,8 @@ fun ThreadScreen(
         drawerContent = {
             HistoryDrawerContent(
                 history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed
+                onHistoryEntryDismissed = onHistoryEntryDismissed,
+                onHistoryEntrySelected = handleHistorySelection
             )
         }
     ) {
@@ -1083,16 +1163,16 @@ fun ThreadScreen(
             topBar = {
                 ThreadTopBar(
                     boardName = board.name,
-                    threadTitle = threadTitle ?: "スレッド",
+                    threadTitle = resolvedThreadTitle,
                     replyCount = resolvedReplyCount,
+                    statusLabel = statusLabel,
                     onBack = onBack,
                     onOpenHistory = { coroutineScope.launch { drawerState.open() } },
                     onSearch = {
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar("検索はモック動作です")
                         }
-                    },
-                    onRefresh = refreshThread
+                    }
                 )
             },
             bottomBar = {
@@ -1115,8 +1195,34 @@ fun ThreadScreen(
                         coroutineScope.launch { drawerState.close() }
                     }
                 }
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                .padding(horizontal = 8.dp)
+                .pointerInput(onBack, isDrawerOpen, backSwipeEdgePx, backSwipeTriggerPx) {
+                    if (isDrawerOpen) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.position.x > backSwipeEdgePx) {
+                            waitForUpOrCancellation()
+                            return@awaitEachGesture
+                        }
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        val pointerId = down.id
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == pointerId } ?: continue
+                            if (!change.pressed) break
+                            val delta = change.positionChange()
+                            totalDx = (totalDx + delta.x).coerceAtLeast(0f)
+                            totalDy += abs(delta.y)
+                            if (totalDx > backSwipeTriggerPx && totalDx > totalDy) {
+                                change.consume()
+                                onBack()
+                                return@awaitEachGesture
+                            }
+                        }
+                    }
+                }
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 0.dp)
 
             when (val state = uiState.value) {
                 ThreadUiState.Loading -> ThreadLoading(modifier = contentModifier)
@@ -1125,18 +1231,13 @@ fun ThreadScreen(
                     onRetry = refreshThread
                 )
 
-                is ThreadUiState.Success -> ThreadContent(
-                    page = state.page,
-                    board = board,
-                    threadTitle = threadTitle ?: "スレッド",
-                    replyCount = state.page.posts.size,
-                    modifier = contentModifier,
-                    onPostAction = { action, post ->
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("「${action.label}」はモック動作です (No.${post.id})")
-                        }
-                    }
-                )
+                is ThreadUiState.Success -> {
+                    val displayedReplies = resolvedReplyCount ?: state.page.posts.size
+                    ThreadContent(
+                        page = state.page,
+                        modifier = contentModifier
+                    )
+                }
             }
         }
     }
@@ -1148,26 +1249,18 @@ private fun ThreadTopBar(
     boardName: String,
     threadTitle: String,
     replyCount: Int?,
+    statusLabel: String?,
     onBack: () -> Unit,
     onOpenHistory: () -> Unit,
-    onSearch: () -> Unit,
-    onRefresh: () -> Unit
+    onSearch: () -> Unit
 ) {
     TopAppBar(
         navigationIcon = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.Rounded.ArrowBack,
-                        contentDescription = "カタログに戻る"
-                    )
-                }
-                IconButton(onClick = onOpenHistory) {
-                    Icon(
-                        imageVector = Icons.Outlined.Menu,
-                        contentDescription = "履歴を開く"
-                    )
-                }
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Rounded.ArrowBack,
+                    contentDescription = "戻る"
+                )
             }
         },
         title = {
@@ -1184,13 +1277,22 @@ private fun ThreadTopBar(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
                     )
-                    replyCount?.let {
-                        Text(
-                            text = "  /  ${it}レス",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                        )
+                    if (statusLabel == null) {
+                        replyCount?.let {
+                            Text(
+                                text = "  /  ${it}レス",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                            )
+                        }
                     }
+                }
+                statusLabel?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                    )
                 }
             }
         },
@@ -1201,10 +1303,10 @@ private fun ThreadTopBar(
                     contentDescription = "スレ内検索"
                 )
             }
-            IconButton(onClick = onRefresh) {
+            IconButton(onClick = onOpenHistory) {
                 Icon(
-                    imageVector = Icons.Rounded.Refresh,
-                    contentDescription = "更新"
+                    imageVector = Icons.Outlined.MoreVert,
+                    contentDescription = "履歴を開く"
                 )
             }
         },
@@ -1254,202 +1356,266 @@ private fun ThreadError(
 @Composable
 private fun ThreadContent(
     page: ThreadPage,
-    board: BoardSummary,
-    threadTitle: String,
-    replyCount: Int,
-    modifier: Modifier = Modifier,
-    onPostAction: (ThreadPostAction, Post) -> Unit
+    modifier: Modifier = Modifier
 ) {
+    val posterIdLabels = remember(page.posts) {
+        buildPosterIdLabels(page.posts)
+    }
+    val postIndex = remember(page.posts) { page.posts.associateBy { it.id } }
+    var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(vertical = 16.dp)
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
-        item(key = "thread-header") {
-            ThreadHeader(
-                board = board,
-                title = threadTitle,
-                replyCount = replyCount
-            )
+        page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+            item(key = "thread-notice") {
+                ThreadNoticeCard(message = notice)
+            }
         }
         itemsIndexed(
             items = page.posts,
             key = { _, post -> post.id }
         ) { index, post ->
             ThreadPostCard(
-                index = index,
                 post = post,
                 isOp = index == 0,
-                onPostAction = onPostAction
+                posterIdLabel = posterIdLabels[post.id],
+                onQuoteClick = { reference ->
+                    val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
+                    if (targets.isNotEmpty()) {
+                        quotePreviewState = QuotePreviewState(
+                            quoteText = reference.text,
+                            targetPosts = targets,
+                            posterIdLabels = posterIdLabels
+                        )
+                    }
+                }
             )
+            if (index != page.posts.lastIndex) {
+                Divider(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                    thickness = 0.5.dp
+                )
+            }
         }
     }
-}
-
-@Composable
-private fun ThreadHeader(
-    board: BoardSummary,
-    title: String,
-    replyCount: Int,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.primaryContainer
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = board.name,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = "${replyCount}レス / ${board.description}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-            )
-        }
+    quotePreviewState?.let { state ->
+        QuotePreviewDialog(
+            state = state,
+            onDismiss = { quotePreviewState = null },
+            onQuoteClick = { reference ->
+                val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
+                if (targets.isNotEmpty()) {
+                    quotePreviewState = state.copy(
+                        quoteText = reference.text,
+                        targetPosts = targets
+                    )
+                }
+            }
+        )
     }
 }
 
 @Composable
 private fun ThreadPostCard(
-    index: Int,
     post: Post,
     isOp: Boolean,
-    onPostAction: (ThreadPostAction, Post) -> Unit,
+    posterIdLabel: PosterIdLabel?,
+    onQuoteClick: (QuoteReference) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var saidaneLabel by remember(post.id, post.saidaneLabel) { mutableStateOf(post.saidaneLabel) }
     val platformContext = LocalPlatformContext.current
-    Surface(
+    val backgroundColor = when {
+        post.isDeleted -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        else -> MaterialTheme.colorScheme.surface
+    }
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp),
-        shape = MaterialTheme.shapes.small,
-        tonalElevation = if (isOp) 4.dp else 1.dp,
-        shadowElevation = if (isOp) 2.dp else 0.dp
+            .background(backgroundColor)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (!post.subject.isNullOrBlank()) {
-                    Text(
-                        text = post.subject,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
-                ThreadPostMetadata(
-                    index = index,
-                    post = post
-                )
+        ThreadPostMetadata(
+            post = post,
+            isOp = isOp,
+            posterIdLabel = posterIdLabel,
+            saidaneLabel = saidaneLabel,
+            onSaidaneClick = {
+                saidaneLabel = incrementSaidaneLabel(saidaneLabel)
             }
-            post.imageUrl?.let { imageUrl ->
-                AsyncImage(
-                    model = ImageRequest.Builder(platformContext)
-                        .data(imageUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "添付画像",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentScale = ContentScale.Crop
-                )
-            }
-            ThreadMessageText(messageHtml = post.messageHtml)
-            ThreadPostActions(onAction = { action -> onPostAction(action, post) })
+        )
+        post.imageUrl?.let { imageUrl ->
+            AsyncImage(
+                model = ImageRequest.Builder(platformContext)
+                    .data(imageUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "添付画像",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentScale = ContentScale.Crop
+            )
         }
+        ThreadMessageText(
+            messageHtml = post.messageHtml,
+            isDeleted = post.isDeleted,
+            quoteReferences = post.quoteReferences,
+            onQuoteClick = onQuoteClick
+        )
     }
 }
 
 @Composable
 private fun ThreadPostMetadata(
-    index: Int,
-    post: Post
+    post: Post,
+    isOp: Boolean,
+    posterIdLabel: PosterIdLabel?,
+    saidaneLabel: String?,
+    onSaidaneClick: () -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        val subjectText = post.subject?.ifBlank { "無題" } ?: "無題"
+        val authorText = post.author?.ifBlank { "名無し" } ?: "名無し"
+        val subjectColor = when {
+            subjectText.contains("無念") || subjectText.contains("株") -> Color(0xFFD32F2F)
+            isOp -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.onSurface
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             Text(
-                text = "${index} ${post.author.orEmpty().ifBlank { "名無しさん" }}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary
+                text = (post.order ?: 0).toString(),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFD32F2F)
             )
             Text(
-                text = post.timestamp,
-                style = MaterialTheme.typography.bodySmall,
+                text = subjectText,
+                style = MaterialTheme.typography.titleMedium,
+                color = subjectColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = authorText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF2E7D32)
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            if (post.referencedCount > 0) {
+                ReplyCountLabel(count = post.referencedCount)
+            }
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            val timestampText = remember(post.timestamp) {
+                extractTimestampWithoutId(post.timestamp)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = timestampText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                posterIdLabel?.let { label ->
+                    Text(
+                        text = label.text,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (label.highlight) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                saidaneLabel?.let { label ->
+                    SaidaneLink(
+                        label = label,
+                        onClick = onSaidaneClick
+                    )
+                }
+            }
+            Text(
+                text = "No.${post.id}",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Text(
-            text = "No.${post.id}",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
 @Composable
 private fun ThreadMessageText(
     messageHtml: String,
+    isDeleted: Boolean,
+    quoteReferences: List<QuoteReference>,
+    onQuoteClick: (QuoteReference) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val annotated: AnnotatedString = remember(messageHtml) {
-        parseHtmlToAnnotatedString(messageHtml)
+    val annotated: AnnotatedString = remember(messageHtml, quoteReferences) {
+        buildAnnotatedMessage(messageHtml, quoteReferences)
     }
-    Text(
+    val textColor = if (isDeleted) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    ClickableText(
         modifier = modifier,
         text = annotated,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurface
+        style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
+        onClick = { offset ->
+            annotated
+                .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                .firstOrNull()
+                ?.item
+                ?.toIntOrNull()
+                ?.let { index ->
+                    quoteReferences.getOrNull(index)
+                        ?.takeIf { it.targetPostIds.isNotEmpty() }
+                        ?.let(onQuoteClick)
+                }
+        }
     )
 }
 
-private fun parseHtmlToAnnotatedString(html: String): AnnotatedString {
-    val normalized = html
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace(Regex("(?i)</p>"), "\n\n")
-    val withoutTags = normalized.replace(Regex("<[^>]+>"), "")
-    val decoded = withoutTags
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-    val lines = decoded.lines()
+private const val QUOTE_ANNOTATION_TAG = "quote"
+
+private fun buildAnnotatedMessage(
+    html: String,
+    quoteReferences: List<QuoteReference>
+): AnnotatedString {
+    val lines = messageHtmlToLines(html)
+    var quoteIndex = 0
     return buildAnnotatedString {
         lines.forEachIndexed { index, line ->
             val content = line.trimEnd()
-            if (content.startsWith(">")) {
-                withStyle(
-                    style = SpanStyle(color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
-                ) {
-                    append(content)
+            val isQuote = content.startsWith(">") || content.startsWith("＞")
+            if (isQuote) {
+                val spanStyle = SpanStyle(color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
+                val annotationIndex = quoteIndex
+                val reference = quoteReferences.getOrNull(annotationIndex)
+                if (reference != null && reference.targetPostIds.isNotEmpty()) {
+                    pushStringAnnotation(QUOTE_ANNOTATION_TAG, annotationIndex.toString())
+                    withStyle(spanStyle) { append(content) }
+                    pop()
+                } else {
+                    withStyle(spanStyle) { append(content) }
                 }
+                quoteIndex += 1
             } else {
                 append(content)
             }
@@ -1460,37 +1626,177 @@ private fun parseHtmlToAnnotatedString(html: String): AnnotatedString {
     }
 }
 
+private fun messageHtmlToLines(html: String): List<String> {
+    val normalized = html
+        .replace(Regex("(?i)<br\\s*/?>"), "\n")
+        .replace(Regex("(?i)</p>"), "\n\n")
+    val withoutTags = normalized.replace(Regex("<[^>]+>"), "")
+    val decoded = withoutTags
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+    return decoded.lines()
+}
+
+private fun extractTimestampWithoutId(timestamp: String): String {
+    val idx = timestamp.indexOf("ID:")
+    if (idx == -1) return timestamp.trim()
+    return timestamp.substring(0, idx).trimEnd()
+}
+
 @Composable
-private fun ThreadPostActions(
-    onAction: (ThreadPostAction) -> Unit,
-    modifier: Modifier = Modifier
+private fun QuotePreviewDialog(
+    state: QuotePreviewState,
+    onDismiss: () -> Unit,
+    onQuoteClick: (QuoteReference) -> Unit
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true
+        )
     ) {
-        threadPostActions.forEach { action ->
-            AssistChip(
-                onClick = { onAction(action) },
-                label = { Text(action.label) },
-                leadingIcon = {
-                    Icon(imageVector = action.icon, contentDescription = action.label)
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.background,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    text = state.quoteText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                state.targetPosts.forEachIndexed { index, post ->
+                    ThreadPostCard(
+                        post = post,
+                        isOp = post.order == 0,
+                        posterIdLabel = state.posterIdLabels[post.id],
+                        onQuoteClick = onQuoteClick,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 4.dp)
+                    )
+                    if (index != state.targetPosts.lastIndex) {
+                        Divider(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                            thickness = 0.5.dp
+                        )
+                    }
                 }
-            )
+            }
         }
     }
 }
 
-private data class ThreadPostAction(
-    val label: String,
-    val icon: ImageVector
+private data class QuotePreviewState(
+    val quoteText: String,
+    val targetPosts: List<Post>,
+    val posterIdLabels: Map<String, PosterIdLabel>
 )
 
-private val threadPostActions = listOf(
-    ThreadPostAction("レス", Icons.Rounded.Reply),
-    ThreadPostAction("そうだね", Icons.Rounded.ThumbUp),
-    ThreadPostAction("削除", Icons.Rounded.Delete)
+private fun buildPosterIdLabels(posts: List<Post>): Map<String, PosterIdLabel> {
+    if (posts.isEmpty()) return emptyMap()
+    val totals = mutableMapOf<String, Int>()
+    posts.forEach { post ->
+        normalizePosterIdValue(post.posterId)?.let { normalized ->
+            totals[normalized] = (totals[normalized] ?: 0) + 1
+        }
+    }
+    if (totals.isEmpty()) return emptyMap()
+    val running = mutableMapOf<String, Int>()
+    val labels = mutableMapOf<String, PosterIdLabel>()
+    posts.forEach { post ->
+        val normalized = normalizePosterIdValue(post.posterId) ?: return@forEach
+        val currentIndex = running.compute(normalized) { _, value -> (value ?: 0) + 1 }!!
+        val total = totals.getValue(normalized)
+        labels[post.id] = PosterIdLabel(
+            text = formatPosterIdLabel(normalized, currentIndex, total),
+            highlight = total > 1 && currentIndex > 1
+        )
+    }
+    return labels
+}
+
+private fun normalizePosterIdValue(raw: String?): String? {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isBlank()) return null
+    val withoutPrefix = if (trimmed.startsWith("ID:", ignoreCase = true)) {
+        trimmed.substring(3)
+    } else {
+        trimmed
+    }
+    return withoutPrefix.trim().takeIf { it.isNotBlank() }
+}
+
+private fun formatPosterIdLabel(value: String, index: Int, total: Int): String {
+    val safeIndex = index.coerceAtLeast(1)
+    val safeTotal = total.coerceAtLeast(safeIndex)
+    return "ID:$value(${safeIndex}/${safeTotal})"
+}
+
+private data class PosterIdLabel(
+    val text: String,
+    val highlight: Boolean
 )
+
+@Composable
+private fun ThreadNoticeCard(message: String) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
+}
+
+@Composable
+private fun ReplyCountLabel(count: Int) {
+    Text(
+        text = "${count}レス",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFFD32F2F)
+    )
+}
+
+@Composable
+private fun SaidaneLink(
+    label: String,
+    onClick: () -> Unit
+) {
+    val normalized = if (label == "+") "そうだね" else label
+    Text(
+        text = normalized,
+        style = MaterialTheme.typography.labelMedium.copy(
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+        ),
+        textDecoration = TextDecoration.Underline,
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+}
 
 @Composable
 private fun ThreadActionBar(
@@ -1499,32 +1805,21 @@ private fun ThreadActionBar(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        tonalElevation = 6.dp
+        color = MaterialTheme.colorScheme.primary
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
             ThreadActionBarItem.entries.forEach { action ->
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    IconButton(onClick = { onAction(action) }) {
-                        Icon(
-                            imageVector = action.icon,
-                            contentDescription = action.label,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Text(
-                        text = action.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                IconButton(onClick = { onAction(action) }) {
+                    Icon(
+                        imageVector = action.icon,
+                        contentDescription = action.label,
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
             }
@@ -1542,4 +1837,13 @@ private enum class ThreadActionBarItem(
     Share("共有", Icons.Rounded.Share),
     Favorite("お気に入り", Icons.Rounded.BookmarkAdd),
     Settings("設定", Icons.Rounded.Settings)
+}
+
+internal fun incrementSaidaneLabel(current: String?): String {
+    val normalized = current?.trim().orEmpty()
+    val existing = normalized.takeIf { it.isNotBlank() }?.let {
+        Regex("(\\d+)$").find(it)?.value?.toIntOrNull()
+    } ?: 0
+    val next = (existing + 1).coerceAtLeast(1)
+    return "そうだねx$next"
 }
