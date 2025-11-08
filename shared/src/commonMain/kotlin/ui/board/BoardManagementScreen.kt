@@ -126,7 +126,6 @@ import coil3.request.crossfade
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
-import com.valoser.futacha.shared.model.hostLabel
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.Post
@@ -139,7 +138,6 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlin.time.Duration.Companion.minutes
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
@@ -755,7 +753,6 @@ private fun CatalogCard(
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
-    val status = CatalogTileStatus.fromExpiration(item.expiresAtEpochMillis)
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
@@ -801,19 +798,11 @@ private fun CatalogCard(
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                     )
                 }
-                CatalogTileCounters(
-                    status = status,
-                    replyCount = item.replyCount,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp)
-                )
             }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
                     text = item.title ?: "無題",
@@ -821,65 +810,7 @@ private fun CatalogCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = item.id,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = item.hostLabel(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
-        }
-    }
-}
-
-@Composable
-private fun CatalogTileCounters(
-    status: CatalogTileStatus?,
-    replyCount: Int,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (status != null) {
-            Surface(
-                color = status.color.copy(alpha = 0.9f),
-                shape = MaterialTheme.shapes.extraSmall
-            ) {
-                Text(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    text = status.label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            shape = MaterialTheme.shapes.extraSmall
-        ) {
-            Text(
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                text = replyCount.toString(),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Black
-            )
         }
     }
 }
@@ -1046,25 +977,6 @@ private enum class CatalogNavDestination(val label: String, val icon: ImageVecto
     Trend("勢い", Icons.Rounded.Timeline),
     Settings("設定", Icons.Rounded.Settings),
     Favorites("お気に入り", Icons.Rounded.Favorite)
-}
-
-private enum class CatalogTileStatus(
-    val label: String,
-    val color: Color
-) {
-    DropSoon("落", Color(0xFFD32F2F));
-
-    companion object {
-        private val DROP_WARNING_WINDOW = 30.minutes
-
-        fun fromExpiration(expiresAtEpochMillis: Long?): CatalogTileStatus? {
-            val expiresAt = expiresAtEpochMillis?.let(Instant::fromEpochMilliseconds) ?: return null
-            val now = Clock.System.now()
-            val remaining = expiresAt - now
-            if (remaining.isNegative()) return null
-            return if (remaining <= DROP_WARNING_WINDOW) DropSoon else null
-        }
-    }
 }
 
 sealed interface ThreadUiState {
