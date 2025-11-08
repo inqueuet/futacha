@@ -138,12 +138,13 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlin.time.ExperimentalTime
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
 fun BoardManagementScreen(
     boards: List<BoardSummary>,
@@ -474,6 +475,7 @@ private fun HistoryEntryCard(
     }
 }
 
+@OptIn(ExperimentalTime::class)
 private fun formatLastVisited(epochMillis: Long): String {
     val instant = Instant.fromEpochMilliseconds(epochMillis)
     val localDateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
@@ -555,7 +557,7 @@ sealed interface CatalogUiState {
     data object Error : CatalogUiState
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
 fun CatalogScreen(
     board: BoardSummary?,
@@ -985,7 +987,7 @@ sealed interface ThreadUiState {
     data class Success(val page: ThreadPage) : ThreadUiState
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
 fun ThreadScreen(
     board: BoardSummary,

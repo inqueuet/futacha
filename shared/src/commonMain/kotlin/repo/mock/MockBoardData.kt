@@ -4,9 +4,10 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.parser.CatalogHtmlParserCore
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.ExperimentalTime
 
 /**
  * Mock snapshot backed by the Futaba HTML/API captures checked into `/example`.
@@ -18,14 +19,15 @@ import kotlin.time.Duration.Companion.minutes
  * Keeping these values in sync with the captured sources allows Compose previews, tests, and Hilt
  * fakes to reflect the markup documented in codex.md without hitting the real network.
  */
+@OptIn(ExperimentalTime::class)
 internal object MockBoardData {
     private val now = Clock.System.now()
 
     val catalogItems: List<CatalogItem> = CatalogHtmlParserCore.parseCatalog(exampleCatalogHtml)
         .mapIndexed { index, item ->
             when (index) {
-                0 -> item.copy(expiresAtEpochMillis = now.plus(10.minutes).toEpochMilliseconds())
-                3 -> item.copy(expiresAtEpochMillis = now.plus(3.hours).toEpochMilliseconds())
+                0 -> item.copy(expiresAtEpochMillis = (now + 10.minutes).toEpochMilliseconds())
+                3 -> item.copy(expiresAtEpochMillis = (now + 3.hours).toEpochMilliseconds())
                 else -> item
             }
         }

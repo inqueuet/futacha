@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
+import kotlin.time.ExperimentalTime
 
 enum class BoardManagementMenuAction(val label: String) {
     LIST("板一覧"),
@@ -75,6 +76,7 @@ val mockThreadHistory = listOf(
     )
 )
 
+@OptIn(ExperimentalTime::class)
 private fun dateMillis(
     year: Int,
     month: Int,

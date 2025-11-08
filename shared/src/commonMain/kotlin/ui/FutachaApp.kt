@@ -21,8 +21,10 @@ import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
+@OptIn(ExperimentalTime::class)
 @Composable
 fun FutachaApp(
     stateStore: AppStateStore,
