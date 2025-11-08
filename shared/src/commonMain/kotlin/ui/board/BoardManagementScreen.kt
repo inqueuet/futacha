@@ -4,8 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -20,11 +20,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -1393,6 +1396,8 @@ private fun ThreadContent(
         buildPosterIdLabels(page.posts)
     }
     val postIndex = remember(page.posts) { page.posts.associateBy { it.id } }
+    val referencedByMap = remember(page.posts) { buildReferencedPostsMap(page.posts) }
+    val postsByPosterId = remember(page.posts) { buildPostsByPosterId(page.posts) }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
@@ -1410,10 +1415,12 @@ private fun ThreadContent(
                 items = page.posts,
                 key = { _, post -> post.id }
             ) { index, post ->
+                val normalizedPosterId = normalizePosterIdValue(post.posterId)
                 ThreadPostCard(
                     post = post,
                     isOp = index == 0,
                     posterIdLabel = posterIdLabels[post.id],
+                    posterIdValue = normalizedPosterId,
                     onQuoteClick = { reference ->
                         val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
                         if (targets.isNotEmpty()) {
@@ -1423,7 +1430,32 @@ private fun ThreadContent(
                                 posterIdLabels = posterIdLabels
                             )
                         }
-                    }
+                    },
+                    onPosterIdClick = normalizedPosterId
+                        ?.let { normalizedId ->
+                            postsByPosterId[normalizedId]
+                                ?.takeIf { it.isNotEmpty() }
+                                ?.let { sameIdPosts ->
+                                    {
+                                        quotePreviewState = QuotePreviewState(
+                                            quoteText = "ID:$normalizedId のレス",
+                                            targetPosts = sameIdPosts,
+                                            posterIdLabels = posterIdLabels
+                                        )
+                                    }
+                                }
+                        },
+                    onReferencedByClick = referencedByMap[post.id]
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { referencingPosts ->
+                            {
+                                quotePreviewState = QuotePreviewState(
+                                    quoteText = ">>${post.id} を引用したレス",
+                                    targetPosts = referencingPosts,
+                                    posterIdLabels = posterIdLabels
+                                )
+                            }
+                        }
                 )
                 if (index != page.posts.lastIndex) {
                     Divider(
@@ -1519,7 +1551,10 @@ private fun ThreadPostCard(
     post: Post,
     isOp: Boolean,
     posterIdLabel: PosterIdLabel?,
+    posterIdValue: String?,
     onQuoteClick: (QuoteReference) -> Unit,
+    onPosterIdClick: (() -> Unit)? = null,
+    onReferencedByClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var saidaneLabel by remember(post.id, post.saidaneLabel) { mutableStateOf(post.saidaneLabel) }
@@ -1539,10 +1574,13 @@ private fun ThreadPostCard(
             post = post,
             isOp = isOp,
             posterIdLabel = posterIdLabel,
+            posterIdValue = posterIdValue,
             saidaneLabel = saidaneLabel,
             onSaidaneClick = {
                 saidaneLabel = incrementSaidaneLabel(saidaneLabel)
-            }
+            },
+            onPosterIdClick = onPosterIdClick,
+            onReferencedByClick = onReferencedByClick
         )
         post.imageUrl?.let { imageUrl ->
             AsyncImage(
@@ -1572,8 +1610,11 @@ private fun ThreadPostMetadata(
     post: Post,
     isOp: Boolean,
     posterIdLabel: PosterIdLabel?,
+    posterIdValue: String?,
     saidaneLabel: String?,
-    onSaidaneClick: () -> Unit
+    onSaidaneClick: () -> Unit,
+    onPosterIdClick: (() -> Unit)? = null,
+    onReferencedByClick: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1611,7 +1652,10 @@ private fun ThreadPostMetadata(
             )
             Spacer(modifier = Modifier.weight(1f))
             if (post.referencedCount > 0) {
-                ReplyCountLabel(count = post.referencedCount)
+                ReplyCountLabel(
+                    count = post.referencedCount,
+                    onClick = onReferencedByClick
+                )
             }
         }
         Column(
@@ -1631,7 +1675,13 @@ private fun ThreadPostMetadata(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 posterIdLabel?.let { label ->
+                    val idModifier = if (posterIdValue != null && onPosterIdClick != null) {
+                        Modifier.clickable(onClick = onPosterIdClick)
+                    } else {
+                        Modifier
+                    }
                     Text(
+                        modifier = idModifier,
                         text = label.text,
                         style = MaterialTheme.typography.labelMedium,
                         color = if (label.highlight) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1765,6 +1815,7 @@ private fun QuotePreviewDialog(
             color = MaterialTheme.colorScheme.background,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
         ) {
+            val scrollState = rememberScrollState()
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     modifier = Modifier
@@ -1775,22 +1826,30 @@ private fun QuotePreviewDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
-                state.targetPosts.forEachIndexed { index, post ->
-                    ThreadPostCard(
-                        post = post,
-                        isOp = post.order == 0,
-                        posterIdLabel = state.posterIdLabels[post.id],
-                        onQuoteClick = onQuoteClick,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 4.dp)
-                    )
-                    if (index != state.targetPosts.lastIndex) {
-                        Divider(
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                            thickness = 0.5.dp
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                        .verticalScroll(scrollState)
+                ) {
+                    state.targetPosts.forEachIndexed { index, post ->
+                        ThreadPostCard(
+                            post = post,
+                            isOp = post.order == 0,
+                            posterIdValue = normalizePosterIdValue(post.posterId),
+                            posterIdLabel = state.posterIdLabels[post.id],
+                            onQuoteClick = onQuoteClick,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 4.dp)
                         )
+                        if (index != state.targetPosts.lastIndex) {
+                            Divider(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                thickness = 0.5.dp
+                            )
+                        }
                     }
                 }
             }
@@ -1813,18 +1872,52 @@ private fun buildPosterIdLabels(posts: List<Post>): Map<String, PosterIdLabel> {
         }
     }
     if (totals.isEmpty()) return emptyMap()
-    val running = mutableMapOf<String, Int>()
+    val runningCounts = mutableMapOf<String, Int>()
     val labels = mutableMapOf<String, PosterIdLabel>()
     posts.forEach { post ->
         val normalized = normalizePosterIdValue(post.posterId) ?: return@forEach
-        val currentIndex = running.compute(normalized) { _, value -> (value ?: 0) + 1 }!!
+        val nextIndex = (runningCounts[normalized] ?: 0) + 1
+        runningCounts[normalized] = nextIndex
         val total = totals.getValue(normalized)
         labels[post.id] = PosterIdLabel(
-            text = formatPosterIdLabel(normalized, currentIndex, total),
-            highlight = total > 1 && currentIndex > 1
+            text = formatPosterIdLabel(normalized, nextIndex, total),
+            highlight = total > 1 && nextIndex > 1
         )
     }
     return labels
+}
+
+private fun buildPostsByPosterId(posts: List<Post>): Map<String, List<Post>> {
+    if (posts.isEmpty()) return emptyMap()
+    val groups = mutableMapOf<String, MutableList<Post>>()
+    posts.forEach { post ->
+        val normalized = normalizePosterIdValue(post.posterId) ?: return@forEach
+        groups.getOrPut(normalized) { mutableListOf() }.add(post)
+    }
+    if (groups.isEmpty()) return emptyMap()
+    return groups.mapValues { (_, value) -> value.toList() }
+}
+
+private fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>> {
+    if (posts.isEmpty()) return emptyMap()
+    val orderIndex = posts.mapIndexed { index, post -> post.id to index }.toMap()
+    val referencedBy = mutableMapOf<String, MutableList<Post>>()
+    posts.forEach { source ->
+        source.quoteReferences.forEach { reference ->
+            reference.targetPostIds.forEach { targetId ->
+                val bucket = referencedBy.getOrPut(targetId) { mutableListOf() }
+                if (bucket.none { it.id == source.id }) {
+                    bucket.add(source)
+                }
+            }
+        }
+    }
+    if (referencedBy.isEmpty()) return emptyMap()
+    return referencedBy.mapValues { (_, value) ->
+        value
+            .distinctBy { it.id }
+            .sortedBy { orderIndex[it.id] ?: Int.MAX_VALUE }
+    }
 }
 
 private fun normalizePosterIdValue(raw: String?): String? {
@@ -1868,8 +1961,13 @@ private fun ThreadNoticeCard(message: String) {
 }
 
 @Composable
-private fun ReplyCountLabel(count: Int) {
+private fun ReplyCountLabel(
+    count: Int,
+    onClick: (() -> Unit)? = null
+) {
+    val labelModifier = onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
     Text(
+        modifier = labelModifier,
         text = "${count}レス",
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
