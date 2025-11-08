@@ -8,7 +8,9 @@ material = "1.13.0"
 composeBom = "2025.11.00"
 composeCompiler = "1.5.15"
 activityCompose = "1.11.0"
-composeMultiplatform = "1.7.3" #バージョンアップすると失敗する
+composeMultiplatform = "1.9.3"
+composeMultiplatformMaterial3 = "1.7.3" #アップデート失敗
+material-icons-extended = "1.7.3"
 coil = "2.7.0"
 coil3 = "3.3.0"
 datastore = "1.1.7"
@@ -47,8 +49,8 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-datetime = { group = "org.jetbrains.kotlinx", name = "kotlinx-datetime", version.ref = "kotlinxDatetime" }
 jetbrains-compose-runtime = { group = "org.jetbrains.compose.runtime", name = "runtime", version.ref = "composeMultiplatform" }
 jetbrains-compose-foundation = { group = "org.jetbrains.compose.foundation", name = "foundation", version.ref = "composeMultiplatform" }
-jetbrains-compose-material3 = { group = "org.jetbrains.compose.material3", name = "material3", version.ref = "composeMultiplatform" }
-jetbrains-compose-material-icons = { group = "org.jetbrains.compose.material", name = "material-icons-extended", version.ref = "composeMultiplatform" }
+jetbrains-compose-material3 = { group = "org.jetbrains.compose.material3", name = "material3", version.ref = "composeMultiplatformMaterial3" }
+jetbrains-compose-material-icons = { group = "org.jetbrains.compose.material", name = "material-icons-extended", version.ref = "material-icons-extended" }
 jetbrains-compose-components-resources = { group = "org.jetbrains.compose.components", name = "components-resources", version.ref = "composeMultiplatform" }
 jetbrains-compose-components-ui-tooling-preview = { group = "org.jetbrains.compose.components", name = "components-ui-tooling-preview", version.ref = "composeMultiplatform" }
 jetbrains-compose-preview = { group = "org.jetbrains.compose.ui", name = "ui-tooling-preview", version.ref = "composeMultiplatform" }
