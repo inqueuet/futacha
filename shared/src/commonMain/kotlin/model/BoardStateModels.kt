@@ -21,5 +21,7 @@ data class ThreadHistoryEntry(
     val boardName: String,
     val boardUrl: String,
     val lastVisitedEpochMillis: Long,
-    val replyCount: Int
+    val replyCount: Int,
+    val lastReadItemIndex: Int = 0,
+    val lastReadItemOffset: Int = 0
 )

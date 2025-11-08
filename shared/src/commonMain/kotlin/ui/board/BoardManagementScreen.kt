@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -90,10 +92,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -128,6 +134,8 @@ import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
@@ -1073,6 +1081,7 @@ fun ThreadScreen(
     onBack: () -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
 ) {
@@ -1140,6 +1149,26 @@ fun ThreadScreen(
     val density = LocalDensity.current
     val backSwipeEdgePx = remember(density) { with(density) { 48.dp.toPx() } }
     val backSwipeTriggerPx = remember(density) { with(density) { 96.dp.toPx() } }
+    val initialHistoryEntry = remember(threadId) {
+        history.firstOrNull { it.threadId == threadId }
+    }
+    val lazyListState = remember(threadId, initialHistoryEntry) {
+        LazyListState(
+            initialHistoryEntry?.lastReadItemIndex ?: 0,
+            initialHistoryEntry?.lastReadItemOffset ?: 0
+        )
+    }
+
+    LaunchedEffect(threadId, lazyListState) {
+        snapshotFlow {
+            lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
+        }
+            .distinctUntilChanged()
+            .debounce(250)
+            .collect { (index, offset) ->
+                onScrollPositionPersist(threadId, index, offset)
+            }
+    }
 
     val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
         coroutineScope.launch { drawerState.close() }
@@ -1235,6 +1264,7 @@ fun ThreadScreen(
                     val displayedReplies = resolvedReplyCount ?: state.page.posts.size
                     ThreadContent(
                         page = state.page,
+                        listState = lazyListState,
                         modifier = contentModifier
                     )
                 }
@@ -1356,6 +1386,7 @@ private fun ThreadError(
 @Composable
 private fun ThreadContent(
     page: ThreadPage,
+    listState: LazyListState,
     modifier: Modifier = Modifier
 ) {
     val posterIdLabels = remember(page.posts) {
@@ -1363,43 +1394,52 @@ private fun ThreadContent(
     }
     val postIndex = remember(page.posts) { page.posts.associateBy { it.id } }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
-        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
-    ) {
-        page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
-            item(key = "thread-notice") {
-                ThreadNoticeCard(message = notice)
-            }
-        }
-        itemsIndexed(
-            items = page.posts,
-            key = { _, post -> post.id }
-        ) { index, post ->
-            ThreadPostCard(
-                post = post,
-                isOp = index == 0,
-                posterIdLabel = posterIdLabels[post.id],
-                onQuoteClick = { reference ->
-                    val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
-                    if (targets.isNotEmpty()) {
-                        quotePreviewState = QuotePreviewState(
-                            quoteText = reference.text,
-                            targetPosts = targets,
-                            posterIdLabels = posterIdLabels
-                        )
-                    }
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
+        ) {
+            page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+                item(key = "thread-notice") {
+                    ThreadNoticeCard(message = notice)
                 }
-            )
-            if (index != page.posts.lastIndex) {
-                Divider(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
-                    thickness = 0.5.dp
+            }
+            itemsIndexed(
+                items = page.posts,
+                key = { _, post -> post.id }
+            ) { index, post ->
+                ThreadPostCard(
+                    post = post,
+                    isOp = index == 0,
+                    posterIdLabel = posterIdLabels[post.id],
+                    onQuoteClick = { reference ->
+                        val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
+                        if (targets.isNotEmpty()) {
+                            quotePreviewState = QuotePreviewState(
+                                quoteText = reference.text,
+                                targetPosts = targets,
+                                posterIdLabels = posterIdLabels
+                            )
+                        }
+                    }
                 )
+                if (index != page.posts.lastIndex) {
+                    Divider(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                        thickness = 0.5.dp
+                    )
+                }
             }
         }
+        ThreadScrollbar(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(vertical = 12.dp, horizontal = 4.dp)
+        )
     }
     quotePreviewState?.let { state ->
         QuotePreviewDialog(
@@ -1414,6 +1454,62 @@ private fun ThreadContent(
                     )
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun ThreadScrollbar(
+    listState: LazyListState,
+    modifier: Modifier = Modifier
+) {
+    val layoutInfo = listState.layoutInfo
+    val visibleItems = layoutInfo.visibleItemsInfo
+    if (visibleItems.isEmpty()) return
+    val totalItems = layoutInfo.totalItemsCount
+    if (totalItems <= 0) return
+    val viewportHeightPx = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+    if (viewportHeightPx <= 0) return
+    val avgItemSizePx = visibleItems
+        .map { it.size }
+        .filter { it > 0 }
+        .takeIf { it.isNotEmpty() }
+        ?.average()
+        ?.toFloat()
+        ?: return
+    val contentHeightPx = avgItemSizePx * totalItems
+    if (contentHeightPx <= viewportHeightPx) return
+
+    val firstVisibleSize = visibleItems.first().size.coerceAtLeast(1)
+    val partialIndex = listState.firstVisibleItemScrollOffset / firstVisibleSize.toFloat()
+    val totalScrollableItems = (totalItems - visibleItems.size).coerceAtLeast(1)
+    val scrollFraction = ((listState.firstVisibleItemIndex + partialIndex) / totalScrollableItems)
+        .coerceIn(0f, 1f)
+    val thumbHeightFraction = (viewportHeightPx / contentHeightPx).coerceIn(0.05f, 1f)
+
+    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+
+    Canvas(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(6.dp)
+    ) {
+        val trackWidth = size.width
+        val trackHeight = size.height
+        val trackCornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)
+        drawRoundRect(
+            color = trackColor,
+            size = Size(trackWidth, trackHeight),
+            cornerRadius = trackCornerRadius
+        )
+        val thumbHeightPx = (trackHeight * thumbHeightFraction).coerceAtLeast(trackWidth)
+        val thumbOffsetPx = (trackHeight - thumbHeightPx) * scrollFraction
+        drawRoundRect(
+            color = thumbColor,
+            topLeft = Offset(x = 0f, y = thumbOffsetPx),
+            size = Size(trackWidth, thumbHeightPx),
+            cornerRadius = trackCornerRadius
         )
     }
 }

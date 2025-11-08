@@ -114,6 +114,7 @@ fun FutachaApp(
                     val historyThreadUrl = selectedThreadUrl ?: selectedBoard.url
                     val historyReplies = selectedThreadReplies ?: 0
                     val historyThumbnail = selectedThreadThumbnailUrl.orEmpty()
+                    val existingHistoryEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
 
                     LaunchedEffect(
                         activeThreadId,
@@ -131,13 +132,63 @@ fun FutachaApp(
                             boardName = selectedBoard.name,
                             boardUrl = historyThreadUrl,
                             lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                            replyCount = historyReplies
+                            replyCount = historyReplies,
+                            lastReadItemIndex = existingHistoryEntry?.lastReadItemIndex ?: 0,
+                            lastReadItemOffset = existingHistoryEntry?.lastReadItemOffset ?: 0
                         )
                         val updatedHistory = buildList {
                             add(entry)
                             addAll(persistedHistory.filterNot { it.threadId == activeThreadId })
                         }
                         stateStore.setHistory(updatedHistory)
+                    }
+
+                    val persistScrollPosition: (String, Int, Int) -> Unit = { targetThreadId, index, offset ->
+                        coroutineScope.launch {
+                            val currentHistory = persistedHistory
+                            val existingEntry = currentHistory.firstOrNull { it.threadId == targetThreadId }
+                            if (existingEntry != null &&
+                                existingEntry.lastReadItemIndex == index &&
+                                existingEntry.lastReadItemOffset == offset
+                            ) {
+                                return@launch
+                            }
+                            val updatedHistory = when {
+                                existingEntry != null -> currentHistory.map { entry ->
+                                    if (entry.threadId == targetThreadId) {
+                                        entry.copy(
+                                            lastReadItemIndex = index,
+                                            lastReadItemOffset = offset
+                                        )
+                                    } else {
+                                        entry
+                                    }
+                                }
+
+                                targetThreadId == activeThreadId -> buildList {
+                                    add(
+                                        ThreadHistoryEntry(
+                                            threadId = activeThreadId,
+                                            boardId = selectedBoard.id,
+                                            title = historyTitle,
+                                            titleImageUrl = historyThumbnail,
+                                            boardName = selectedBoard.name,
+                                            boardUrl = historyThreadUrl,
+                                            lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                                            replyCount = historyReplies,
+                                            lastReadItemIndex = index,
+                                            lastReadItemOffset = offset
+                                        )
+                                    )
+                                    addAll(currentHistory)
+                                }
+
+                                else -> currentHistory
+                            }
+                            if (updatedHistory != currentHistory) {
+                                stateStore.setHistory(updatedHistory)
+                            }
+                        }
                     }
 
                     ThreadScreen(
@@ -154,7 +205,8 @@ fun FutachaApp(
                             selectedThreadUrl = null
                         },
                         onHistoryEntrySelected = openHistoryEntry,
-                        onHistoryEntryDismissed = dismissHistoryEntry
+                        onHistoryEntryDismissed = dismissHistoryEntry,
+                        onScrollPositionPersist = persistScrollPosition
                     )
                 }
             }
