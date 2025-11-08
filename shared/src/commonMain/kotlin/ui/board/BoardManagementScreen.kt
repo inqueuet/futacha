@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,7 +27,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -37,13 +37,13 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.BookmarkAdd
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
@@ -62,7 +62,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
@@ -70,6 +69,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -111,6 +111,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -134,10 +135,11 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
-import kotlinx.coroutines.launch
-import kotlin.math.abs
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
@@ -479,7 +481,8 @@ private fun HistoryEntryCard(
 private fun formatLastVisited(epochMillis: Long): String {
     val instant = Instant.fromEpochMilliseconds(epochMillis)
     val localDateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-    return "${localDateTime.year}/${localDateTime.monthNumber.toString().padStart(2, '0')}/${localDateTime.dayOfMonth.toString().padStart(2, '0')} " +
+    val monthValue = localDateTime.month.ordinal + 1
+    return "${localDateTime.year}/${monthValue.toString().padStart(2, '0')}/${localDateTime.day.toString().padStart(2, '0')} " +
             "${localDateTime.hour.toString().padStart(2, '0')}:${localDateTime.minute.toString().padStart(2, '0')}"
 }
 
@@ -987,7 +990,7 @@ sealed interface ThreadUiState {
     data class Success(val page: ThreadPage) : ThreadUiState
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
 @Composable
 fun ThreadScreen(
     board: BoardSummary,
@@ -1205,7 +1208,7 @@ private fun ThreadTopBar(
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(
-                    imageVector = Icons.Rounded.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = "戻る"
                 )
             }
@@ -1372,7 +1375,7 @@ private fun ThreadContent(
                         }
                 )
                 if (index != page.posts.lastIndex) {
-                    Divider(
+                    HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 12.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
                         thickness = 0.5.dp
@@ -1633,22 +1636,27 @@ private fun ThreadMessageText(
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    ClickableText(
-        modifier = modifier,
+    var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        modifier = modifier.pointerInput(annotated, quoteReferences) {
+            detectTapGestures { position ->
+                val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
+                annotated
+                    .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                    .firstOrNull()
+                    ?.item
+                    ?.toIntOrNull()
+                    ?.let { index ->
+                        quoteReferences
+                            .getOrNull(index)
+                            ?.takeIf { it.targetPostIds.isNotEmpty() }
+                            ?.let(onQuoteClick)
+                    }
+            }
+        },
         text = annotated,
         style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
-        onClick = { offset ->
-            annotated
-                .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
-                .firstOrNull()
-                ?.item
-                ?.toIntOrNull()
-                ?.let { index ->
-                    quoteReferences.getOrNull(index)
-                        ?.takeIf { it.targetPostIds.isNotEmpty() }
-                        ?.let(onQuoteClick)
-                }
-        }
+        onTextLayout = { textLayoutResult = it }
     )
 }
 
@@ -1739,7 +1747,7 @@ private fun QuotePreviewDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1758,7 +1766,7 @@ private fun QuotePreviewDialog(
                                 .padding(horizontal = 4.dp, vertical = 4.dp)
                         )
                         if (index != state.targetPosts.lastIndex) {
-                            Divider(
+                            HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = 12.dp),
                                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
                                 thickness = 0.5.dp
