@@ -119,14 +119,23 @@ internal object ThreadHtmlParserCore {
             if (firstReplyIndex != -1) {
                 val repliesHtml = normalized.substring(firstReplyIndex)
                 var searchStart = 0
+                var iterationCount = 0
+                val maxIterations = 10000 // Prevent infinite loops
 
-                while (searchStart < repliesHtml.length) {
+                while (searchStart < repliesHtml.length && iterationCount < maxIterations) {
+                    iterationCount++
                     val tableStart = tableRegex.find(repliesHtml, searchStart) ?: break
                     val tableEnd = tableEndRegex.find(repliesHtml, tableStart.range.last) ?: break
                     val block = repliesHtml.substring(tableStart.range.first, tableEnd.range.last + 1)
 
                     if (block.length > MAX_CHUNK_SIZE) {
                         println("ThreadHtmlParserCore: Warning - large table block ${block.length} bytes")
+                        // Limit processing to prevent ReDoS attacks
+                        if (block.length > MAX_CHUNK_SIZE * 5) {
+                            println("ThreadHtmlParserCore: Skipping block exceeding safe size limit")
+                            searchStart = tableEnd.range.last + 1
+                            continue
+                        }
                     }
 
                     if (block.contains("class=\"cno\"", ignoreCase = true) ||
@@ -136,6 +145,15 @@ internal object ThreadHtmlParserCore {
                     }
 
                     searchStart = tableEnd.range.last + 1
+
+                    // Safety check to prevent searchStart from going backwards or staying the same
+                    if (searchStart <= tableEnd.range.last) {
+                        break
+                    }
+                }
+
+                if (iterationCount >= maxIterations) {
+                    println("ThreadHtmlParserCore: Warning - reached maximum iteration limit, possible malformed HTML")
                 }
             }
 
@@ -260,8 +278,13 @@ internal object ThreadHtmlParserCore {
         result = hexEntityRegex.replace(result) { match ->
             val value = match.groupValues.getOrNull(1) ?: return@replace ""
             val codePoint = runCatching { value.toInt(16) }.getOrNull()
-            if (codePoint != null && codePoint in 0..0xFFFF) {
-                codePoint.toChar().toString()
+            if (codePoint != null && codePoint in 0x20..0x10FFFF) {
+                // Handle surrogate pairs for characters above 0xFFFF
+                if (codePoint > 0xFFFF) {
+                    String(intArrayOf(codePoint), 0, 1)
+                } else {
+                    codePoint.toChar().toString()
+                }
             } else {
                 match.value
             }
@@ -269,8 +292,13 @@ internal object ThreadHtmlParserCore {
         result = numericEntityRegex.replace(result) { match ->
             val value = match.groupValues.getOrNull(1) ?: return@replace ""
             val codePoint = runCatching { value.toInt() }.getOrNull()
-            if (codePoint != null && codePoint in 0..0xFFFF) {
-                codePoint.toChar().toString()
+            if (codePoint != null && codePoint in 0x20..0x10FFFF) {
+                // Handle surrogate pairs for characters above 0xFFFF
+                if (codePoint > 0xFFFF) {
+                    String(intArrayOf(codePoint), 0, 1)
+                } else {
+                    codePoint.toChar().toString()
+                }
             } else {
                 match.value
             }

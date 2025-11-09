@@ -296,13 +296,17 @@ private fun AddBoardDialog(
     // Enhanced URL validation
     val isValidUrl = hasUrl && urlHasScheme && run {
         val urlWithoutScheme = trimmedUrl.removePrefix("https://").removePrefix("http://")
-        // Check for valid domain structure
-        urlWithoutScheme.isNotEmpty() &&
-            !urlWithoutScheme.startsWith("/") &&
-            !urlWithoutScheme.startsWith(".") &&
-            urlWithoutScheme.contains(".") && // Must have at least one dot for domain
-            !urlWithoutScheme.contains("..") && // No consecutive dots
-            !urlWithoutScheme.contains(" ") // No spaces
+        // Check for valid domain/host structure
+        val hostPart = urlWithoutScheme.substringBefore("/").substringBefore("?").substringBefore("#")
+
+        hostPart.isNotEmpty() &&
+            !hostPart.startsWith(".") &&
+            !hostPart.endsWith(".") &&
+            !hostPart.contains("..") && // No consecutive dots
+            !hostPart.contains(" ") && // No spaces
+            (hostPart.contains(".") || // Must have at least one dot for domain
+             hostPart.equals("localhost", ignoreCase = true) || // Allow localhost
+             hostPart.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$"))) // Allow IP addresses
     }
 
     val isDuplicateUrl = existingBoards.any { it.url.equals(trimmedUrl, ignoreCase = true) }

@@ -46,6 +46,7 @@ class AppStateStore internal constructor(
     /**
      * Thread-safe update of scroll position in history.
      * This prevents race conditions when multiple scroll updates occur concurrently.
+     * Note: This should only be called for scroll position updates, not initial navigation.
      */
     suspend fun updateHistoryScrollPosition(
         threadId: String,
@@ -59,13 +60,13 @@ class AppStateStore internal constructor(
         replyCount: Int
     ) {
         historyMutex.withLock {
-            // Read current state within the lock
+            // Read current state within the lock to prevent race conditions
             val currentHistoryJson = storage.historyJson.first()
             val currentHistory = currentHistoryJson?.let { decodeHistory(it) } ?: emptyList()
 
             val existingEntry = currentHistory.firstOrNull { it.threadId == threadId }
 
-            // Skip update if scroll position hasn't changed
+            // Skip update if scroll position hasn't changed to reduce unnecessary writes
             if (existingEntry != null &&
                 existingEntry.lastReadItemIndex == index &&
                 existingEntry.lastReadItemOffset == offset
@@ -74,33 +75,41 @@ class AppStateStore internal constructor(
             }
 
             val updatedHistory = when {
-                existingEntry != null -> currentHistory.map { entry ->
-                    if (entry.threadId == threadId) {
-                        entry.copy(
-                            lastReadItemIndex = index,
-                            lastReadItemOffset = offset
-                        )
-                    } else {
-                        entry
+                existingEntry != null -> {
+                    // Update existing entry's scroll position while preserving other fields
+                    currentHistory.map { entry ->
+                        if (entry.threadId == threadId) {
+                            entry.copy(
+                                lastReadItemIndex = index,
+                                lastReadItemOffset = offset,
+                                // Update visit time to reflect recent activity
+                                lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                            )
+                        } else {
+                            entry
+                        }
                     }
                 }
 
-                else -> buildList {
-                    add(
-                        ThreadHistoryEntry(
-                            threadId = threadId,
-                            boardId = boardId,
-                            title = title,
-                            titleImageUrl = titleImageUrl,
-                            boardName = boardName,
-                            boardUrl = boardUrl,
-                            lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds(),
-                            replyCount = replyCount,
-                            lastReadItemIndex = index,
-                            lastReadItemOffset = offset
+                else -> {
+                    // Entry doesn't exist yet - create a new one
+                    buildList {
+                        add(
+                            ThreadHistoryEntry(
+                                threadId = threadId,
+                                boardId = boardId,
+                                title = title,
+                                titleImageUrl = titleImageUrl,
+                                boardName = boardName,
+                                boardUrl = boardUrl,
+                                lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                                replyCount = replyCount,
+                                lastReadItemIndex = index,
+                                lastReadItemOffset = offset
+                            )
                         )
-                    )
-                    addAll(currentHistory)
+                        addAll(currentHistory)
+                    }
                 }
             }
 

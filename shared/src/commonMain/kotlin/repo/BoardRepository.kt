@@ -13,6 +13,11 @@ interface BoardRepository {
         mode: CatalogMode = CatalogMode.default
     ): List<CatalogItem>
     suspend fun getThread(board: String, threadId: String): ThreadPage
+
+    /**
+     * Close the repository and release resources (e.g., HTTP client connections)
+     */
+    fun close()
 }
 
 class DefaultBoardRepository(
@@ -31,5 +36,10 @@ class DefaultBoardRepository(
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
         val html = api.fetchThread(board, threadId)
         return parser.parseThread(html)
+    }
+
+    override fun close() {
+        // Close the underlying API if it supports cleanup
+        (api as? AutoCloseable)?.close()
     }
 }

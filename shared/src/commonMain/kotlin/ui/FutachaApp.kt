@@ -43,7 +43,7 @@ fun FutachaApp(
             // Clean up repository when composable leaves composition
             androidx.compose.runtime.DisposableEffect(remoteBoardRepository) {
                 onDispose {
-                    // Repository cleanup if needed
+                    remoteBoardRepository.close()
                 }
             }
 
@@ -139,20 +139,24 @@ fun FutachaApp(
 
                 else -> {
                     val activeThreadId = selectedThreadId ?: return@Surface
+                    // selectedBoard should be non-null at this point due to when block structure
+                    // but add explicit check for safety
+                    val currentBoard = selectedBoard ?: return@Surface
                     val historyTitle = selectedThreadTitle ?: "無題"
-                    val historyThreadUrl = selectedThreadUrl ?: selectedBoard.url
+                    val historyThreadUrl = selectedThreadUrl ?: currentBoard.url
                     val historyReplies = selectedThreadReplies ?: 0
                     val historyThumbnail = selectedThreadThumbnailUrl.orEmpty()
                     val existingHistoryEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
 
                     // Reduce LaunchedEffect dependencies to only essential keys to prevent excessive coroutine creation
-                    LaunchedEffect(activeThreadId, selectedBoard.id) {
+                    // Use a key that only changes when navigating to a different thread
+                    LaunchedEffect(activeThreadId) {
                         val entry = ThreadHistoryEntry(
                             threadId = activeThreadId,
-                            boardId = selectedBoard.id,
+                            boardId = currentBoard.id,
                             title = historyTitle,
                             titleImageUrl = historyThumbnail,
-                            boardName = selectedBoard.name,
+                            boardName = currentBoard.name,
                             boardUrl = historyThreadUrl,
                             lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
                             replyCount = historyReplies,
@@ -173,19 +177,19 @@ fun FutachaApp(
                                 threadId = targetThreadId,
                                 index = index,
                                 offset = offset,
-                                boardId = selectedBoard.id,
+                                boardId = currentBoard.id,
                                 title = historyTitle,
                                 titleImageUrl = historyThumbnail,
-                                boardName = selectedBoard.name,
+                                boardName = currentBoard.name,
                                 boardUrl = historyThreadUrl,
                                 replyCount = historyReplies
                             )
                         }
                     }
 
-                    val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
+                    val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
                     ThreadScreen(
-                        board = selectedBoard,
+                        board = currentBoard,
                         history = persistedHistory,
                         threadId = activeThreadId,
                         threadTitle = selectedThreadTitle,
@@ -293,13 +297,15 @@ private fun slugify(value: String): String {
 private fun normalizeBoardUrl(raw: String): String {
     val trimmed = raw.trim()
 
-    // Force HTTPS for security
+    // Keep user's protocol choice - don't force HTTPS conversion
+    // The network security config will handle cleartext traffic restrictions
     return when {
         trimmed.startsWith("https://", ignoreCase = true) -> trimmed
         trimmed.startsWith("http://", ignoreCase = true) -> {
-            println("FutachaApp: Converting HTTP to HTTPS for security: $trimmed")
-            trimmed.replaceFirst("http://", "https://", ignoreCase = true)
+            // Log warning but keep HTTP if user explicitly specified it
+            println("FutachaApp: Warning - HTTP URL detected. Connection may fail if cleartext traffic is disabled: $trimmed")
+            trimmed
         }
-        else -> "https://$trimmed"
+        else -> "https://$trimmed"  // Default to HTTPS for security
     }
 }

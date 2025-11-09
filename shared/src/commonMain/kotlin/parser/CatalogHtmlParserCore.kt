@@ -75,6 +75,10 @@ internal object CatalogHtmlParserCore {
 
             if (tableBody.length > MAX_CHUNK_SIZE) {
                 println("CatalogHtmlParserCore: Warning - large table body ${tableBody.length} bytes")
+                // Limit processing to prevent ReDoS attacks
+                if (tableBody.length > MAX_CHUNK_SIZE * 5) {
+                    throw IllegalArgumentException("Table body size ${tableBody.length} exceeds safe processing limit")
+                }
             }
 
             val items = mutableListOf<CatalogItem>()

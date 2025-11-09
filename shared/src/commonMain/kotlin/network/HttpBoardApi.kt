@@ -10,7 +10,7 @@ import io.ktor.http.isSuccess
 
 class HttpBoardApi(
     private val client: HttpClient
-) : BoardApi {
+) : BoardApi, AutoCloseable {
     override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
         val url = BoardUrlResolver.resolveCatalogUrl(board, mode)
         return try {
@@ -68,6 +68,10 @@ class HttpBoardApi(
             println("HttpBoardApi: $errorMsg")
             throw NetworkException(errorMsg, cause = e)
         }
+    }
+
+    override fun close() {
+        client.close()
     }
 
     companion object {

@@ -36,4 +36,8 @@ class FakeBoardRepository(
         onAccess()
         return MockBoardData.thread(threadId)
     }
+
+    override fun close() {
+        // No resources to clean up for fake repository
+    }
 }
