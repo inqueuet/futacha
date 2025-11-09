@@ -7,31 +7,61 @@ import io.ktor.http.takeFrom
 
 internal object BoardUrlResolver {
     fun resolveCatalogUrl(boardUrl: String, mode: CatalogMode): String {
-        return URLBuilder().apply {
-            takeFrom(boardUrl)
-            parameters.remove("mode")
-            parameters.remove("sort")
-            parameters.append("mode", "cat")
-            mode.sortParam?.let { parameters.append("sort", it) }
-        }.buildString()
+        if (boardUrl.isBlank()) {
+            throw IllegalArgumentException("Board URL cannot be blank")
+        }
+
+        return try {
+            URLBuilder().apply {
+                takeFrom(boardUrl)
+                parameters.remove("mode")
+                parameters.remove("sort")
+                parameters.append("mode", "cat")
+                mode.sortParam?.let { parameters.append("sort", it) }
+            }.buildString()
+        } catch (e: Exception) {
+            println("BoardUrlResolver: Failed to resolve catalog URL for '$boardUrl': ${e.message}")
+            throw IllegalArgumentException("Invalid board URL: $boardUrl", e)
+        }
     }
 
     fun resolveThreadUrl(boardUrl: String, threadId: String): String {
-        val base = resolveBoardBaseUrl(boardUrl)
-        val sanitizedBase = if (base.endsWith("/")) base.dropLast(1) else base
-        return buildString {
-            append(sanitizedBase)
-            if (sanitizedBase.isNotEmpty()) append('/')
-            append("res/")
-            append(threadId.trim())
-            append(".htm")
+        if (boardUrl.isBlank()) {
+            throw IllegalArgumentException("Board URL cannot be blank")
+        }
+        if (threadId.isBlank()) {
+            throw IllegalArgumentException("Thread ID cannot be blank")
+        }
+
+        return try {
+            val base = resolveBoardBaseUrl(boardUrl)
+            val sanitizedBase = if (base.endsWith("/")) base.dropLast(1) else base
+            buildString {
+                append(sanitizedBase)
+                if (sanitizedBase.isNotEmpty()) append('/')
+                append("res/")
+                append(threadId.trim())
+                append(".htm")
+            }
+        } catch (e: Exception) {
+            println("BoardUrlResolver: Failed to resolve thread URL for board='$boardUrl', thread='$threadId': ${e.message}")
+            throw IllegalArgumentException("Invalid board URL or thread ID", e)
         }
     }
 
     fun resolveBoardBaseUrl(boardUrl: String): String {
+        if (boardUrl.isBlank()) {
+            throw IllegalArgumentException("Board URL cannot be blank")
+        }
+
         val url = runCatching { Url(boardUrl) }.getOrNull()
         if (url == null) {
-            return boardUrl.substringBefore('#').substringBefore('?').trimEnd('/')
+            println("BoardUrlResolver: Failed to parse URL '$boardUrl', using fallback")
+            val fallback = boardUrl.substringBefore('#').substringBefore('?').trimEnd('/')
+            if (fallback.isBlank()) {
+                throw IllegalArgumentException("Invalid board URL: $boardUrl")
+            }
+            return fallback
         }
         val segments = url.encodedPath
             .split('/')

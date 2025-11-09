@@ -13,6 +13,7 @@ import com.valoser.futacha.shared.model.ThreadPage
  */
 internal object ThreadHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://dat.2chan.net"
+    private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
 
     private val canonicalRegex = Regex(
         pattern = "<link[^>]+rel=['\"]canonical['\"][^>]+href=['\"]([^'\"]+)['\"]",
@@ -69,63 +70,72 @@ internal object ThreadHtmlParserCore {
     private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
 
     fun parseThread(html: String): ThreadPage {
-        val normalized = html.replace("\r\n", "\n")
-        val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
-        val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL
-        val threadId = canonical?.let { canonicalIdRegex.find(it)?.groupValues?.getOrNull(1) }
-            ?: dataResRegex.find(normalized)?.groupValues?.getOrNull(1)
-            ?: postIdRegex.find(normalized)?.groupValues?.getOrNull(1)
-            ?: ""
+        if (html.length > MAX_HTML_SIZE) {
+            throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
+        }
 
-        val boardTitle = boardTitleRegex.find(normalized)
-            ?.groupValues?.getOrNull(1)
-            ?.let(::stripTags)
-            ?.trim()
-        val expiresAt = expireRegex.find(normalized)
-            ?.groupValues?.getOrNull(1)
-            ?.let(::stripTags)
-            ?.trim()
-        val deletedNotice = deletedNoticeRegex.find(normalized)
-            ?.groupValues?.getOrNull(1)
-            ?.let(::stripTags)
-            ?.replace("\\s+".toRegex(), "")
-            ?.trim()
+        return try {
+            val normalized = html.replace("\r\n", "\n")
+            val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
+            val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL
+            val threadId = canonical?.let { canonicalIdRegex.find(it)?.groupValues?.getOrNull(1) }
+                ?: dataResRegex.find(normalized)?.groupValues?.getOrNull(1)
+                ?: postIdRegex.find(normalized)?.groupValues?.getOrNull(1)
+                ?: ""
 
-        val posts = mutableListOf<Post>()
-        val firstReplyIndex = normalized.indexOf("<table border=0", ignoreCase = true)
-        val opBlock = extractOpBlock(normalized, firstReplyIndex)
-        opBlock?.let { parsePostBlock(it, baseUrl, isOp = true)?.let(posts::add) }
+            val boardTitle = boardTitleRegex.find(normalized)
+                ?.groupValues?.getOrNull(1)
+                ?.let(::stripTags)
+                ?.trim()
+            val expiresAt = expireRegex.find(normalized)
+                ?.groupValues?.getOrNull(1)
+                ?.let(::stripTags)
+                ?.trim()
+            val deletedNotice = deletedNoticeRegex.find(normalized)
+                ?.groupValues?.getOrNull(1)
+                ?.let(::stripTags)
+                ?.replace("\\s+".toRegex(), "")
+                ?.trim()
 
-        if (firstReplyIndex != -1) {
-            val repliesHtml = normalized.substring(firstReplyIndex)
-            tableRegex.findAll(repliesHtml).forEach { match ->
-                val block = match.value
-                if (!block.contains("class=\"cno\"", ignoreCase = true) &&
-                    !block.contains("class=cno", ignoreCase = true)
-                ) {
-                    return@forEach
+            val posts = mutableListOf<Post>()
+            val firstReplyIndex = normalized.indexOf("<table border=0", ignoreCase = true)
+            val opBlock = extractOpBlock(normalized, firstReplyIndex)
+            opBlock?.let { parsePostBlock(it, baseUrl, isOp = true)?.let(posts::add) }
+
+            if (firstReplyIndex != -1) {
+                val repliesHtml = normalized.substring(firstReplyIndex)
+                tableRegex.findAll(repliesHtml).forEach { match ->
+                    val block = match.value
+                    if (!block.contains("class=\"cno\"", ignoreCase = true) &&
+                        !block.contains("class=cno", ignoreCase = true)
+                    ) {
+                        return@forEach
+                    }
+                    parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
                 }
-                parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
             }
-        }
 
-        val referenceCounts = computeReferencedCounts(posts)
-        val quoteReferenceMap = buildQuoteReferenceMap(posts)
-        val postsWithReferences = posts.map { post ->
-            post.copy(
-                referencedCount = referenceCounts[post.id] ?: 0,
-                quoteReferences = quoteReferenceMap[post.id].orEmpty()
+            val referenceCounts = computeReferencedCounts(posts)
+            val quoteReferenceMap = buildQuoteReferenceMap(posts)
+            val postsWithReferences = posts.map { post ->
+                post.copy(
+                    referencedCount = referenceCounts[post.id] ?: 0,
+                    quoteReferences = quoteReferenceMap[post.id].orEmpty()
+                )
+            }
+
+            val resolvedThreadId = if (threadId.isNotBlank()) threadId else postsWithReferences.firstOrNull()?.id.orEmpty()
+            ThreadPage(
+                threadId = resolvedThreadId,
+                boardTitle = boardTitle,
+                expiresAtLabel = expiresAt,
+                deletedNotice = deletedNotice,
+                posts = postsWithReferences
             )
+        } catch (e: Exception) {
+            println("ThreadHtmlParserCore: Failed to parse thread HTML: ${e.message}")
+            throw ParserException("Failed to parse thread HTML", e)
         }
-
-        val resolvedThreadId = if (threadId.isNotBlank()) threadId else postsWithReferences.firstOrNull()?.id.orEmpty()
-        return ThreadPage(
-            threadId = resolvedThreadId,
-            boardTitle = boardTitle,
-            expiresAtLabel = expiresAt,
-            deletedNotice = deletedNotice,
-            posts = postsWithReferences
-        )
     }
 
     private fun extractOpBlock(html: String, firstReplyIndex: Int): String? {
@@ -222,12 +232,20 @@ internal object ThreadHtmlParserCore {
         result = hexEntityRegex.replace(result) { match ->
             val value = match.groupValues.getOrNull(1) ?: return@replace ""
             val codePoint = runCatching { value.toInt(16) }.getOrNull()
-            codePoint?.toChar()?.toString() ?: ""
+            if (codePoint != null && codePoint in 0..0xFFFF) {
+                codePoint.toChar().toString()
+            } else {
+                match.value
+            }
         }
         result = numericEntityRegex.replace(result) { match ->
             val value = match.groupValues.getOrNull(1) ?: return@replace ""
             val codePoint = runCatching { value.toInt() }.getOrNull()
-            codePoint?.toChar()?.toString() ?: ""
+            if (codePoint != null && codePoint in 0..0xFFFF) {
+                codePoint.toChar().toString()
+            } else {
+                match.value
+            }
         }
         return result
     }

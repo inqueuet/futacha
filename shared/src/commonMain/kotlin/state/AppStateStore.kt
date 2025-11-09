@@ -4,6 +4,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
@@ -15,6 +17,8 @@ class AppStateStore internal constructor(
 ) {
     private val boardsSerializer = ListSerializer(BoardSummary.serializer())
     private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
+    private val boardsMutex = Mutex()
+    private val historyMutex = Mutex()
 
     val boards: Flow<List<BoardSummary>> = storage.boardsJson.map { stored ->
         stored?.let { decodeBoards(it) } ?: emptyList()
@@ -25,11 +29,15 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
-        storage.updateBoardsJson(json.encodeToString(boardsSerializer, boards))
+        boardsMutex.withLock {
+            storage.updateBoardsJson(json.encodeToString(boardsSerializer, boards))
+        }
     }
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
-        storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+        historyMutex.withLock {
+            storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+        }
     }
 
     suspend fun seedIfEmpty(
@@ -43,11 +51,17 @@ class AppStateStore internal constructor(
     }
     private fun decodeBoards(raw: String): List<BoardSummary> = runCatching {
         json.decodeFromString(boardsSerializer, raw)
-    }.getOrElse { emptyList() }
+    }.getOrElse { e ->
+        println("AppStateStore: Failed to decode boards: ${e.message}")
+        emptyList()
+    }
 
     private fun decodeHistory(raw: String): List<ThreadHistoryEntry> = runCatching {
         json.decodeFromString(historySerializer, raw)
-    }.getOrElse { emptyList() }
+    }.getOrElse { e ->
+        println("AppStateStore: Failed to decode history: ${e.message}")
+        emptyList()
+    }
 }
 
 fun createAppStateStore(platformContext: Any? = null): AppStateStore {

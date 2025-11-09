@@ -320,8 +320,14 @@ private fun slugify(value: String): String {
 
 private fun normalizeBoardUrl(raw: String): String {
     val trimmed = raw.trim()
-    if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
-        return trimmed
+
+    // Force HTTPS for security
+    return when {
+        trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+        trimmed.startsWith("http://", ignoreCase = true) -> {
+            println("FutachaApp: Converting HTTP to HTTPS for security: $trimmed")
+            trimmed.replaceFirst("http://", "https://", ignoreCase = true)
+        }
+        else -> "https://$trimmed"
     }
-    return "https://$trimmed"
 }

@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.model.CatalogItem
  */
 internal object CatalogHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://dat.2chan.net"
+    private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
 
     private val tableRegex = Regex(
         pattern = "<table[^>]+id=['\"]cattable['\"][^>]*>([\\s\\S]*?)</table>",
@@ -42,38 +43,47 @@ internal object CatalogHtmlParserCore {
     )
 
     fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> {
-        val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
-        val normalized = html.replace("\r\n", "\n")
-        val tableBody = tableRegex.find(normalized)?.groupValues?.getOrNull(1) ?: return emptyList()
-        return cellRegex.findAll(tableBody)
-            .mapIndexedNotNull { index, match ->
-                val cell = match.groupValues.getOrNull(1) ?: return@mapIndexedNotNull null
-                val href = anchorRegex.find(cell)?.groupValues?.getOrNull(1) ?: return@mapIndexedNotNull null
-                val threadId = threadIdRegex.find(href)?.groupValues?.getOrNull(1) ?: return@mapIndexedNotNull null
-                val thumbnail = imageRegex.find(cell)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.let { resolveUrl(it, resolvedBaseUrl) }
-                val titleText = titleRegex
-                    .find(cell)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.let(::cleanText)
-                val labelText = cellLabelRegex
-                    .find(cell)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.let(::cleanText)
-                val replies = labelText?.toIntOrNull() ?: 0
-                CatalogItem(
-                    id = threadId,
-                    threadUrl = resolveUrl(href, resolvedBaseUrl),
-                    title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${index + 1}",
-                    thumbnailUrl = thumbnail,
-                    replyCount = replies
-                )
-            }
-            .toList()
+        if (html.length > MAX_HTML_SIZE) {
+            throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
+        }
+
+        return try {
+            val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
+            val normalized = html.replace("\r\n", "\n")
+            val tableBody = tableRegex.find(normalized)?.groupValues?.getOrNull(1) ?: return emptyList()
+            cellRegex.findAll(tableBody)
+                .mapIndexedNotNull { index, match ->
+                    val cell = match.groupValues.getOrNull(1) ?: return@mapIndexedNotNull null
+                    val href = anchorRegex.find(cell)?.groupValues?.getOrNull(1) ?: return@mapIndexedNotNull null
+                    val threadId = threadIdRegex.find(href)?.groupValues?.getOrNull(1) ?: return@mapIndexedNotNull null
+                    val thumbnail = imageRegex.find(cell)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.let { resolveUrl(it, resolvedBaseUrl) }
+                    val titleText = titleRegex
+                        .find(cell)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.let(::cleanText)
+                    val labelText = cellLabelRegex
+                        .find(cell)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.let(::cleanText)
+                    val replies = labelText?.toIntOrNull() ?: 0
+                    CatalogItem(
+                        id = threadId,
+                        threadUrl = resolveUrl(href, resolvedBaseUrl),
+                        title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${index + 1}",
+                        thumbnailUrl = thumbnail,
+                        replyCount = replies
+                    )
+                }
+                .toList()
+        } catch (e: Exception) {
+            println("CatalogHtmlParserCore: Failed to parse catalog HTML: ${e.message}")
+            throw ParserException("Failed to parse catalog HTML", e)
+        }
     }
 
     private fun resolveUrl(path: String, baseUrl: String): String = when {
@@ -95,11 +105,19 @@ internal object CatalogHtmlParserCore {
         val withoutTags = htmlTagRegex.replace(raw, "")
         val decodedNumeric = numericEntityRegex.replace(withoutTags) { match ->
             val value = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return@replace match.value
-            value.toChar().toString()
+            if (value in 0..0xFFFF) {
+                value.toChar().toString()
+            } else {
+                match.value
+            }
         }
         val decodedHex = hexEntityRegex.replace(decodedNumeric) { match ->
             val value = match.groupValues.getOrNull(1)?.toIntOrNull(16) ?: return@replace match.value
-            value.toChar().toString()
+            if (value in 0..0xFFFF) {
+                value.toChar().toString()
+            } else {
+                match.value
+            }
         }
         return decodedHex
             .replace("&lt;", "<")

@@ -652,7 +652,7 @@ private fun BoardSummaryCard(
 sealed interface CatalogUiState {
     data object Loading : CatalogUiState
     data class Success(val items: List<CatalogItem>) : CatalogUiState
-    data object Error : CatalogUiState
+    data class Error(val message: String = "カタログを読み込めませんでした") : CatalogUiState
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
@@ -692,13 +692,22 @@ fun CatalogScreen(
 
     LaunchedEffect(board?.url, catalogMode) {
         if (board == null) {
-            uiState.value = CatalogUiState.Error
+            uiState.value = CatalogUiState.Error("板が選択されていません")
             return@LaunchedEffect
         }
         uiState.value = CatalogUiState.Loading
         runCatching { activeRepository.getCatalog(board.url, catalogMode) }
             .onSuccess { catalog -> uiState.value = CatalogUiState.Success(catalog) }
-            .onFailure { uiState.value = CatalogUiState.Error }
+            .onFailure { e ->
+                val message = when {
+                    e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
+                    e.message?.contains("404") == true -> "板が見つかりません (404)"
+                    e.message?.contains("500") == true -> "サーバーエラー (500)"
+                    e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
+                    else -> "カタログを読み込めませんでした: ${e.message ?: "不明なエラー"}"
+                }
+                uiState.value = CatalogUiState.Error(message)
+            }
     }
 
     val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -766,7 +775,7 @@ fun CatalogScreen(
                 }
             when (val state = currentState) {
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
-                CatalogUiState.Error -> CatalogError(modifier = contentModifier)
+                is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
                 is CatalogUiState.Success -> CatalogSuccessContent(
                     items = catalogMode.applyLocalSort(state.items),
                     onThreadSelected = onThreadSelected,
@@ -788,20 +797,19 @@ private fun LoadingCatalog(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CatalogError(modifier: Modifier = Modifier) {
+private fun CatalogError(message: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(16.dp)
+        ) {
             Text(
-                text = "カタログを読み込めませんでした",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Text(
-                text = "Mock リポジトリから取得しています。構成を確認してください。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = message,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
         }
     }
@@ -1081,7 +1089,7 @@ private enum class CatalogNavDestination(val label: String, val icon: ImageVecto
 
 sealed interface ThreadUiState {
     data object Loading : ThreadUiState
-    data object Error : ThreadUiState
+    data class Error(val message: String = "スレッドを読み込めませんでした") : ThreadUiState
     data class Success(val page: ThreadPage) : ThreadUiState
 }
 
@@ -1127,9 +1135,16 @@ fun ThreadScreen(
                 uiState.value = ThreadUiState.Loading
                 runCatching { activeRepository.getThread(board.url, threadId) }
                     .onSuccess { page -> uiState.value = ThreadUiState.Success(page) }
-                    .onFailure {
-                        uiState.value = ThreadUiState.Error
-                        snackbarHostState.showSnackbar("スレッドを読み込めませんでした")
+                    .onFailure { e ->
+                        val message = when {
+                            e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
+                            e.message?.contains("404") == true -> "スレッドが見つかりません (404)"
+                            e.message?.contains("500") == true -> "サーバーエラー (500)"
+                            e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
+                            else -> "スレッドを読み込めませんでした: ${e.message ?: "不明なエラー"}"
+                        }
+                        uiState.value = ThreadUiState.Error(message)
+                        snackbarHostState.showSnackbar(message)
                     }
             }
             Unit
@@ -1174,7 +1189,7 @@ fun ThreadScreen(
         )
     }
 
-    LaunchedEffect(threadId, lazyListState) {
+    LaunchedEffect(threadId) {
         snapshotFlow {
             lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
         }
@@ -1270,7 +1285,8 @@ fun ThreadScreen(
 
             when (val state = uiState.value) {
                 ThreadUiState.Loading -> ThreadLoading(modifier = contentModifier)
-                ThreadUiState.Error -> ThreadError(
+                is ThreadUiState.Error -> ThreadError(
+                    message = state.message,
                     modifier = contentModifier,
                     onRetry = refreshThread
                 )
@@ -1376,6 +1392,7 @@ private fun ThreadLoading(modifier: Modifier = Modifier) {
 
 @Composable
 private fun ThreadError(
+    message: String,
     modifier: Modifier = Modifier,
     onRetry: () -> Unit
 ) {
@@ -1385,11 +1402,13 @@ private fun ThreadError(
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "スレッドを読み込めませんでした",
-                style = MaterialTheme.typography.titleMedium
+                text = message,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
             Button(onClick = onRetry) {
                 Text("再読み込み")
