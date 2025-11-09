@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
 
 interface BoardRepository {
@@ -23,7 +24,8 @@ class DefaultBoardRepository(
         mode: CatalogMode
     ): List<CatalogItem> {
         val html = api.fetchCatalog(board, mode)
-        return parser.parseCatalog(html)
+        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
+        return parser.parseCatalog(html, baseUrl)
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {

@@ -7,12 +7,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.repo.createRemoteBoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
@@ -34,6 +36,7 @@ fun FutachaApp(
     FutachaTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             val coroutineScope = rememberCoroutineScope()
+            val remoteBoardRepository = remember { createRemoteBoardRepository() }
 
             LaunchedEffect(stateStore, boardList, history) {
                 stateStore.seedIfEmpty(boardList, history)
@@ -80,6 +83,19 @@ fun FutachaApp(
                         boards = persistedBoards,
                         history = persistedHistory,
                         onBoardSelected = { board -> selectedBoardId = board.id },
+                        onAddBoard = { name, url ->
+                            val normalizedUrl = normalizeBoardUrl(url)
+                            if (persistedBoards.none { it.url.equals(normalizedUrl, ignoreCase = true) }) {
+                                val newBoard = createCustomBoard(
+                                    name = name,
+                                    url = normalizedUrl,
+                                    existingBoards = persistedBoards
+                                )
+                                coroutineScope.launch {
+                                    stateStore.setBoards(persistedBoards + newBoard)
+                                }
+                            }
+                        },
                         onMenuAction = { },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry
@@ -87,6 +103,7 @@ fun FutachaApp(
                 }
 
                 selectedThreadId == null -> {
+                    val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
                     CatalogScreen(
                         board = selectedBoard,
                         history = persistedHistory,
@@ -106,7 +123,8 @@ fun FutachaApp(
                             selectedThreadUrl = item.threadUrl
                         },
                         onHistoryEntrySelected = openHistoryEntry,
-                        onHistoryEntryDismissed = dismissHistoryEntry
+                        onHistoryEntryDismissed = dismissHistoryEntry,
+                        repository = boardRepository
                     )
                 }
 
@@ -193,6 +211,7 @@ fun FutachaApp(
                         }
                     }
 
+                    val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
                     ThreadScreen(
                         board = selectedBoard,
                         history = persistedHistory,
@@ -208,10 +227,101 @@ fun FutachaApp(
                         },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
-                        onScrollPositionPersist = persistScrollPosition
+                        onScrollPositionPersist = persistScrollPosition,
+                        repository = boardRepository
                     )
                 }
             }
         }
     }
+}
+
+private fun BoardSummary.isMockBoard(): Boolean {
+    return url.contains("example.com", ignoreCase = true)
+}
+
+private fun createCustomBoard(
+    name: String,
+    url: String,
+    existingBoards: List<BoardSummary>
+): BoardSummary {
+    val trimmedName = name.trim().ifBlank { "新しい板" }
+    val normalizedUrl = url.trim()
+    val boardId = generateBoardId(normalizedUrl, trimmedName, existingBoards)
+    return BoardSummary(
+        id = boardId,
+        name = trimmedName,
+        category = "カスタム",
+        url = normalizedUrl,
+        description = "$trimmedName のユーザー追加板",
+        pinned = false
+    )
+}
+
+private fun generateBoardId(
+    url: String,
+    fallbackName: String,
+    existingBoards: List<BoardSummary>
+): String {
+    val candidates = buildList {
+        extractPathSegment(url)?.let { add(it) }
+        extractSubdomain(url)?.let { add(it) }
+        val nameSlug = slugify(fallbackName)
+        if (nameSlug.isNotBlank()) add(nameSlug)
+    }
+    val base = candidates.firstOrNull { it.isNotBlank() } ?: "board"
+    var candidate = base
+    var suffix = 1
+    while (existingBoards.any { it.id.equals(candidate, ignoreCase = true) }) {
+        candidate = "$base$suffix"
+        suffix += 1
+    }
+    return candidate
+}
+
+private fun extractPathSegment(url: String): String? {
+    val withoutScheme = url.substringAfter("//", url)
+    val slashIndex = withoutScheme.indexOf('/')
+    if (slashIndex == -1) return null
+    val path = withoutScheme.substring(slashIndex + 1)
+        .substringBefore('?')
+        .substringBefore('#')
+    if (path.isBlank()) return null
+    val firstSegment = path.split('/')
+        .firstOrNull { it.isNotBlank() }
+        ?: return null
+    return slugify(firstSegment)
+}
+
+private fun extractSubdomain(url: String): String? {
+    val withoutScheme = url.substringAfter("//", url)
+    val host = withoutScheme.substringBefore('/')
+    if (host.isBlank()) return null
+    val parts = host.split('.')
+    if (parts.isEmpty()) return null
+    val candidate = when {
+        parts.size >= 3 -> parts.first()
+        else -> parts.first()
+    }
+    return slugify(candidate)
+}
+
+private fun slugify(value: String): String {
+    val normalized = value.lowercase()
+    val builder = StringBuilder()
+    normalized.forEach { ch ->
+        when {
+            ch.isLetterOrDigit() -> builder.append(ch)
+            ch == '-' || ch == '_' -> builder.append(ch)
+        }
+    }
+    return builder.toString()
+}
+
+private fun normalizeBoardUrl(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+        return trimmed
+    }
+    return "https://$trimmed"
 }

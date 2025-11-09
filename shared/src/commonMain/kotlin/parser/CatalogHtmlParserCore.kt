@@ -10,12 +10,12 @@ internal object CatalogHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://dat.2chan.net"
 
     private val tableRegex = Regex(
-        pattern = "<table[^>]+id=['\"]cattable['\"][^>]*>(.*?)</table>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<table[^>]+id=['\"]cattable['\"][^>]*>([\\s\\S]*?)</table>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val cellRegex = Regex(
-        pattern = "<td[^>]*>(.*?)</td>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<td[^>]*>([\\s\\S]*?)</td>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val anchorRegex = Regex(
         pattern = "<a[^>]+href=['\"]([^'\"]+)['\"][^>]*>",
@@ -25,31 +25,24 @@ internal object CatalogHtmlParserCore {
         pattern = "<img[^>]+src=['\"]([^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
-    private val repliesRegex = Regex(
-        pattern = "<font[^>]*>(\\d+)</font>",
+    private val cellLabelRegex = Regex(
+        pattern = "<font[^>]*>([\\s\\S]*?)</font>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val titleRegex = Regex(
+        pattern = "<small[^>]*>([\\s\\S]*?)</small>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val threadIdRegex = Regex("res/(\\d+)\\.htm")
+    private val htmlTagRegex = Regex("<[^>]+>")
+    private val numericEntityRegex = Regex("&#(\\d+);")
+    private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
     private val knownTitles = mapOf(
-        "354621" to "料理板利用時のルール",
-        "354711" to "株スレ観測ログ",
-        "354693" to "政治と芸能の専門板",
-        "353918" to "鍋パの準備",
-        "353821" to "土鍋ごはんチャレンジ",
-        "352870" to "低温調理部屋",
-        "353755" to "スイーツ実況部",
-        "354446" to "日用品テイスティング",
-        "353520" to "夜食反省会",
-        "353990" to "早朝パン焼き",
-        "353777" to "業務スーパー巡礼",
-        "353612" to "弁当晒し",
-        "353400" to "地方食事情",
-        "353211" to "炊飯器研究会",
-        "353005" to "味の素に頼りたい夜",
-        "352910" to "野菜室整理スレ"
+        "1364612020" to "チュートリアル",
     )
 
-    fun parseCatalog(html: String): List<CatalogItem> {
+    fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> {
+        val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
         val normalized = html.replace("\r\n", "\n")
         val tableBody = tableRegex.find(normalized)?.groupValues?.getOrNull(1) ?: return emptyList()
         return cellRegex.findAll(tableBody)
@@ -57,12 +50,25 @@ internal object CatalogHtmlParserCore {
                 val cell = match.groupValues.getOrNull(1) ?: return@mapIndexedNotNull null
                 val href = anchorRegex.find(cell)?.groupValues?.getOrNull(1) ?: return@mapIndexedNotNull null
                 val threadId = threadIdRegex.find(href)?.groupValues?.getOrNull(1) ?: return@mapIndexedNotNull null
-                val thumbnail = imageRegex.find(cell)?.groupValues?.getOrNull(1)?.let(::resolveUrl)
-                val replies = repliesRegex.find(cell)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                val thumbnail = imageRegex.find(cell)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.let { resolveUrl(it, resolvedBaseUrl) }
+                val titleText = titleRegex
+                    .find(cell)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.let(::cleanText)
+                val labelText = cellLabelRegex
+                    .find(cell)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.let(::cleanText)
+                val replies = labelText?.toIntOrNull() ?: 0
                 CatalogItem(
                     id = threadId,
-                    threadUrl = resolveUrl(href),
-                    title = knownTitles[threadId] ?: "スレッド ${index + 1}",
+                    threadUrl = resolveUrl(href, resolvedBaseUrl),
+                    title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${index + 1}",
                     thumbnailUrl = thumbnail,
                     replyCount = replies
                 )
@@ -70,10 +76,37 @@ internal object CatalogHtmlParserCore {
             .toList()
     }
 
-    private fun resolveUrl(path: String): String = when {
+    private fun resolveUrl(path: String, baseUrl: String): String = when {
         path.startsWith("http://") || path.startsWith("https://") -> path
         path.startsWith("//") -> "https:$path"
-        path.startsWith("/") -> DEFAULT_BASE_URL + path
-        else -> "$DEFAULT_BASE_URL/$path"
+        path.startsWith("/") -> extractOrigin(baseUrl).trimEnd('/') + path
+        else -> baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+    }
+
+    private fun extractOrigin(baseUrl: String): String {
+        val schemeIndex = baseUrl.indexOf("://")
+        if (schemeIndex == -1) return DEFAULT_BASE_URL
+        val hostStart = schemeIndex + 3
+        val hostEnd = baseUrl.indexOf('/', startIndex = hostStart).takeIf { it != -1 } ?: baseUrl.length
+        return baseUrl.substring(0, hostEnd)
+    }
+
+    private fun cleanText(raw: String): String {
+        val withoutTags = htmlTagRegex.replace(raw, "")
+        val decodedNumeric = numericEntityRegex.replace(withoutTags) { match ->
+            val value = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return@replace match.value
+            value.toChar().toString()
+        }
+        val decodedHex = hexEntityRegex.replace(decodedNumeric) { match ->
+            val value = match.groupValues.getOrNull(1)?.toIntOrNull(16) ?: return@replace match.value
+            value.toChar().toString()
+        }
+        return decodedHex
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .trim()
     }
 }

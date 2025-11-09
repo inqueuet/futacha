@@ -4,6 +4,6 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.ThreadPage
 
 interface HtmlParser {
-    fun parseCatalog(html: String): List<CatalogItem>
+    fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem>
     fun parseThread(html: String): ThreadPage
 }

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.WatchLater
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Badge
@@ -75,6 +76,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -82,6 +84,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
@@ -152,6 +155,7 @@ fun BoardManagementScreen(
     boards: List<BoardSummary>,
     history: List<ThreadHistoryEntry>,
     onBoardSelected: (BoardSummary) -> Unit,
+    onAddBoard: (String, String) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -160,6 +164,7 @@ fun BoardManagementScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var isMenuExpanded by remember { mutableStateOf(false) }
+    var isAddDialogVisible by rememberSaveable { mutableStateOf(false) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
@@ -214,8 +219,12 @@ fun BoardManagementScreen(
                                     onClick = {
                                         isMenuExpanded = false
                                         onMenuAction(action)
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                        if (action == BoardManagementMenuAction.ADD) {
+                                            isAddDialogVisible = true
+                                        } else {
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                            }
                                         }
                                     }
                                 )
@@ -253,6 +262,92 @@ fun BoardManagementScreen(
             }
         }
     }
+
+    if (isAddDialogVisible) {
+        AddBoardDialog(
+            existingBoards = boards,
+            onDismiss = { isAddDialogVisible = false },
+            onSubmit = { name, url ->
+                onAddBoard(name, url)
+                isAddDialogVisible = false
+                scope.launch {
+                    snackbarHostState.showSnackbar("\"$name\" を追加しました")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AddBoardDialog(
+    existingBoards: List<BoardSummary>,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String) -> Unit
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var url by rememberSaveable { mutableStateOf("") }
+    val trimmedName = name.trim()
+    val trimmedUrl = url.trim()
+    val hasName = trimmedName.isNotEmpty()
+    val hasUrl = trimmedUrl.isNotEmpty()
+    val urlHasScheme = trimmedUrl.startsWith("http://", ignoreCase = true) ||
+        trimmedUrl.startsWith("https://", ignoreCase = true)
+    val isDuplicateUrl = existingBoards.any { it.url.equals(trimmedUrl, ignoreCase = true) }
+    val canSubmit = hasName && hasUrl && urlHasScheme && !isDuplicateUrl
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = "板を追加") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("板の名前") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = !hasName && name.isNotEmpty()
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("板のURL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = (hasUrl && !urlHasScheme) || isDuplicateUrl
+                )
+                val helperText = when {
+                    isDuplicateUrl -> "同じURLの板が既に登録されています"
+                    hasUrl && !urlHasScheme -> "http:// もしくは https:// から始まるURLを入力してください"
+                    else -> null
+                }
+                helperText?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canSubmit,
+                onClick = {
+                    onSubmit(trimmedName, trimmedUrl)
+                    name = ""
+                    url = ""
+                }
+            ) {
+                Text("追加")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -595,13 +690,13 @@ fun CatalogScreen(
         onBack()
     }
 
-    LaunchedEffect(board?.id, catalogMode) {
+    LaunchedEffect(board?.url, catalogMode) {
         if (board == null) {
             uiState.value = CatalogUiState.Error
             return@LaunchedEffect
         }
         uiState.value = CatalogUiState.Loading
-        runCatching { activeRepository.getCatalog(board.id, catalogMode) }
+        runCatching { activeRepository.getCatalog(board.url, catalogMode) }
             .onSuccess { catalog -> uiState.value = CatalogUiState.Success(catalog) }
             .onFailure { uiState.value = CatalogUiState.Error }
     }
@@ -1026,11 +1121,11 @@ fun ThreadScreen(
         onBack()
     }
 
-    val refreshThread: () -> Unit = remember(board.id, threadId, activeRepository) {
+    val refreshThread: () -> Unit = remember(board.url, threadId, activeRepository) {
         {
             coroutineScope.launch {
                 uiState.value = ThreadUiState.Loading
-                runCatching { activeRepository.getThread(board.id, threadId) }
+                runCatching { activeRepository.getThread(board.url, threadId) }
                     .onSuccess { page -> uiState.value = ThreadUiState.Success(page) }
                     .onFailure {
                         uiState.value = ThreadUiState.Error
@@ -1041,7 +1136,7 @@ fun ThreadScreen(
         }
     }
 
-    LaunchedEffect(board.id, threadId) {
+    LaunchedEffect(board.url, threadId) {
         refreshThread()
     }
 

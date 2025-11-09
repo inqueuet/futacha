@@ -21,24 +21,24 @@ internal object ThreadHtmlParserCore {
     private val canonicalIdRegex = Regex("/res/(\\d+)\\.htm")
     private val dataResRegex = Regex("data-res=['\"]?(\\d+)")
     private val boardTitleRegex = Regex(
-        pattern = "<span\\s+id=['\"]tit['\"]>(.*?)</span>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<span\\s+id=['\"]tit['\"]>([\\s\\S]*?)</span>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val expireRegex = Regex(
-        pattern = "<span(?=[^>]*class=['\"]?cntd['\"]?)[^>]*>(.*?)</span>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<span(?=[^>]*class=['\"]?cntd['\"]?)[^>]*>([\\s\\S]*?)</span>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val deletedNoticeRegex = Regex(
-        pattern = "<span\\s+id=['\"]ddel['\"]>(.*?)<br></span>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<span\\s+id=['\"]ddel['\"]>([\\s\\S]*?)<br></span>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val tableRegex = Regex(
-        pattern = "<table\\s+border=0[^>]*>.*?</table>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<table\\s+border=0[^>]*>([\\s\\S]*?)</table>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val blockquoteRegex = Regex(
-        pattern = "<blockquote[^>]*>(.*?)</blockquote>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<blockquote[^>]*>([\\s\\S]*?)</blockquote>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val postIdRegex = Regex(
         pattern = "<span(?=[^>]*class=['\"]?cno['\"]?)[^>]*>\\s*No\\.?\\s*(\\d+)",
@@ -57,8 +57,8 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val saidaneRegex = Regex(
-        pattern = "<a(?=[^>]*class=['\"]?sod['\"]?)[^>]*>(.*?)</a>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        pattern = "<a(?=[^>]*class=['\"]?sod['\"]?)[^>]*>([\\s\\S]*?)</a>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
     private val posterIdRegex = Regex("ID:[^\\s<]+")
     private val noReferenceRegex = Regex("No\\.?\\s*(\\d+)", RegexOption.IGNORE_CASE)
@@ -200,8 +200,8 @@ internal object ThreadHtmlParserCore {
 
     private fun spanRegex(className: String): Regex = Regex(
         pattern = "<span(?=[^>]*class=(?:['\"])?$className(?:['\"])?)" +
-            "[^>]*>(.*?)</span>",
-        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+            "[^>]*>([\\s\\S]*?)</span>",
+        options = setOf(RegexOption.IGNORE_CASE)
     )
 
     private fun stripTags(value: String): String = htmlTagRegex.replace(
@@ -237,10 +237,10 @@ internal object ThreadHtmlParserCore {
         val posterIdIndex = buildPosterIdIndex(posts)
         val messageLineIndex = buildMessageLineIndex(posts)
         val counts = mutableMapOf<String, Int>()
-        posts.forEach { post ->
+        posts.forEach { post: Post ->
             if (post.messageHtml.isBlank()) return@forEach
-            extractQuoteLines(post.messageHtml).forEach { quoteLine ->
-                resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex).forEach { targetId ->
+            extractQuoteLines(post.messageHtml).forEach { quoteLine: String ->
+                resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex).forEach { targetId: String ->
                     counts[targetId] = counts.getOrDefault(targetId, 0) + 1
                 }
             }
@@ -253,11 +253,12 @@ internal object ThreadHtmlParserCore {
         val posterIdIndex = buildPosterIdIndex(posts)
         val messageLineIndex = buildMessageLineIndex(posts)
         val map = mutableMapOf<String, MutableList<QuoteReference>>()
-        posts.forEach { post ->
+        posts.forEach { post: Post ->
             val quoteLines = extractQuoteLines(post.messageHtml)
             if (quoteLines.isEmpty()) return@forEach
-            val references = quoteLines.map { quoteLine ->
-                val targets = resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex).toList()
+            val references = quoteLines.map { quoteLine: String ->
+                val targets: List<String> = resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex)
+                    .toList()
                 QuoteReference(
                     text = quoteLine.trim(),
                     targetPostIds = targets
@@ -287,7 +288,7 @@ internal object ThreadHtmlParserCore {
 
     private fun buildPosterIdIndex(posts: List<Post>): Map<String, Set<String>> {
         return posts
-            .mapNotNull { post ->
+            .mapNotNull { post: Post ->
                 val id = post.posterId?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 id to post.id
             }
@@ -297,13 +298,13 @@ internal object ThreadHtmlParserCore {
 
     private fun buildMessageLineIndex(posts: List<Post>): Map<String, Set<String>> {
         val index = mutableMapOf<String, MutableSet<String>>()
-        posts.forEach { post ->
+        posts.forEach { post: Post ->
             if (post.messageHtml.isBlank()) return@forEach
             decodeHtmlEntities(stripTags(post.messageHtml))
                 .lines()
                 .map { normalizeQuoteText(it) }
                 .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
-                .forEach { line ->
+                .forEach { line: String ->
                     index.getOrPut(line) { mutableSetOf() }.add(post.id)
                 }
         }
