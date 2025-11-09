@@ -3,12 +3,15 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlin.time.ExperimentalTime
 
+@OptIn(ExperimentalTime::class)
 class AppStateStore internal constructor(
     private val storage: PlatformStateStorage,
     private val json: Json = Json {
@@ -37,6 +40,71 @@ class AppStateStore internal constructor(
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         historyMutex.withLock {
             storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+        }
+    }
+
+    /**
+     * Thread-safe update of scroll position in history.
+     * This prevents race conditions when multiple scroll updates occur concurrently.
+     */
+    suspend fun updateHistoryScrollPosition(
+        threadId: String,
+        index: Int,
+        offset: Int,
+        boardId: String,
+        title: String,
+        titleImageUrl: String,
+        boardName: String,
+        boardUrl: String,
+        replyCount: Int
+    ) {
+        historyMutex.withLock {
+            // Read current state within the lock
+            val currentHistoryJson = storage.historyJson.first()
+            val currentHistory = currentHistoryJson?.let { decodeHistory(it) } ?: emptyList()
+
+            val existingEntry = currentHistory.firstOrNull { it.threadId == threadId }
+
+            // Skip update if scroll position hasn't changed
+            if (existingEntry != null &&
+                existingEntry.lastReadItemIndex == index &&
+                existingEntry.lastReadItemOffset == offset
+            ) {
+                return
+            }
+
+            val updatedHistory = when {
+                existingEntry != null -> currentHistory.map { entry ->
+                    if (entry.threadId == threadId) {
+                        entry.copy(
+                            lastReadItemIndex = index,
+                            lastReadItemOffset = offset
+                        )
+                    } else {
+                        entry
+                    }
+                }
+
+                else -> buildList {
+                    add(
+                        ThreadHistoryEntry(
+                            threadId = threadId,
+                            boardId = boardId,
+                            title = title,
+                            titleImageUrl = titleImageUrl,
+                            boardName = boardName,
+                            boardUrl = boardUrl,
+                            lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                            replyCount = replyCount,
+                            lastReadItemIndex = index,
+                            lastReadItemOffset = offset
+                        )
+                    )
+                    addAll(currentHistory)
+                }
+            }
+
+            storage.updateHistoryJson(json.encodeToString(historySerializer, updatedHistory))
         }
     }
 

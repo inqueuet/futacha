@@ -14,6 +14,7 @@ import com.valoser.futacha.shared.model.ThreadPage
 internal object ThreadHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://dat.2chan.net"
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
+    private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
 
     private val canonicalRegex = Regex(
         pattern = "<link[^>]+rel=['\"]canonical['\"][^>]+href=['\"]([^'\"]+)['\"]",
@@ -22,23 +23,39 @@ internal object ThreadHtmlParserCore {
     private val canonicalIdRegex = Regex("/res/(\\d+)\\.htm")
     private val dataResRegex = Regex("data-res=['\"]?(\\d+)")
     private val boardTitleRegex = Regex(
-        pattern = "<span\\s+id=['\"]tit['\"]>([\\s\\S]*?)</span>",
+        pattern = "<span\\s+id=['\"]tit['\"]>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val spanEndRegex = Regex(
+        pattern = "</span>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val expireRegex = Regex(
-        pattern = "<span(?=[^>]*class=['\"]?cntd['\"]?)[^>]*>([\\s\\S]*?)</span>",
+        pattern = "<span(?=[^>]*class=['\"]?cntd['\"]?)[^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val deletedNoticeRegex = Regex(
-        pattern = "<span\\s+id=['\"]ddel['\"]>([\\s\\S]*?)<br></span>",
+        pattern = "<span\\s+id=['\"]ddel['\"]>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val brEndRegex = Regex(
+        pattern = "<br></span>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val tableRegex = Regex(
-        pattern = "<table\\s+border=0[^>]*>([\\s\\S]*?)</table>",
+        pattern = "<table\\s+border=0[^>]*>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val tableEndRegex = Regex(
+        pattern = "</table>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val blockquoteRegex = Regex(
-        pattern = "<blockquote[^>]*>([\\s\\S]*?)</blockquote>",
+        pattern = "<blockquote[^>]*>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val blockquoteEndRegex = Regex(
+        pattern = "</blockquote>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val postIdRegex = Regex(
@@ -83,16 +100,13 @@ internal object ThreadHtmlParserCore {
                 ?: postIdRegex.find(normalized)?.groupValues?.getOrNull(1)
                 ?: ""
 
-            val boardTitle = boardTitleRegex.find(normalized)
-                ?.groupValues?.getOrNull(1)
+            val boardTitle = extractBetween(normalized, boardTitleRegex, spanEndRegex)
                 ?.let(::stripTags)
                 ?.trim()
-            val expiresAt = expireRegex.find(normalized)
-                ?.groupValues?.getOrNull(1)
+            val expiresAt = extractBetween(normalized, expireRegex, spanEndRegex)
                 ?.let(::stripTags)
                 ?.trim()
-            val deletedNotice = deletedNoticeRegex.find(normalized)
-                ?.groupValues?.getOrNull(1)
+            val deletedNotice = extractBetween(normalized, deletedNoticeRegex, brEndRegex)
                 ?.let(::stripTags)
                 ?.replace("\\s+".toRegex(), "")
                 ?.trim()
@@ -104,14 +118,24 @@ internal object ThreadHtmlParserCore {
 
             if (firstReplyIndex != -1) {
                 val repliesHtml = normalized.substring(firstReplyIndex)
-                tableRegex.findAll(repliesHtml).forEach { match ->
-                    val block = match.value
-                    if (!block.contains("class=\"cno\"", ignoreCase = true) &&
-                        !block.contains("class=cno", ignoreCase = true)
-                    ) {
-                        return@forEach
+                var searchStart = 0
+
+                while (searchStart < repliesHtml.length) {
+                    val tableStart = tableRegex.find(repliesHtml, searchStart) ?: break
+                    val tableEnd = tableEndRegex.find(repliesHtml, tableStart.range.last) ?: break
+                    val block = repliesHtml.substring(tableStart.range.first, tableEnd.range.last + 1)
+
+                    if (block.length > MAX_CHUNK_SIZE) {
+                        println("ThreadHtmlParserCore: Warning - large table block ${block.length} bytes")
                     }
-                    parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
+
+                    if (block.contains("class=\"cno\"", ignoreCase = true) ||
+                        block.contains("class=cno", ignoreCase = true)
+                    ) {
+                        parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
+                    }
+
+                    searchStart = tableEnd.range.last + 1
                 }
             }
 
@@ -136,6 +160,12 @@ internal object ThreadHtmlParserCore {
             println("ThreadHtmlParserCore: Failed to parse thread HTML: ${e.message}")
             throw ParserException("Failed to parse thread HTML", e)
         }
+    }
+
+    private fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {
+        val start = startRegex.find(text) ?: return null
+        val end = endRegex.find(text, start.range.last) ?: return null
+        return text.substring(start.range.last + 1, end.range.first)
     }
 
     private fun extractOpBlock(html: String, firstReplyIndex: Int): String? {
@@ -163,9 +193,7 @@ internal object ThreadHtmlParserCore {
         val timestampRaw = sanitizeInlineText(block, "cnw")
         val posterId = timestampRaw?.let { posterIdRegex.find(it)?.value }
         val timestamp = timestampRaw.orEmpty()
-        val messageHtml = blockquoteRegex.find(block)
-            ?.groupValues
-            ?.getOrNull(1)
+        val messageHtml = extractBetween(block, blockquoteRegex, blockquoteEndRegex)
             ?.let(::cleanMessageHtml)
             .orEmpty()
         val imageUrl = srcLinkRegex.find(block)?.groupValues?.getOrNull(1)?.let { resolveUrl(it, baseUrl) }

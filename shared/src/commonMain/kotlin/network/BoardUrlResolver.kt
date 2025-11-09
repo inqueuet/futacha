@@ -33,6 +33,12 @@ internal object BoardUrlResolver {
             throw IllegalArgumentException("Thread ID cannot be blank")
         }
 
+        // Validate threadId to prevent path traversal attacks
+        val sanitizedThreadId = sanitizeThreadId(threadId)
+        if (sanitizedThreadId.isBlank()) {
+            throw IllegalArgumentException("Invalid thread ID: contains unsafe characters")
+        }
+
         return try {
             val base = resolveBoardBaseUrl(boardUrl)
             val sanitizedBase = if (base.endsWith("/")) base.dropLast(1) else base
@@ -40,12 +46,22 @@ internal object BoardUrlResolver {
                 append(sanitizedBase)
                 if (sanitizedBase.isNotEmpty()) append('/')
                 append("res/")
-                append(threadId.trim())
+                append(sanitizedThreadId)
                 append(".htm")
             }
         } catch (e: Exception) {
             println("BoardUrlResolver: Failed to resolve thread URL for board='$boardUrl', thread='$threadId': ${e.message}")
             throw IllegalArgumentException("Invalid board URL or thread ID", e)
+        }
+    }
+
+    private fun sanitizeThreadId(threadId: String): String {
+        val trimmed = threadId.trim()
+        // Only allow digits (thread IDs should be numeric)
+        return if (trimmed.all { it.isDigit() }) {
+            trimmed
+        } else {
+            ""
         }
     }
 

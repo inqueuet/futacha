@@ -292,8 +292,21 @@ private fun AddBoardDialog(
     val hasUrl = trimmedUrl.isNotEmpty()
     val urlHasScheme = trimmedUrl.startsWith("http://", ignoreCase = true) ||
         trimmedUrl.startsWith("https://", ignoreCase = true)
+
+    // Enhanced URL validation
+    val isValidUrl = hasUrl && urlHasScheme && run {
+        val urlWithoutScheme = trimmedUrl.removePrefix("https://").removePrefix("http://")
+        // Check for valid domain structure
+        urlWithoutScheme.isNotEmpty() &&
+            !urlWithoutScheme.startsWith("/") &&
+            !urlWithoutScheme.startsWith(".") &&
+            urlWithoutScheme.contains(".") && // Must have at least one dot for domain
+            !urlWithoutScheme.contains("..") && // No consecutive dots
+            !urlWithoutScheme.contains(" ") // No spaces
+    }
+
     val isDuplicateUrl = existingBoards.any { it.url.equals(trimmedUrl, ignoreCase = true) }
-    val canSubmit = hasName && hasUrl && urlHasScheme && !isDuplicateUrl
+    val canSubmit = hasName && isValidUrl && !isDuplicateUrl
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -314,11 +327,12 @@ private fun AddBoardDialog(
                     label = { Text("板のURL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    isError = (hasUrl && !urlHasScheme) || isDuplicateUrl
+                    isError = hasUrl && (!isValidUrl || isDuplicateUrl)
                 )
                 val helperText = when {
                     isDuplicateUrl -> "同じURLの板が既に登録されています"
                     hasUrl && !urlHasScheme -> "http:// もしくは https:// から始まるURLを入力してください"
+                    hasUrl && !isValidUrl -> "有効なURLを入力してください（例: https://example.com/board）"
                     else -> null
                 }
                 helperText?.let { message ->
