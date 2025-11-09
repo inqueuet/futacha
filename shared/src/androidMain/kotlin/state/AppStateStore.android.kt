@@ -29,21 +29,44 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data.map { prefs -> prefs[historyKey] }
 
     override suspend fun updateBoardsJson(value: String) {
-        context.dataStore.edit { prefs -> prefs[boardsKey] = value }
+        try {
+            context.dataStore.edit { prefs -> prefs[boardsKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update boards: ${e.message}")
+            // Re-throw as a more specific exception for caller to handle
+            throw StorageException("Failed to save boards data", e)
+        }
     }
 
     override suspend fun updateHistoryJson(value: String) {
-        context.dataStore.edit { prefs -> prefs[historyKey] = value }
+        try {
+            context.dataStore.edit { prefs -> prefs[historyKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update history: ${e.message}")
+            // Re-throw as a more specific exception for caller to handle
+            throw StorageException("Failed to save history data", e)
+        }
     }
 
     override suspend fun seedIfEmpty(defaultBoardsJson: String, defaultHistoryJson: String) {
-        context.dataStore.edit { prefs ->
-            if (!prefs.contains(boardsKey)) {
-                prefs[boardsKey] = defaultBoardsJson
+        try {
+            context.dataStore.edit { prefs ->
+                if (!prefs.contains(boardsKey)) {
+                    prefs[boardsKey] = defaultBoardsJson
+                }
+                if (!prefs.contains(historyKey)) {
+                    prefs[historyKey] = defaultHistoryJson
+                }
             }
-            if (!prefs.contains(historyKey)) {
-                prefs[historyKey] = defaultHistoryJson
-            }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to seed data: ${e.message}")
+            // Re-throw as a more specific exception for caller to handle
+            throw StorageException("Failed to initialize default data", e)
         }
     }
 }
+
+/**
+ * Exception thrown when storage operations fail
+ */
+class StorageException(message: String, cause: Throwable? = null) : Exception(message, cause)

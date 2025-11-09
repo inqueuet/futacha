@@ -139,6 +139,7 @@ import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -714,18 +715,30 @@ fun CatalogScreen(
             return@LaunchedEffect
         }
         uiState.value = CatalogUiState.Loading
-        runCatching { activeRepository.getCatalog(board.url, catalogMode) }
-            .onSuccess { catalog -> uiState.value = CatalogUiState.Success(catalog) }
-            .onFailure { e ->
+
+        // Use try-finally to ensure cleanup even on cancellation
+        try {
+            val catalog = activeRepository.getCatalog(board.url, catalogMode)
+            // Check if still active before updating state
+            if (isActive) {
+                uiState.value = CatalogUiState.Success(catalog)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Rethrow cancellation to properly cancel the coroutine
+            throw e
+        } catch (e: Exception) {
+            if (isActive) {
                 val message = when {
                     e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
                     e.message?.contains("404") == true -> "板が見つかりません (404)"
                     e.message?.contains("500") == true -> "サーバーエラー (500)"
                     e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
+                    e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
                     else -> "カタログを読み込めませんでした: ${e.message ?: "不明なエラー"}"
                 }
                 uiState.value = CatalogUiState.Error(message)
             }
+        }
     }
 
     val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -1151,19 +1164,29 @@ fun ThreadScreen(
         {
             coroutineScope.launch {
                 uiState.value = ThreadUiState.Loading
-                runCatching { activeRepository.getThread(board.url, threadId) }
-                    .onSuccess { page -> uiState.value = ThreadUiState.Success(page) }
-                    .onFailure { e ->
+                try {
+                    val page = activeRepository.getThread(board.url, threadId)
+                    // Check if still active before updating state
+                    if (isActive) {
+                        uiState.value = ThreadUiState.Success(page)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Rethrow cancellation to properly cancel the coroutine
+                    throw e
+                } catch (e: Exception) {
+                    if (isActive) {
                         val message = when {
                             e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
                             e.message?.contains("404") == true -> "スレッドが見つかりません (404)"
                             e.message?.contains("500") == true -> "サーバーエラー (500)"
                             e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
+                            e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
                             else -> "スレッドを読み込めませんでした: ${e.message ?: "不明なエラー"}"
                         }
                         uiState.value = ThreadUiState.Error(message)
                         snackbarHostState.showSnackbar(message)
                     }
+                }
             }
             Unit
         }
@@ -1212,9 +1235,12 @@ fun ThreadScreen(
             lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
         }
             .distinctUntilChanged()
-            .debounce(250)
+            .debounce(500) // Increased from 250ms to reduce write frequency
             .collect { (index, offset) ->
-                onScrollPositionPersist(threadId, index, offset)
+                // Only persist if position has meaningfully changed
+                if (index > 0 || offset > 0) {
+                    onScrollPositionPersist(threadId, index, offset)
+                }
             }
     }
 

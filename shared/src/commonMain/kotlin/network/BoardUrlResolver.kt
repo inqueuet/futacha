@@ -70,13 +70,22 @@ internal object BoardUrlResolver {
             throw IllegalArgumentException("Board URL cannot be blank")
         }
 
-        val url = runCatching { Url(boardUrl) }.getOrNull()
-        if (url == null) {
-            println("BoardUrlResolver: Failed to parse URL '$boardUrl', using fallback")
-            val fallback = boardUrl.substringBefore('#').substringBefore('?').trimEnd('/')
-            if (fallback.isBlank()) {
+        val url = runCatching { Url(boardUrl) }.getOrElse { error ->
+            println("BoardUrlResolver: Failed to parse URL '$boardUrl': ${error.message}")
+            // More robust fallback - validate URL structure before using
+            val fallback = boardUrl
+                .substringBefore('#')
+                .substringBefore('?')
+                .trimEnd('/')
+
+            // Validate fallback has basic URL structure
+            if (fallback.isBlank() ||
+                (!fallback.startsWith("http://", ignoreCase = true) &&
+                 !fallback.startsWith("https://", ignoreCase = true))) {
                 throw IllegalArgumentException("Invalid board URL: $boardUrl")
             }
+
+            // Return null to force explicit URL handling
             return fallback
         }
         val segments = url.encodedPath

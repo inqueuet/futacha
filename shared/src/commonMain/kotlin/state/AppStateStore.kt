@@ -33,13 +33,23 @@ class AppStateStore internal constructor(
 
     suspend fun setBoards(boards: List<BoardSummary>) {
         boardsMutex.withLock {
-            storage.updateBoardsJson(json.encodeToString(boardsSerializer, boards))
+            try {
+                storage.updateBoardsJson(json.encodeToString(boardsSerializer, boards))
+            } catch (e: Exception) {
+                println("AppStateStore: Failed to save boards: ${e.message}")
+                // Log error but don't crash - data will be lost but app continues
+            }
         }
     }
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         historyMutex.withLock {
-            storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+            try {
+                storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+            } catch (e: Exception) {
+                println("AppStateStore: Failed to save history: ${e.message}")
+                // Log error but don't crash - data will be lost but app continues
+            }
         }
     }
 
@@ -113,7 +123,12 @@ class AppStateStore internal constructor(
                 }
             }
 
-            storage.updateHistoryJson(json.encodeToString(historySerializer, updatedHistory))
+            try {
+                storage.updateHistoryJson(json.encodeToString(historySerializer, updatedHistory))
+            } catch (e: Exception) {
+                println("AppStateStore: Failed to update scroll position: ${e.message}")
+                // Log error but don't crash
+            }
         }
     }
 
@@ -121,10 +136,15 @@ class AppStateStore internal constructor(
         defaultBoards: List<BoardSummary>,
         defaultHistory: List<ThreadHistoryEntry>
     ) {
-        storage.seedIfEmpty(
-            json.encodeToString(boardsSerializer, defaultBoards),
-            json.encodeToString(historySerializer, defaultHistory)
-        )
+        try {
+            storage.seedIfEmpty(
+                json.encodeToString(boardsSerializer, defaultBoards),
+                json.encodeToString(historySerializer, defaultHistory)
+            )
+        } catch (e: Exception) {
+            println("AppStateStore: Failed to seed default data: ${e.message}")
+            // Log error but don't crash - app will work with empty state
+        }
     }
     private fun decodeBoards(raw: String): List<BoardSummary> = runCatching {
         json.decodeFromString(boardsSerializer, raw)

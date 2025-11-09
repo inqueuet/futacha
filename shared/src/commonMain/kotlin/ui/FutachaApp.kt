@@ -36,12 +36,14 @@ fun FutachaApp(
     FutachaTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             val coroutineScope = rememberCoroutineScope()
-            val remoteBoardRepository = remember {
+            // Use remember with Unit key to ensure single instance per composition lifecycle
+            val remoteBoardRepository = remember(Unit) {
                 createRemoteBoardRepository()
             }
 
             // Clean up repository when composable leaves composition
-            androidx.compose.runtime.DisposableEffect(remoteBoardRepository) {
+            // Add Unit key to ensure DisposableEffect runs only once per composition
+            androidx.compose.runtime.DisposableEffect(Unit) {
                 onDispose {
                     remoteBoardRepository.close()
                 }

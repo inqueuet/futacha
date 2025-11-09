@@ -74,8 +74,9 @@ internal object ThreadHtmlParserCore {
         pattern = "<img[^>]+src=['\"]([^'\"]*/thumb/[^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // Simplified regex to prevent ReDoS - match saidane links more carefully
     private val saidaneRegex = Regex(
-        pattern = "<a(?=[^>]*class=['\"]?sod['\"]?)[^>]*>([\\s\\S]*?)</a>",
+        pattern = "<a[^>]*class=['\"]?sod['\"]?[^>]*>([^<]+)</a>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val posterIdRegex = Regex("ID:[^\\s<]+")
@@ -95,10 +96,17 @@ internal object ThreadHtmlParserCore {
             val normalized = html.replace("\r\n", "\n")
             val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
             val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL
-            val threadId = canonical?.let { canonicalIdRegex.find(it)?.groupValues?.getOrNull(1) }
-                ?: dataResRegex.find(normalized)?.groupValues?.getOrNull(1)
-                ?: postIdRegex.find(normalized)?.groupValues?.getOrNull(1)
-                ?: ""
+
+            // Extract threadId with better error handling
+            val threadId = runCatching {
+                canonical?.let { canonicalIdRegex.find(it)?.groupValues?.getOrNull(1) }
+                    ?: dataResRegex.find(normalized)?.groupValues?.getOrNull(1)
+                    ?: postIdRegex.find(normalized)?.groupValues?.getOrNull(1)
+                    ?: ""
+            }.getOrElse {
+                println("ThreadHtmlParserCore: Failed to extract threadId: ${it.message}")
+                ""
+            }
 
             val boardTitle = extractBetween(normalized, boardTitleRegex, spanEndRegex)
                 ?.let(::stripTags)
@@ -120,12 +128,22 @@ internal object ThreadHtmlParserCore {
                 val repliesHtml = normalized.substring(firstReplyIndex)
                 var searchStart = 0
                 var iterationCount = 0
-                val maxIterations = 10000 // Prevent infinite loops
+                val maxIterations = 5000 // Reduced to prevent ANR - allows up to 5000 posts
+                val maxPosts = 3000 // Additional safety: maximum number of posts to parse
 
-                while (searchStart < repliesHtml.length && iterationCount < maxIterations) {
+                while (searchStart < repliesHtml.length &&
+                       iterationCount < maxIterations &&
+                       posts.size < maxPosts) {
                     iterationCount++
                     val tableStart = tableRegex.find(repliesHtml, searchStart) ?: break
                     val tableEnd = tableEndRegex.find(repliesHtml, tableStart.range.last) ?: break
+
+                    // Safety check to prevent infinite loop from invalid ranges
+                    if (tableEnd.range.last <= tableStart.range.last) {
+                        println("ThreadHtmlParserCore: Invalid table range detected, stopping parse")
+                        break
+                    }
+
                     val block = repliesHtml.substring(tableStart.range.first, tableEnd.range.last + 1)
 
                     if (block.length > MAX_CHUNK_SIZE) {
@@ -148,12 +166,16 @@ internal object ThreadHtmlParserCore {
 
                     // Safety check to prevent searchStart from going backwards or staying the same
                     if (searchStart <= tableEnd.range.last) {
+                        println("ThreadHtmlParserCore: Search position not advancing, stopping parse")
                         break
                     }
                 }
 
                 if (iterationCount >= maxIterations) {
-                    println("ThreadHtmlParserCore: Warning - reached maximum iteration limit, possible malformed HTML")
+                    println("ThreadHtmlParserCore: Reached maximum iteration limit ($maxIterations), thread may be truncated")
+                }
+                if (posts.size >= maxPosts) {
+                    println("ThreadHtmlParserCore: Reached maximum post limit ($maxPosts), thread truncated")
                 }
             }
 

@@ -84,10 +84,18 @@ internal object CatalogHtmlParserCore {
             val items = mutableListOf<CatalogItem>()
             var searchStart = 0
             var index = 0
+            val maxCatalogItems = 1000 // Prevent excessive parsing
 
-            while (searchStart < tableBody.length) {
+            while (searchStart < tableBody.length && items.size < maxCatalogItems) {
                 val cellStart = cellRegex.find(tableBody, searchStart) ?: break
                 val cellEnd = cellEndRegex.find(tableBody, cellStart.range.last) ?: break
+
+                // Safety check for invalid ranges
+                if (cellEnd.range.last <= cellStart.range.last) {
+                    println("CatalogHtmlParserCore: Invalid cell range detected")
+                    break
+                }
+
                 val cell = tableBody.substring(cellStart.range.last + 1, cellEnd.range.first)
 
                 val href = anchorRegex.find(cell)?.groupValues?.getOrNull(1)
@@ -114,6 +122,16 @@ internal object CatalogHtmlParserCore {
                 }
 
                 searchStart = cellEnd.range.last + 1
+
+                // Safety check to prevent infinite loop
+                if (searchStart <= cellEnd.range.last) {
+                    println("CatalogHtmlParserCore: Search position not advancing")
+                    break
+                }
+            }
+
+            if (items.size >= maxCatalogItems) {
+                println("CatalogHtmlParserCore: Reached maximum catalog items limit ($maxCatalogItems)")
             }
 
             items
