@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.parser
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadPage
+import kotlin.text.concatToString
 
 /**
  * Minimal-yet-robust parser that understands Futaba thread markup.
@@ -301,12 +302,7 @@ internal object ThreadHtmlParserCore {
             val value = match.groupValues.getOrNull(1) ?: return@replace ""
             val codePoint = runCatching { value.toInt(16) }.getOrNull()
             if (codePoint != null && codePoint in 0x20..0x10FFFF) {
-                // Handle surrogate pairs for characters above 0xFFFF
-                if (codePoint > 0xFFFF) {
-                    String(intArrayOf(codePoint), 0, 1)
-                } else {
-                    codePoint.toChar().toString()
-                }
+                codePointToString(codePoint)
             } else {
                 match.value
             }
@@ -315,17 +311,23 @@ internal object ThreadHtmlParserCore {
             val value = match.groupValues.getOrNull(1) ?: return@replace ""
             val codePoint = runCatching { value.toInt() }.getOrNull()
             if (codePoint != null && codePoint in 0x20..0x10FFFF) {
-                // Handle surrogate pairs for characters above 0xFFFF
-                if (codePoint > 0xFFFF) {
-                    String(intArrayOf(codePoint), 0, 1)
-                } else {
-                    codePoint.toChar().toString()
-                }
+                codePointToString(codePoint)
             } else {
                 match.value
             }
         }
         return result
+    }
+
+    private fun codePointToString(codePoint: Int): String {
+        return if (codePoint <= 0xFFFF) {
+            codePoint.toChar().toString()
+        } else {
+            val cpPrime = codePoint - 0x10000
+            val highSurrogate = ((cpPrime shr 10) + 0xD800).toChar()
+            val lowSurrogate = ((cpPrime and 0x3FF) + 0xDC00).toChar()
+            charArrayOf(highSurrogate, lowSurrogate).concatToString()
+        }
     }
 
     private fun computeReferencedCounts(posts: List<Post>): Map<String, Int> {
@@ -337,7 +339,7 @@ internal object ThreadHtmlParserCore {
             if (post.messageHtml.isBlank()) return@forEach
             extractQuoteLines(post.messageHtml).forEach { quoteLine: String ->
                 resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex).forEach { targetId: String ->
-                    counts[targetId] = counts.getOrDefault(targetId, 0) + 1
+                    counts[targetId] = counts[targetId]?.plus(1) ?: 1
                 }
             }
         }

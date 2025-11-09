@@ -6,6 +6,19 @@
 
 ---
 
+## 🔍 最新共通化チェック
+
+- **モジュール構成**: `shared/build.gradle.kts` で Compose Multiplatform + KMP を有効化し、`androidTarget` と `iosX64/iosArm64/iosSimulatorArm64` を同一ソースセットにぶら下げているため UI/ロジックを完全共有できます。
+- **エントリーポイント**: Android (`app-android/src/main/java/com/valoser/futacha/MainActivity.kt`) と iOS (`shared/src/iosMain/kotlin/MainViewController.kt`) はどちらも `createAppStateStore()` で状態永続レイヤーを注入し、`FutachaApp` をそのまま表示するだけの薄いホストになっています。
+- **共通UI/ロジック**: `shared/src/commonMain/kotlin/ui/FutachaApp.kt` 配下に `BoardManagementScreen`, `CatalogScreen`, `ThreadScreen` など Compose UI があり、`repo/`, `network/`, `parser/` で HTTP クライアント/HTMLパース/リポジトリを共通実装しています。
+- **プラットフォーム固有実装**:
+  - `state/AppStateStore` は `createPlatformStateStorage` だけを expect/actual 化し、Android は DataStore、iOS は NSUserDefaults を利用。
+  - `network/HttpClientFactory` は Android=OkHttp、iOS=Darwin のみ差し替え。
+  - `parser/ParserFactory` と `ui/util/PlatformBackHandler` も expect/actual で必要最低限の差分に留めています。
+- **リソース共有の実際**: UI からは `createRemoteBoardRepository()` を経由して `HttpBoardApi` + `HtmlParser`（どちらも commonMain）を利用しており、HTTP レイヤーや HTML 解析は両OSで同じ Kotlin コードを通ります。
+
+---
+
 ## 📊 Project Overview
 
 | Layer | Tech | 共通化率 | Purpose |
