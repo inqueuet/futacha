@@ -37,6 +37,39 @@ class FakeBoardRepository(
         return MockBoardData.thread(threadId)
     }
 
+    override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
+        onAccess()
+    }
+
+    override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        onAccess()
+    }
+
+    override suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ) {
+        onAccess()
+    }
+
+    override suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ) {
+        onAccess()
+    }
+
     override fun close() {
         // No resources to clean up for fake repository
     }

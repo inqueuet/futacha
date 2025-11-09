@@ -13,6 +13,27 @@ interface BoardRepository {
         mode: CatalogMode = CatalogMode.default
     ): List<CatalogItem>
     suspend fun getThread(board: String, threadId: String): ThreadPage
+    suspend fun voteSaidane(board: String, threadId: String, postId: String)
+    suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
+    suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    )
+    suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    )
 
     /**
      * Close the repository and release resources (e.g., HTTP client connections)
@@ -36,6 +57,39 @@ class DefaultBoardRepository(
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
         val html = api.fetchThread(board, threadId)
         return parser.parseThread(html)
+    }
+
+    override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
+        api.voteSaidane(board, threadId, postId)
+    }
+
+    override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        api.requestDeletion(board, threadId, postId, reasonCode)
+    }
+
+    override suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ) {
+        api.deleteByUser(board, threadId, postId, password, imageOnly)
+    }
+
+    override suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ) {
+        api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
     }
 
     override fun close() {

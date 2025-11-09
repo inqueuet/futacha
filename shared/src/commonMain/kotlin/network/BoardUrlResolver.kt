@@ -34,7 +34,7 @@ internal object BoardUrlResolver {
         }
 
         // Validate threadId to prevent path traversal attacks
-        val sanitizedThreadId = sanitizeThreadId(threadId)
+        val sanitizedThreadId = sanitizeNumericId(threadId)
         if (sanitizedThreadId.isBlank()) {
             throw IllegalArgumentException("Invalid thread ID: contains unsafe characters")
         }
@@ -55,14 +55,15 @@ internal object BoardUrlResolver {
         }
     }
 
-    private fun sanitizeThreadId(threadId: String): String {
-        val trimmed = threadId.trim()
-        // Only allow digits (thread IDs should be numeric)
-        return if (trimmed.all { it.isDigit() }) {
-            trimmed
-        } else {
-            ""
+    internal fun sanitizePostId(postId: String): String = sanitizeNumericId(postId)
+
+    fun resolveBoardSlug(boardUrl: String): String {
+        val base = resolveBoardBaseUrl(boardUrl)
+        val slug = base.substringAfterLast('/', missingDelimiterValue = base)
+        if (slug.isBlank()) {
+            throw IllegalArgumentException("Could not extract board slug from URL: $boardUrl")
         }
+        return slug
     }
 
     fun resolveBoardBaseUrl(boardUrl: String): String {
@@ -114,4 +115,43 @@ internal object BoardUrlResolver {
         }.trimEnd('/')
     }
 
+    fun resolveSiteRoot(boardUrl: String): String {
+        if (boardUrl.isBlank()) {
+            throw IllegalArgumentException("Board URL cannot be blank")
+        }
+
+        val url = runCatching { Url(boardUrl) }.getOrElse { error ->
+            val normalized = boardUrl
+                .substringBefore('#')
+                .substringBefore('?')
+            val schemeSeparator = normalized.indexOf("://")
+            if (schemeSeparator <= 0) {
+                throw IllegalArgumentException("Invalid board URL: $boardUrl", error)
+            }
+            val scheme = normalized.substring(0, schemeSeparator)
+            val remainder = normalized.substring(schemeSeparator + 3)
+            val host = remainder.substringBefore('/')
+            return "$scheme://$host"
+        }
+
+        val portSegment = when {
+            url.port == url.protocol.defaultPort -> ""
+            else -> ":${url.port}"
+        }
+        return buildString {
+            append(url.protocol.name)
+            append("://")
+            append(url.host)
+            append(portSegment)
+        }
+    }
+
+    private fun sanitizeNumericId(raw: String): String {
+        val trimmed = raw.trim()
+        return if (trimmed.isNotEmpty() && trimmed.all { it.isDigit() }) {
+            trimmed
+        } else {
+            ""
+        }
+    }
 }

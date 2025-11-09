@@ -13,4 +13,25 @@ interface BoardApi {
         mode: CatalogMode = CatalogMode.default
     ): String
     suspend fun fetchThread(board: String, threadId: String): String
+    suspend fun voteSaidane(board: String, threadId: String, postId: String)
+    suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
+    suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    )
+    suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    )
 }

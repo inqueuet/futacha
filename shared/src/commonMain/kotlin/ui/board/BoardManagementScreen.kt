@@ -1,11 +1,12 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -35,14 +36,20 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -63,6 +70,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
@@ -71,11 +79,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -88,12 +100,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -117,6 +131,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -701,6 +716,26 @@ fun CatalogScreen(
         }
     }
     var catalogMode by rememberSaveable { mutableStateOf(CatalogMode.default) }
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    val performRefresh: () -> Unit = {
+        if (!isRefreshing && board != null) {
+            coroutineScope.launch {
+                isRefreshing = true
+                try {
+                    val catalog = activeRepository.getCatalog(board.url, catalogMode)
+                    uiState.value = CatalogUiState.Success(catalog)
+                    snackbarHostState.showSnackbar("カタログを更新しました")
+                } catch (e: Exception) {
+                    if (e !is kotlinx.coroutines.CancellationException) {
+                        snackbarHostState.showSnackbar("更新に失敗しました")
+                    }
+                } finally {
+                    isRefreshing = false
+                }
+            }
+        }
+    }
 
     PlatformBackHandler(enabled = isDrawerOpen) {
         coroutineScope.launch { drawerState.close() }
@@ -810,6 +845,7 @@ fun CatalogScreen(
                 is CatalogUiState.Success -> CatalogSuccessContent(
                     items = catalogMode.applyLocalSort(state.items),
                     onThreadSelected = onThreadSelected,
+                    onRefresh = performRefresh,
                     modifier = contentModifier
                 )
             }
@@ -850,11 +886,13 @@ private fun CatalogError(message: String, modifier: Modifier = Modifier) {
 private fun CatalogSuccessContent(
     items: List<CatalogItem>,
     onThreadSelected: (CatalogItem) -> Unit,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     CatalogGrid(
         items = items,
         onThreadSelected = onThreadSelected,
+        onRefresh = onRefresh,
         modifier = modifier
     )
 }
@@ -864,23 +902,66 @@ private fun CatalogSuccessContent(
 private fun CatalogGrid(
     items: List<CatalogItem>,
     onThreadSelected: (CatalogItem) -> Unit,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    LazyVerticalGrid(
-        modifier = modifier.padding(horizontal = 8.dp),
-        columns = GridCells.Adaptive(120.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
+    val gridState = rememberLazyGridState()
+
+    val isAtTop by remember {
+        derivedStateOf {
+            gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+        }
+    }
+    val isAtBottom by remember {
+        derivedStateOf {
+            val lastIndex = gridState.layoutInfo.totalItemsCount - 1
+            gridState.firstVisibleItemIndex + gridState.layoutInfo.visibleItemsInfo.size >= lastIndex
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var totalDy = 0f
+                    val pointerId = down.id
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                        if (!change.pressed) {
+                            if (kotlin.math.abs(totalDy) > 200f) {
+                                if (totalDy > 0 && isAtTop) {
+                                    onRefresh()
+                                } else if (totalDy < 0 && isAtBottom) {
+                                    onRefresh()
+                                }
+                            }
+                            break
+                        }
+                        totalDy += change.positionChange().y
+                    }
+                }
+            }
     ) {
-        items(
-            items = items,
-            key = { it.id }
-        ) { catalogItem ->
-            CatalogCard(
-                item = catalogItem,
-                onClick = { onThreadSelected(catalogItem) }
-            )
+        LazyVerticalGrid(
+            state = gridState,
+            modifier = Modifier.padding(horizontal = 8.dp),
+            columns = GridCells.Adaptive(120.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
+        ) {
+            items(
+                items = items,
+                key = { it.id }
+            ) { catalogItem ->
+                CatalogCard(
+                    item = catalogItem,
+                    onClick = { onThreadSelected(catalogItem) }
+                )
+            }
         }
     }
 }
@@ -1152,6 +1233,23 @@ fun ThreadScreen(
                 drawerState.targetValue == DrawerValue.Open
         }
     }
+    var actionInProgress by remember { mutableStateOf(false) }
+    val saidaneOverrides = remember(threadId) { mutableStateMapOf<String, String>() }
+    var actionTargetPost by remember { mutableStateOf<Post?>(null) }
+    var deleteDialogTarget by remember { mutableStateOf<Post?>(null) }
+    var isActionSheetVisible by remember { mutableStateOf(false) }
+    var pendingDeletePassword by remember { mutableStateOf("") }
+    var pendingDeleteImageOnly by remember { mutableStateOf(false) }
+    var lastUsedDeleteKey by rememberSaveable(board.id) { mutableStateOf("") }
+    var isReplySheetVisible by remember { mutableStateOf(false) }
+    var replyName by rememberSaveable(board.id) { mutableStateOf("") }
+    var replyEmail by rememberSaveable(board.id) { mutableStateOf("") }
+    var replySubject by remember { mutableStateOf("") }
+    var replyComment by remember { mutableStateOf("") }
+    var replyPassword by rememberSaveable(board.id) { mutableStateOf("") }
+    var replyTextOnly by remember { mutableStateOf(false) }
+    var isGalleryVisible by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
     PlatformBackHandler(enabled = isDrawerOpen) {
         coroutineScope.launch { drawerState.close() }
@@ -1166,12 +1264,10 @@ fun ThreadScreen(
                 uiState.value = ThreadUiState.Loading
                 try {
                     val page = activeRepository.getThread(board.url, threadId)
-                    // Check if still active before updating state
                     if (isActive) {
                         uiState.value = ThreadUiState.Success(page)
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
-                    // Rethrow cancellation to properly cancel the coroutine
                     throw e
                 } catch (e: Exception) {
                     if (isActive) {
@@ -1235,9 +1331,8 @@ fun ThreadScreen(
             lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
         }
             .distinctUntilChanged()
-            .debounce(500) // Increased from 250ms to reduce write frequency
+            .debounce(500)
             .collect { (index, offset) ->
-                // Only persist if position has meaningfully changed
                 if (index > 0 || offset > 0) {
                     onScrollPositionPersist(threadId, index, offset)
                 }
@@ -1247,6 +1342,84 @@ fun ThreadScreen(
     val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
         coroutineScope.launch { drawerState.close() }
         onHistoryEntrySelected(entry)
+    }
+
+    fun launchThreadAction(
+        successMessage: String,
+        failurePrefix: String,
+        onSuccess: () -> Unit = {},
+        block: suspend () -> Unit
+    ) {
+        coroutineScope.launch {
+            if (actionInProgress) {
+                snackbarHostState.showSnackbar("処理中です…")
+                return@launch
+            }
+            actionInProgress = true
+            try {
+                block()
+                onSuccess()
+                snackbarHostState.showSnackbar(successMessage)
+            } catch (e: Exception) {
+                val detail = e.message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
+                snackbarHostState.showSnackbar("$failurePrefix$detail")
+            } finally {
+                actionInProgress = false
+            }
+        }
+    }
+
+    val handleSaidaneAction: (Post) -> Unit = { post ->
+        isActionSheetVisible = false
+        val baseLabel = saidaneOverrides[post.id] ?: post.saidaneLabel
+        launchThreadAction(
+            successMessage = "そうだねを送信しました",
+            failurePrefix = "そうだねに失敗しました",
+            onSuccess = {
+                saidaneOverrides[post.id] = incrementSaidaneLabel(baseLabel)
+            }
+        ) {
+            activeRepository.voteSaidane(board.url, threadId, post.id)
+        }
+    }
+
+    val handleDelRequest: (Post) -> Unit = { post ->
+        isActionSheetVisible = false
+        launchThreadAction(
+            successMessage = "DEL依頼を送信しました",
+            failurePrefix = "DEL依頼に失敗しました"
+        ) {
+            activeRepository.requestDeletion(board.url, threadId, post.id, DEFAULT_DEL_REASON_CODE)
+        }
+    }
+
+    val openDeleteDialog: (Post) -> Unit = { post ->
+        isActionSheetVisible = false
+        deleteDialogTarget = post
+        pendingDeletePassword = lastUsedDeleteKey
+        pendingDeleteImageOnly = false
+    }
+
+    val performRefresh: () -> Unit = {
+        if (!isRefreshing) {
+            coroutineScope.launch {
+                isRefreshing = true
+                val savedIndex = lazyListState.firstVisibleItemIndex
+                val savedOffset = lazyListState.firstVisibleItemScrollOffset
+                try {
+                    val page = activeRepository.getThread(board.url, threadId)
+                    uiState.value = ThreadUiState.Success(page)
+                    lazyListState.scrollToItem(savedIndex, savedOffset)
+                    snackbarHostState.showSnackbar("スレッドを更新しました")
+                } catch (e: Exception) {
+                    if (e !is kotlinx.coroutines.CancellationException) {
+                        snackbarHostState.showSnackbar("更新に失敗しました")
+                    }
+                } finally {
+                    isRefreshing = false
+                }
+            }
+        }
     }
 
     ModalNavigationDrawer(
@@ -1281,8 +1454,55 @@ fun ThreadScreen(
             bottomBar = {
                 ThreadActionBar(
                     onAction = { action ->
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                        when (action) {
+                            ThreadActionBarItem.Reply -> {
+                                if (replyPassword.isBlank()) {
+                                    replyPassword = lastUsedDeleteKey
+                                }
+                                isReplySheetVisible = true
+                            }
+                            ThreadActionBarItem.ScrollToTop -> {
+                                coroutineScope.launch {
+                                    lazyListState.animateScrollToItem(0)
+                                }
+                            }
+                            ThreadActionBarItem.ScrollToBottom -> {
+                                coroutineScope.launch {
+                                    val currentState = uiState.value
+                                    if (currentState is ThreadUiState.Success) {
+                                        val lastIndex = currentState.page.posts.size - 1
+                                        if (lastIndex >= 0) {
+                                            lazyListState.animateScrollToItem(lastIndex)
+                                        }
+                                    }
+                                }
+                            }
+                            ThreadActionBarItem.Refresh -> {
+                                val savedIndex = lazyListState.firstVisibleItemIndex
+                                val savedOffset = lazyListState.firstVisibleItemScrollOffset
+                                coroutineScope.launch {
+                                    try {
+                                        val page = activeRepository.getThread(board.url, threadId)
+                                        if (isActive) {
+                                            uiState.value = ThreadUiState.Success(page)
+                                            snackbarHostState.showSnackbar("スレッドを更新しました")
+                                            lazyListState.scrollToItem(savedIndex, savedOffset)
+                                        }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("更新に失敗しました: ${e.message ?: "不明なエラー"}")
+                                    }
+                                }
+                            }
+                            ThreadActionBarItem.Gallery -> {
+                                isGalleryVisible = true
+                            }
+                            else -> {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                }
+                            }
                         }
                     }
                 )
@@ -1327,27 +1547,172 @@ fun ThreadScreen(
                 .background(MaterialTheme.colorScheme.background)
                 .padding(horizontal = 0.dp)
 
-            when (val state = uiState.value) {
-                ThreadUiState.Loading -> ThreadLoading(modifier = contentModifier)
-                is ThreadUiState.Error -> ThreadError(
-                    message = state.message,
-                    modifier = contentModifier,
-                    onRetry = refreshThread
-                )
+            Box(modifier = contentModifier) {
+                when (val state = uiState.value) {
+                    ThreadUiState.Loading -> ThreadLoading(modifier = Modifier.matchParentSize())
+                    is ThreadUiState.Error -> ThreadError(
+                        message = state.message,
+                        modifier = Modifier.matchParentSize(),
+                        onRetry = refreshThread
+                    )
 
-                is ThreadUiState.Success -> {
-                    val displayedReplies = resolvedReplyCount ?: state.page.posts.size
-                    ThreadContent(
-                        page = state.page,
-                        listState = lazyListState,
-                        modifier = contentModifier
+                    is ThreadUiState.Success -> {
+                        ThreadContent(
+                            page = state.page,
+                            listState = lazyListState,
+                            saidaneOverrides = saidaneOverrides,
+                            onPostLongPress = { post ->
+                                actionTargetPost = post
+                                isActionSheetVisible = true
+                            },
+                            onSaidaneClick = handleSaidaneAction,
+                            onRefresh = performRefresh,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
+                }
+
+                if (actionInProgress) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
                     )
                 }
             }
         }
     }
-}
 
+    val sheetTarget = actionTargetPost
+    if (isActionSheetVisible && sheetTarget != null) {
+        ThreadPostActionSheet(
+            post = sheetTarget,
+            onDismiss = {
+                isActionSheetVisible = false
+                actionTargetPost = null
+            },
+            onSaidane = { handleSaidaneAction(sheetTarget) },
+            onDelRequest = { handleDelRequest(sheetTarget) },
+            onDelete = { openDeleteDialog(sheetTarget) }
+        )
+    }
+
+    val deleteTarget = deleteDialogTarget
+    if (deleteTarget != null) {
+        DeleteByUserDialog(
+            post = deleteTarget,
+            password = pendingDeletePassword,
+            onPasswordChange = { pendingDeletePassword = it },
+            imageOnly = pendingDeleteImageOnly,
+            onImageOnlyChange = { pendingDeleteImageOnly = it },
+            onDismiss = {
+                deleteDialogTarget = null
+                pendingDeletePassword = ""
+                pendingDeleteImageOnly = false
+            },
+            onConfirm = {
+                val trimmed = pendingDeletePassword.trim()
+                if (trimmed.isBlank()) {
+                    coroutineScope.launch { snackbarHostState.showSnackbar("削除キーを入力してください") }
+                    return@DeleteByUserDialog
+                }
+                val imageOnly = pendingDeleteImageOnly
+                deleteDialogTarget = null
+                pendingDeletePassword = ""
+                pendingDeleteImageOnly = false
+                lastUsedDeleteKey = trimmed
+                launchThreadAction(
+                    successMessage = "本人削除を実行しました",
+                    failurePrefix = "本人削除に失敗しました",
+                    onSuccess = { refreshThread() }
+                ) {
+                    activeRepository.deleteByUser(
+                        board.url,
+                        threadId,
+                        deleteTarget.id,
+                        trimmed,
+                        imageOnly
+                    )
+                }
+            }
+        )
+    }
+
+    if (isReplySheetVisible) {
+        ThreadReplySheet(
+            name = replyName,
+            onNameChange = { replyName = it },
+            email = replyEmail,
+            onEmailChange = { replyEmail = it },
+            subject = replySubject,
+            onSubjectChange = { replySubject = it },
+            comment = replyComment,
+            onCommentChange = { replyComment = it },
+            password = replyPassword,
+            onPasswordChange = { replyPassword = it },
+            textOnly = replyTextOnly,
+            onTextOnlyChange = { replyTextOnly = it },
+            onDismiss = {
+                isReplySheetVisible = false
+            },
+            onSubmit = {
+                val trimmedPassword = replyPassword.trim()
+                if (trimmedPassword.isBlank()) {
+                    coroutineScope.launch { snackbarHostState.showSnackbar("削除キーを入力してください") }
+                    return@ThreadReplySheet
+                }
+                if (replyComment.trim().isBlank()) {
+                    coroutineScope.launch { snackbarHostState.showSnackbar("コメントを入力してください") }
+                    return@ThreadReplySheet
+                }
+                isReplySheetVisible = false
+                val name = replyName
+                val email = replyEmail
+                val subject = replySubject
+                val comment = replyComment
+                val textOnly = replyTextOnly
+                replySubject = ""
+                replyComment = ""
+                replyTextOnly = false
+                lastUsedDeleteKey = trimmedPassword
+                launchThreadAction(
+                    successMessage = "返信を送信しました",
+                    failurePrefix = "返信の送信に失敗しました",
+                    onSuccess = { refreshThread() }
+                ) {
+                    activeRepository.replyToThread(
+                        board.url,
+                        threadId,
+                        name,
+                        email,
+                        subject,
+                        comment,
+                        trimmedPassword,
+                        null,
+                        null,
+                        textOnly
+                    )
+                }
+            }
+        )
+    }
+
+    val currentSuccessState = uiState.value as? ThreadUiState.Success
+    if (isGalleryVisible && currentSuccessState != null) {
+        ThreadImageGallery(
+            posts = currentSuccessState.page.posts,
+            onDismiss = { isGalleryVisible = false },
+            onImageClick = { post ->
+                val index = currentSuccessState.page.posts.indexOfFirst { it.id == post.id }
+                if (index >= 0) {
+                    coroutineScope.launch {
+                        lazyListState.animateScrollToItem(index)
+                    }
+                }
+            }
+        )
+    }
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadTopBar(
@@ -1465,6 +1830,10 @@ private fun ThreadError(
 private fun ThreadContent(
     page: ThreadPage,
     listState: LazyListState,
+    saidaneOverrides: Map<String, String>,
+    onPostLongPress: (Post) -> Unit,
+    onSaidaneClick: (Post) -> Unit,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val posterIdLabels = remember(page.posts) {
@@ -1474,7 +1843,38 @@ private fun ThreadContent(
     val referencedByMap = remember(page.posts) { buildReferencedPostsMap(page.posts) }
     val postsByPosterId = remember(page.posts) { buildPostsByPosterId(page.posts) }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
-    Box(modifier = modifier.fillMaxSize()) {
+
+    val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 } }
+    val isAtBottom by remember { derivedStateOf {
+        val lastIndex = listState.layoutInfo.totalItemsCount - 1
+        listState.firstVisibleItemIndex + listState.layoutInfo.visibleItemsInfo.size >= lastIndex
+    } }
+
+    Box(modifier = modifier
+        .fillMaxSize()
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                var totalDy = 0f
+                val pointerId = down.id
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                    if (!change.pressed) {
+                        if (kotlin.math.abs(totalDy) > 200f) {
+                            if (totalDy > 0 && isAtTop) {
+                                onRefresh()
+                            } else if (totalDy < 0 && isAtBottom) {
+                                onRefresh()
+                            }
+                        }
+                        break
+                    }
+                    totalDy += change.positionChange().y
+                }
+            }
+        }
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
@@ -1496,6 +1896,7 @@ private fun ThreadContent(
                     isOp = index == 0,
                     posterIdLabel = posterIdLabels[post.id],
                     posterIdValue = normalizedPosterId,
+                    saidaneLabelOverride = saidaneOverrides[post.id],
                     onQuoteClick = { reference ->
                         val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
                         if (targets.isNotEmpty()) {
@@ -1530,7 +1931,10 @@ private fun ThreadContent(
                                     posterIdLabels = posterIdLabels
                                 )
                             }
-                        }
+                        },
+                    onSaidaneClick = { onSaidaneClick(post) },
+                    onLongPress = { onPostLongPress(post) },
+                    modifier = Modifier.fillMaxWidth()
                 )
                 if (index != page.posts.lastIndex) {
                     HorizontalDivider(
@@ -1621,25 +2025,37 @@ private fun ThreadScrollbar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadPostCard(
     post: Post,
     isOp: Boolean,
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
+    saidaneLabelOverride: String?,
     onQuoteClick: (QuoteReference) -> Unit,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
+    onSaidaneClick: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var saidaneLabel by remember(post.id, post.saidaneLabel) { mutableStateOf(post.saidaneLabel) }
     val platformContext = LocalPlatformContext.current
     val backgroundColor = when {
         post.isDeleted -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
         else -> MaterialTheme.colorScheme.surface
     }
+    val saidaneLabel = saidaneLabelOverride ?: post.saidaneLabel
+    val cardModifier = if (onLongPress != null) {
+        modifier.combinedClickable(
+            onClick = {},
+            onLongClick = onLongPress
+        )
+    } else {
+        modifier
+    }
     Column(
-        modifier = modifier
+        modifier = cardModifier
             .fillMaxWidth()
             .background(backgroundColor)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -1651,9 +2067,7 @@ private fun ThreadPostCard(
             posterIdLabel = posterIdLabel,
             posterIdValue = posterIdValue,
             saidaneLabel = saidaneLabel,
-            onSaidaneClick = {
-                saidaneLabel = incrementSaidaneLabel(saidaneLabel)
-            },
+            onSaidaneClick = onSaidaneClick,
             onPosterIdClick = onPosterIdClick,
             onReferencedByClick = onReferencedByClick
         )
@@ -1687,7 +2101,7 @@ private fun ThreadPostMetadata(
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
     saidaneLabel: String?,
-    onSaidaneClick: () -> Unit,
+    onSaidaneClick: (() -> Unit)? = null,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null
 ) {
@@ -1762,9 +2176,9 @@ private fun ThreadPostMetadata(
                         color = if (label.highlight) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                saidaneLabel?.let { label ->
+                if (saidaneLabel != null && onSaidaneClick != null) {
                     SaidaneLink(
-                        label = label,
+                        label = saidaneLabel,
                         onClick = onSaidaneClick
                     )
                 }
@@ -1816,6 +2230,327 @@ private fun ThreadMessageText(
         style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
         onTextLayout = { textLayoutResult = it }
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadPostActionSheet(
+    post: Post,
+    onDismiss: () -> Unit,
+    onSaidane: () -> Unit,
+    onDelRequest: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "No.${post.id} の操作",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            ListItem(
+                leadingContent = {
+                    Icon(Icons.Outlined.ThumbUp, contentDescription = null)
+                },
+                headlineContent = { Text("そうだね") },
+                supportingContent = { Text("レスにそうだねを送信") },
+                modifier = Modifier.clickable { onSaidane() }
+            )
+            ListItem(
+                leadingContent = {
+                    Icon(Icons.Outlined.Flag, contentDescription = null)
+                },
+                headlineContent = { Text("DEL 依頼") },
+                supportingContent = { Text("管理人へ削除依頼を送信") },
+                modifier = Modifier.clickable { onDelRequest() }
+            )
+            ListItem(
+                leadingContent = {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                },
+                headlineContent = { Text("削除 (本人)") },
+                supportingContent = { Text("削除キーでレスまたは画像を削除") },
+                modifier = Modifier.clickable { onDelete() }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun DeleteByUserDialog(
+    post: Post,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    imageOnly: Boolean,
+    onImageOnlyChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("削除")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        },
+        title = { Text("No.${post.id} を削除") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("削除キー") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Checkbox(
+                        checked = imageOnly,
+                        onCheckedChange = onImageOnlyChange
+                    )
+                    Text("画像だけ消す")
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadReplySheet(
+    name: String,
+    onNameChange: (String) -> Unit,
+    email: String,
+    onEmailChange: (String) -> Unit,
+    subject: String,
+    onSubjectChange: (String) -> Unit,
+    comment: String,
+    onCommentChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    textOnly: Boolean,
+    onTextOnlyChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onSubmit: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "返信する",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = onNameChange,
+                label = { Text("おなまえ") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = email,
+                onValueChange = onEmailChange,
+                label = { Text("E-mail") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = subject,
+                onValueChange = onSubjectChange,
+                label = { Text("題名") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = comment,
+                onValueChange = onCommentChange,
+                label = { Text("コメント") },
+                minLines = 4,
+                maxLines = 8,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = textOnly,
+                    onCheckedChange = onTextOnlyChange
+                )
+                Text("画像なし")
+            }
+
+            OutlinedTextField(
+                value = password,
+                onValueChange = onPasswordChange,
+                label = { Text("削除キー") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                supportingText = { Text("削除用. 英数字で8字以内", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("キャンセル")
+                }
+                Button(
+                    onClick = onSubmit,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("返信する")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadImageGallery(
+    posts: List<Post>,
+    onDismiss: () -> Unit,
+    onImageClick: (Post) -> Unit
+) {
+    val imagesWithPosts = remember(posts) {
+        posts.filter { it.imageUrl != null && it.thumbnailUrl != null }
+    }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "画像一覧 (${imagesWithPosts.size}枚)",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            if (imagesWithPosts.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "画像がありません",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 600.dp)
+                ) {
+                    items(imagesWithPosts) { post ->
+                        GalleryImageItem(
+                            post = post,
+                            onClick = {
+                                onDismiss()
+                                onImageClick(post)
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun GalleryImageItem(
+    post: Post,
+    onClick: () -> Unit
+) {
+    val platformContext = LocalPlatformContext.current
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = ImageRequest.Builder(platformContext)
+                    .data(post.thumbnailUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "No.${post.id}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                shape = MaterialTheme.shapes.extraSmall
+            ) {
+                Text(
+                    text = "No.${post.id}",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
 }
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
@@ -1916,9 +2651,12 @@ private fun QuotePreviewDialog(
                         ThreadPostCard(
                             post = post,
                             isOp = post.order == 0,
-                            posterIdValue = normalizePosterIdValue(post.posterId),
                             posterIdLabel = state.posterIdLabels[post.id],
+                            posterIdValue = normalizePosterIdValue(post.posterId),
+                            saidaneLabelOverride = null,
                             onQuoteClick = onQuoteClick,
+                            onSaidaneClick = null,
+                            onLongPress = null,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 4.dp)
@@ -2106,12 +2844,16 @@ private enum class ThreadActionBarItem(
     val icon: ImageVector
 ) {
     Reply("返信", Icons.Rounded.Edit),
+    ScrollToTop("最上部", Icons.Filled.ArrowUpward),
+    ScrollToBottom("最下部", Icons.Filled.ArrowDownward),
     Refresh("更新", Icons.Rounded.Refresh),
     Gallery("画像", Icons.Outlined.Image),
     Share("共有", Icons.Rounded.Share),
     Favorite("お気に入り", Icons.Rounded.BookmarkAdd),
     Settings("設定", Icons.Rounded.Settings)
 }
+
+private const val DEFAULT_DEL_REASON_CODE = "110"
 
 internal fun incrementSaidaneLabel(current: String?): String {
     val normalized = current?.trim().orEmpty()
