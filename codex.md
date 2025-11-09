@@ -229,7 +229,7 @@ project-root/
 
 **パーサーロジック例（Jsoup）:**
 ```kotlin
-val doc = Jsoup.parse(html, "https://dat.2chan.net/t/")
+val doc = Jsoup.parse(html, "https://www.example.com/t/")
 doc.select("#cattable td").mapNotNull { td ->
     val a = td.selectFirst("a[href*=res/]") ?: return@mapNotNull null
     val href = a.absUrl("href")
