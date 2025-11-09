@@ -27,11 +27,11 @@ class ThreadHtmlParserCoreTest {
         assertEquals(false, op.isDeleted)
         assertEquals(2, op.referencedCount)
         assertEquals(
-            "https://dat.2chan.net/t/src/1762145224666.jpg",
+            "https://www.example.com/t/src/1762145224666.jpg",
             op.imageUrl
         )
         assertEquals(
-            "https://dat.2chan.net/t/thumb/1762145224666s.jpg",
+            "https://www.example.com/t/thumb/1762145224666s.jpg",
             op.thumbnailUrl
         )
 
@@ -60,7 +60,7 @@ class ThreadHtmlParserCoreTest {
 private val sampleThreadHtml = """
     <html>
     <head>
-    <link rel="canonical" href="https://dat.2chan.net/t/res/354621.htm">
+    <link rel="canonical" href="https://www.example.com/t/res/354621.htm">
     </head>
     <body>
     <span id="tit">料理＠ふたば</span>

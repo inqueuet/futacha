@@ -20,7 +20,7 @@ object ExampleBoardHttpSamples {
 
     val postReply = HttpSample(
         label = "Thread reply (mode=regist)",
-        requestUrl = "https://may.2chan.net/b/futaba.php?guid=on",
+        requestUrl = "https://www.example.com/b/futaba.php?guid=on",
         method = "POST",
         contentType = "multipart/form-data; boundary=----WebKitFormBoundarymBLTraM363UngAbs",
         statusCode = 200,
@@ -36,7 +36,7 @@ object ExampleBoardHttpSamples {
 
     val voteSo = HttpSample(
         label = "そうだね投票",
-        requestUrl = "https://may.2chan.net/sd.php?b.1364374856",
+        requestUrl = "https://www.example.com/sd.php?b.1364374856",
         method = "GET",
         contentType = "text/plain; charset=utf-8",
         statusCode = 200,
@@ -46,7 +46,7 @@ object ExampleBoardHttpSamples {
 
     val requestDeletion = HttpSample(
         label = "del依頼",
-        requestUrl = "https://may.2chan.net/del.php",
+        requestUrl = "https://www.example.com/del.php",
         method = "POST",
         contentType = "application/x-www-form-urlencoded",
         statusCode = 200,
@@ -56,7 +56,7 @@ object ExampleBoardHttpSamples {
 
     val deleteByUser = HttpSample(
         label = "本人削除 (mode=usrdel)",
-        requestUrl = "https://may.2chan.net/b/futaba.php?guid=on",
+        requestUrl = "https://www.example.com/b/futaba.php?guid=on",
         method = "POST",
         contentType = "application/x-www-form-urlencoded",
         statusCode = 200,

@@ -23,13 +23,13 @@ class CatalogHtmlParserCoreTest {
 
         assertEquals(2, items.size)
         assertEquals("354621", items[0].id)
-        assertEquals("https://dat.2chan.net/res/354621.htm", items[0].threadUrl)
-        assertEquals("https://dat.2chan.net/t/cat/1762145224666s.jpg", items[0].thumbnailUrl)
+        assertEquals("https://www.example.com/res/354621.htm", items[0].threadUrl)
+        assertEquals("https://www.example.com/t/cat/1762145224666s.jpg", items[0].thumbnailUrl)
         assertEquals(17, items[0].replyCount)
         assertEquals("17", items[0].title)
 
         assertEquals("1364612020", items[1].id)
-        assertEquals("https://dat.2chan.net/res/1364612020.htm", items[1].threadUrl)
+        assertEquals("https://www.example.com/res/1364612020.htm", items[1].threadUrl)
         assertEquals("チュートリアル", items[1].title)
         assertEquals(0, items[1].replyCount)
     }

@@ -13,7 +13,7 @@ import kotlin.text.concatToString
  * checked into `/example/thread.txt`.
  */
 internal object ThreadHtmlParserCore {
-    private const val DEFAULT_BASE_URL = "https://dat.2chan.net"
+    private const val DEFAULT_BASE_URL = "https://www.example.com"
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
     private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
 
