@@ -2616,13 +2616,14 @@ private fun ThreadPostCard(
                 contentDescription = "添付画像",
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 200.dp)
                     .clip(MaterialTheme.shapes.small)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .background(backgroundColor)
                     .clickable {
                         val targetUrl = post.imageUrl ?: displayUrl
                         onMediaClick?.invoke(targetUrl, determineMediaType(targetUrl))
                     },
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Fit
             )
         }
         ThreadMessageText(
