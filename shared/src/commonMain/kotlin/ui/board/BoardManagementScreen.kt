@@ -1090,6 +1090,7 @@ fun CatalogScreen(
     var isSearchActive by rememberSaveable(board?.id) { mutableStateOf(false) }
     var searchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
     var showModeDialog by remember { mutableStateOf(false) }
+    var showCreateThreadDialog by remember { mutableStateOf(false) }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -1240,9 +1241,7 @@ fun CatalogScreen(
                     current = null,
                     onNavigate = { destination ->
                         when (destination) {
-                            CatalogNavDestination.CreateThread -> coroutineScope.launch {
-                                snackbarHostState.showSnackbar("スレッド作成は未実装です")
-                            }
+                            CatalogNavDestination.CreateThread -> showCreateThreadDialog = true
                             CatalogNavDestination.RefreshCatalog -> performRefresh()
                             CatalogNavDestination.Mode -> showModeDialog = true
                             CatalogNavDestination.Settings -> coroutineScope.launch {
@@ -1321,7 +1320,115 @@ fun CatalogScreen(
                 }
             )
         }
+
+        if (showCreateThreadDialog) {
+            CreateThreadDialog(
+                onDismiss = { showCreateThreadDialog = false },
+                onSubmit = { name, email, title, comment ->
+                    showCreateThreadDialog = false
+                    if (board == null) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("板が選択されていません")
+                        }
+                        return@CreateThreadDialog
+                    }
+                    coroutineScope.launch {
+                        try {
+                            snackbarHostState.showSnackbar("スレッドを作成中...")
+                            val threadId = activeRepository.createThread(
+                                board = board.url,
+                                name = name,
+                                email = email,
+                                subject = title,
+                                comment = comment,
+                                password = "",
+                                imageFile = null,
+                                imageFileName = null,
+                                textOnly = true
+                            )
+                            snackbarHostState.showSnackbar("スレッドを作成しました (ID: $threadId)")
+                            // Refresh catalog to show the new thread
+                            performRefresh()
+                        } catch (e: Exception) {
+                            snackbarHostState.showSnackbar("スレッド作成に失敗しました: ${e.message ?: "不明なエラー"}")
+                        }
+                    }
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun CreateThreadDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (name: String, email: String, title: String, comment: String) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var comment by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("スレッド作成") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("おなまえ") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("E-mail") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("題名") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = { comment = it },
+                    label = { Text("コメント") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 4,
+                    maxLines = 8
+                )
+                Text(
+                    text = "※画像添付機能は後で実装予定",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSubmit(name, email, title, comment) },
+                enabled = title.isNotBlank() || comment.isNotBlank()
+            ) {
+                Text("作成")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        }
+    )
 }
 
 @Composable

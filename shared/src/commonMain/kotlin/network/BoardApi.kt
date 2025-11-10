@@ -34,4 +34,15 @@ interface BoardApi {
         imageFileName: String?,
         textOnly: Boolean
     )
+    suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String
 }

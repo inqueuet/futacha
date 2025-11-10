@@ -68,6 +68,22 @@ class FakeBoardRepository(
         onAccess()
     }
 
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String {
+        onAccess()
+        // Return a mock thread ID
+        return "1234567890"
+    }
+
     override fun close() {
         // No resources to clean up for fake repository
     }

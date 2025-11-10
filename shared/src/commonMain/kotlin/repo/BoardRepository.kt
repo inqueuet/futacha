@@ -35,6 +35,18 @@ interface BoardRepository {
         textOnly: Boolean
     )
 
+    suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String
+
     /**
      * Close the repository and release resources (e.g., HTTP client connections)
      */
@@ -90,6 +102,20 @@ class DefaultBoardRepository(
         textOnly: Boolean
     ) {
         api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+    }
+
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String {
+        return api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
     }
 
     override fun close() {

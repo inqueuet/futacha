@@ -221,6 +221,68 @@ class HttpBoardApi(
         }
     }
 
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String {
+        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
+        val referer = buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.htm")
+        }
+        val url = buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.php?guid=on")
+        }
+        val response = try {
+            client.submitForm(
+                url = url,
+                formParameters = Parameters.build {
+                    append("guid", "on")
+                    append("mode", "regist")
+                    append("MAX_FILE_SIZE", "8192000")
+                    append("name", name)
+                    append("email", email)
+                    append("sub", subject)
+                    append("com", comment)
+                    append("pwd", password)
+                    if (textOnly) {
+                        append("textonly", "on")
+                    }
+                }
+            ) {
+                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                headers[HttpHeaders.CacheControl] = "no-cache"
+                headers[HttpHeaders.Pragma] = "no-cache"
+                headers[HttpHeaders.Referrer] = referer
+            }
+        } catch (e: Exception) {
+            throw NetworkException("Failed to create thread: ${e.message}", cause = e)
+        }
+        if (!response.status.isSuccess()) {
+            throw NetworkException("スレッド作成に失敗しました (HTTP ${response.status.value})")
+        }
+
+        // Parse response to extract thread ID
+        val responseBody = response.bodyAsText()
+        // Look for thread ID in response - it should redirect to the new thread
+        // Example: res/1364612020.htm
+        val threadIdRegex = """res/(\d+)\.htm""".toRegex()
+        val match = threadIdRegex.find(responseBody)
+        return match?.groupValues?.get(1) ?: throw NetworkException("スレッドIDの取得に失敗しました")
+    }
+
     override suspend fun replyToThread(
         board: String,
         threadId: String,
