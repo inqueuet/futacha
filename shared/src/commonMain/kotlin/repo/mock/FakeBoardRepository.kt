@@ -26,8 +26,6 @@ class FakeBoardRepository(
             CatalogMode.Few -> base.sortedBy { it.replyCount }
             CatalogMode.Momentum -> base.sortedByDescending { it.replyCount / (it.numericId() % 10 + 1) }
             CatalogMode.So -> base.filterIndexed { index, _ -> index % 2 == 0 }
-            CatalogMode.Seen -> base.take(4)
-            CatalogMode.History -> base.takeLast(4)
             CatalogMode.Catalog, CatalogMode.Many -> base.sortedByDescending { it.replyCount }
         }
     }

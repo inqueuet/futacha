@@ -15,9 +15,7 @@ enum class CatalogMode(
     Many("多い順", "3"),
     Few("少ない順", "4"),
     Momentum("勢い順", "6"),
-    So("そ順", "8"),
-    Seen("見歴", "7"),
-    History("履歴", "9");
+    So("そ順", "8");
 
     companion object {
         val default = Many
@@ -30,7 +28,5 @@ enum class CatalogMode(
         Few -> items.sortedBy { it.replyCount }
         Momentum -> items.sortedByDescending { it.replyCount / ((it.numericId() % 10) + 1) }
         So -> items.filterIndexed { index, _ -> index % 2 == 0 }
-        Seen -> items.take(4)
-        History -> items.takeLast(4)
     }
 }

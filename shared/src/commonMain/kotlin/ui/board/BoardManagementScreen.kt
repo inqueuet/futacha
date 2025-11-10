@@ -55,6 +55,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
@@ -68,6 +69,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.AlertDialog
@@ -1235,14 +1237,16 @@ fun CatalogScreen(
             },
             bottomBar = {
                 CatalogNavigationBar(
-                    current = CatalogNavDestination.Catalog,
+                    current = null,
                     onNavigate = { destination ->
                         when (destination) {
-                            CatalogNavDestination.Boards -> onBack()
-                            CatalogNavDestination.Catalog -> Unit
+                            CatalogNavDestination.CreateThread -> coroutineScope.launch {
+                                snackbarHostState.showSnackbar("スレッド作成は未実装です")
+                            }
+                            CatalogNavDestination.RefreshCatalog -> performRefresh()
                             CatalogNavDestination.Mode -> showModeDialog = true
-                            else -> coroutineScope.launch {
-                                snackbarHostState.showSnackbar("${destination.label} は未実装です")
+                            CatalogNavDestination.Settings -> coroutineScope.launch {
+                                snackbarHostState.showSnackbar("設定は未実装です")
                             }
                         }
                     }
@@ -1618,29 +1622,13 @@ private fun CatalogTopBar(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = mode.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        board?.category
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { category ->
-                                Text(
-                                    text = category,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                    }
+                    Text(
+                        text = mode.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         },
@@ -1746,7 +1734,7 @@ private fun CatalogSearchTextField(
 
 @Composable
 private fun CatalogNavigationBar(
-    current: CatalogNavDestination,
+    current: CatalogNavDestination?,
     onNavigate: (CatalogNavDestination) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1787,11 +1775,10 @@ private enum class CatalogMenuAction(val label: String) {
 }
 
 private enum class CatalogNavDestination(val label: String, val icon: ImageVector) {
-    Boards("板一覧", Icons.Outlined.Menu),
-    Catalog("ｶﾀﾛｸﾞ", Icons.Outlined.Image),
-    Mode("モード", Icons.Rounded.Timeline),
-    Settings("設定", Icons.Rounded.Settings),
-    Favorites("お気に入り", Icons.Rounded.Favorite)
+    CreateThread("スレッド作成", Icons.Rounded.Add),
+    RefreshCatalog("カタログ更新", Icons.Rounded.Refresh),
+    Mode("モード", Icons.Rounded.Sort),
+    Settings("設定", Icons.Rounded.Settings)
 }
 
 sealed interface ThreadUiState {
