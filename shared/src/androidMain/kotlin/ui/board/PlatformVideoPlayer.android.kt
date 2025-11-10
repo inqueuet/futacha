@@ -5,7 +5,11 @@ import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -18,10 +22,13 @@ actual fun PlatformVideoPlayer(
     val context = LocalContext.current
     val uri = remember(videoUrl) { Uri.parse(videoUrl) }
     val controller = remember { MediaController(context) }
+    var videoView by remember { mutableStateOf<VideoView?>(null) }
+    val currentVideoView by rememberUpdatedState(videoView)
 
     AndroidView(
         factory = {
             VideoView(context).apply {
+                videoView = this
                 setMediaController(controller)
                 controller.setAnchorView(this)
                 setVideoURI(uri)
@@ -29,6 +36,7 @@ actual fun PlatformVideoPlayer(
             }
         },
         update = { view ->
+            videoView = view
             if (view.tag != videoUrl) {
                 view.tag = videoUrl
                 view.setVideoURI(uri)
@@ -38,8 +46,14 @@ actual fun PlatformVideoPlayer(
         modifier = modifier
     )
 
-    DisposableEffect(videoUrl) {
+    DisposableEffect(videoUrl, currentVideoView) {
         onDispose {
+            currentVideoView?.apply {
+                setOnPreparedListener(null)
+                stopPlayback()
+                suspend()
+            }
+            controller.setAnchorView(null)
             controller.hide()
         }
     }

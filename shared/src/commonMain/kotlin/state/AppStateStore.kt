@@ -45,7 +45,7 @@ class AppStateStore internal constructor(
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         historyMutex.withLock {
             try {
-                storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+                persistHistory(history)
             } catch (e: Exception) {
                 println("AppStateStore: Failed to save history: ${e.message}")
                 // Log error but don't crash - data will be lost but app continues
@@ -59,9 +59,11 @@ class AppStateStore internal constructor(
      * requiring the caller to manage the whole list manually.
      */
     suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) {
+        val currentHistory = readHistorySnapshot() ?: run {
+            println("AppStateStore: Skipping history upsert due to missing snapshot")
+            return
+        }
         historyMutex.withLock {
-            val currentHistoryJson = storage.historyJson.first()
-            val currentHistory = currentHistoryJson?.let { decodeHistory(it) } ?: emptyList()
             val existingIndex = currentHistory.indexOfFirst { it.threadId == entry.threadId }
             val updatedHistory = if (existingIndex >= 0) {
                 currentHistory.toMutableList().also { it[existingIndex] = entry }
@@ -73,7 +75,7 @@ class AppStateStore internal constructor(
             }
 
             try {
-                storage.updateHistoryJson(json.encodeToString(historySerializer, updatedHistory))
+                persistHistory(updatedHistory)
             } catch (e: Exception) {
                 println("AppStateStore: Failed to upsert history entry: ${e.message}")
                 // Log error but don't crash
@@ -97,11 +99,11 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
+        val currentHistory = readHistorySnapshot() ?: run {
+            println("AppStateStore: Skipping scroll position update due to missing snapshot")
+            return
+        }
         historyMutex.withLock {
-            // Read current state within the lock to prevent race conditions
-            val currentHistoryJson = storage.historyJson.first()
-            val currentHistory = currentHistoryJson?.let { decodeHistory(it) } ?: emptyList()
-
             val existingEntry = currentHistory.firstOrNull { it.threadId == threadId }
 
             // Skip update if scroll position hasn't changed to reduce unnecessary writes
@@ -152,7 +154,7 @@ class AppStateStore internal constructor(
             }
 
             try {
-                storage.updateHistoryJson(json.encodeToString(historySerializer, updatedHistory))
+                persistHistory(updatedHistory)
             } catch (e: Exception) {
                 println("AppStateStore: Failed to update scroll position: ${e.message}")
                 // Log error but don't crash
@@ -174,11 +176,26 @@ class AppStateStore internal constructor(
             // Log error but don't crash - app will work with empty state
         }
     }
+
     private fun decodeBoards(raw: String): List<BoardSummary> = runCatching {
         json.decodeFromString(boardsSerializer, raw)
     }.getOrElse { e ->
         println("AppStateStore: Failed to decode boards: ${e.message}")
         emptyList()
+    }
+
+    private suspend fun readHistorySnapshot(): List<ThreadHistoryEntry>? {
+        return try {
+            val raw = storage.historyJson.first()
+            raw?.let { decodeHistory(it) } ?: emptyList()
+        } catch (e: Exception) {
+            println("AppStateStore: Failed to read history state: ${e.message}")
+            null
+        }
+    }
+
+    private suspend fun persistHistory(history: List<ThreadHistoryEntry>) {
+        storage.updateHistoryJson(json.encodeToString(historySerializer, history))
     }
 
     private fun decodeHistory(raw: String): List<ThreadHistoryEntry> = runCatching {

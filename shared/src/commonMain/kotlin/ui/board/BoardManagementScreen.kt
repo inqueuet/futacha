@@ -2544,7 +2544,7 @@ private fun ThreadScrollbar(
     val contentHeightPx = avgItemSizePx * totalItems
     if (contentHeightPx <= viewportHeightPx) return
 
-    val firstVisibleSize = visibleItems.first().size.coerceAtLeast(1)
+    val firstVisibleSize = visibleItems.firstOrNull()?.size?.coerceAtLeast(1) ?: 1
     val partialIndex = listState.firstVisibleItemScrollOffset / firstVisibleSize.toFloat()
     val totalScrollableItems = (totalItems - visibleItems.size).coerceAtLeast(1)
     val scrollFraction = ((listState.firstVisibleItemIndex + partialIndex) / totalScrollableItems)

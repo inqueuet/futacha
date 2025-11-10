@@ -22,6 +22,7 @@ import com.valoser.futacha.shared.ui.board.ThreadScreen
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -88,8 +89,19 @@ fun FutachaApp(
                     if (entry.boardUrl.isBlank() || entry.boardUrl.contains("example.com", ignoreCase = true)) {
                         return@forEach
                     }
+                    val boardBaseUrl = persistedBoards.firstOrNull { it.id == entry.boardId }?.url
+                        ?: runCatching {
+                            if (entry.boardUrl.isNotBlank()) {
+                                BoardUrlResolver.resolveBoardBaseUrl(entry.boardUrl)
+                            } else {
+                                null
+                            }
+                        }.getOrNull()
+                    if (boardBaseUrl.isNullOrBlank()) {
+                        return@forEach
+                    }
                     try {
-                        val page = remoteBoardRepository.getThread(entry.boardUrl, entry.threadId)
+                        val page = remoteBoardRepository.getThread(boardBaseUrl, entry.threadId)
                         val opPost = page.posts.firstOrNull()
                         val updatedEntry = entry.copy(
                             title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
