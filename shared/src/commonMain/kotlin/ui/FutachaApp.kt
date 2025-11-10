@@ -109,7 +109,17 @@ fun FutachaApp(
                         },
                         onMenuAction = { },
                         onHistoryEntrySelected = openHistoryEntry,
-                        onHistoryEntryDismissed = dismissHistoryEntry
+                        onHistoryEntryDismissed = dismissHistoryEntry,
+                        onBoardDeleted = { board ->
+                            coroutineScope.launch {
+                                stateStore.setBoards(persistedBoards.filter { it.id != board.id })
+                            }
+                        },
+                        onBoardsReordered = { reorderedBoards ->
+                            coroutineScope.launch {
+                                stateStore.setBoards(reorderedBoards)
+                            }
+                        }
                     )
                 }
 

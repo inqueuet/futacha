@@ -10,6 +10,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -102,6 +103,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -175,12 +177,17 @@ fun BoardManagementScreen(
     onMenuAction: (BoardManagementMenuAction) -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     modifier: Modifier = Modifier,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {}
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    onBoardDeleted: (BoardSummary) -> Unit = {},
+    onBoardsReordered: (List<BoardSummary>) -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var isMenuExpanded by remember { mutableStateOf(false) }
     var isAddDialogVisible by rememberSaveable { mutableStateOf(false) }
+    var isDeleteMode by rememberSaveable { mutableStateOf(false) }
+    var isReorderMode by rememberSaveable { mutableStateOf(false) }
+    var boardToDelete by remember { mutableStateOf<BoardSummary?>(null) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
@@ -210,14 +217,34 @@ fun BoardManagementScreen(
             topBar = {
                 CenterAlignedTopAppBar(
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Menu,
-                                contentDescription = "履歴を開く"
-                            )
+                        if (isDeleteMode || isReorderMode) {
+                            IconButton(onClick = {
+                                isDeleteMode = false
+                                isReorderMode = false
+                            }) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                    contentDescription = "戻る"
+                                )
+                            }
+                        } else {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Menu,
+                                    contentDescription = "履歴を開く"
+                                )
+                            }
                         }
                     },
-                    title = { Text("ふたば") },
+                    title = {
+                        Text(
+                            when {
+                                isDeleteMode -> "削除する板を選択"
+                                isReorderMode -> "板の順序を変更"
+                                else -> "ふたば"
+                            }
+                        )
+                    },
                     actions = {
                         IconButton(onClick = { isMenuExpanded = true }) {
                             Icon(
@@ -235,11 +262,22 @@ fun BoardManagementScreen(
                                     onClick = {
                                         isMenuExpanded = false
                                         onMenuAction(action)
-                                        if (action == BoardManagementMenuAction.ADD) {
-                                            isAddDialogVisible = true
-                                        } else {
-                                            scope.launch {
-                                                snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                        when (action) {
+                                            BoardManagementMenuAction.ADD -> {
+                                                isAddDialogVisible = true
+                                            }
+                                            BoardManagementMenuAction.DELETE -> {
+                                                isDeleteMode = !isDeleteMode
+                                                isReorderMode = false
+                                            }
+                                            BoardManagementMenuAction.REORDER -> {
+                                                isReorderMode = !isReorderMode
+                                                isDeleteMode = false
+                                            }
+                                            else -> {
+                                                scope.launch {
+                                                    snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                                }
                                             }
                                         }
                                     }
@@ -266,14 +304,49 @@ fun BoardManagementScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 12.dp)
             ) {
-                items(
+                itemsIndexed(
                     items = boards,
-                    key = { it.id }
-                ) { board ->
-                    BoardSummaryCard(
-                        board = board,
-                        onClick = { onBoardSelected(board) }
-                    )
+                    key = { _, board -> board.id }
+                ) { index, board ->
+                    when {
+                        isDeleteMode -> {
+                            BoardSummaryCardWithDelete(
+                                board = board,
+                                onDelete = {
+                                    boardToDelete = board
+                                }
+                            )
+                        }
+                        isReorderMode -> {
+                            BoardSummaryCardWithReorder(
+                                board = board,
+                                onMoveUp = {
+                                    if (index > 0) {
+                                        val newBoards = boards.toMutableList()
+                                        newBoards.removeAt(index)
+                                        newBoards.add(index - 1, board)
+                                        onBoardsReordered(newBoards)
+                                    }
+                                },
+                                onMoveDown = {
+                                    if (index < boards.size - 1) {
+                                        val newBoards = boards.toMutableList()
+                                        newBoards.removeAt(index)
+                                        newBoards.add(index + 1, board)
+                                        onBoardsReordered(newBoards)
+                                    }
+                                },
+                                canMoveUp = index > 0,
+                                canMoveDown = index < boards.size - 1
+                            )
+                        }
+                        else -> {
+                            BoardSummaryCard(
+                                board = board,
+                                onClick = { onBoardSelected(board) }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -288,6 +361,20 @@ fun BoardManagementScreen(
                 isAddDialogVisible = false
                 scope.launch {
                     snackbarHostState.showSnackbar("\"$name\" を追加しました")
+                }
+            }
+        )
+    }
+
+    boardToDelete?.let { board ->
+        DeleteBoardDialog(
+            board = board,
+            onDismiss = { boardToDelete = null },
+            onConfirm = {
+                onBoardDeleted(board)
+                boardToDelete = null
+                scope.launch {
+                    snackbarHostState.showSnackbar("\"${board.name}\" を削除しました")
                 }
             }
         )
@@ -683,6 +770,195 @@ private fun BoardSummaryCard(
     }
 }
 
+@Composable
+private fun DeleteBoardDialog(
+    board: BoardSummary,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("板を削除") },
+        text = {
+            Text("「${board.name}」を削除してもよろしいですか？")
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("削除")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        }
+    )
+}
+
+@Composable
+private fun BoardSummaryCardWithDelete(
+    board: BoardSummary,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = CircleShape,
+                color = if (board.pinned) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = if (board.pinned) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (board.pinned) {
+                            Icons.Outlined.PushPin
+                        } else {
+                            Icons.Outlined.Folder
+                        },
+                        contentDescription = null
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = board.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = board.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Rounded.Delete,
+                    contentDescription = "削除",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoardSummaryCardWithReorder(
+    board: BoardSummary,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = CircleShape,
+                color = if (board.pinned) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = if (board.pinned) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (board.pinned) {
+                            Icons.Outlined.PushPin
+                        } else {
+                            Icons.Outlined.Folder
+                        },
+                        contentDescription = null
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = board.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = board.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column {
+                IconButton(
+                    onClick = onMoveUp,
+                    enabled = canMoveUp
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ArrowUpward,
+                        contentDescription = "上へ移動"
+                    )
+                }
+                IconButton(
+                    onClick = onMoveDown,
+                    enabled = canMoveDown
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ArrowDownward,
+                        contentDescription = "下へ移動"
+                    )
+                }
+            }
+        }
+    }
+}
+
 sealed interface CatalogUiState {
     data object Loading : CatalogUiState
     data class Success(val items: List<CatalogItem>) : CatalogUiState
@@ -846,6 +1122,7 @@ fun CatalogScreen(
                     items = catalogMode.applyLocalSort(state.items),
                     onThreadSelected = onThreadSelected,
                     onRefresh = performRefresh,
+                    isRefreshing = isRefreshing,
                     modifier = contentModifier
                 )
             }
@@ -887,79 +1164,86 @@ private fun CatalogSuccessContent(
     items: List<CatalogItem>,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
+    isRefreshing: Boolean,
     modifier: Modifier = Modifier
 ) {
     CatalogGrid(
         items = items,
         onThreadSelected = onThreadSelected,
         onRefresh = onRefresh,
+        isRefreshing = isRefreshing,
         modifier = modifier
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun CatalogGrid(
     items: List<CatalogItem>,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
+    isRefreshing: Boolean,
     modifier: Modifier = Modifier
 ) {
     val gridState = rememberLazyGridState()
-
-    val isAtTop by remember {
-        derivedStateOf {
-            gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-        }
-    }
+    val coroutineScope = rememberCoroutineScope()
+    var dragOffset by remember { mutableStateOf(0f) }
     val isAtBottom by remember {
         derivedStateOf {
-            val lastIndex = gridState.layoutInfo.totalItemsCount - 1
-            gridState.firstVisibleItemIndex + gridState.layoutInfo.visibleItemsInfo.size >= lastIndex
+            val layoutInfo = gridState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            lastVisibleItem != null && lastVisibleItem.index == layoutInfo.totalItemsCount - 1
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    var totalDy = 0f
-                    val pointerId = down.id
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-                        if (!change.pressed) {
-                            if (kotlin.math.abs(totalDy) > 200f) {
-                                if (totalDy > 0 && isAtTop) {
-                                    onRefresh()
-                                } else if (totalDy < 0 && isAtBottom) {
-                                    onRefresh()
-                                }
-                            }
-                            break
-                        }
-                        totalDy += change.positionChange().y
-                    }
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = modifier.fillMaxSize()
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyVerticalGrid(
+                state = gridState,
+                modifier = Modifier.padding(horizontal = 8.dp),
+                columns = GridCells.Adaptive(120.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
+            ) {
+                items(
+                    items = items,
+                    key = { it.id }
+                ) { catalogItem ->
+                    CatalogCard(
+                        item = catalogItem,
+                        onClick = { onThreadSelected(catalogItem) }
+                    )
                 }
             }
-    ) {
-        LazyVerticalGrid(
-            state = gridState,
-            modifier = Modifier.padding(horizontal = 8.dp),
-            columns = GridCells.Adaptive(120.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
-        ) {
-            items(
-                items = items,
-                key = { it.id }
-            ) { catalogItem ->
-                CatalogCard(
-                    item = catalogItem,
-                    onClick = { onThreadSelected(catalogItem) }
+
+            if (isAtBottom && !isRefreshing) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp)
+                        .align(Alignment.BottomCenter)
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragStart = { dragOffset = 0f },
+                                onDragEnd = {
+                                    if (dragOffset > 100) {
+                                        coroutineScope.launch { onRefresh() }
+                                    }
+                                    dragOffset = 0f
+                                },
+                                onDragCancel = { dragOffset = 0f },
+                                onVerticalDrag = { _, dragAmount ->
+                                    if (dragAmount < 0) {
+                                        dragOffset += -dragAmount
+                                    }
+                                }
+                            )
+                        }
                 )
             }
         }
@@ -1567,6 +1851,7 @@ fun ThreadScreen(
                             },
                             onSaidaneClick = handleSaidaneAction,
                             onRefresh = performRefresh,
+                            isRefreshing = isRefreshing,
                             modifier = Modifier.matchParentSize()
                         )
                     }
@@ -1826,6 +2111,7 @@ private fun ThreadError(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadContent(
     page: ThreadPage,
@@ -1834,6 +2120,7 @@ private fun ThreadContent(
     onPostLongPress: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
     onRefresh: () -> Unit,
+    isRefreshing: Boolean,
     modifier: Modifier = Modifier
 ) {
     val posterIdLabels = remember(page.posts) {
@@ -1843,38 +2130,23 @@ private fun ThreadContent(
     val referencedByMap = remember(page.posts) { buildReferencedPostsMap(page.posts) }
     val postsByPosterId = remember(page.posts) { buildPostsByPosterId(page.posts) }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
-
-    val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 } }
-    val isAtBottom by remember { derivedStateOf {
-        val lastIndex = listState.layoutInfo.totalItemsCount - 1
-        listState.firstVisibleItemIndex + listState.layoutInfo.visibleItemsInfo.size >= lastIndex
-    } }
-
-    Box(modifier = modifier
-        .fillMaxSize()
-        .pointerInput(Unit) {
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
-                var totalDy = 0f
-                val pointerId = down.id
-                while (true) {
-                    val event = awaitPointerEvent()
-                    val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-                    if (!change.pressed) {
-                        if (kotlin.math.abs(totalDy) > 200f) {
-                            if (totalDy > 0 && isAtTop) {
-                                onRefresh()
-                            } else if (totalDy < 0 && isAtBottom) {
-                                onRefresh()
-                            }
-                        }
-                        break
-                    }
-                    totalDy += change.positionChange().y
-                }
-            }
+    val coroutineScope = rememberCoroutineScope()
+    var dragOffset by remember { mutableStateOf(0f) }
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            lastVisibleItem != null && lastVisibleItem.index == layoutInfo.totalItemsCount - 1
         }
-    ) {
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize()
+        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
@@ -1944,6 +2216,34 @@ private fun ThreadContent(
                     )
                 }
             }
+        }
+
+            if (isAtBottom && !isRefreshing) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp)
+                        .align(Alignment.BottomCenter)
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragStart = { dragOffset = 0f },
+                                onDragEnd = {
+                                    if (dragOffset > 100) {
+                                        coroutineScope.launch { onRefresh() }
+                                    }
+                                    dragOffset = 0f
+                                },
+                                onDragCancel = { dragOffset = 0f },
+                                onVerticalDrag = { _, dragAmount ->
+                                    if (dragAmount < 0) {
+                                        dragOffset += -dragAmount
+                                    }
+                                }
+                            )
+                        }
+                )
+            }
+        }
         }
         ThreadScrollbar(
             listState = listState,
