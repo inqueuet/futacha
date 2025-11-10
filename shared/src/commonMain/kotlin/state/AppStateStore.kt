@@ -54,6 +54,34 @@ class AppStateStore internal constructor(
     }
 
     /**
+     * Insert or update a history entry while keeping the existing order intact.
+     * This is used for incremental updates (e.g., refreshing metadata) without
+     * requiring the caller to manage the whole list manually.
+     */
+    suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) {
+        historyMutex.withLock {
+            val currentHistoryJson = storage.historyJson.first()
+            val currentHistory = currentHistoryJson?.let { decodeHistory(it) } ?: emptyList()
+            val existingIndex = currentHistory.indexOfFirst { it.threadId == entry.threadId }
+            val updatedHistory = if (existingIndex >= 0) {
+                currentHistory.toMutableList().also { it[existingIndex] = entry }
+            } else {
+                buildList {
+                    addAll(currentHistory)
+                    add(entry)
+                }
+            }
+
+            try {
+                storage.updateHistoryJson(json.encodeToString(historySerializer, updatedHistory))
+            } catch (e: Exception) {
+                println("AppStateStore: Failed to upsert history entry: ${e.message}")
+                // Log error but don't crash
+            }
+        }
+    }
+
+    /**
      * Thread-safe update of scroll position in history.
      * This prevents race conditions when multiple scroll updates occur concurrently.
      * Note: This should only be called for scroll position updates, not initial navigation.

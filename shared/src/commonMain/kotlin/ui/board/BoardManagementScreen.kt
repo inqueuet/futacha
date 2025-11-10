@@ -9,7 +9,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +54,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
@@ -80,6 +83,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
@@ -124,6 +128,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -177,8 +182,10 @@ fun BoardManagementScreen(
     onAddBoard: (String, String) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
+    onHistoryRefresh: suspend () -> Unit = {},
     modifier: Modifier = Modifier,
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    onHistoryCleared: () -> Unit = {},
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {}
 ) {
@@ -201,11 +208,26 @@ fun BoardManagementScreen(
         onHistoryEntrySelected(entry)
     }
 
+    var isHistoryRefreshing by remember { mutableStateOf(false) }
+    val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
+        if (isHistoryRefreshing) return@handleHistoryRefresh
+        scope.launch {
+            isHistoryRefreshing = true
+            snackbarHostState.showSnackbar("履歴を更新中...")
+            try {
+                onHistoryRefresh()
+                snackbarHostState.showSnackbar("履歴を更新しました")
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
+            } finally {
+            isHistoryRefreshing = false
+            }
+        }
+    }
+
     val handleBatchDelete: () -> Unit = {
         scope.launch {
-            history.forEach { entry ->
-                onHistoryEntryDismissed(entry)
-            }
+            onHistoryCleared()
             snackbarHostState.showSnackbar("履歴を一括削除しました")
             drawerState.close()
         }
@@ -224,12 +246,7 @@ fun BoardManagementScreen(
                         drawerState.close()
                     }
                 },
-                onRefreshClick = {
-                    scope.launch {
-                        snackbarHostState.showSnackbar("履歴を更新中...")
-                        drawerState.close()
-                    }
-                },
+                onRefreshClick = handleHistoryRefresh,
                 onBatchDeleteClick = handleBatchDelete,
                 onSettingsClick = {
                     scope.launch {
@@ -507,6 +524,7 @@ private fun HistoryDrawerContent(
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
     onBoardClick: () -> Unit = {},
     onRefreshClick: () -> Unit = {},
+    onThreadRefreshClick: (() -> Unit)? = null,
     onBatchDeleteClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
@@ -541,6 +559,7 @@ private fun HistoryDrawerContent(
             HistoryBottomBar(
                 onBoardClick = onBoardClick,
                 onRefreshClick = onRefreshClick,
+                onThreadRefreshClick = onThreadRefreshClick,
                 onBatchDeleteClick = onBatchDeleteClick,
                 onSettingsClick = onSettingsClick
             )
@@ -568,6 +587,7 @@ private fun HistoryListHeader() {
 private fun HistoryBottomBar(
     onBoardClick: () -> Unit = {},
     onRefreshClick: () -> Unit = {},
+    onThreadRefreshClick: (() -> Unit)? = null,
     onBatchDeleteClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
@@ -580,7 +600,13 @@ private fun HistoryBottomBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             HistoryBottomIcon(Icons.Rounded.Home, "板", onBoardClick)
-            HistoryBottomIcon(Icons.Rounded.Refresh, "更新", onRefreshClick)
+            HistoryBottomIcon(
+                icon = Icons.Rounded.Refresh,
+                label = "更新"
+            ) {
+                onRefreshClick()
+                onThreadRefreshClick?.invoke()
+            }
             HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick)
             HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick)
         }
@@ -1024,6 +1050,8 @@ fun CatalogScreen(
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = {},
+    onHistoryRefresh: suspend () -> Unit = {},
+    onHistoryCleared: () -> Unit = {},
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
 ) {
@@ -1043,6 +1071,22 @@ fun CatalogScreen(
     }
     var catalogMode by rememberSaveable { mutableStateOf(CatalogMode.default) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var isHistoryRefreshing by remember { mutableStateOf(false) }
+    val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
+        if (isHistoryRefreshing) return@handleHistoryRefresh
+        coroutineScope.launch {
+            isHistoryRefreshing = true
+            snackbarHostState.showSnackbar("履歴を更新中...")
+            try {
+                onHistoryRefresh()
+                snackbarHostState.showSnackbar("履歴を更新しました")
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
+            } finally {
+                isHistoryRefreshing = false
+            }
+        }
+    }
 
     val performRefresh: () -> Unit = {
         if (!isRefreshing && board != null) {
@@ -1109,9 +1153,7 @@ fun CatalogScreen(
 
     val handleBatchDelete: () -> Unit = {
         coroutineScope.launch {
-            history.forEach { entry ->
-                onHistoryEntryDismissed(entry)
-            }
+            onHistoryCleared()
             snackbarHostState.showSnackbar("履歴を一括削除しました")
             drawerState.close()
         }
@@ -1133,10 +1175,8 @@ fun CatalogScreen(
                         onBack()
                     }
                 },
-                onRefreshClick = {
-                    coroutineScope.launch {
-                        drawerState.close()
-                    }
+                onRefreshClick = handleHistoryRefresh,
+                onThreadRefreshClick = {
                     performRefresh()
                 },
                 onBatchDeleteClick = handleBatchDelete,
@@ -1381,6 +1421,23 @@ private fun CatalogCard(
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                     )
                 }
+                if (item.replyCount > 0) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp),
+                        shape = MaterialTheme.shapes.extraSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        tonalElevation = 4.dp
+                    ) {
+                        Text(
+                            text = "${item.replyCount}レス",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
             Column(
                 modifier = Modifier
@@ -1580,6 +1637,7 @@ fun ThreadScreen(
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = {},
+    onHistoryRefresh: suspend () -> Unit = {},
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
@@ -1614,6 +1672,30 @@ fun ThreadScreen(
     var replyTextOnly by remember { mutableStateOf(false) }
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var isHistoryRefreshing by remember { mutableStateOf(false) }
+    var previewImageUrl by remember { mutableStateOf<String?>(null) }
+    var previewVideoUrl by remember { mutableStateOf<String?>(null) }
+    val handleMediaClick: (String, MediaType) -> Unit = { url, mediaType ->
+        when (mediaType) {
+            MediaType.Image -> previewImageUrl = url
+            MediaType.Video -> previewVideoUrl = url
+        }
+    }
+    val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
+        if (isHistoryRefreshing) return@handleHistoryRefresh
+        coroutineScope.launch {
+            isHistoryRefreshing = true
+            snackbarHostState.showSnackbar("履歴を更新中...")
+            try {
+                onHistoryRefresh()
+                snackbarHostState.showSnackbar("履歴を更新しました")
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
+            } finally {
+                isHistoryRefreshing = false
+            }
+        }
+    }
 
     PlatformBackHandler(enabled = isDrawerOpen) {
         coroutineScope.launch { drawerState.close() }
@@ -1658,7 +1740,7 @@ fun ThreadScreen(
 
     val currentState = uiState.value
     val resolvedReplyCount: Int? = when (currentState) {
-        is ThreadUiState.Success -> initialReplyCount ?: currentState.page.posts.size
+        is ThreadUiState.Success -> currentState.page.posts.size
         else -> initialReplyCount
     }
     val resolvedThreadTitle = when (currentState) {
@@ -1822,10 +1904,8 @@ fun ThreadScreen(
                         onBack()
                     }
                 },
-                onRefreshClick = {
-                    coroutineScope.launch {
-                        drawerState.close()
-                    }
+                onRefreshClick = handleHistoryRefresh,
+                onThreadRefreshClick = {
                     performRefresh()
                 },
                 onBatchDeleteClick = handleBatchDelete,
@@ -1970,6 +2050,7 @@ fun ThreadScreen(
                                 isActionSheetVisible = true
                             },
                             onSaidaneClick = handleSaidaneAction,
+                            onMediaClick = handleMediaClick,
                             onRefresh = performRefresh,
                             isRefreshing = isRefreshing,
                             modifier = Modifier.matchParentSize()
@@ -2098,6 +2179,24 @@ fun ThreadScreen(
                         textOnly
                     )
                 }
+            }
+        )
+    }
+
+    previewImageUrl?.let { imageUrl ->
+        ImagePreviewDialog(
+            imageUrl = imageUrl,
+            onDismiss = {
+                previewImageUrl = null
+            }
+        )
+    }
+
+    previewVideoUrl?.let { videoUrl ->
+        VideoPreviewDialog(
+            videoUrl = videoUrl,
+            onDismiss = {
+                previewVideoUrl = null
             }
         )
     }
@@ -2239,6 +2338,7 @@ private fun ThreadContent(
     saidaneOverrides: Map<String, String>,
     onPostLongPress: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     modifier: Modifier = Modifier
@@ -2325,6 +2425,7 @@ private fun ThreadContent(
                             }
                         },
                     onSaidaneClick = { onSaidaneClick(post) },
+                    onMediaClick = onMediaClick,
                     onLongPress = { onPostLongPress(post) },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -2333,6 +2434,18 @@ private fun ThreadContent(
                         modifier = Modifier.padding(horizontal = 12.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
                         thickness = 0.5.dp
+                    )
+                }
+            }
+            page.expiresAtLabel?.takeIf { it.isNotBlank() }?.let { footerLabel ->
+                item(key = "thread-expires-label") {
+                    Text(
+                        text = footerLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp, horizontal = 16.dp)
                     )
                 }
             }
@@ -2376,6 +2489,7 @@ private fun ThreadContent(
         QuotePreviewDialog(
             state = state,
             onDismiss = { quotePreviewState = null },
+            onMediaClick = onMediaClick,
             onQuoteClick = { reference ->
                 val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
                 if (targets.isNotEmpty()) {
@@ -2456,6 +2570,7 @@ private fun ThreadPostCard(
     onQuoteClick: (QuoteReference) -> Unit,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
     onSaidaneClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -2491,17 +2606,22 @@ private fun ThreadPostCard(
             onPosterIdClick = onPosterIdClick,
             onReferencedByClick = onReferencedByClick
         )
-        post.imageUrl?.let { imageUrl ->
+        val thumbnailForDisplay = post.thumbnailUrl ?: post.imageUrl
+        thumbnailForDisplay?.let { displayUrl ->
             AsyncImage(
                 model = ImageRequest.Builder(platformContext)
-                    .data(imageUrl)
+                    .data(displayUrl)
                     .crossfade(true)
                     .build(),
                 contentDescription = "添付画像",
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(MaterialTheme.shapes.small)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable {
+                        val targetUrl = post.imageUrl ?: displayUrl
+                        onMediaClick?.invoke(targetUrl, determineMediaType(targetUrl))
+                    },
                 contentScale = ContentScale.Crop
             )
         }
@@ -3032,6 +3152,7 @@ private fun extractTimestampWithoutId(timestamp: String): String {
 private fun QuotePreviewDialog(
     state: QuotePreviewState,
     onDismiss: () -> Unit,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
     onQuoteClick: (QuoteReference) -> Unit
 ) {
     Dialog(
@@ -3068,16 +3189,17 @@ private fun QuotePreviewDialog(
                         .verticalScroll(scrollState)
                 ) {
                     state.targetPosts.forEachIndexed { index, post ->
-                        ThreadPostCard(
-                            post = post,
-                            isOp = post.order == 0,
-                            posterIdLabel = state.posterIdLabels[post.id],
-                            posterIdValue = normalizePosterIdValue(post.posterId),
-                            saidaneLabelOverride = null,
-                            onQuoteClick = onQuoteClick,
-                            onSaidaneClick = null,
-                            onLongPress = null,
-                            modifier = Modifier
+                    ThreadPostCard(
+                        post = post,
+                        isOp = post.order == 0,
+                        posterIdLabel = state.posterIdLabels[post.id],
+                        posterIdValue = normalizePosterIdValue(post.posterId),
+                        saidaneLabelOverride = null,
+                        onQuoteClick = onQuoteClick,
+                        onSaidaneClick = null,
+                        onLongPress = null,
+                        onMediaClick = onMediaClick,
+                        modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 4.dp)
                         )
@@ -3155,6 +3277,158 @@ private fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>> 
         value
             .distinctBy { it.id }
             .sortedBy { orderIndex[it.id] ?: Int.MAX_VALUE }
+    }
+}
+
+@Composable
+private fun ImagePreviewDialog(
+    imageUrl: String,
+    onDismiss: () -> Unit
+) {
+    val platformContext = LocalPlatformContext.current
+    var scale by remember { mutableStateOf(1f) }
+    var translation by remember { mutableStateOf(Offset.Zero) }
+    var swipeDistance by remember { mutableStateOf(0f) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            swipeDistance += dragAmount
+                            if (swipeDistance < -200f) {
+                                swipeDistance = 0f
+                                onDismiss()
+                            }
+                        },
+                        onDragEnd = { swipeDistance = 0f },
+                        onDragCancel = { swipeDistance = 0f }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 6f)
+                        translation += pan
+                    }
+                }
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(platformContext)
+                    .data(imageUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "プレビュー画像",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = translation.x,
+                        translationY = translation.y
+                    )
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(40.dp),
+                colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "プレビューを閉じる"
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoPreviewDialog(
+    videoUrl: String,
+    onDismiss: () -> Unit
+) {
+    var swipeDistance by remember { mutableStateOf(0f) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            swipeDistance += dragAmount
+                            if (swipeDistance < -200f) {
+                                swipeDistance = 0f
+                                onDismiss()
+                            }
+                        },
+                        onDragEnd = { swipeDistance = 0f },
+                        onDragCancel = { swipeDistance = 0f }
+                    )
+                }
+        ) {
+            PlatformVideoPlayer(
+                videoUrl = videoUrl,
+                modifier = Modifier.fillMaxSize()
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(40.dp),
+                colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "プレビューを閉じる"
+                )
+            }
+        }
+    }
+}
+
+private enum class MediaType {
+    Image,
+    Video
+}
+
+private fun determineMediaType(url: String): MediaType {
+    val cleaned = url.substringBefore('?')
+    val extension = cleaned.substringAfterLast('.', "").lowercase()
+    return if (extension in setOf("mp4", "webm", "mkv", "mov", "avi", "ts", "flv")) {
+        MediaType.Video
+    } else {
+        MediaType.Image
     }
 }
 

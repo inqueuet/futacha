@@ -55,6 +55,14 @@ class ThreadHtmlParserCoreTest {
         assertNotNull(thumb)
         assertTrue(thumb.endsWith("1762246395132s.jpg"))
     }
+
+    @Test
+    fun parseThread_handlesLegacyCntdClassSpan() {
+        val legacyHtml = sampleThreadHtml.replace("id=\"contdisp\"", "class=\"cntd\"")
+        val page = ThreadHtmlParserCore.parseThread(legacyHtml)
+
+        assertEquals("1月18日頃消えます", page.expiresAtLabel)
+    }
 }
 
 private val sampleThreadHtml = """
@@ -64,7 +72,7 @@ private val sampleThreadHtml = """
     </head>
     <body>
     <span id="tit">料理＠ふたば</span>
-    <span class="cntd">1月18日頃消えます</span>
+    <span id="contdisp">1月18日頃消えます</span>
     <div class="thre" data-res="354621">
     <span class="csb">スレタイ</span>Name<span class="cnm">名無し</span>
     <span class="cnw">25/11/03(日)13:47:04 ID:IDOP</span><span class="cno">No.354621</span>

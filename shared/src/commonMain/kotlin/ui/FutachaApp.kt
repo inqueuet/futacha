@@ -71,20 +71,41 @@ fun FutachaApp(
                 }
             }
             val updateHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
-                val updatedHistory = buildList {
-                    val existingIndex = persistedHistory.indexOfFirst { it.threadId == entry.threadId }
-                    if (existingIndex >= 0) {
-                        addAll(persistedHistory.take(existingIndex))
-                        add(entry)
-                        addAll(persistedHistory.drop(existingIndex + 1))
-                    } else {
-                        addAll(persistedHistory)
-                        add(entry)
+                coroutineScope.launch {
+                    stateStore.upsertHistoryEntry(entry)
+                }
+            }
+            val clearHistory: () -> Unit = {
+                coroutineScope.launch {
+                    stateStore.setHistory(emptyList())
+                }
+            }
+            val refreshHistoryEntries: suspend () -> Unit = refreshHistoryEntries@{
+                val snapshot = persistedHistory.toList()
+                if (snapshot.isEmpty()) return@refreshHistoryEntries
+                var firstError: Throwable? = null
+                snapshot.forEach { entry ->
+                    if (entry.boardUrl.isBlank() || entry.boardUrl.contains("example.com", ignoreCase = true)) {
+                        return@forEach
+                    }
+                    try {
+                        val page = remoteBoardRepository.getThread(entry.boardUrl, entry.threadId)
+                        val opPost = page.posts.firstOrNull()
+                        val updatedEntry = entry.copy(
+                            title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
+                            titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
+                            boardName = page.boardTitle ?: entry.boardName,
+                            replyCount = page.posts.size
+                        )
+                        updateHistoryEntry(updatedEntry)
+                    } catch (e: Exception) {
+                        println("FutachaApp: Failed to refresh history entry ${entry.threadId}: ${e.message}")
+                        if (firstError == null) {
+                            firstError = e
+                        }
                     }
                 }
-                coroutineScope.launch {
-                    stateStore.setHistory(updatedHistory)
-                }
+                firstError?.let { throw it }
             }
             val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 val targetBoard = persistedBoards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
@@ -126,6 +147,8 @@ fun FutachaApp(
                         onMenuAction = { },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
+                        onHistoryCleared = clearHistory,
+                        onHistoryRefresh = refreshHistoryEntries,
                         onBoardDeleted = { board ->
                             coroutineScope.launch {
                                 stateStore.setBoards(persistedBoards.filter { it.id != board.id })
@@ -162,6 +185,8 @@ fun FutachaApp(
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
                         onHistoryEntryUpdated = updateHistoryEntry,
+                        onHistoryRefresh = refreshHistoryEntries,
+                        onHistoryCleared = clearHistory,
                         repository = boardRepository
                     )
                 }
@@ -217,13 +242,13 @@ fun FutachaApp(
                     }
 
                     val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
-                    ThreadScreen(
-                        board = currentBoard,
-                        history = persistedHistory,
-                        threadId = activeThreadId,
-                        threadTitle = selectedThreadTitle,
-                        initialReplyCount = selectedThreadReplies,
-                        onBack = {
+                        ThreadScreen(
+                            board = currentBoard,
+                            history = persistedHistory,
+                            threadId = activeThreadId,
+                            threadTitle = selectedThreadTitle,
+                            initialReplyCount = selectedThreadReplies,
+                            onBack = {
                             selectedThreadId = null
                             selectedThreadTitle = null
                             selectedThreadReplies = null
@@ -232,10 +257,11 @@ fun FutachaApp(
                         },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
-                        onHistoryEntryUpdated = updateHistoryEntry,
-                        onScrollPositionPersist = persistScrollPosition,
-                        repository = boardRepository
-                    )
+                            onHistoryEntryUpdated = updateHistoryEntry,
+                            onHistoryRefresh = refreshHistoryEntries,
+                            onScrollPositionPersist = persistScrollPosition,
+                            repository = boardRepository
+                        )
                 }
             }
         }

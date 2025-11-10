@@ -32,7 +32,7 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val expireRegex = Regex(
-        pattern = "<span(?=[^>]*class=['\"]?cntd['\"]?)[^>]*>",
+        pattern = "<span(?=[^>]*(?:id=['\"]?contdisp['\"]?|class=['\"]?cntd['\"]?))[^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val deletedNoticeRegex = Regex(
