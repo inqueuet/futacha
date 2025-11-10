@@ -163,6 +163,8 @@ import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.size.Precision
+import coil3.size.Scale
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
@@ -1324,7 +1326,7 @@ fun CatalogScreen(
         if (showCreateThreadDialog) {
             CreateThreadDialog(
                 onDismiss = { showCreateThreadDialog = false },
-                onSubmit = { name, email, title, comment ->
+                onSubmit = { name, email, title, comment, imageData ->
                     showCreateThreadDialog = false
                     if (board == null) {
                         coroutineScope.launch {
@@ -1342,9 +1344,9 @@ fun CatalogScreen(
                                 subject = title,
                                 comment = comment,
                                 password = "",
-                                imageFile = null,
-                                imageFileName = null,
-                                textOnly = true
+                                imageFile = imageData?.bytes,
+                                imageFileName = imageData?.fileName,
+                                textOnly = imageData == null
                             )
                             snackbarHostState.showSnackbar("スレッドを作成しました (ID: $threadId)")
                             // Refresh catalog to show the new thread
@@ -1362,12 +1364,14 @@ fun CatalogScreen(
 @Composable
 private fun CreateThreadDialog(
     onDismiss: () -> Unit,
-    onSubmit: (name: String, email: String, title: String, comment: String) -> Unit
+    onSubmit: (name: String, email: String, title: String, comment: String, imageData: com.valoser.futacha.shared.util.ImageData?) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var comment by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
+    var selectedImage by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1408,16 +1412,67 @@ private fun CreateThreadDialog(
                     minLines = 4,
                     maxLines = 8
                 )
-                Text(
-                    text = "※画像添付機能は後で実装予定",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+
+                // 画像添付セクション
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "画像添付",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        ImagePickerButton(
+                            onImageSelected = { image ->
+                                selectedImage = image
+                            }
+                        )
+                    }
+
+                    selectedImage?.let { image ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    MaterialTheme.shapes.small
+                                )
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = image.fileName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${image.bytes.size / 1024} KB",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = { selectedImage = null }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = "画像を削除"
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSubmit(name, email, title, comment) },
+                onClick = { onSubmit(name, email, title, comment, selectedImage) },
                 enabled = title.isNotBlank() || comment.isNotBlank()
             ) {
                 Text("作成")
@@ -1430,6 +1485,11 @@ private fun CreateThreadDialog(
         }
     )
 }
+
+@Composable
+internal expect fun ImagePickerButton(
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit
+)
 
 @Composable
 private fun LoadingCatalog(modifier: Modifier = Modifier) {
@@ -1531,10 +1591,10 @@ private fun CatalogGrid(
             LazyVerticalGrid(
                 state = gridState,
                 modifier = Modifier.padding(horizontal = 8.dp),
-                columns = GridCells.Adaptive(120.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
+                columns = GridCells.Fixed(5),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
             ) {
                 items(
                     items = items,
@@ -1584,23 +1644,17 @@ private fun CatalogCard(
 ) {
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
-    val thumbnailWidthPx = item.thumbnailWidth?.takeIf { it > 0 }
-    val thumbnailHeightPx = item.thumbnailHeight?.takeIf { it > 0 }
-    val thumbnailWidthDp = thumbnailWidthPx?.let { with(density) { it.toDp() } }
-    val thumbnailHeightDp = thumbnailHeightPx?.let { with(density) { it.toDp() } }
-    val baseWidthDp = thumbnailWidthDp ?: 64.dp
-    val baseHeightDp = thumbnailHeightDp ?: 64.dp
-    val requestWidth = thumbnailWidthPx?.coerceAtLeast(1) ?: 64
-    val requestHeight = thumbnailHeightPx?.coerceAtLeast(1) ?: 64
-    val targetSizeDp = 120.dp
-    val widthScale = targetSizeDp / baseWidthDp
-    val heightScale = targetSizeDp / baseHeightDp
-    val rawScale = min(widthScale, heightScale).coerceAtLeast(1f)
-    val scaleFactor = floor(rawScale.toDouble()).toFloat().coerceIn(1f, 5f)
+
+    // 4列グリッドでの推定カードサイズ（画面幅360dpの場合約75dp）
+    // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
+    val targetSizePx = with(density) { 50.dp.toPx().toInt() }
+
     val imageRequest = ImageRequest.Builder(platformContext)
         .data(item.thumbnailUrl)
         .crossfade(true)
-        .size(requestWidth, requestHeight)
+        .size(targetSizePx, targetSizePx)
+        .precision(Precision.INEXACT)
+        .scale(Scale.FIT)
         .build()
 
     ElevatedCard(
@@ -1621,8 +1675,8 @@ private fun CatalogCard(
         Column(modifier = Modifier.fillMaxWidth()) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .size(targetSizeDp)
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
@@ -1637,28 +1691,23 @@ private fun CatalogCard(
                         model = imageRequest,
                         contentDescription = item.title ?: "サムネイル",
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(baseWidthDp, baseHeightDp)
-                            .graphicsLayer {
-                                scaleX = scaleFactor
-                                scaleY = scaleFactor
-                            }
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
                 if (item.replyCount > 0) {
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(6.dp),
+                            .padding(4.dp),
                         shape = MaterialTheme.shapes.extraSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        tonalElevation = 4.dp
+                        color = Color.White,
+                        tonalElevation = 2.dp
                     ) {
                         Text(
-                            text = "${item.replyCount}レス",
+                            text = "${item.replyCount}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            color = Color.Black,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
                 }
@@ -1666,13 +1715,14 @@ private fun CatalogCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
             ) {
                 Text(
                     text = item.title ?: "無題",
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = MaterialTheme.typography.bodySmall.fontSize
                 )
             }
         }
@@ -1939,6 +1989,7 @@ fun ThreadScreen(
     var replyComment by remember { mutableStateOf("") }
     var replyPassword by rememberSaveable(board.id) { mutableStateOf("") }
     var replyTextOnly by remember { mutableStateOf(false) }
+    var replyImageData by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
@@ -2467,6 +2518,8 @@ fun ThreadScreen(
             onPasswordChange = { replyPassword = it },
             textOnly = replyTextOnly,
             onTextOnlyChange = { replyTextOnly = it },
+            selectedImage = replyImageData,
+            onImageSelected = { replyImageData = it },
             onDismiss = {
                 isReplySheetVisible = false
             },
@@ -2486,9 +2539,11 @@ fun ThreadScreen(
                 val subject = replySubject
                 val comment = replyComment
                 val textOnly = replyTextOnly
+                val imageData = replyImageData
                 replySubject = ""
                 replyComment = ""
                 replyTextOnly = false
+                replyImageData = null
                 lastUsedDeleteKey = trimmedPassword
                 launchThreadAction(
                     successMessage = "返信を送信しました",
@@ -2503,8 +2558,8 @@ fun ThreadScreen(
                         subject,
                         comment,
                         trimmedPassword,
-                        null,
-                        null,
+                        imageData?.bytes,
+                        imageData?.fileName,
                         textOnly
                     )
                 }
@@ -2849,8 +2904,8 @@ private fun ThreadContent(
                 if (index != page.posts.lastIndex) {
                     HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 12.dp),
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
-                        thickness = 0.5.dp
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                        thickness = 1.dp
                     )
                 }
             }
@@ -3313,6 +3368,8 @@ private fun ThreadReplySheet(
     onPasswordChange: (String) -> Unit,
     textOnly: Boolean,
     onTextOnlyChange: (Boolean) -> Unit,
+    selectedImage: com.valoser.futacha.shared.util.ImageData?,
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData?) -> Unit,
     onDismiss: () -> Unit,
     onSubmit: () -> Unit
 ) {
@@ -3367,13 +3424,74 @@ private fun ThreadReplySheet(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            // 画像添付セクション
+            if (!textOnly) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "画像添付",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        ImagePickerButton(
+                            onImageSelected = { image ->
+                                onImageSelected(image)
+                            }
+                        )
+                    }
+
+                    selectedImage?.let { image ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    MaterialTheme.shapes.small
+                                )
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = image.fileName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${image.bytes.size / 1024} KB",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = { onImageSelected(null) }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = "画像を削除"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Checkbox(
                     checked = textOnly,
-                    onCheckedChange = onTextOnlyChange
+                    onCheckedChange = {
+                        onTextOnlyChange(it)
+                        if (it) onImageSelected(null)
+                    }
                 )
                 Text("画像なし")
             }
@@ -3655,7 +3773,10 @@ private fun QuotePreviewDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                    thickness = 1.dp
+                )
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3680,8 +3801,8 @@ private fun QuotePreviewDialog(
                         if (index != state.targetPosts.lastIndex) {
                             HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = 12.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                                thickness = 0.5.dp
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                thickness = 1.dp
                             )
                         }
                     }
