@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,6 +40,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -60,6 +62,8 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -103,6 +107,8 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
@@ -127,6 +133,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -134,11 +142,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -1074,6 +1084,8 @@ fun CatalogScreen(
     var catalogMode by rememberSaveable { mutableStateOf(CatalogMode.default) }
     var isRefreshing by remember { mutableStateOf(false) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
+    var isSearchActive by rememberSaveable(board?.id) { mutableStateOf(false) }
+    var searchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -1112,7 +1124,11 @@ fun CatalogScreen(
     PlatformBackHandler(enabled = isDrawerOpen) {
         coroutineScope.launch { drawerState.close() }
     }
-    PlatformBackHandler(enabled = !isDrawerOpen) {
+    PlatformBackHandler(enabled = !isDrawerOpen && isSearchActive) {
+        isSearchActive = false
+        searchQuery = ""
+    }
+    PlatformBackHandler(enabled = !isDrawerOpen && !isSearchActive) {
         onBack()
     }
 
@@ -1197,13 +1213,17 @@ fun CatalogScreen(
                 CatalogTopBar(
                     board = board,
                     mode = catalogMode,
-                    onNavigationClick = { coroutineScope.launch { drawerState.open() } },
-                    onModeSelected = { catalogMode = it },
-                    onSearchClick = {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("検索はモック動作です")
+                    searchQuery = searchQuery,
+                    isSearchActive = isSearchActive,
+                    onSearchQueryChange = { searchQuery = it },
+                    onSearchActiveChange = { active ->
+                        isSearchActive = active
+                        if (!active) {
+                            searchQuery = ""
                         }
                     },
+                    onNavigationClick = { coroutineScope.launch { drawerState.open() } },
+                    onModeSelected = { catalogMode = it },
                     onMenuAction = { action ->
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar("${action.label} はモック動作です")
@@ -1239,13 +1259,18 @@ fun CatalogScreen(
             when (val state = currentState) {
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
                 is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
-                is CatalogUiState.Success -> CatalogSuccessContent(
-                    items = catalogMode.applyLocalSort(state.items),
-                    onThreadSelected = onThreadSelected,
-                    onRefresh = performRefresh,
-                    isRefreshing = isRefreshing,
-                    modifier = contentModifier
-                )
+                is CatalogUiState.Success -> {
+                    val sortedItems = catalogMode.applyLocalSort(state.items)
+                    val visibleItems = sortedItems.filterByQuery(searchQuery)
+                    CatalogSuccessContent(
+                        items = visibleItems,
+                        isSearching = searchQuery.isNotBlank(),
+                        onThreadSelected = onThreadSelected,
+                        onRefresh = performRefresh,
+                        isRefreshing = isRefreshing,
+                        modifier = contentModifier
+                    )
+                }
             }
         }
     }
@@ -1283,18 +1308,43 @@ private fun CatalogError(message: String, modifier: Modifier = Modifier) {
 @Composable
 private fun CatalogSuccessContent(
     items: List<CatalogItem>,
+    isSearching: Boolean,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     modifier: Modifier = Modifier
 ) {
-    CatalogGrid(
-        items = items,
-        onThreadSelected = onThreadSelected,
-        onRefresh = onRefresh,
-        isRefreshing = isRefreshing,
-        modifier = modifier
-    )
+    if (items.isEmpty()) {
+        CatalogEmptyContent(
+            isSearching = isSearching,
+            modifier = modifier
+        )
+    } else {
+        CatalogGrid(
+            items = items,
+            onThreadSelected = onThreadSelected,
+            onRefresh = onRefresh,
+            isRefreshing = isRefreshing,
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+private fun CatalogEmptyContent(
+    isSearching: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = if (isSearching) "検索に一致するスレッドがありません" else "表示できるスレッドがありません",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -1479,13 +1529,26 @@ private fun CatalogCard(
 private fun CatalogTopBar(
     board: BoardSummary?,
     mode: CatalogMode,
+    searchQuery: String,
+    isSearchActive: Boolean,
+    onSearchQueryChange: (String) -> Unit,
+    onSearchActiveChange: (Boolean) -> Unit,
     onNavigationClick: () -> Unit,
     onModeSelected: (CatalogMode) -> Unit,
-    onSearchClick: () -> Unit,
     onMenuAction: (CatalogMenuAction) -> Unit
 ) {
     var isMenuExpanded by remember { mutableStateOf(false) }
     var isSortExpanded by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
+        } else {
+            focusManager.clearFocus()
+        }
+    }
 
     TopAppBar(
         navigationIcon = {
@@ -1497,64 +1560,73 @@ private fun CatalogTopBar(
             }
         },
         title = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = board?.name ?: "カタログ",
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            if (isSearchActive) {
+                CatalogSearchTextField(
+                    query = searchQuery,
+                    onQueryChange = onSearchQueryChange,
+                    focusRequester = focusRequester,
+                    modifier = Modifier.fillMaxWidth()
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = mode.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                        text = board?.name ?: "カタログ",
+                        style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    board?.category
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { category ->
-                            Text(
-                                text = category,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    Box {
-                        AssistChip(
-                            onClick = { isSortExpanded = true },
-                            label = { Text("モード") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Rounded.Timeline,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            colors = AssistChipDefaults.assistChipColors(
-                                containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.15f),
-                                labelColor = MaterialTheme.colorScheme.onPrimary,
-                                leadingIconContentColor = MaterialTheme.colorScheme.onPrimary
-                            )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = mode.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        DropdownMenu(
-                            expanded = isSortExpanded,
-                            onDismissRequest = { isSortExpanded = false }
-                        ) {
-                            CatalogMode.entries.forEach { option ->
-                                DropdownMenuItem(
-                                    text = { Text(option.label) },
-                                    onClick = {
-                                        isSortExpanded = false
-                                        onModeSelected(option)
-                                    }
+                        board?.category
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { category ->
+                                Text(
+                                    text = category,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                            }
+                        Box {
+                            AssistChip(
+                                onClick = { isSortExpanded = true },
+                                label = { Text("モード") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Timeline,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.15f),
+                                    labelColor = MaterialTheme.colorScheme.onPrimary,
+                                    leadingIconContentColor = MaterialTheme.colorScheme.onPrimary
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = isSortExpanded,
+                                onDismissRequest = { isSortExpanded = false }
+                            ) {
+                                CatalogMode.entries.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            isSortExpanded = false
+                                            onModeSelected(option)
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1562,31 +1634,48 @@ private fun CatalogTopBar(
             }
         },
         actions = {
-            IconButton(onClick = onSearchClick) {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = "検索"
-                )
-            }
-            Box {
-                IconButton(onClick = { isMenuExpanded = true }) {
+            if (isSearchActive) {
+                IconButton(
+                    onClick = {
+                        if (searchQuery.isNotEmpty()) {
+                            onSearchQueryChange("")
+                        } else {
+                            onSearchActiveChange(false)
+                        }
+                    }
+                ) {
                     Icon(
-                        imageVector = Icons.Outlined.MoreVert,
-                        contentDescription = "メニュー"
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "検索を閉じる"
                     )
                 }
-                DropdownMenu(
-                    expanded = isMenuExpanded,
-                    onDismissRequest = { isMenuExpanded = false }
-                ) {
-                    CatalogMenuAction.entries.forEach { action ->
-                        DropdownMenuItem(
-                            text = { Text(action.label) },
-                            onClick = {
-                                isMenuExpanded = false
-                                onMenuAction(action)
-                            }
+            } else {
+                IconButton(onClick = { onSearchActiveChange(true) }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "検索"
+                    )
+                }
+                Box {
+                    IconButton(onClick = { isMenuExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = "メニュー"
                         )
+                    }
+                    DropdownMenu(
+                        expanded = isMenuExpanded,
+                        onDismissRequest = { isMenuExpanded = false }
+                    ) {
+                        CatalogMenuAction.entries.forEach { action ->
+                            DropdownMenuItem(
+                                text = { Text(action.label) },
+                                onClick = {
+                                    isMenuExpanded = false
+                                    onMenuAction(action)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -1596,6 +1685,50 @@ private fun CatalogTopBar(
             titleContentColor = MaterialTheme.colorScheme.onPrimary,
             navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
             actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+        )
+    )
+}
+
+@Composable
+private fun CatalogSearchTextField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    focusRequester: FocusRequester,
+    modifier: Modifier = Modifier
+) {
+    val focusManager = LocalFocusManager.current
+    TextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier
+            .padding(end = 8.dp)
+            .focusRequester(focusRequester),
+        singleLine = true,
+        placeholder = { Text("スレタイ検索") },
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null
+            )
+        },
+        trailingIcon = null,
+        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+        shape = RoundedCornerShape(28.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
+            unfocusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.1f),
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            focusedTextColor = MaterialTheme.colorScheme.onPrimary,
+            unfocusedTextColor = MaterialTheme.colorScheme.onPrimary,
+            cursorColor = MaterialTheme.colorScheme.onPrimary,
+            focusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+            unfocusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+            focusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+            unfocusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+            focusedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
+            unfocusedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
         )
     )
 }
@@ -1620,6 +1753,18 @@ private fun CatalogNavigationBar(
                 label = { Text(destination.label) }
             )
         }
+    }
+}
+
+private fun List<CatalogItem>.filterByQuery(query: String): List<CatalogItem> {
+    val trimmedQuery = query.trim()
+    if (trimmedQuery.isEmpty()) return this
+    val normalizedQuery = trimmedQuery.lowercase()
+    return filter { item ->
+        val titleMatch = item.title?.lowercase()?.contains(normalizedQuery) == true
+        val idMatch = item.id.lowercase().contains(normalizedQuery)
+        val threadMatch = item.threadUrl.lowercase().contains(normalizedQuery)
+        titleMatch || idMatch || threadMatch
     }
 }
 
@@ -1791,6 +1936,60 @@ fun ThreadScreen(
         )
     }
 
+    var isSearchActive by rememberSaveable(threadId) { mutableStateOf(false) }
+    var searchQuery by rememberSaveable(threadId) { mutableStateOf("") }
+    var currentSearchResultIndex by remember(threadId) { mutableStateOf(0) }
+    val currentPage = (currentState as? ThreadUiState.Success)?.page
+    val searchMatches = if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
+        buildThreadSearchMatches(currentPage.posts, searchQuery)
+    } else {
+        emptyList()
+    }
+    val postHighlightRanges = if (isSearchActive) {
+        searchMatches.associate { it.postId to it.highlightRanges }
+    } else {
+        emptyMap()
+    }
+
+    LaunchedEffect(searchQuery, threadId) {
+        currentSearchResultIndex = 0
+    }
+
+    LaunchedEffect(searchMatches) {
+        if (searchMatches.isEmpty()) {
+            currentSearchResultIndex = 0
+        } else if (currentSearchResultIndex !in searchMatches.indices) {
+            currentSearchResultIndex = 0
+        }
+    }
+
+    fun scrollToSearchMatch(targetIndex: Int) {
+        val target = searchMatches.getOrNull(targetIndex) ?: return
+        coroutineScope.launch {
+            lazyListState.animateScrollToItem(target.postIndex)
+        }
+    }
+
+    fun focusCurrentSearchMatch() {
+        if (searchMatches.isNotEmpty()) {
+            scrollToSearchMatch(currentSearchResultIndex)
+        }
+    }
+
+    fun moveToNextSearchMatch() {
+        if (searchMatches.isEmpty()) return
+        val nextIndex = if (currentSearchResultIndex + 1 >= searchMatches.size) 0 else currentSearchResultIndex + 1
+        currentSearchResultIndex = nextIndex
+        scrollToSearchMatch(nextIndex)
+    }
+
+    fun moveToPreviousSearchMatch() {
+        if (searchMatches.isEmpty()) return
+        val previousIndex = if (currentSearchResultIndex - 1 < 0) searchMatches.lastIndex else currentSearchResultIndex - 1
+        currentSearchResultIndex = previousIndex
+        scrollToSearchMatch(previousIndex)
+    }
+
     LaunchedEffect(threadId) {
         snapshotFlow {
             lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
@@ -1945,13 +2144,18 @@ fun ThreadScreen(
                     threadTitle = resolvedThreadTitle,
                     replyCount = resolvedReplyCount,
                     statusLabel = statusLabel,
+                    isSearchActive = isSearchActive,
+                    searchQuery = searchQuery,
+                    currentSearchIndex = currentSearchResultIndex,
+                    totalSearchMatches = searchMatches.size,
+                    onSearchQueryChange = { searchQuery = it },
+                    onSearchPrev = { moveToPreviousSearchMatch() },
+                    onSearchNext = { moveToNextSearchMatch() },
+                    onSearchSubmit = { focusCurrentSearchMatch() },
+                    onSearchClose = { isSearchActive = false },
                     onBack = onBack,
                     onOpenHistory = { coroutineScope.launch { drawerState.open() } },
-                    onSearch = {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("検索はモック動作です")
-                        }
-                    }
+                    onSearch = { isSearchActive = true }
                 )
             },
             bottomBar = {
@@ -2060,11 +2264,12 @@ fun ThreadScreen(
                     )
 
                     is ThreadUiState.Success -> {
-                        ThreadContent(
-                            page = state.page,
-                            listState = lazyListState,
-                            saidaneOverrides = saidaneOverrides,
-                            onPostLongPress = { post ->
+                    ThreadContent(
+                        page = state.page,
+                        listState = lazyListState,
+                        saidaneOverrides = saidaneOverrides,
+                        searchHighlightRanges = postHighlightRanges,
+                        onPostLongPress = { post ->
                                 actionTargetPost = post
                                 isActionSheetVisible = true
                             },
@@ -2243,64 +2448,150 @@ private fun ThreadTopBar(
     threadTitle: String,
     replyCount: Int?,
     statusLabel: String?,
+    isSearchActive: Boolean,
+    searchQuery: String,
+    currentSearchIndex: Int,
+    totalSearchMatches: Int,
+    onSearchQueryChange: (String) -> Unit,
+    onSearchPrev: () -> Unit,
+    onSearchNext: () -> Unit,
+    onSearchSubmit: () -> Unit,
+    onSearchClose: () -> Unit,
     onBack: () -> Unit,
     onOpenHistory: () -> Unit,
     onSearch: () -> Unit
 ) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
+        }
+    }
+    val displayIndex = if (totalSearchMatches <= 0) {
+        0
+    } else {
+        (currentSearchIndex.coerceIn(0, totalSearchMatches - 1) + 1)
+    }
     TopAppBar(
         navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "戻る"
-                )
+            if (!isSearchActive) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "戻る"
+                    )
+                }
             }
         },
         title = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = threadTitle,
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = boardName,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
-                    )
-                    if (statusLabel == null) {
-                        replyCount?.let {
-                            Text(
-                                text = "  /  ${it}レス",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                            )
+            if (isSearchActive) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            placeholder = { Text("スレ内検索") },
+                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .focusRequester(focusRequester),
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { onSearchSubmit() }),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
+                                unfocusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = MaterialTheme.colorScheme.onPrimary,
+                                focusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+                                unfocusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+                                focusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                unfocusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                focusedTextColor = MaterialTheme.colorScheme.onPrimary,
+                                unfocusedTextColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            trailingIcon = {
+                                IconButton(onClick = onSearchClose) {
+                                    Icon(Icons.Rounded.Close, contentDescription = "検索を閉じる")
+                                }
+                            }
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "$displayIndex / $totalSearchMatches",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        IconButton(onClick = onSearchPrev, enabled = totalSearchMatches > 0) {
+                            Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "前の検索結果")
+                        }
+                        IconButton(onClick = onSearchNext, enabled = totalSearchMatches > 0) {
+                            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "次の検索結果")
                         }
                     }
                 }
-                statusLabel?.let {
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                        text = threadTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = boardName,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                        )
+                        if (statusLabel == null) {
+                            replyCount?.let {
+                                Text(
+                                    text = "  /  ${it}レス",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    }
+                    statusLabel?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                        )
+                    }
                 }
             }
         },
         actions = {
-            IconButton(onClick = onSearch) {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = "スレ内検索"
-                )
-            }
-            IconButton(onClick = onOpenHistory) {
-                Icon(
-                    imageVector = Icons.Outlined.MoreVert,
-                    contentDescription = "履歴を開く"
-                )
+            if (!isSearchActive) {
+                IconButton(onClick = onSearch) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "スレ内検索"
+                    )
+                }
+                IconButton(onClick = onOpenHistory) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "履歴を開く"
+                    )
+                }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -2355,6 +2646,7 @@ private fun ThreadContent(
     page: ThreadPage,
     listState: LazyListState,
     saidaneOverrides: Map<String, String>,
+    searchHighlightRanges: Map<String, List<IntRange>>,
     onPostLongPress: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
@@ -2408,6 +2700,7 @@ private fun ThreadContent(
                     posterIdLabel = posterIdLabels[post.id],
                     posterIdValue = normalizedPosterId,
                     saidaneLabelOverride = saidaneOverrides[post.id],
+                    highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
                     onQuoteClick = { reference ->
                         val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
                         if (targets.isNotEmpty()) {
@@ -2586,6 +2879,7 @@ private fun ThreadPostCard(
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
     saidaneLabelOverride: String?,
+    highlightRanges: List<IntRange> = emptyList(),
     onQuoteClick: (QuoteReference) -> Unit,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
@@ -2649,7 +2943,8 @@ private fun ThreadPostCard(
             messageHtml = post.messageHtml,
             isDeleted = post.isDeleted,
             quoteReferences = post.quoteReferences,
-            onQuoteClick = onQuoteClick
+            onQuoteClick = onQuoteClick,
+            highlightRanges = highlightRanges
         )
     }
 }
@@ -2758,10 +3053,14 @@ private fun ThreadMessageText(
     isDeleted: Boolean,
     quoteReferences: List<QuoteReference>,
     onQuoteClick: (QuoteReference) -> Unit,
+    highlightRanges: List<IntRange> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    val annotated: AnnotatedString = remember(messageHtml, quoteReferences) {
-        buildAnnotatedMessage(messageHtml, quoteReferences)
+    val highlightStyle = SpanStyle(
+        background = MaterialTheme.colorScheme.secondary.copy(alpha = 0.32f)
+    )
+    val annotated: AnnotatedString = remember(messageHtml, quoteReferences, highlightRanges) {
+        buildAnnotatedMessage(messageHtml, quoteReferences, highlightRanges, highlightStyle)
     }
     val textColor = if (isDeleted) {
         MaterialTheme.colorScheme.onSurfaceVariant
@@ -3117,11 +3416,16 @@ private const val QUOTE_ANNOTATION_TAG = "quote"
 
 private fun buildAnnotatedMessage(
     html: String,
-    quoteReferences: List<QuoteReference>
+    quoteReferences: List<QuoteReference>,
+    highlightRanges: List<IntRange>,
+    highlightStyle: SpanStyle
 ): AnnotatedString {
     val lines = messageHtmlToLines(html)
     var quoteIndex = 0
     return buildAnnotatedString {
+        val normalizedHighlights = highlightRanges
+            .filter { it.first >= 0 && it.last >= it.first }
+            .sortedBy { it.first }
         lines.forEachIndexed { index, line ->
             val content = line.trimEnd()
             val isQuote = content.startsWith(">") || content.startsWith("＞")
@@ -3131,18 +3435,57 @@ private fun buildAnnotatedMessage(
                 val reference = quoteReferences.getOrNull(annotationIndex)
                 if (reference != null && reference.targetPostIds.isNotEmpty()) {
                     pushStringAnnotation(QUOTE_ANNOTATION_TAG, annotationIndex.toString())
-                    withStyle(spanStyle) { append(content) }
+                    appendWithHighlights(content, spanStyle, normalizedHighlights, highlightStyle)
                     pop()
                 } else {
-                    withStyle(spanStyle) { append(content) }
+                    appendWithHighlights(content, spanStyle, normalizedHighlights, highlightStyle)
                 }
                 quoteIndex += 1
             } else {
-                append(content)
+                appendWithHighlights(content, SpanStyle(), normalizedHighlights, highlightStyle)
             }
             if (index != lines.lastIndex) {
                 append("\n")
             }
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.appendWithHighlights(
+    text: String,
+    baseStyle: SpanStyle,
+    highlightRanges: List<IntRange>,
+    highlightStyle: SpanStyle
+) {
+    if (text.isEmpty()) {
+        return
+    }
+    val textOffset = this.length
+    val relevant = highlightRanges.filter { it.last >= textOffset && it.first < textOffset + text.length }
+    if (relevant.isEmpty()) {
+        withStyle(baseStyle) {
+            append(text)
+        }
+        return
+    }
+    var cursor = 0
+    val textEndOffset = textOffset + text.length
+    relevant.forEach { range ->
+        val startInText = maxOf(range.first, textOffset) - textOffset
+        val endInText = minOf(range.last, textEndOffset - 1) - textOffset + 1
+        if (cursor < startInText) {
+            withStyle(baseStyle) {
+                append(text.substring(cursor, startInText))
+            }
+        }
+        withStyle(baseStyle.merge(highlightStyle)) {
+            append(text.substring(startInText, endInText))
+        }
+        cursor = endInText
+    }
+    if (cursor < text.length) {
+        withStyle(baseStyle) {
+            append(text.substring(cursor))
         }
     }
 }
@@ -3160,6 +3503,12 @@ private fun messageHtmlToLines(html: String): List<String> {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
     return decoded.lines()
+}
+
+private fun messageHtmlToPlainText(html: String): String {
+    return messageHtmlToLines(html)
+        .map { it.trimEnd() }
+        .joinToString("\n")
 }
 
 private fun extractTimestampWithoutId(timestamp: String): String {
@@ -3243,6 +3592,12 @@ private data class QuotePreviewState(
     val posterIdLabels: Map<String, PosterIdLabel>
 )
 
+private data class ThreadSearchMatch(
+    val postId: String,
+    val postIndex: Int,
+    val highlightRanges: List<IntRange>
+)
+
 private fun buildPosterIdLabels(posts: List<Post>): Map<String, PosterIdLabel> {
     if (posts.isEmpty()) return emptyMap()
     val totals = mutableMapOf<String, Int>()
@@ -3298,6 +3653,51 @@ private fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>> 
             .distinctBy { it.id }
             .sortedBy { orderIndex[it.id] ?: Int.MAX_VALUE }
     }
+}
+
+private fun buildThreadSearchMatches(posts: List<Post>, query: String): List<ThreadSearchMatch> {
+    if (posts.isEmpty()) return emptyList()
+    val normalizedQuery = query.trim().lowercase()
+    if (normalizedQuery.isEmpty()) return emptyList()
+    return posts.mapIndexedNotNull { index, post ->
+        val haystack = buildSearchTextForPost(post)
+        if (haystack.contains(normalizedQuery)) {
+            val messagePlain = messageHtmlToPlainText(post.messageHtml)
+            val ranges = computeHighlightRanges(messagePlain, normalizedQuery)
+            ThreadSearchMatch(post.id, index, ranges)
+        } else {
+            null
+        }
+    }
+}
+
+private fun buildSearchTextForPost(post: Post): String {
+    val builder = StringBuilder()
+    post.subject?.takeIf { it.isNotBlank() }?.let {
+        builder.appendLine(it)
+    }
+    post.author?.takeIf { it.isNotBlank() }?.let {
+        builder.appendLine(it)
+    }
+    post.posterId?.takeIf { it.isNotBlank() }?.let {
+        builder.appendLine(it)
+    }
+    builder.appendLine(post.id)
+    builder.append(messageHtmlToPlainText(post.messageHtml))
+    return builder.toString().lowercase()
+}
+
+private fun computeHighlightRanges(text: String, normalizedQuery: String): List<IntRange> {
+    if (normalizedQuery.isEmpty()) return emptyList()
+    val normalizedText = text.lowercase()
+    val ranges = mutableListOf<IntRange>()
+    var startIndex = normalizedText.indexOf(normalizedQuery)
+    while (startIndex >= 0) {
+        val endIndex = startIndex + normalizedQuery.length - 1
+        ranges.add(startIndex..endIndex)
+        startIndex = normalizedText.indexOf(normalizedQuery, startIndex + normalizedQuery.length)
+    }
+    return ranges
 }
 
 @Composable
