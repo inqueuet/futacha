@@ -99,6 +99,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -1086,6 +1087,7 @@ fun CatalogScreen(
     var isHistoryRefreshing by remember { mutableStateOf(false) }
     var isSearchActive by rememberSaveable(board?.id) { mutableStateOf(false) }
     var searchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
+    var showModeDialog by remember { mutableStateOf(false) }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -1238,6 +1240,7 @@ fun CatalogScreen(
                         when (destination) {
                             CatalogNavDestination.Boards -> onBack()
                             CatalogNavDestination.Catalog -> Unit
+                            CatalogNavDestination.Mode -> showModeDialog = true
                             else -> coroutineScope.launch {
                                 snackbarHostState.showSnackbar("${destination.label} は未実装です")
                             }
@@ -1272,6 +1275,47 @@ fun CatalogScreen(
                     )
                 }
             }
+        }
+
+        if (showModeDialog) {
+            AlertDialog(
+                onDismissRequest = { showModeDialog = false },
+                title = { Text("モード選択") },
+                text = {
+                    Column {
+                        CatalogMode.entries.forEach { mode ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        catalogMode = mode
+                                        showModeDialog = false
+                                    }
+                                    .padding(vertical = 12.dp, horizontal = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = catalogMode == mode,
+                                    onClick = {
+                                        catalogMode = mode
+                                        showModeDialog = false
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = mode.label,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showModeDialog = false }) {
+                        Text("閉じる")
+                    }
+                }
+            )
         }
     }
 }
@@ -1538,7 +1582,6 @@ private fun CatalogTopBar(
     onMenuAction: (CatalogMenuAction) -> Unit
 ) {
     var isMenuExpanded by remember { mutableStateOf(false) }
-    var isSortExpanded by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
 
@@ -1597,38 +1640,6 @@ private fun CatalogTopBar(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                        Box {
-                            AssistChip(
-                                onClick = { isSortExpanded = true },
-                                label = { Text("モード") },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Timeline,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                },
-                                colors = AssistChipDefaults.assistChipColors(
-                                    containerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.15f),
-                                    labelColor = MaterialTheme.colorScheme.onPrimary,
-                                    leadingIconContentColor = MaterialTheme.colorScheme.onPrimary
-                                )
-                            )
-                            DropdownMenu(
-                                expanded = isSortExpanded,
-                                onDismissRequest = { isSortExpanded = false }
-                            ) {
-                                CatalogMode.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option.label) },
-                                        onClick = {
-                                            isSortExpanded = false
-                                            onModeSelected(option)
-                                        }
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -1778,7 +1789,7 @@ private enum class CatalogMenuAction(val label: String) {
 private enum class CatalogNavDestination(val label: String, val icon: ImageVector) {
     Boards("板一覧", Icons.Outlined.Menu),
     Catalog("ｶﾀﾛｸﾞ", Icons.Outlined.Image),
-    Trend("勢い", Icons.Rounded.Timeline),
+    Mode("モード", Icons.Rounded.Timeline),
     Settings("設定", Icons.Rounded.Settings),
     Favorites("お気に入り", Icons.Rounded.Favorite)
 }

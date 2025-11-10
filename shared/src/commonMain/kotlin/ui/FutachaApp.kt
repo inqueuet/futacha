@@ -295,7 +295,7 @@ private fun createCustomBoard(
     return BoardSummary(
         id = boardId,
         name = trimmedName,
-        category = "カスタム",
+        category = "",
         url = normalizedUrl,
         description = "$trimmedName のユーザー追加板",
         pinned = false
