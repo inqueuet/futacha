@@ -167,6 +167,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.min
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
@@ -1376,6 +1378,26 @@ private fun CatalogCard(
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
+    val density = LocalDensity.current
+    val thumbnailWidthPx = item.thumbnailWidth?.takeIf { it > 0 }
+    val thumbnailHeightPx = item.thumbnailHeight?.takeIf { it > 0 }
+    val thumbnailWidthDp = thumbnailWidthPx?.let { with(density) { it.toDp() } }
+    val thumbnailHeightDp = thumbnailHeightPx?.let { with(density) { it.toDp() } }
+    val baseWidthDp = thumbnailWidthDp ?: 64.dp
+    val baseHeightDp = thumbnailHeightDp ?: 64.dp
+    val requestWidth = thumbnailWidthPx?.coerceAtLeast(1) ?: 64
+    val requestHeight = thumbnailHeightPx?.coerceAtLeast(1) ?: 64
+    val targetSizeDp = 120.dp
+    val widthScale = targetSizeDp / baseWidthDp
+    val heightScale = targetSizeDp / baseHeightDp
+    val rawScale = min(widthScale, heightScale).coerceAtLeast(1f)
+    val scaleFactor = floor(rawScale.toDouble()).toFloat().coerceIn(1f, 5f)
+    val imageRequest = ImageRequest.Builder(platformContext)
+        .data(item.thumbnailUrl)
+        .crossfade(true)
+        .size(requestWidth, requestHeight)
+        .build()
+
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
@@ -1392,33 +1414,30 @@ private fun CatalogCard(
         )
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            Box {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .size(targetSizeDp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
                 if (item.thumbnailUrl.isNullOrBlank()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Image,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Outlined.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 } else {
                     AsyncImage(
-                        model = ImageRequest.Builder(platformContext)
-                            .data(item.thumbnailUrl)
-                            .crossfade(true)
-                            .build(),
+                        model = imageRequest,
                         contentDescription = item.title ?: "サムネイル",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .size(baseWidthDp, baseHeightDp)
+                            .graphicsLayer {
+                                scaleX = scaleFactor
+                                scaleY = scaleFactor
+                            }
                     )
                 }
                 if (item.replyCount > 0) {

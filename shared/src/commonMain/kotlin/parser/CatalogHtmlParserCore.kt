@@ -35,6 +35,14 @@ internal object CatalogHtmlParserCore {
         pattern = "<img[^>]+src=['\"]([^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    private val widthAttrRegex = Regex(
+        pattern = "width\\s*=\\s*['\"]?(\\d+)['\"]?",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val heightAttrRegex = Regex(
+        pattern = "height\\s*=\\s*['\"]?(\\d+)['\"]?",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
     private val cellLabelRegex = Regex(
         pattern = "<font[^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
@@ -102,10 +110,22 @@ internal object CatalogHtmlParserCore {
                 val threadId = href?.let { threadIdRegex.find(it)?.groupValues?.getOrNull(1) }
 
                 if (threadId != null) {
-                    val thumbnail = imageRegex.find(cell)
+                    val imageMatch = imageRegex.find(cell)
+                    val thumbnail = imageMatch
                         ?.groupValues
                         ?.getOrNull(1)
                         ?.let { resolveUrl(it, resolvedBaseUrl) }
+                    val imageTag = imageMatch?.value
+                    val width = imageTag
+                        ?.let { widthAttrRegex.find(it) }
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                    val height = imageTag
+                        ?.let { heightAttrRegex.find(it) }
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
 
                     val titleText = extractBetween(cell, titleRegex, smallEndRegex)?.let(::cleanText)
                     val labelText = extractBetween(cell, cellLabelRegex, fontEndRegex)?.let(::cleanText)
@@ -116,6 +136,8 @@ internal object CatalogHtmlParserCore {
                         threadUrl = resolveUrl(href, resolvedBaseUrl),
                         title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${index + 1}",
                         thumbnailUrl = thumbnail,
+                        thumbnailWidth = width,
+                        thumbnailHeight = height,
                         replyCount = replies
                     ))
                     index++
