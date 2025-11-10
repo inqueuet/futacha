@@ -70,6 +70,22 @@ fun FutachaApp(
                     stateStore.setHistory(updatedHistory)
                 }
             }
+            val updateHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
+                val updatedHistory = buildList {
+                    val existingIndex = persistedHistory.indexOfFirst { it.threadId == entry.threadId }
+                    if (existingIndex >= 0) {
+                        addAll(persistedHistory.take(existingIndex))
+                        add(entry)
+                        addAll(persistedHistory.drop(existingIndex + 1))
+                    } else {
+                        addAll(persistedHistory)
+                        add(entry)
+                    }
+                }
+                coroutineScope.launch {
+                    stateStore.setHistory(updatedHistory)
+                }
+            }
             val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 val targetBoard = persistedBoards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
                     ?: persistedBoards.firstOrNull { it.name == entry.boardName }
@@ -145,6 +161,7 @@ fun FutachaApp(
                         },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
+                        onHistoryEntryUpdated = updateHistoryEntry,
                         repository = boardRepository
                     )
                 }
@@ -215,6 +232,7 @@ fun FutachaApp(
                         },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
+                        onHistoryEntryUpdated = updateHistoryEntry,
                         onScrollPositionPersist = persistScrollPosition,
                         repository = boardRepository
                     )

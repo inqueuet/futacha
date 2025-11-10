@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
@@ -200,6 +201,16 @@ fun BoardManagementScreen(
         onHistoryEntrySelected(entry)
     }
 
+    val handleBatchDelete: () -> Unit = {
+        scope.launch {
+            history.forEach { entry ->
+                onHistoryEntryDismissed(entry)
+            }
+            snackbarHostState.showSnackbar("履歴を一括削除しました")
+            drawerState.close()
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = isDrawerOpen,
@@ -207,7 +218,24 @@ fun BoardManagementScreen(
             HistoryDrawerContent(
                 history = history,
                 onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = handleHistorySelection
+                onHistoryEntrySelected = handleHistorySelection,
+                onBoardClick = {
+                    scope.launch {
+                        drawerState.close()
+                    }
+                },
+                onRefreshClick = {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("履歴を更新中...")
+                        drawerState.close()
+                    }
+                },
+                onBatchDeleteClick = handleBatchDelete,
+                onSettingsClick = {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("設定はモック動作です")
+                    }
+                }
             )
         }
     ) {
@@ -476,7 +504,11 @@ private fun AddBoardDialog(
 private fun HistoryDrawerContent(
     history: List<ThreadHistoryEntry>,
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
+    onBoardClick: () -> Unit = {},
+    onRefreshClick: () -> Unit = {},
+    onBatchDeleteClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {}
 ) {
     val drawerWidth = 320.dp
     ModalDrawerSheet(
@@ -506,7 +538,12 @@ private fun HistoryDrawerContent(
                     )
                 }
             }
-            HistoryBottomBar()
+            HistoryBottomBar(
+                onBoardClick = onBoardClick,
+                onRefreshClick = onRefreshClick,
+                onBatchDeleteClick = onBatchDeleteClick,
+                onSettingsClick = onSettingsClick
+            )
         }
     }
 }
@@ -528,7 +565,12 @@ private fun HistoryListHeader() {
 }
 
 @Composable
-private fun HistoryBottomBar() {
+private fun HistoryBottomBar(
+    onBoardClick: () -> Unit = {},
+    onRefreshClick: () -> Unit = {},
+    onBatchDeleteClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {}
+) {
     Surface(color = MaterialTheme.colorScheme.primary) {
         Row(
             modifier = Modifier
@@ -537,17 +579,24 @@ private fun HistoryBottomBar() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            HistoryBottomIcon(Icons.Rounded.Home, "板")
-            HistoryBottomIcon(Icons.Rounded.WatchLater, "未読")
-            HistoryBottomIcon(Icons.Rounded.Timeline, "勢い")
-            HistoryBottomIcon(Icons.Rounded.Settings, "設定")
+            HistoryBottomIcon(Icons.Rounded.Home, "板", onBoardClick)
+            HistoryBottomIcon(Icons.Rounded.Refresh, "更新", onRefreshClick)
+            HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick)
+            HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick)
         }
     }
 }
 
 @Composable
-private fun HistoryBottomIcon(icon: ImageVector, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun HistoryBottomIcon(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit = {}
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable { onClick() }
+    ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
@@ -974,6 +1023,7 @@ fun CatalogScreen(
     onThreadSelected: (CatalogItem) -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = {},
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
 ) {
@@ -1056,6 +1106,17 @@ fun CatalogScreen(
         coroutineScope.launch { drawerState.close() }
         onHistoryEntrySelected(entry)
     }
+
+    val handleBatchDelete: () -> Unit = {
+        coroutineScope.launch {
+            history.forEach { entry ->
+                onHistoryEntryDismissed(entry)
+            }
+            snackbarHostState.showSnackbar("履歴を一括削除しました")
+            drawerState.close()
+        }
+    }
+
     val currentState = uiState.value
 
     ModalNavigationDrawer(
@@ -1065,7 +1126,25 @@ fun CatalogScreen(
             HistoryDrawerContent(
                 history = history,
                 onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = handleHistorySelection
+                onHistoryEntrySelected = handleHistorySelection,
+                onBoardClick = {
+                    coroutineScope.launch {
+                        drawerState.close()
+                        onBack()
+                    }
+                },
+                onRefreshClick = {
+                    coroutineScope.launch {
+                        drawerState.close()
+                    }
+                    performRefresh()
+                },
+                onBatchDeleteClick = handleBatchDelete,
+                onSettingsClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("設定はモック動作です")
+                    }
+                }
             )
         }
     ) {
@@ -1500,6 +1579,7 @@ fun ThreadScreen(
     onBack: () -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
+    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = {},
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
     repository: BoardRepository? = null,
     modifier: Modifier = Modifier
@@ -1694,6 +1774,18 @@ fun ThreadScreen(
                     val page = activeRepository.getThread(board.url, threadId)
                     uiState.value = ThreadUiState.Success(page)
                     lazyListState.scrollToItem(savedIndex, savedOffset)
+
+                    // 履歴のエントリーを更新
+                    val currentEntry = history.firstOrNull { it.threadId == threadId }
+                    if (currentEntry != null) {
+                        val updatedEntry = currentEntry.copy(
+                            replyCount = page.posts.size,
+                            title = page.posts.firstOrNull()?.subject ?: currentEntry.title,
+                            lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
+                        )
+                        onHistoryEntryUpdated(updatedEntry)
+                    }
+
                     snackbarHostState.showSnackbar("スレッドを更新しました")
                 } catch (e: Exception) {
                     if (e !is kotlinx.coroutines.CancellationException) {
@@ -1706,6 +1798,16 @@ fun ThreadScreen(
         }
     }
 
+    val handleBatchDelete: () -> Unit = {
+        coroutineScope.launch {
+            history.forEach { entry ->
+                onHistoryEntryDismissed(entry)
+            }
+            snackbarHostState.showSnackbar("履歴を一括削除しました")
+            drawerState.close()
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = isDrawerOpen,
@@ -1713,7 +1815,25 @@ fun ThreadScreen(
             HistoryDrawerContent(
                 history = history,
                 onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = handleHistorySelection
+                onHistoryEntrySelected = handleHistorySelection,
+                onBoardClick = {
+                    coroutineScope.launch {
+                        drawerState.close()
+                        onBack()
+                    }
+                },
+                onRefreshClick = {
+                    coroutineScope.launch {
+                        drawerState.close()
+                    }
+                    performRefresh()
+                },
+                onBatchDeleteClick = handleBatchDelete,
+                onSettingsClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("設定はモック動作です")
+                    }
+                }
             )
         }
     ) {
