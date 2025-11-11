@@ -130,34 +130,35 @@ project-root/
 │   │   ├── state/                  # 状態管理（1ファイル）
 │   │   │   └── AppStateStore.kt    # Flow、JSON、Mutex、expect/actual
 │   │   │
-│   │   ├── ui/                     # Compose Multiplatform UI（10ファイル）
+│   │   ├── ui/                     # Compose Multiplatform UI（11ファイル）
 │   │   │   ├── FutachaApp.kt       # メインアプリ、画面遷移、履歴管理
 │   │   │   ├── UpdateNotificationDialog.kt # バージョン通知ダイアログ
 │   │   │   ├── PermissionRequest.kt    # パーミッション要求（expect/actual）
 │   │   │   ├── theme/
 │   │   │   │   └── FutachaTheme.kt # テーマ定義
 │   │   │   ├── board/
-│   │   │   │   ├── BoardManagementScreen.kt  # 3画面統合
-│   │   │   │   │   - BoardManagementScreen（板管理）
-│   │   │   │   │   - CatalogScreen（カタログ、7モード）
-│   │   │   │   │   - ThreadScreen（スレッド詳細、投稿）
+│   │   │   │   ├── BoardManagementScreen.kt  # 3画面統合（4400行超）
+│   │   │   │   │   - BoardManagementScreen（板管理、ドラッグ&ドロップ、ピン留め）
+│   │   │   │   │   - CatalogScreen（カタログ、7モード、グリッド/リスト切替）
+│   │   │   │   │   - ThreadScreen（スレッド詳細、投稿、画像プレビュー、動画再生）
 │   │   │   │   ├── SaveProgressDialog.kt     # 保存進捗ダイアログ
 │   │   │   │   ├── SavedThreadsScreen.kt     # 保存済みスレッド一覧
-│   │   │   │   ├── PlatformVideoPlayer.kt    # expect/actual
+│   │   │   │   ├── PlatformVideoPlayer.kt    # expect/actual（動画プレーヤー）
 │   │   │   │   ├── ImagePickerButton.kt      # 画像選択ボタン（expect/actual）
 │   │   │   │   └── BoardManagementFixtures.kt
 │   │   │   └── util/
 │   │   │       └── PlatformBackHandler.kt    # expect/actual
 │   │   │
-│   │   ├── util/                   # ユーティリティ（3ファイル）
+│   │   ├── util/                   # ユーティリティ（4ファイル）
 │   │   │   ├── ImagePicker.kt      # expect/actual（ImageData）
 │   │   │   ├── FileSystem.kt       # expect/actual（ファイル操作抽象化）
+│   │   │   ├── Logger.kt           # expect/actual（ログ出力）
 │   │   │   └── BoardConfig.kt
 │   │   │
 │   │   └── version/                # バージョンチェック（1ファイル）
 │   │       └── VersionChecker.kt   # interface、GitHub Releases API
 │   │
-│   ├── src/androidMain/kotlin/     # Android固有実装（13ファイル）
+│   ├── src/androidMain/kotlin/     # Android固有実装（14ファイル）
 │   │   ├── parser/
 │   │   │   ├── JsoupHtmlParser.kt           # CatalogHtmlParserCore使用
 │   │   │   └── ParserFactory.android.kt
@@ -168,6 +169,7 @@ project-root/
 │   │   ├── util/
 │   │   │   ├── ImagePicker.android.kt       # Uri→ImageData変換
 │   │   │   ├── FileSystem.android.kt        # Android File API
+│   │   │   ├── Logger.android.kt            # android.util.Log
 │   │   │   └── PermissionHelper.android.kt  # 権限処理ヘルパー
 │   │   ├── ui/
 │   │   │   └── PermissionRequest.android.kt # Accompanist Permissions
@@ -179,7 +181,7 @@ project-root/
 │   │   └── version/
 │   │       └── VersionChecker.android.kt    # PackageManager
 │   │
-│   └── src/iosMain/kotlin/         # iOS固有実装（13ファイル）
+│   └── src/iosMain/kotlin/         # iOS固有実装（14ファイル）
 │       ├── MainViewController.kt            # iOSエントリーポイント
 │       ├── parser/
 │       │   ├── AppleHtmlParser.kt           # CatalogHtmlParserCore使用
@@ -190,7 +192,8 @@ project-root/
 │       │   └── HttpClientFactory.ios.kt     # Darwin
 │       ├── util/
 │       │   ├── ImagePicker.ios.kt           # PHPickerViewController実装
-│       │   └── FileSystem.ios.kt            # iOS File API
+│       │   ├── FileSystem.ios.kt            # iOS File API
+│       │   └── Logger.ios.kt                # NSLog
 │       ├── ui/
 │       │   └── PermissionRequest.ios.kt     # iOS権限処理
 │       ├── ui/board/
@@ -211,11 +214,12 @@ project-root/
 
 ### 📊 ファイル数の内訳（最新）
 
-- **commonMain**: 約45ファイル（UI + ロジック + モデル + ネットワーク + パーサー + サービス + リポジトリ）
-- **androidMain**: 13ファイル（永続化 + パーサー + ファイルシステム + 画像選択 + 権限処理 + バージョンチェック）
-- **iosMain**: 13ファイル（エントリーポイント + 永続化 + パーサー + ファイルシステム + 画像選択 + バージョンチェック）
+- **commonMain**: 約47ファイル（UI + ロジック + モデル + ネットワーク + パーサー + サービス + リポジトリ + Logger）
+- **androidMain**: 14ファイル（永続化 + パーサー + ファイルシステム + 画像選択 + 権限処理 + バージョンチェック + Logger）
+- **iosMain**: 14ファイル（エントリーポイント + 永続化 + パーサー + ファイルシステム + 画像選択 + バージョンチェック + Logger）
+- **commonTest**: 3ファイル（テストコード）
 
-**合計**: 約70ファイル（コード共有率 ~95%）
+**合計**: 約78ファイル（テスト含む）、コード共有率 ~95%
 
 ---
 
@@ -307,10 +311,11 @@ project-root/
 - **HTTPS優先**: デフォルトでHTTPS使用
 
 #### その他機能
-- **バージョン通知**: GitHub Releases API連携（Android）
+- **バージョン通知**: GitHub Releases API連携（Android/iOS）
 - **ダークモード**: 自動対応
 - **検索・フィルター**: カタログ検索、ローカルソート
 - **履歴管理**: メタデータ自動更新、履歴から削除
+- **ログ出力**: クロスプラットフォームLogger（Android: android.util.Log、iOS: NSLog）
 
 ### ✅ iOS実装状況（完全実装完了）
 - ✅ UI層完全動作（3画面すべて）
@@ -335,6 +340,9 @@ project-root/
   - ファイル操作完全実装
 - ✅ **権限処理（iOS実装完了）**
   - `PermissionRequest.ios.kt`: iOS権限処理実装
+- ✅ **Logger（NSLog実装完了）**
+  - `Logger.ios.kt`: NSLog使用
+  - デバッグ・エラー・警告・情報ログ出力
 
 **🎉 Android/iOS完全対応達成！コード共有率 ~95%**
 
@@ -1079,6 +1087,47 @@ class IosFileSystem : FileSystem {
 }
 ```
 
+### メモリ効率化
+
+#### チャンク処理
+大量の投稿を一度に処理するとメモリ不足になる可能性があるため、チャンク単位で処理：
+
+```kotlin
+val chunkSize = 50 // 50投稿ずつ処理
+posts.chunked(chunkSize).forEach { postChunk ->
+    val mediaItems = postChunk.flatMap { post ->
+        buildList {
+            post.thumbnailUrl?.let { add(MediaItem(it, MediaType.THUMBNAIL, post)) }
+            post.imageUrl?.let { add(MediaItem(it, MediaType.FULL_IMAGE, post)) }
+        }
+    }
+    // ダウンロード処理
+}
+```
+
+#### ストリーミングHTML生成
+HTMLを文字列として一度にメモリに展開せず、StringBuilder で直接ファイルに書き込み：
+
+```kotlin
+val estimatedSize = metadata.posts.size * 500 // 容量予測でreallocation削減
+val htmlBuilder = StringBuilder(estimatedSize)
+
+// ヘッダー書き込み
+htmlBuilder.appendLine("<!DOCTYPE html>")
+// ...
+
+// 投稿を逐次追加（中間リスト作成なし）
+metadata.posts.forEach { post ->
+    htmlBuilder.apply {
+        appendLine("    <div class=\"post\" id=\"post-${post.id}\">")
+        // ...
+    }
+}
+
+// 単一write操作
+fileSystem.writeString(filePath, htmlBuilder.toString()).getOrThrow()
+```
+
 ### 実装状況
 
 - ✅ 保存済みスレッド一覧画面（SavedThreadsScreen）
@@ -1087,6 +1136,8 @@ class IosFileSystem : FileSystem {
 - ✅ ファイルサイズ・形式チェック（8000KB, GIF/JPG/PNG/WEBP/MP4/WEBM）
 - ✅ 進捗パーセンテージ表示（重み付き計算）
 - ✅ 共有ストレージ保存（Android: Documents、iOS: NSDocumentDirectory）
+- ✅ **メモリ効率化**（チャンク処理、ストリーミングHTML生成）
+- ✅ **SavedThreadRepository**（インデックス管理、Mutex排他制御）
 
 ### 今後の拡張
 
@@ -1094,6 +1145,56 @@ class IosFileSystem : FileSystem {
 - [ ] ZIP形式でのエクスポート機能
 - [ ] スレッド更新機能（差分ダウンロード）
 - [ ] 保存済みスレッドの検索・フィルタリング機能
+
+---
+
+---
+
+## 🧩 クロスプラットフォーム共通化戦略
+
+### Logger実装（expect/actual）
+
+#### 共通インターフェース（commonMain）
+```kotlin
+expect object Logger {
+    fun d(tag: String, message: String)
+    fun e(tag: String, message: String, throwable: Throwable? = null)
+    fun w(tag: String, message: String)
+    fun i(tag: String, message: String)
+}
+```
+
+#### Android実装（androidMain）
+```kotlin
+actual object Logger {
+    actual fun d(tag: String, message: String) {
+        android.util.Log.d(tag, message)
+    }
+    actual fun e(tag: String, message: String, throwable: Throwable?) {
+        android.util.Log.e(tag, message, throwable)
+    }
+    // ...
+}
+```
+
+#### iOS実装（iosMain）
+```kotlin
+actual object Logger {
+    actual fun d(tag: String, message: String) {
+        platform.Foundation.NSLog("[$tag] DEBUG: $message")
+    }
+    actual fun e(tag: String, message: String, throwable: Throwable?) {
+        platform.Foundation.NSLog("[$tag] ERROR: $message${throwable?.let { "\n$it" } ?: ""}")
+    }
+    // ...
+}
+```
+
+### 使用例
+```kotlin
+Logger.d("ThreadSaveService", "Starting download for thread $threadId")
+Logger.e("NetworkError", "Failed to fetch catalog", exception)
+```
 
 ---
 

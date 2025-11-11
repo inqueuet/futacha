@@ -73,8 +73,8 @@ futacha/
 │   └── src/main/java/com/valoser/futacha/
 │       └── MainActivity.kt
 │
-├── shared/               # 共通コード (UI + ロジック) - 70+ファイル
-│   ├── src/commonMain/kotlin/  # 完全共通化 (~95%) - 45+ファイル
+├── shared/               # 共通コード (UI + ロジック) - 78ファイル
+│   ├── src/commonMain/kotlin/  # 完全共通化 (~95%) - 47ファイル
 │   │   ├── model/        # データモデル (8ファイル)
 │   │   │   ├── Post.kt, CatalogItem.kt, ThreadPage.kt
 │   │   │   ├── BoardStateModels.kt (BoardSummary, ThreadHistoryEntry)
@@ -105,7 +105,7 @@ futacha/
 │   │   │   └── SavedThreadRepository.kt (保存済みスレッド管理)
 │   │   │
 │   │   ├── service/      # ビジネスロジック (1ファイル)
-│   │   │   └── ThreadSaveService.kt (スレッド保存、進捗管理)
+│   │   │   └── ThreadSaveService.kt (スレッド保存、進捗管理、メモリ効率化)
 │   │   │
 │   │   ├── state/        # 状態管理 (1ファイル)
 │   │   │   └── AppStateStore.kt (Flow、JSON、Mutex、expect/actual)
@@ -114,7 +114,7 @@ futacha/
 │   │   │   ├── FutachaApp.kt (メインアプリ、画面遷移)
 │   │   │   ├── PermissionRequest.kt (expect/actual)
 │   │   │   ├── board/
-│   │   │   │   ├── BoardManagementScreen.kt (3画面統合)
+│   │   │   │   ├── BoardManagementScreen.kt (3画面統合、4400行超)
 │   │   │   │   ├── SaveProgressDialog.kt (保存進捗表示)
 │   │   │   │   ├── SavedThreadsScreen.kt (保存済み一覧)
 │   │   │   │   ├── ImagePickerButton.kt (画像選択ボタン、expect/actual)
@@ -124,34 +124,39 @@ futacha/
 │   │   │   ├── theme/FutachaTheme.kt
 │   │   │   └── util/PlatformBackHandler.kt (expect/actual)
 │   │   │
-│   │   ├── util/         # ユーティリティ (3ファイル)
+│   │   ├── util/         # ユーティリティ (4ファイル)
 │   │   │   ├── ImagePicker.kt (expect/actual)
 │   │   │   ├── FileSystem.kt (expect/actual、ファイル操作抽象化)
+│   │   │   ├── Logger.kt (expect/actual、クロスプラットフォームログ出力)
 │   │   │   └── BoardConfig.kt
 │   │   │
 │   │   └── version/      # バージョンチェック (1ファイル)
 │   │       └── VersionChecker.kt (GitHub Releases API)
 │   │
-│   ├── src/androidMain/kotlin/  # Android固有実装 (13ファイル)
+│   ├── src/androidMain/kotlin/  # Android固有実装 (14ファイル)
 │   │   ├── parser/       # JsoupHtmlParser.kt, ParserFactory.android.kt
 │   │   ├── state/        # AppStateStore.android.kt (DataStore)
 │   │   ├── network/      # HttpClientFactory.android.kt (OkHttp)
-│   │   ├── util/         # ImagePicker.android.kt, FileSystem.android.kt, PermissionHelper.android.kt
+│   │   ├── util/         # ImagePicker, FileSystem, Logger.android.kt, PermissionHelper
 │   │   ├── ui/           # PermissionRequest.android.kt
 │   │   ├── ui/board/     # ImagePickerButton, PlatformVideoPlayer
 │   │   ├── ui/util/      # PlatformBackHandler.android.kt
 │   │   └── version/      # VersionChecker.android.kt (PackageManager)
 │   │
-│   └── src/iosMain/kotlin/      # iOS固有実装 (13ファイル)
-│       ├── parser/       # AppleHtmlParser.kt, ParserFactory.ios.kt
-│       ├── state/        # AppStateStore.ios.kt (NSUserDefaults)
-│       ├── network/      # HttpClientFactory.ios.kt (Darwin)
-│       ├── util/         # ImagePicker.ios.kt, FileSystem.ios.kt
-│       ├── ui/           # PermissionRequest.ios.kt
-│       ├── ui/board/     # ImagePickerButton, PlatformVideoPlayer
-│       ├── ui/util/      # PlatformBackHandler.ios.kt
-│       ├── version/      # VersionChecker.ios.kt
-│       └── MainViewController.kt
+│   ├── src/iosMain/kotlin/      # iOS固有実装 (14ファイル)
+│   │   ├── parser/       # AppleHtmlParser.kt, ParserFactory.ios.kt
+│   │   ├── state/        # AppStateStore.ios.kt (NSUserDefaults)
+│   │   ├── network/      # HttpClientFactory.ios.kt (Darwin)
+│   │   ├── util/         # ImagePicker, FileSystem, Logger.ios.kt
+│   │   ├── ui/           # PermissionRequest.ios.kt
+│   │   ├── ui/board/     # ImagePickerButton, PlatformVideoPlayer
+│   │   ├── ui/util/      # PlatformBackHandler.ios.kt
+│   │   ├── version/      # VersionChecker.ios.kt
+│   │   └── MainViewController.kt
+│   │
+│   └── src/commonTest/kotlin/  # 共通テスト (3ファイル)
+│       ├── parser/       # CatalogHtmlParserCoreTest, ThreadHtmlParserCoreTest
+│       └── ui/board/     # BoardManagementScreenTest
 │
 ├── codex.md              # 詳細設計書（API仕様、パーサー、実装状況）
 └── README.md             # このファイル
@@ -252,6 +257,7 @@ futacha/
 - **URL-to-Pathマッピング**: ダウンロード時にURLとローカルパスを紐付け
 - **相対パス変換**: HTMLの画像URLを相対パス（`images/img_xxx.jpg`）に変換
 - **保存済み一覧**: 保存したスレッドの一覧表示・削除機能
+- **メモリ効率化**: チャンク処理（50投稿ずつ）、ストリーミングHTML生成
 
 #### スレッド作成機能
 - **新規スレッド作成**: 板からスレッドを新規作成
@@ -270,6 +276,7 @@ futacha/
 - **バージョン通知**: GitHub Releases API連携（Android/iOS）
 - **ダークモード**: 自動対応
 - **検索・フィルター**: カタログ検索、ローカルソート
+- **ログ出力**: クロスプラットフォームLogger（Android: Log、iOS: NSLog）
 
 ### ✅ iOS実装状況（完全対応）
 - ✅ 基本UI動作（板管理、カタログ、スレッド表示）
@@ -283,8 +290,9 @@ futacha/
 - ✅ **権限処理（実装完了）**
 - ✅ **スレッド作成（画像添付対応）**
 - ✅ **板アイコン選択（ImagePickerButton）**
+- ✅ **Logger（NSLog実装完了）**
 
-**Android/iOS完全対応！** コード共有率 ~95%
+**Android/iOS完全対応！** コード共有率 ~95% （78ファイル中、プラットフォーム固有は28ファイルのみ）
 
 ### 📝 今後の拡張予定
 - オフラインキャッシュ
