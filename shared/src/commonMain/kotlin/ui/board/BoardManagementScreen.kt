@@ -1287,6 +1287,8 @@ fun CatalogScreen(
                     val visibleItems = sortedItems.filterByQuery(searchQuery)
                     CatalogSuccessContent(
                         items = visibleItems,
+                        board = board,
+                        repository = activeRepository,
                         isSearching = searchQuery.isNotBlank(),
                         onThreadSelected = onThreadSelected,
                         onRefresh = performRefresh,
@@ -1824,6 +1826,8 @@ private fun CatalogError(message: String, modifier: Modifier = Modifier) {
 @Composable
 private fun CatalogSuccessContent(
     items: List<CatalogItem>,
+    board: BoardSummary?,
+    repository: BoardRepository,
     isSearching: Boolean,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
@@ -1838,6 +1842,8 @@ private fun CatalogSuccessContent(
     } else {
         CatalogGrid(
             items = items,
+            board = board,
+            repository = repository,
             onThreadSelected = onThreadSelected,
             onRefresh = onRefresh,
             isRefreshing = isRefreshing,
@@ -1867,6 +1873,8 @@ private fun CatalogEmptyContent(
 @Composable
 private fun CatalogGrid(
     items: List<CatalogItem>,
+    board: BoardSummary?,
+    repository: BoardRepository,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
@@ -1903,6 +1911,8 @@ private fun CatalogGrid(
                 ) { catalogItem ->
                     CatalogCard(
                         item = catalogItem,
+                        boardUrl = board?.url,
+                        repository = repository,
                         onClick = { onThreadSelected(catalogItem) }
                     )
                 }
@@ -1940,19 +1950,36 @@ private fun CatalogGrid(
 @Composable
 private fun CatalogCard(
     item: CatalogItem,
+    boardUrl: String?,
+    repository: BoardRepository,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
+    var resolvedThumbnailUrl by remember(item.id, item.thumbnailUrl, boardUrl) {
+        mutableStateOf(item.thumbnailUrl)
+    }
+    var opImageRequested by remember(item.id, boardUrl) {
+        mutableStateOf(false)
+    }
+
+    LaunchedEffect(item.id, boardUrl, repository) {
+        if (boardUrl.isNullOrBlank() || item.id.isBlank() || opImageRequested) return@LaunchedEffect
+        opImageRequested = true
+        val fetchedUrl = repository.fetchOpImageUrl(boardUrl, item.id)
+        if (!fetchedUrl.isNullOrBlank()) {
+            resolvedThumbnailUrl = fetchedUrl
+        }
+    }
 
     // 4列グリッドでの推定カードサイズ（画面幅360dpの場合約75dp）
     // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
-
-    val imageRequest = remember(item.thumbnailUrl, targetSizePx) {
+    val thumbnailToShow = resolvedThumbnailUrl ?: ""
+    val imageRequest = remember(thumbnailToShow, targetSizePx) {
         ImageRequest.Builder(platformContext)
-            .data(item.thumbnailUrl)
+            .data(thumbnailToShow.takeIf { it.isNotBlank() })
             .crossfade(true)
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
@@ -1983,7 +2010,7 @@ private fun CatalogCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (item.thumbnailUrl.isNullOrBlank()) {
+                if (thumbnailToShow.isBlank()) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,

@@ -6,9 +6,6 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -20,6 +17,7 @@ interface BoardRepository {
         board: String,
         mode: CatalogMode = CatalogMode.default
     ): List<CatalogItem>
+    suspend fun fetchOpImageUrl(board: String, threadId: String): String?
     suspend fun getThread(board: String, threadId: String): ThreadPage
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
@@ -77,6 +75,8 @@ class DefaultBoardRepository(
         private const val OP_IMAGE_CONCURRENCY = 4
     }
 
+    private val opImageSemaphore = Semaphore(OP_IMAGE_CONCURRENCY)
+
     /**
      * Ensures cookies are initialized for the given board.
      * This should be called before any operations that require cookies.
@@ -103,23 +103,14 @@ class DefaultBoardRepository(
         ensureCookiesInitialized(board)
         val html = api.fetchCatalog(board, mode)
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val catalog = parser.parseCatalog(html, baseUrl)
-        if (catalog.isEmpty()) {
-            return catalog
-        }
+        return parser.parseCatalog(html, baseUrl)
+    }
 
-        val semaphore = Semaphore(OP_IMAGE_CONCURRENCY)
-        return coroutineScope {
-            catalog.map { item ->
-                async {
-                    val threadId = item.id
-                    if (threadId.isBlank()) return@async item
-                    val opImageUrl = semaphore.withPermit {
-                        resolveOpImageUrl(board, baseUrl, threadId)
-                    }
-                    if (opImageUrl.isNullOrBlank()) item else item.copy(thumbnailUrl = opImageUrl)
-                }
-            }.awaitAll()
+    override suspend fun fetchOpImageUrl(board: String, threadId: String): String? {
+        ensureCookiesInitialized(board)
+        if (threadId.isBlank()) return null
+        return opImageSemaphore.withPermit {
+            resolveOpImageUrl(board, threadId)
         }
     }
 
@@ -188,9 +179,9 @@ class DefaultBoardRepository(
 
     private suspend fun resolveOpImageUrl(
         board: String,
-        baseUrl: String,
         threadId: String
     ): String? {
+        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
         return runCatching {
             val snippet = api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
             parser.extractOpImageUrl(snippet, baseUrl)

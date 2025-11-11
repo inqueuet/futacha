@@ -30,6 +30,11 @@ class FakeBoardRepository(
         }
     }
 
+    override suspend fun fetchOpImageUrl(board: String, threadId: String): String? {
+        onAccess()
+        return null
+    }
+
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
         onAccess()
         return MockBoardData.thread(threadId)
