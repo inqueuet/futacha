@@ -165,6 +165,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
+import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.size.Precision
@@ -749,6 +750,7 @@ private fun HistoryEntryCard(
                     .data(entry.titleImageUrl)
                     .crossfade(true)
                     .build(),
+                imageLoader = LocalFutachaImageLoader.current,
                 contentDescription = "${entry.title} のタイトル画像",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -1990,6 +1992,7 @@ private fun CatalogCard(
                 } else {
                     AsyncImage(
                         model = imageRequest,
+                        imageLoader = LocalFutachaImageLoader.current,
                         contentDescription = item.title ?: "サムネイル",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -3440,6 +3443,19 @@ private fun ThreadPostCard(
     } else {
         modifier
     }
+    val imageLoader = LocalFutachaImageLoader.current
+    val previewUrl = post.imageUrl?.takeIf { it.isNotBlank() }
+    if (previewUrl != null) {
+        LaunchedEffect(previewUrl) {
+            imageLoader.enqueue(
+                ImageRequest.Builder(platformContext)
+                    .data(previewUrl)
+                    .crossfade(false)
+                    .build()
+            )
+        }
+    }
+
     Column(
         modifier = cardModifier
             .fillMaxWidth()
@@ -3458,13 +3474,14 @@ private fun ThreadPostCard(
             onReferencedByClick = onReferencedByClick
         )
         val thumbnailForDisplay = post.thumbnailUrl ?: post.imageUrl
-        thumbnailForDisplay?.let { displayUrl ->
-            AsyncImage(
-                model = ImageRequest.Builder(platformContext)
-                    .data(displayUrl)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = "添付画像",
+            thumbnailForDisplay?.let { displayUrl ->
+                AsyncImage(
+                    model = ImageRequest.Builder(platformContext)
+                        .data(displayUrl)
+                        .crossfade(true)
+                        .build(),
+                    imageLoader = LocalFutachaImageLoader.current,
+                    contentDescription = "添付画像",
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 200.dp)
@@ -3816,6 +3833,7 @@ private fun GalleryImageItem(
                     .data(post.thumbnailUrl)
                     .crossfade(true)
                     .build(),
+                imageLoader = LocalFutachaImageLoader.current,
                 contentDescription = "No.${post.id}",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -4180,6 +4198,7 @@ private fun ImagePreviewDialog(
 
             AsyncImage(
                 model = previewRequest,
+                imageLoader = LocalFutachaImageLoader.current,
                 contentDescription = "プレビュー画像",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

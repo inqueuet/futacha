@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.ui
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -21,6 +23,8 @@ import com.valoser.futacha.shared.ui.board.CatalogScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
+import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.Logger
@@ -49,8 +53,15 @@ fun FutachaApp(
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
     FutachaTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            val coroutineScope = rememberCoroutineScope()
+        val imageLoader = rememberFutachaImageLoader()
+        DisposableEffect(imageLoader) {
+            onDispose {
+                imageLoader.shutdown()
+            }
+        }
+        CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                val coroutineScope = rememberCoroutineScope()
 
             // Set coroutine scope for debouncing scroll position updates
             LaunchedEffect(Unit) {
@@ -64,7 +75,7 @@ fun FutachaApp(
 
             // Clean up repository when composable leaves composition
             // Add Unit key to ensure DisposableEffect runs only once per composition
-            androidx.compose.runtime.DisposableEffect(Unit) {
+            DisposableEffect(Unit) {
                 onDispose {
                     remoteBoardRepository.close()
                 }
@@ -358,6 +369,7 @@ fun FutachaApp(
                         )
                 }
             }
+        }
         }
     }
 }
