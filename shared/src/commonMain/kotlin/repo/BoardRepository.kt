@@ -57,25 +57,48 @@ class DefaultBoardRepository(
     private val api: BoardApi,
     private val parser: HtmlParser
 ) : BoardRepository {
+    // Track which boards have been initialized with cookies
+    private val initializedBoards = mutableSetOf<String>()
+
+    /**
+     * Ensures cookies are initialized for the given board.
+     * This should be called before any operations that require cookies.
+     */
+    private suspend fun ensureCookiesInitialized(board: String) {
+        if (!initializedBoards.contains(board)) {
+            try {
+                api.fetchCatalogSetup(board)
+                initializedBoards.add(board)
+            } catch (e: Exception) {
+                println("DefaultBoardRepository: Failed to initialize cookies for board $board: ${e.message}")
+                // Continue anyway - the operation might still work
+            }
+        }
+    }
+
     override suspend fun getCatalog(
         board: String,
         mode: CatalogMode
     ): List<CatalogItem> {
+        ensureCookiesInitialized(board)
         val html = api.fetchCatalog(board, mode)
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
         return parser.parseCatalog(html, baseUrl)
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
+        ensureCookiesInitialized(board)
         val html = api.fetchThread(board, threadId)
         return parser.parseThread(html)
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
+        ensureCookiesInitialized(board)
         api.voteSaidane(board, threadId, postId)
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        ensureCookiesInitialized(board)
         api.requestDeletion(board, threadId, postId, reasonCode)
     }
 
@@ -86,6 +109,7 @@ class DefaultBoardRepository(
         password: String,
         imageOnly: Boolean
     ) {
+        ensureCookiesInitialized(board)
         api.deleteByUser(board, threadId, postId, password, imageOnly)
     }
 
@@ -101,6 +125,7 @@ class DefaultBoardRepository(
         imageFileName: String?,
         textOnly: Boolean
     ) {
+        ensureCookiesInitialized(board)
         api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
     }
 
@@ -115,6 +140,7 @@ class DefaultBoardRepository(
         imageFileName: String?,
         textOnly: Boolean
     ): String {
+        ensureCookiesInitialized(board)
         return api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
     }
 

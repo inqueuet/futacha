@@ -22,6 +22,50 @@ class HttpBoardApi(
         private const val MAX_RESPONSE_SIZE = 20 * 1024 * 1024 // 20MB limit
     }
 
+    override suspend fun fetchCatalogSetup(board: String) {
+        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
+        val url = buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.php?mode=catset")
+        }
+        try {
+            val response: HttpResponse = client.submitForm(
+                url = url,
+                formParameters = Parameters.build {
+                    append("mode", "catset")
+                    append("cx", "5")   // カタログの横サイズ
+                    append("cy", "60")  // カタログの縦サイズ
+                    append("cl", "4")   // 文字数
+                    append("cm", "0")   // 文字位置 (0=下, 1=右)
+                    append("ci", "0")   // 画像サイズ (0=小)
+                    append("vh", "on")  // 見たスレッドを見歴に追加
+                }
+            ) {
+                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                headers[HttpHeaders.CacheControl] = "max-age=0"
+                headers[HttpHeaders.Referrer] = url
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorMsg = "HTTP error ${response.status.value} when fetching catalog setup from $url"
+                println("HttpBoardApi: $errorMsg")
+                throw NetworkException(errorMsg, response.status.value)
+            }
+
+            // Cookies (posttime, cxyl, etc.) are automatically stored by HttpCookies plugin
+            println("HttpBoardApi: Catalog setup cookies initialized for board: $board (cx=5, cy=60)")
+        } catch (e: NetworkException) {
+            throw e
+        } catch (e: Exception) {
+            val errorMsg = "Failed to fetch catalog setup from $url: ${e.message}"
+            println("HttpBoardApi: $errorMsg")
+            throw NetworkException(errorMsg, cause = e)
+        }
+    }
+
     override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
         val url = BoardUrlResolver.resolveCatalogUrl(board, mode)
         return try {

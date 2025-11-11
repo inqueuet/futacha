@@ -8,6 +8,12 @@ data class BoardEndpoint(
 )
 
 interface BoardApi {
+    /**
+     * Fetches catalog setup page to initialize cookies (posttime, cxyl, etc.)
+     * This should be called before any catalog operations to ensure proper cookie setup.
+     */
+    suspend fun fetchCatalogSetup(board: String)
+
     suspend fun fetchCatalog(
         board: String,
         mode: CatalogMode = CatalogMode.default
