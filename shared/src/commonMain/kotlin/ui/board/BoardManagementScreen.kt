@@ -56,7 +56,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -68,7 +68,6 @@ import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.WatchLater
@@ -204,7 +203,9 @@ fun BoardManagementScreen(
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
     onHistoryCleared: () -> Unit = {},
     onBoardDeleted: (BoardSummary) -> Unit = {},
-    onBoardsReordered: (List<BoardSummary>) -> Unit = {}
+    onBoardsReordered: (List<BoardSummary>) -> Unit = {},
+    httpClient: io.ktor.client.HttpClient? = null,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -1964,6 +1965,8 @@ fun ThreadScreen(
     onHistoryRefresh: suspend () -> Unit = {},
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
     repository: BoardRepository? = null,
+    httpClient: io.ktor.client.HttpClient? = null,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -2000,6 +2003,7 @@ fun ThreadScreen(
     var isHistoryRefreshing by remember { mutableStateOf(false) }
     var previewImageUrl by remember { mutableStateOf<String?>(null) }
     var previewVideoUrl by remember { mutableStateOf<String?>(null) }
+    var saveProgress by remember { mutableStateOf<com.valoser.futacha.shared.model.SaveProgress?>(null) }
     val handleMediaClick: (String, MediaType) -> Unit = { url, mediaType ->
         when (mediaType) {
             MediaType.Image -> previewImageUrl = url
@@ -2366,6 +2370,66 @@ fun ThreadScreen(
                             ThreadActionBarItem.Gallery -> {
                                 isGalleryVisible = true
                             }
+                            ThreadActionBarItem.Save -> {
+                                val currentStateValue = currentState
+                                if (currentStateValue is ThreadUiState.Success) {
+                                    if (httpClient != null && fileSystem != null) {
+                                        coroutineScope.launch {
+                                            try {
+                                                // ThreadSaveServiceを作成
+                                                val saveService = com.valoser.futacha.shared.service.ThreadSaveService(
+                                                    httpClient = httpClient,
+                                                    fileSystem = fileSystem
+                                                )
+
+                                                // 進捗を監視
+                                                val progressJob = launch {
+                                                    saveService.saveProgress.collect { progress ->
+                                                        saveProgress = progress
+                                                    }
+                                                }
+
+                                                // スレッドを保存
+                                                val page = currentStateValue.page
+                                                val result = saveService.saveThread(
+                                                    threadId = threadId,
+                                                    boardId = board.id,
+                                                    boardName = board.name,
+                                                    boardUrl = board.url,
+                                                    title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
+                                                    expiresAtLabel = page.expiresAtLabel,
+                                                    posts = page.posts
+                                                )
+
+                                                progressJob.cancel()
+
+                                                result.onSuccess { savedThread ->
+                                                    // SavedThreadRepositoryに追加
+                                                    val repository = com.valoser.futacha.shared.repository.SavedThreadRepository(fileSystem)
+                                                    repository.addThreadToIndex(savedThread)
+
+                                                    saveProgress = null
+                                                    snackbarHostState.showSnackbar("スレッドを保存しました")
+                                                }.onFailure { error ->
+                                                    saveProgress = null
+                                                    snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                                                }
+                                            } catch (e: Exception) {
+                                                saveProgress = null
+                                                snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                                            }
+                                        }
+                                    } else {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("保存機能が利用できません")
+                                        }
+                                    }
+                                } else {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar("スレッドの読み込みが完了していません")
+                                    }
+                                }
+                            }
                             else -> {
                                 coroutineScope.launch {
                                     snackbarHostState.showSnackbar("${action.label} はモック動作です")
@@ -2605,6 +2669,14 @@ fun ThreadScreen(
             }
         )
     }
+
+    // 保存進捗ダイアログ
+    SaveProgressDialog(
+        progress = saveProgress,
+        onDismissRequest = {
+            saveProgress = null
+        }
+    )
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -4193,8 +4265,7 @@ private enum class ThreadActionBarItem(
     ScrollToBottom("最下部", Icons.Filled.ArrowDownward),
     Refresh("更新", Icons.Rounded.Refresh),
     Gallery("画像", Icons.Outlined.Image),
-    Share("共有", Icons.Rounded.Share),
-    Favorite("お気に入り", Icons.Rounded.BookmarkAdd),
+    Save("保存", Icons.Rounded.Archive),
     Settings("設定", Icons.Rounded.Settings)
 }
 

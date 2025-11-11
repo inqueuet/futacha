@@ -26,13 +26,18 @@ import com.valoser.futacha.shared.network.BoardUrlResolver
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+import version.VersionChecker
+import version.UpdateInfo
 
 @OptIn(ExperimentalTime::class)
 @Composable
 fun FutachaApp(
     stateStore: AppStateStore,
     boardList: List<BoardSummary> = mockBoardSummaries,
-    history: List<ThreadHistoryEntry> = mockThreadHistory
+    history: List<ThreadHistoryEntry> = mockThreadHistory,
+    versionChecker: VersionChecker? = null,
+    httpClient: io.ktor.client.HttpClient? = null,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
     FutachaTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -52,6 +57,27 @@ fun FutachaApp(
 
             LaunchedEffect(stateStore, boardList, history) {
                 stateStore.seedIfEmpty(boardList, history)
+            }
+
+            // バージョンチェック
+            var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+            LaunchedEffect(versionChecker) {
+                versionChecker?.let { checker ->
+                    try {
+                        val info = checker.checkForUpdate()
+                        updateInfo = info
+                    } catch (e: Exception) {
+                        println("FutachaApp: Version check failed: ${e.message}")
+                    }
+                }
+            }
+
+            // 更新通知ダイアログ
+            updateInfo?.let { info ->
+                UpdateNotificationDialog(
+                    updateInfo = info,
+                    onDismiss = { updateInfo = null }
+                )
             }
 
             val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
@@ -272,7 +298,9 @@ fun FutachaApp(
                             onHistoryEntryUpdated = updateHistoryEntry,
                             onHistoryRefresh = refreshHistoryEntries,
                             onScrollPositionPersist = persistScrollPosition,
-                            repository = boardRepository
+                            repository = boardRepository,
+                            httpClient = httpClient,
+                            fileSystem = fileSystem
                         )
                 }
             }

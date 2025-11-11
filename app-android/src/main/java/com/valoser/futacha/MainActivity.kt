@@ -7,6 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
+import com.valoser.futacha.shared.network.createHttpClient
+import version.createVersionChecker
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -14,7 +16,15 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val stateStore = remember { createAppStateStore(applicationContext) }
-            FutachaApp(stateStore = stateStore)
+            val httpClient = remember { createHttpClient() }
+            val versionChecker = remember { createVersionChecker(applicationContext, httpClient) }
+            val fileSystem = remember { com.valoser.futacha.shared.util.createFileSystem(applicationContext) }
+            FutachaApp(
+                stateStore = stateStore,
+                versionChecker = versionChecker,
+                httpClient = httpClient,
+                fileSystem = fileSystem
+            )
         }
     }
 }

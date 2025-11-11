@@ -9,19 +9,26 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.util.pickImage
+import kotlinx.coroutines.launch
 
 @Composable
 actual fun ImagePickerButton(
     onImageSelected: (ImageData) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+
     Button(
         onClick = {
-            // TODO: Implement iOS image picker
-        },
-        enabled = false
+            scope.launch {
+                val imageData = pickImage()
+                imageData?.let(onImageSelected)
+            }
+        }
     ) {
         Icon(
             imageVector = Icons.Outlined.Image,
