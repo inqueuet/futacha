@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -63,6 +65,9 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.VideoLibrary
+import androidx.compose.material.icons.rounded.FlashOn
+import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
@@ -1331,8 +1336,9 @@ fun CatalogScreen(
 
         if (showCreateThreadDialog) {
             CreateThreadDialog(
+                boardName = board?.name,
                 onDismiss = { showCreateThreadDialog = false },
-                onSubmit = { name, email, title, comment, imageData ->
+                onSubmit = { name, email, title, comment, password, imageData ->
                     showCreateThreadDialog = false
                     if (board == null) {
                         coroutineScope.launch {
@@ -1349,7 +1355,7 @@ fun CatalogScreen(
                                 email = email,
                                 subject = title,
                                 comment = comment,
-                                password = "",
+                                password = password,
                                 imageFile = imageData?.bytes,
                                 imageFileName = imageData?.fileName,
                                 textOnly = imageData == null
@@ -1367,135 +1373,420 @@ fun CatalogScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateThreadDialog(
+    boardName: String?,
     onDismiss: () -> Unit,
-    onSubmit: (name: String, email: String, title: String, comment: String, imageData: com.valoser.futacha.shared.util.ImageData?) -> Unit
+    onSubmit: (name: String, email: String, title: String, comment: String, password: String, imageData: com.valoser.futacha.shared.util.ImageData?) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var comment by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var selectedImage by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
-    val coroutineScope = rememberCoroutineScope()
+    val emailPresets = remember { listOf("ID表示", "IP表示", "sage") }
 
-    AlertDialog(
+    ThreadFormDialog(
+        title = "スレ立て",
+        subtitle = boardName?.takeIf { it.isNotBlank() },
+        emailPresets = emailPresets,
+        comment = comment,
+        onCommentChange = { comment = it },
+        name = name,
+        onNameChange = { name = it },
+        email = email,
+        onEmailChange = { email = it },
+        subject = title,
+        onSubjectChange = { title = it },
+        password = password,
+        onPasswordChange = { password = it },
+        selectedImage = selectedImage,
+        onImageSelected = { selectedImage = it },
+        onDismiss = onDismiss,
+        onSubmit = {
+            onSubmit(name, email, title, comment, password, selectedImage)
+        },
+        onClear = {
+            name = ""
+            email = ""
+            title = ""
+            comment = ""
+            password = ""
+            selectedImage = null
+        },
+        isSubmitEnabled = title.isNotBlank() || comment.isNotBlank(),
+        sendDescription = "スレ立て",
+        showSubject = true,
+        showPassword = true
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadReplyDialog(
+    boardName: String,
+    threadTitle: String,
+    name: String,
+    onNameChange: (String) -> Unit,
+    email: String,
+    onEmailChange: (String) -> Unit,
+    subject: String,
+    onSubjectChange: (String) -> Unit,
+    comment: String,
+    onCommentChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    selectedImage: com.valoser.futacha.shared.util.ImageData?,
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData?) -> Unit,
+    onDismiss: () -> Unit,
+    onSubmit: () -> Unit,
+    onClear: () -> Unit
+) {
+    ThreadFormDialog(
+        title = threadTitle.ifBlank { "返信" },
+        subtitle = boardName,
+        emailPresets = listOf("ID表示", "IP表示", "sage"),
+        comment = comment,
+        onCommentChange = onCommentChange,
+        name = name,
+        onNameChange = onNameChange,
+        email = email,
+        onEmailChange = onEmailChange,
+        subject = subject,
+        onSubjectChange = onSubjectChange,
+        password = password,
+        onPasswordChange = onPasswordChange,
+        selectedImage = selectedImage,
+        onImageSelected = onImageSelected,
+        onDismiss = onDismiss,
+        onSubmit = onSubmit,
+        onClear = onClear,
+        isSubmitEnabled = comment.isNotBlank(),
+        sendDescription = "返信する",
+        showSubject = true,
+        showPassword = true
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadFormDialog(
+    title: String,
+    subtitle: String?,
+    emailPresets: List<String>,
+    comment: String,
+    onCommentChange: (String) -> Unit,
+    name: String,
+    onNameChange: (String) -> Unit,
+    email: String,
+    onEmailChange: (String) -> Unit,
+    subject: String,
+    onSubjectChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    selectedImage: com.valoser.futacha.shared.util.ImageData?,
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData?) -> Unit,
+    onDismiss: () -> Unit,
+    onSubmit: () -> Unit,
+    onClear: () -> Unit,
+    isSubmitEnabled: Boolean,
+    sendDescription: String,
+    showSubject: Boolean = true,
+    showPassword: Boolean = true
+) {
+    val commentLineCount = remember(comment) {
+        if (comment.isBlank()) 0 else comment.count { it == '\n' } + 1
+    }
+    val commentByteCount = remember(comment) { comment.encodeToByteArray().size }
+    val scrollState = rememberScrollState()
+    val textFieldColors = TextFieldDefaults.colors(
+        focusedContainerColor = Color.Transparent,
+        unfocusedContainerColor = Color.Transparent,
+        disabledContainerColor = Color.Transparent,
+        focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+        unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+    )
+    val imagePickerLauncher = rememberImagePickerLauncher(onImageSelected = { image ->
+        onImageSelected(image)
+    })
+    val videoPickerLauncher = rememberImagePickerLauncher(
+        mimeType = "video/*",
+        onImageSelected = { image ->
+            onImageSelected(image)
+        }
+    )
+    var overflowMenuExpanded by remember { mutableStateOf(false) }
+
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("スレッド作成") },
-        text = {
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .fillMaxSize()
+                    .imePadding()
             ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("おなまえ") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
-                    label = { Text("E-mail") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("題名") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = comment,
-                    onValueChange = { comment = it },
-                    label = { Text("コメント") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 4,
-                    maxLines = 8
-                )
-
-                // 画像添付セクション
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "画像添付",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        ImagePickerButton(
-                            onImageSelected = { image ->
-                                selectedImage = image
-                            }
-                        )
-                    }
-
-                    selectedImage?.let { image ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceVariant,
-                                    MaterialTheme.shapes.small
-                                )
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                text = title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            subtitle?.let {
                                 Text(
-                                    text = image.fileName,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    text = it,
+                                    style = MaterialTheme.typography.labelMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Text(
-                                    text = "${image.bytes.size / 1024} KB",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
-                            IconButton(onClick = { selectedImage = null }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = "画像を削除"
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = "閉じる"
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { overflowMenuExpanded = true }) {
+                            Icon(
+                                imageVector = Icons.Outlined.MoreVert,
+                                contentDescription = "その他"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = overflowMenuExpanded,
+                            onDismissRequest = { overflowMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("キャンセル") },
+                                onClick = {
+                                    overflowMenuExpanded = false
+                                    onDismiss()
+                                }
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                )
+                HorizontalDivider()
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        TextField(
+                            value = comment,
+                            onValueChange = onCommentChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("コメント") },
+                            minLines = 2,
+                            maxLines = 2,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                            colors = textFieldColors,
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Default),
+                            keyboardActions = KeyboardActions.Default
+                        )
+                        Text(
+                            text = "${commentLineCount}行 ${commentByteCount}バイト",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    TextField(
+                        value = name,
+                        onValueChange = onNameChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("おなまえ") },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge,
+                        colors = textFieldColors,
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next)
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TextField(
+                            value = email,
+                            onValueChange = onEmailChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("メール") },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                            colors = textFieldColors,
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            emailPresets.forEachIndexed { index, preset ->
+                                Text(
+                                    text = preset,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .clickable { onEmailChange(preset) }
+                                        .padding(start = if (index == 0) 0.dp else 8.dp)
                                 )
                             }
                         }
                     }
+
+                    if (showSubject) {
+                        TextField(
+                            value = subject,
+                            onValueChange = onSubjectChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("題名") },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                            colors = textFieldColors,
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next)
+                        )
+                    }
+
+                    if (showPassword) {
+                        TextField(
+                            value = password,
+                            onValueChange = onPasswordChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("削除キー") },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                            visualTransformation = PasswordVisualTransformation(),
+                            supportingText = {
+                                Text("削除用. 英数字で8字以内", style = MaterialTheme.typography.bodySmall)
+                            },
+                            colors = textFieldColors,
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done)
+                        )
+                    }
+
+                    selectedImage?.let { image ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = image.fileName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${image.bytes.size / 1024} KB",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { onImageSelected(null) }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = "添付を削除"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .padding(horizontal = 4.dp)
+                            .navigationBarsPadding()
+                            .imePadding(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        IconButton(
+                            onClick = onSubmit,
+                            enabled = isSubmitEnabled
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Send,
+                                contentDescription = sendDescription,
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                        IconButton(onClick = { imagePickerLauncher() }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Image,
+                                contentDescription = "画像を選択",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                        IconButton(onClick = { videoPickerLauncher() }) {
+                            Icon(
+                                imageVector = Icons.Rounded.VideoLibrary,
+                                contentDescription = "動画を選択",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                        IconButton(onClick = onClear) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "入力をクリア",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Outlined.MoreVert,
+                                contentDescription = "その他",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSubmit(name, email, title, comment, selectedImage) },
-                enabled = title.isNotBlank() || comment.isNotBlank()
-            ) {
-                Text("作成")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("キャンセル")
-            }
         }
-    )
+    }
 }
 
 @Composable
-internal expect fun ImagePickerButton(
+expect fun ImagePickerButton(
     onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit
 )
+
+@Composable
+expect fun rememberImagePickerLauncher(
+    mimeType: String = "image/*",
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit
+): () -> Unit
 
 @Composable
 private fun LoadingCatalog(modifier: Modifier = Modifier) {
@@ -1990,13 +2281,12 @@ fun ThreadScreen(
     var pendingDeletePassword by remember { mutableStateOf("") }
     var pendingDeleteImageOnly by remember { mutableStateOf(false) }
     var lastUsedDeleteKey by rememberSaveable(board.id) { mutableStateOf("") }
-    var isReplySheetVisible by remember { mutableStateOf(false) }
+    var isReplyDialogVisible by remember { mutableStateOf(false) }
     var replyName by rememberSaveable(board.id) { mutableStateOf("") }
     var replyEmail by rememberSaveable(board.id) { mutableStateOf("") }
     var replySubject by remember { mutableStateOf("") }
     var replyComment by remember { mutableStateOf("") }
     var replyPassword by rememberSaveable(board.id) { mutableStateOf("") }
-    var replyTextOnly by remember { mutableStateOf(false) }
     var replyImageData by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -2331,7 +2621,7 @@ fun ThreadScreen(
                                 if (replyPassword.isBlank()) {
                                     replyPassword = lastUsedDeleteKey
                                 }
-                                isReplySheetVisible = true
+                                isReplyDialogVisible = true
                             }
                             ThreadActionBarItem.ScrollToTop -> {
                                 coroutineScope.launch {
@@ -2573,8 +2863,10 @@ fun ThreadScreen(
         )
     }
 
-    if (isReplySheetVisible) {
-        ThreadReplySheet(
+    if (isReplyDialogVisible) {
+        ThreadReplyDialog(
+            boardName = board.name,
+            threadTitle = resolvedThreadTitle,
             name = replyName,
             onNameChange = { replyName = it },
             email = replyEmail,
@@ -2585,33 +2877,28 @@ fun ThreadScreen(
             onCommentChange = { replyComment = it },
             password = replyPassword,
             onPasswordChange = { replyPassword = it },
-            textOnly = replyTextOnly,
-            onTextOnlyChange = { replyTextOnly = it },
             selectedImage = replyImageData,
             onImageSelected = { replyImageData = it },
-            onDismiss = {
-                isReplySheetVisible = false
-            },
+            onDismiss = { isReplyDialogVisible = false },
             onSubmit = {
                 val trimmedPassword = replyPassword.trim()
                 if (trimmedPassword.isBlank()) {
                     coroutineScope.launch { snackbarHostState.showSnackbar("削除キーを入力してください") }
-                    return@ThreadReplySheet
+                    return@ThreadReplyDialog
                 }
                 if (replyComment.trim().isBlank()) {
                     coroutineScope.launch { snackbarHostState.showSnackbar("コメントを入力してください") }
-                    return@ThreadReplySheet
+                    return@ThreadReplyDialog
                 }
-                isReplySheetVisible = false
+                isReplyDialogVisible = false
                 val name = replyName
                 val email = replyEmail
                 val subject = replySubject
                 val comment = replyComment
-                val textOnly = replyTextOnly
                 val imageData = replyImageData
+                val textOnly = imageData == null
                 replySubject = ""
                 replyComment = ""
-                replyTextOnly = false
                 replyImageData = null
                 lastUsedDeleteKey = trimmedPassword
                 launchThreadAction(
@@ -2632,6 +2919,14 @@ fun ThreadScreen(
                         textOnly
                     )
                 }
+            },
+            onClear = {
+                replyName = ""
+                replyEmail = ""
+                replySubject = ""
+                replyComment = ""
+                replyPassword = ""
+                replyImageData = null
             }
         )
     }
@@ -3428,182 +3723,6 @@ private fun DeleteByUserDialog(
             }
         }
     )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ThreadReplySheet(
-    name: String,
-    onNameChange: (String) -> Unit,
-    email: String,
-    onEmailChange: (String) -> Unit,
-    subject: String,
-    onSubjectChange: (String) -> Unit,
-    comment: String,
-    onCommentChange: (String) -> Unit,
-    password: String,
-    onPasswordChange: (String) -> Unit,
-    textOnly: Boolean,
-    onTextOnlyChange: (Boolean) -> Unit,
-    selectedImage: com.valoser.futacha.shared.util.ImageData?,
-    onImageSelected: (com.valoser.futacha.shared.util.ImageData?) -> Unit,
-    onDismiss: () -> Unit,
-    onSubmit: () -> Unit
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                text = "返信する",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            OutlinedTextField(
-                value = name,
-                onValueChange = onNameChange,
-                label = { Text("おなまえ") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = email,
-                onValueChange = onEmailChange,
-                label = { Text("E-mail") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = subject,
-                onValueChange = onSubjectChange,
-                label = { Text("題名") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = comment,
-                onValueChange = onCommentChange,
-                label = { Text("コメント") },
-                minLines = 4,
-                maxLines = 8,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            // 画像添付セクション
-            if (!textOnly) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "画像添付",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        ImagePickerButton(
-                            onImageSelected = { image ->
-                                onImageSelected(image)
-                            }
-                        )
-                    }
-
-                    selectedImage?.let { image ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceVariant,
-                                    MaterialTheme.shapes.small
-                                )
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = image.fileName,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${image.bytes.size / 1024} KB",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            IconButton(onClick = { onImageSelected(null) }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = "画像を削除"
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Checkbox(
-                    checked = textOnly,
-                    onCheckedChange = {
-                        onTextOnlyChange(it)
-                        if (it) onImageSelected(null)
-                    }
-                )
-                Text("画像なし")
-            }
-
-            OutlinedTextField(
-                value = password,
-                onValueChange = onPasswordChange,
-                label = { Text("削除キー") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                supportingText = { Text("削除用. 英数字で8字以内", style = MaterialTheme.typography.bodySmall) },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("キャンセル")
-                }
-                Button(
-                    onClick = onSubmit,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("返信する")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

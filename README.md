@@ -73,13 +73,14 @@ futacha/
 │   └── src/main/java/com/valoser/futacha/
 │       └── MainActivity.kt
 │
-├── shared/               # 共通コード (UI + ロジック) - 60+ファイル
-│   ├── src/commonMain/kotlin/  # 完全共通化 (~95%) - 40+ファイル
-│   │   ├── model/        # データモデル (7ファイル)
+├── shared/               # 共通コード (UI + ロジック) - 70+ファイル
+│   ├── src/commonMain/kotlin/  # 完全共通化 (~95%) - 45+ファイル
+│   │   ├── model/        # データモデル (8ファイル)
 │   │   │   ├── Post.kt, CatalogItem.kt, ThreadPage.kt
 │   │   │   ├── BoardStateModels.kt (BoardSummary, ThreadHistoryEntry)
 │   │   │   ├── CatalogMode.kt (7種類の表示モード)
 │   │   │   ├── SavedThread.kt (保存済みスレッド、進捗情報)
+│   │   │   ├── MediaItem.kt (メディアアイテム)
 │   │   │   └── CatalogItemExtensions.kt
 │   │   │
 │   │   ├── network/      # HTTPクライアント (4ファイル)
@@ -109,13 +110,14 @@ futacha/
 │   │   ├── state/        # 状態管理 (1ファイル)
 │   │   │   └── AppStateStore.kt (Flow、JSON、Mutex、expect/actual)
 │   │   │
-│   │   ├── ui/           # Compose Multiplatform UI (10ファイル)
+│   │   ├── ui/           # Compose Multiplatform UI (11ファイル)
 │   │   │   ├── FutachaApp.kt (メインアプリ、画面遷移)
 │   │   │   ├── PermissionRequest.kt (expect/actual)
 │   │   │   ├── board/
 │   │   │   │   ├── BoardManagementScreen.kt (3画面統合)
 │   │   │   │   ├── SaveProgressDialog.kt (保存進捗表示)
 │   │   │   │   ├── SavedThreadsScreen.kt (保存済み一覧)
+│   │   │   │   ├── ImagePickerButton.kt (画像選択ボタン、expect/actual)
 │   │   │   │   ├── PlatformVideoPlayer.kt (expect/actual)
 │   │   │   │   └── BoardManagementFixtures.kt
 │   │   │   ├── UpdateNotificationDialog.kt
@@ -238,16 +240,31 @@ futacha/
 - **動画再生**: プラットフォーム固有実装
 - **画像添付**: Android/iOS実装済み（ImagePicker）
 
-#### スレッド保存機能（NEW!）
+#### スレッド保存機能
 - **オフライン保存**: スレッド全体をHTML+画像で保存
 - **共有ストレージ**: ファイルマネージャーからアクセス可能
   - Android: `/Documents/futacha/saved_threads/`
   - iOS: `NSDocumentDirectory/saved_threads/`
 - **進捗表示**: リアルタイムパーセンテージ表示（準備1%、DL97%、変換1%、完了1%）
-- **ファイルサイズ制限**: 8000KB（8MB）対応
+- **ファイルサイズ制限**: 8000KB（8MB）対応、HEADリクエストで事前チェック
 - **サポート形式**: GIF, JPG, PNG, WEBP, MP4, WEBM
-- **エラーハンドリング**: 一部失敗でも継続、ステータス表示
-- **相対パス**: ディレクトリ移動してもHTMLから画像参照可能
+- **エラーハンドリング**: 一部失敗でも継続、ステータス表示（COMPLETED/PARTIAL/FAILED）
+- **URL-to-Pathマッピング**: ダウンロード時にURLとローカルパスを紐付け
+- **相対パス変換**: HTMLの画像URLを相対パス（`images/img_xxx.jpg`）に変換
+- **保存済み一覧**: 保存したスレッドの一覧表示・削除機能
+
+#### スレッド作成機能
+- **新規スレッド作成**: 板からスレッドを新規作成
+- **画像添付対応**: ImagePickerButtonで画像選択
+  - Android: ActivityResultContracts使用
+  - iOS: PHPickerViewController使用
+- **フォーム入力**: 名前・メール・題名・本文
+- **自動遷移**: 作成後、新スレッドに自動遷移
+
+#### 板アイコン選択機能
+- **カスタムアイコン**: 板ごとにカスタムアイコン設定可能
+- **画像選択**: ImagePickerButtonで画像選択
+- **プラットフォーム固有実装**: Android/iOS完全対応
 
 #### その他機能
 - **バージョン通知**: GitHub Releases API連携（Android/iOS）
@@ -262,6 +279,10 @@ futacha/
 - ✅ **画像選択機能（PHPickerViewController実装完了）**
 - ✅ **バージョンチェッカー（NSBundle実装完了）**
 - ✅ **動画プレーヤー（AVPlayer実装完了）**
+- ✅ **ファイルシステム（NSFileManager実装完了）**
+- ✅ **権限処理（実装完了）**
+- ✅ **スレッド作成（画像添付対応）**
+- ✅ **板アイコン選択（ImagePickerButton）**
 
 **Android/iOS完全対応！** コード共有率 ~95%
 

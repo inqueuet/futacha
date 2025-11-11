@@ -86,7 +86,7 @@ project-root/
 ├── shared/                         # Kotlin Multiplatform 共通コア（60+ファイル）
 │   ├── src/commonMain/kotlin/      # 完全共通化コード（40+ファイル、~95%）
 │   │   │
-│   │   ├── model/                  # データモデル（7ファイル）
+│   │   ├── model/                  # データモデル（8ファイル）
 │   │   │   ├── Post.kt             # 投稿データ（ID、作成者、本文HTML、画像URL等）
 │   │   │   ├── QuoteReference.kt   # 引用参照（>>1形式）
 │   │   │   ├── CatalogItem.kt      # カタログアイテム（スレッドID、URL、サムネ等）
@@ -94,6 +94,7 @@ project-root/
 │   │   │   ├── BoardStateModels.kt # BoardSummary, ThreadHistoryEntry
 │   │   │   ├── CatalogMode.kt      # 7種類の表示モード（enum）
 │   │   │   ├── SavedThread.kt      # 保存済みスレッド、進捗情報、保存ステータス
+│   │   │   ├── MediaItem.kt        # メディアアイテム（画像・動画の抽象化）
 │   │   │   └── CatalogItemExtensions.kt
 │   │   │
 │   │   ├── network/                # ネットワーク層（4ファイル）
@@ -120,12 +121,19 @@ project-root/
 │   │   │       ├── MockThreadFixtures.kt
 │   │   │       └── ExampleBoardHttpSamples.kt
 │   │   │
+│   │   ├── repository/             # 保存機能リポジトリ（1ファイル）
+│   │   │   └── SavedThreadRepository.kt  # 保存済みスレッド管理
+│   │   │
+│   │   ├── service/                # ビジネスロジック（1ファイル）
+│   │   │   └── ThreadSaveService.kt  # スレッド保存、進捗管理
+│   │   │
 │   │   ├── state/                  # 状態管理（1ファイル）
 │   │   │   └── AppStateStore.kt    # Flow、JSON、Mutex、expect/actual
 │   │   │
-│   │   ├── ui/                     # Compose Multiplatform UI（7ファイル）
+│   │   ├── ui/                     # Compose Multiplatform UI（10ファイル）
 │   │   │   ├── FutachaApp.kt       # メインアプリ、画面遷移、履歴管理
 │   │   │   ├── UpdateNotificationDialog.kt # バージョン通知ダイアログ
+│   │   │   ├── PermissionRequest.kt    # パーミッション要求（expect/actual）
 │   │   │   ├── theme/
 │   │   │   │   └── FutachaTheme.kt # テーマ定義
 │   │   │   ├── board/
@@ -133,19 +141,23 @@ project-root/
 │   │   │   │   │   - BoardManagementScreen（板管理）
 │   │   │   │   │   - CatalogScreen（カタログ、7モード）
 │   │   │   │   │   - ThreadScreen（スレッド詳細、投稿）
+│   │   │   │   ├── SaveProgressDialog.kt     # 保存進捗ダイアログ
+│   │   │   │   ├── SavedThreadsScreen.kt     # 保存済みスレッド一覧
 │   │   │   │   ├── PlatformVideoPlayer.kt    # expect/actual
+│   │   │   │   ├── ImagePickerButton.kt      # 画像選択ボタン（expect/actual）
 │   │   │   │   └── BoardManagementFixtures.kt
 │   │   │   └── util/
 │   │   │       └── PlatformBackHandler.kt    # expect/actual
 │   │   │
-│   │   ├── util/                   # ユーティリティ（2ファイル）
+│   │   ├── util/                   # ユーティリティ（3ファイル）
 │   │   │   ├── ImagePicker.kt      # expect/actual（ImageData）
+│   │   │   ├── FileSystem.kt       # expect/actual（ファイル操作抽象化）
 │   │   │   └── BoardConfig.kt
 │   │   │
 │   │   └── version/                # バージョンチェック（1ファイル）
 │   │       └── VersionChecker.kt   # interface、GitHub Releases API
 │   │
-│   ├── src/androidMain/kotlin/     # Android固有実装（9ファイル）
+│   ├── src/androidMain/kotlin/     # Android固有実装（13ファイル）
 │   │   ├── parser/
 │   │   │   ├── JsoupHtmlParser.kt           # CatalogHtmlParserCore使用
 │   │   │   └── ParserFactory.android.kt
@@ -154,7 +166,11 @@ project-root/
 │   │   ├── network/
 │   │   │   └── HttpClientFactory.android.kt # OkHttp
 │   │   ├── util/
-│   │   │   └── ImagePicker.android.kt       # Uri→ImageData変換
+│   │   │   ├── ImagePicker.android.kt       # Uri→ImageData変換
+│   │   │   ├── FileSystem.android.kt        # Android File API
+│   │   │   └── PermissionHelper.android.kt  # 権限処理ヘルパー
+│   │   ├── ui/
+│   │   │   └── PermissionRequest.android.kt # Accompanist Permissions
 │   │   ├── ui/board/
 │   │   │   ├── ImagePickerButton.android.kt # ActivityResultContracts
 │   │   │   └── PlatformVideoPlayer.android.kt
@@ -163,7 +179,7 @@ project-root/
 │   │   └── version/
 │   │       └── VersionChecker.android.kt    # PackageManager
 │   │
-│   └── src/iosMain/kotlin/         # iOS固有実装（10ファイル）
+│   └── src/iosMain/kotlin/         # iOS固有実装（13ファイル）
 │       ├── MainViewController.kt            # iOSエントリーポイント
 │       ├── parser/
 │       │   ├── AppleHtmlParser.kt           # CatalogHtmlParserCore使用
@@ -173,14 +189,17 @@ project-root/
 │       ├── network/
 │       │   └── HttpClientFactory.ios.kt     # Darwin
 │       ├── util/
-│       │   └── ImagePicker.ios.kt           # 未実装
+│       │   ├── ImagePicker.ios.kt           # PHPickerViewController実装
+│       │   └── FileSystem.ios.kt            # iOS File API
+│       ├── ui/
+│       │   └── PermissionRequest.ios.kt     # iOS権限処理
 │       ├── ui/board/
-│       │   ├── ImagePickerButton.ios.kt     # 未実装
-│       │   └── PlatformVideoPlayer.ios.kt
+│       │   ├── ImagePickerButton.ios.kt     # PHPicker統合
+│       │   └── PlatformVideoPlayer.ios.kt   # AVPlayer実装
 │       ├── ui/util/
-│       │   └── PlatformBackHandler.kt       # 空実装
+│       │   └── PlatformBackHandler.kt       # 空実装（ネイティブジェスチャー）
 │       └── version/
-│           └── VersionChecker.ios.kt        # 未実装
+│           └── VersionChecker.ios.kt        # NSBundle実装
 │
 ├── codex.md                        # 詳細設計書（API、パーサー、実装状況）
 ├── README.md                       # プロジェクト概要、機能一覧
@@ -192,11 +211,11 @@ project-root/
 
 ### 📊 ファイル数の内訳（最新）
 
-- **commonMain**: 34ファイル（UI + ロジック + モデル + ネットワーク + パーサー）
-- **androidMain**: 9ファイル（永続化 + パーサー + 画像選択 + バージョンチェック）
-- **iosMain**: 10ファイル（エントリーポイント + 永続化 + パーサー + スタブ実装）
+- **commonMain**: 約45ファイル（UI + ロジック + モデル + ネットワーク + パーサー + サービス + リポジトリ）
+- **androidMain**: 13ファイル（永続化 + パーサー + ファイルシステム + 画像選択 + 権限処理 + バージョンチェック）
+- **iosMain**: 13ファイル（エントリーポイント + 永続化 + パーサー + ファイルシステム + 画像選択 + バージョンチェック）
 
-**合計**: 53ファイル（コード共有率 ~95%）
+**合計**: 約70ファイル（コード共有率 ~95%）
 
 ---
 
@@ -298,18 +317,24 @@ project-root/
 - ✅ ネットワーク通信（Ktor Darwin）
 - ✅ 状態永続化（NSUserDefaults）
 - ✅ HTMLパーサー（CatalogHtmlParserCore, ThreadHtmlParserCore）
-- ✅ **画像選択機能（PHPickerViewController実装）**
+- ✅ **画像選択機能（PHPickerViewController実装完了）**
   - `ImagePicker.ios.kt`: PHPickerViewController使用
   - `ImagePickerButton.ios.kt`: Compose統合完了
   - 画像データ読み込み・変換実装
-- ✅ **バージョンチェッカー（NSBundle実装）**
+- ✅ **バージョンチェッカー（NSBundle実装完了）**
   - `VersionChecker.ios.kt`: CFBundleShortVersionString取得
   - `MainViewController.kt`: VersionChecker統合完了
   - GitHub Releases API連携
-- ✅ **動画プレーヤー（AVPlayer実装）**
+- ✅ **動画プレーヤー（AVPlayer実装完了）**
   - `PlatformVideoPlayer.ios.kt`: AVPlayerViewController使用
   - 再生コントロール実装
   - 自動再生・クリーンアップ実装
+- ✅ **ファイルシステム（NSFileManager実装完了）**
+  - `FileSystem.ios.kt`: NSFileManager使用
+  - NSDocumentDirectory対応
+  - ファイル操作完全実装
+- ✅ **権限処理（iOS実装完了）**
+  - `PermissionRequest.ios.kt`: iOS権限処理実装
 
 **🎉 Android/iOS完全対応達成！コード共有率 ~95%**
 
@@ -557,6 +582,14 @@ Response: text/html SJIS
 - [x] 画像選択機能（ImagePicker.ios.kt - PHPickerViewController）
 - [x] バージョンチェッカー（VersionChecker.ios.kt - NSBundle）
 - [x] 動画プレーヤー（PlatformVideoPlayer.ios.kt - AVPlayer）
+- [x] ファイルシステム（FileSystem.ios.kt - NSFileManager）
+- [x] 権限処理（PermissionRequest.ios.kt）
+
+### 最新の実装追加（2025-11-11）
+- [x] スレッド作成機能（画像添付対応）
+- [x] 板アイコン選択機能（ImagePickerButton）
+  - Android: ActivityResultContracts使用
+  - iOS: PHPickerViewController使用
 
 **すべてのiOS未実装項目が完了しました！**
 
@@ -808,9 +841,10 @@ fun FutachaApp(
 │ ThreadSaveService                                   │
 │  - saveThread(): スレッド保存処理                    │
 │  - saveProgress: StateFlow<SaveProgress>            │
-│  - downloadMedia(): 画像/動画ダウンロード             │
+│  - downloadMedia(): メディアダウンロード（HEADチェック）│
 │  - convertHtmlPaths(): HTML相対パス変換              │
 │  - generateHtml(): スタンドアロンHTML生成             │
+│  - urlToPathMap: URL→ローカルパスマッピング           │
 └──────────────────┬──────────────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────────────┐
@@ -899,6 +933,20 @@ saved_threads/
 
 ### HTML変換
 
+#### URL-to-Pathマッピング
+ダウンロード時に各メディアURLと保存先ローカルパスをマッピングすることで、HTML変換時に正確な相対パスを使用します。
+
+```kotlin
+// ダウンロード時
+val urlToPathMap = mutableMapOf<String, String>()
+downloadResult.onSuccess { fileInfo ->
+    urlToPathMap[mediaItem.url] = fileInfo.relativePath
+}
+
+// HTML変換時
+val convertedHtml = convertHtmlPaths(post.messageHtml, urlToPathMap)
+```
+
 #### 相対パス変換例
 ```html
 <!-- 元のHTML -->
@@ -907,6 +955,8 @@ saved_threads/
 <!-- 変換後 -->
 <img src="images/thumb_1_12345.jpg">
 ```
+
+変換処理は`convertHtmlPaths()`で実行され、`<img>`タグと`<a>`タグのURLを相対パスに置換します。
 
 #### スタンドアロンHTML
 ```html
@@ -927,6 +977,7 @@ saved_threads/
     </div>
     <div class="post">
         <!-- 各投稿 -->
+        <img src="images/img_xxx.jpg" />  <!-- 相対パス -->
     </div>
 </body>
 </html>
@@ -935,13 +986,36 @@ saved_threads/
 ### エラーハンドリング
 
 #### ダウンロード失敗時の挙動
-1. HEADリクエストでファイルサイズチェック
-2. サイズ超過 → スキップして次へ
-3. ダウンロード失敗 → カウント増加、続行
-4. 最終ステータス決定:
-   - 0件失敗 → `COMPLETED`
-   - 一部失敗 → `PARTIAL`
-   - 全て失敗 → `FAILED`
+1. **HEADリクエストでファイルサイズチェック**
+   - Content-Lengthを取得
+   - 8000KB超過 → 例外をスローしてスキップ
+
+2. **拡張子チェック**
+   - URLまたはContent-Typeから拡張子を取得
+   - サポート外の形式 → 例外をスローしてスキップ
+
+3. **ダウンロード失敗時の処理**
+   ```kotlin
+   downloadResult
+       .onSuccess { fileInfo ->
+           urlToPathMap[mediaItem.url] = fileInfo.relativePath
+           totalSize += fileSystem.getFileSize(...)
+       }
+       .onFailure { error ->
+           downloadFailureCount++
+           println("Failed to download ${mediaItem.url}: ${error.message}")
+           // 処理継続
+       }
+   ```
+
+4. **最終ステータス決定**:
+   ```kotlin
+   val status = when {
+       downloadFailureCount == 0 -> SaveStatus.COMPLETED
+       downloadFailureCount < mediaItems.size -> SaveStatus.PARTIAL
+       else -> SaveStatus.FAILED
+   }
+   ```
 
 ### UI実装
 
@@ -1005,13 +1079,21 @@ class IosFileSystem : FileSystem {
 }
 ```
 
+### 実装状況
+
+- ✅ 保存済みスレッド一覧画面（SavedThreadsScreen）
+- ✅ 保存済みスレッドの削除機能
+- ✅ URL-to-Pathマッピングによる正確な相対パス変換
+- ✅ ファイルサイズ・形式チェック（8000KB, GIF/JPG/PNG/WEBP/MP4/WEBM）
+- ✅ 進捗パーセンテージ表示（重み付き計算）
+- ✅ 共有ストレージ保存（Android: Documents、iOS: NSDocumentDirectory）
+
 ### 今後の拡張
 
-- [ ] 保存済みスレッド一覧画面の実装
-- [ ] 保存済みスレッドの削除機能
-- [ ] ストレージ容量管理（自動削除）
+- [ ] ストレージ容量管理（自動削除、古いスレッド自動クリーンアップ）
 - [ ] ZIP形式でのエクスポート機能
 - [ ] スレッド更新機能（差分ダウンロード）
+- [ ] 保存済みスレッドの検索・フィルタリング機能
 
 ---
 

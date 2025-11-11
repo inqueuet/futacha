@@ -18,9 +18,10 @@ import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.readImageDataFromUri
 
 @Composable
-actual fun ImagePickerButton(
+actual fun rememberImagePickerLauncher(
+    mimeType: String,
     onImageSelected: (ImageData) -> Unit
-) {
+): () -> Unit {
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -31,8 +32,19 @@ actual fun ImagePickerButton(
         }
     }
 
+    return {
+        launcher.launch(mimeType)
+    }
+}
+
+@Composable
+actual fun ImagePickerButton(
+    onImageSelected: (ImageData) -> Unit
+) {
+    val launchPicker = rememberImagePickerLauncher(onImageSelected = onImageSelected)
+
     Button(
-        onClick = { launcher.launch("image/*") }
+        onClick = { launchPicker() }
     ) {
         Icon(
             imageVector = Icons.Outlined.Image,

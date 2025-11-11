@@ -17,18 +17,28 @@ import com.valoser.futacha.shared.util.pickImage
 import kotlinx.coroutines.launch
 
 @Composable
+actual fun rememberImagePickerLauncher(
+    mimeType: String = "image/*",
+    onImageSelected: (ImageData) -> Unit
+): () -> Unit {
+    val scope = rememberCoroutineScope()
+
+    return {
+        scope.launch {
+            val imageData = pickImage()
+            imageData?.let(onImageSelected)
+        }
+    }
+}
+
+@Composable
 actual fun ImagePickerButton(
     onImageSelected: (ImageData) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val launchPicker = rememberImagePickerLauncher(onImageSelected = onImageSelected)
 
     Button(
-        onClick = {
-            scope.launch {
-                val imageData = pickImage()
-                imageData?.let(onImageSelected)
-            }
-        }
+        onClick = { launchPicker() }
     ) {
         Icon(
             imageVector = Icons.Outlined.Image,
