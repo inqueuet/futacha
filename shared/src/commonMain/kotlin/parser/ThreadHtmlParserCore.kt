@@ -93,6 +93,7 @@ internal object ThreadHtmlParserCore {
     private val htmlTagRegex = Regex("<[^>]+>")
     private val numericEntityRegex = Regex("&#(\\d+);")
     private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
+    private val videoExtensions = setOf("mp4", "webm", "mkv", "mov", "avi", "ts", "flv")
 
     fun parseThread(html: String): ThreadPage {
         if (html.length > MAX_HTML_SIZE) {
@@ -267,6 +268,34 @@ internal object ThreadHtmlParserCore {
             Logger.e(TAG, "Failed to parse thread HTML", e)
             throw ParserException("Failed to parse thread HTML", e)
         }
+    }
+
+    fun extractOpImageUrl(html: String, baseUrl: String? = null): String? {
+        if (html.isBlank()) return null
+        val normalized = html.replace("\r\n", "\n")
+        val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
+        val resolvedBaseUrl = canonical?.let(::extractBaseUrl)
+            ?: baseUrl?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_BASE_URL
+        val primaryUrl = srcLinkRegex.find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { resolveUrl(it, resolvedBaseUrl) }
+        if (primaryUrl != null && isVideoUrl(primaryUrl)) {
+            val thumbUrl = thumbImgRegex.find(normalized)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.let { resolveUrl(it, resolvedBaseUrl) }
+            return thumbUrl ?: primaryUrl
+        }
+        return primaryUrl
+    }
+
+    private fun isVideoUrl(url: String): Boolean {
+        val cleaned = url.substringBefore('?')
+        val extension = cleaned.substringAfterLast('.', "")
+        if (extension.isBlank()) return false
+        return extension.lowercase() in videoExtensions
     }
 
     private fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {

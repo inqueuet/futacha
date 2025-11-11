@@ -6,8 +6,13 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import com.valoser.futacha.shared.util.Logger
 
 interface BoardRepository {
@@ -68,6 +73,8 @@ class DefaultBoardRepository(
 
     companion object {
         private const val TAG = "DefaultBoardRepository"
+        private const val OP_IMAGE_LINE_LIMIT = 65
+        private const val OP_IMAGE_CONCURRENCY = 4
     }
 
     /**
@@ -96,7 +103,24 @@ class DefaultBoardRepository(
         ensureCookiesInitialized(board)
         val html = api.fetchCatalog(board, mode)
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-        return parser.parseCatalog(html, baseUrl)
+        val catalog = parser.parseCatalog(html, baseUrl)
+        if (catalog.isEmpty()) {
+            return catalog
+        }
+
+        val semaphore = Semaphore(OP_IMAGE_CONCURRENCY)
+        return coroutineScope {
+            catalog.map { item ->
+                async {
+                    val threadId = item.id
+                    if (threadId.isBlank()) return@async item
+                    val opImageUrl = semaphore.withPermit {
+                        resolveOpImageUrl(board, baseUrl, threadId)
+                    }
+                    if (opImageUrl.isNullOrBlank()) item else item.copy(thumbnailUrl = opImageUrl)
+                }
+            }.awaitAll()
+        }
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
@@ -160,5 +184,19 @@ class DefaultBoardRepository(
     override fun close() {
         // Close the underlying API if it supports cleanup
         (api as? AutoCloseable)?.close()
+    }
+
+    private suspend fun resolveOpImageUrl(
+        board: String,
+        baseUrl: String,
+        threadId: String
+    ): String? {
+        return runCatching {
+            val snippet = api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+            parser.extractOpImageUrl(snippet, baseUrl)
+        }.getOrElse { e ->
+            Logger.w(TAG, "Failed to resolve OP image for thread $threadId: ${e.message}")
+            null
+        }
     }
 }

@@ -5,10 +5,12 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.readUTF8Line
 
 class HttpBoardApi(
     private val client: HttpClient
@@ -102,6 +104,50 @@ class HttpBoardApi(
             throw e
         } catch (e: Exception) {
             val errorMsg = "Failed to fetch catalog from $url: ${e.message}"
+            println("HttpBoardApi: $errorMsg")
+            throw NetworkException(errorMsg, cause = e)
+        }
+    }
+
+    override suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int): String {
+        require(maxLines > 0) { "maxLines must be positive" }
+        val url = BoardUrlResolver.resolveThreadUrl(board, threadId)
+        return try {
+            val response: HttpResponse = client.get(url) {
+                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                headers[HttpHeaders.CacheControl] = "no-cache"
+                headers[HttpHeaders.Pragma] = "no-cache"
+                val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
+                    if (base.endsWith("/")) base else "$base/"
+                }
+                headers[HttpHeaders.Referrer] = refererBase
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorMsg = "HTTP error ${response.status.value} when fetching thread head from $url"
+                println("HttpBoardApi: $errorMsg")
+                throw NetworkException(errorMsg, response.status.value)
+            }
+
+            val channel = response.bodyAsChannel()
+            val builder = StringBuilder()
+            var linesRead = 0
+            try {
+                while (!channel.isClosedForRead && linesRead < maxLines) {
+                    val line = channel.readUTF8Line() ?: break
+                    builder.appendLine(line)
+                    linesRead++
+                }
+            } finally {
+                channel.cancel(null)
+            }
+            builder.toString()
+        } catch (e: NetworkException) {
+            throw e
+        } catch (e: Exception) {
+            val errorMsg = "Failed to fetch thread head from $url: ${e.message}"
             println("HttpBoardApi: $errorMsg")
             throw NetworkException(errorMsg, cause = e)
         }

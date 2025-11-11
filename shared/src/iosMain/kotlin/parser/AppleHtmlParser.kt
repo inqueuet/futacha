@@ -10,4 +10,7 @@ class AppleHtmlParser : HtmlParser {
         CatalogHtmlParserCore.parseCatalog(html, baseUrl)
 
     override fun parseThread(html: String): ThreadPage = ThreadHtmlParserCore.parseThread(html)
+
+    override fun extractOpImageUrl(html: String, baseUrl: String?): String? =
+        ThreadHtmlParserCore.extractOpImageUrl(html, baseUrl)
 }

@@ -1948,13 +1948,15 @@ private fun CatalogCard(
     // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
 
-    val imageRequest = ImageRequest.Builder(platformContext)
-        .data(item.thumbnailUrl)
-        .crossfade(true)
-        .size(targetSizePx, targetSizePx)
-        .precision(Precision.INEXACT)
-        .scale(Scale.FIT)
-        .build()
+    val imageRequest = remember(item.thumbnailUrl, targetSizePx) {
+        ImageRequest.Builder(platformContext)
+            .data(item.thumbnailUrl)
+            .crossfade(true)
+            .size(targetSizePx, targetSizePx)
+            .precision(Precision.INEXACT)
+            .scale(Scale.FIT)
+            .build()
+    }
 
     ElevatedCard(
         modifier = modifier
@@ -4169,11 +4171,15 @@ private fun ImagePreviewDialog(
                     }
                 }
         ) {
-            AsyncImage(
-                model = ImageRequest.Builder(platformContext)
+            val previewRequest = remember(imageUrl) {
+                ImageRequest.Builder(platformContext)
                     .data(imageUrl)
                     .crossfade(true)
-                    .build(),
+                    .build()
+            }
+
+            AsyncImage(
+                model = previewRequest,
                 contentDescription = "プレビュー画像",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

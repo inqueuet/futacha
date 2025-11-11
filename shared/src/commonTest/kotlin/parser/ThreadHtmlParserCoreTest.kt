@@ -57,6 +57,37 @@ class ThreadHtmlParserCoreTest {
     }
 
     @Test
+    fun extractOpImageUrl_returnsFirstSrcLinkFromSnippet() {
+        val snippet = sampleThreadHtml
+            .lineSequence()
+            .take(25)
+            .joinToString("\n")
+
+        val url = ThreadHtmlParserCore.extractOpImageUrl(snippet, "https://www.example.com/t")
+
+        assertEquals("https://www.example.com/t/src/1762145224666.jpg", url)
+    }
+
+    @Test
+    fun extractOpImageUrl_prefersThumbnailForVideo() {
+        val videoSnippet = """
+            <html>
+            <head><link rel="canonical" href="https://www.example.com/t/res/888.htm"></head>
+            <body>
+            <div class="thre">
+            画像ファイル名：<a href="/t/src/123456789.webm">123456789.webm</a>
+            <img src="/t/thumb/123456789s.jpg">
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val url = ThreadHtmlParserCore.extractOpImageUrl(videoSnippet, "https://www.example.com/t")
+
+        assertEquals("https://www.example.com/t/thumb/123456789s.jpg", url)
+    }
+
+    @Test
     fun parseThread_handlesLegacyCntdClassSpan() {
         val legacyHtml = sampleThreadHtml.replace("id=\"contdisp\"", "class=\"cntd\"")
         val page = ThreadHtmlParserCore.parseThread(legacyHtml)

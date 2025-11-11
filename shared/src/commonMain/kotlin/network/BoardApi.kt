@@ -18,6 +18,7 @@ interface BoardApi {
         board: String,
         mode: CatalogMode = CatalogMode.default
     ): String
+    suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int = 65): String
     suspend fun fetchThread(board: String, threadId: String): String
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
