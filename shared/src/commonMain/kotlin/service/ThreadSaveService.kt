@@ -58,6 +58,9 @@ class ThreadSaveService(
             fileSystem.createDirectory("$baseDir/images").getOrThrow()
             fileSystem.createDirectory("$baseDir/videos").getOrThrow()
 
+            // URL→ローカルパスのマッピング
+            val urlToPathMap = mutableMapOf<String, String>()
+
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
             var thumbnailPath: String? = null
@@ -85,6 +88,9 @@ class ThreadSaveService(
                 downloadResult
                     .onSuccess { fileInfo ->
                         totalSize += fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
+
+                        // URL→ローカルパスマッピングに追加
+                        urlToPathMap[mediaItem.url] = fileInfo.relativePath
 
                         when (fileInfo.fileType) {
                             FileType.THUMBNAIL -> {
@@ -114,17 +120,12 @@ class ThreadSaveService(
                     "投稿変換中... (${index + 1}/${posts.size})"
                 )
 
-                val localImagePath = if (post.imageUrl != null) {
-                    downloadMedia(post.imageUrl!!, threadId, MediaType.FULL_IMAGE, post.id)
-                        .getOrNull()?.relativePath
-                } else null
+                // マッピングからローカルパスを取得（再ダウンロードしない）
+                val localImagePath = post.imageUrl?.let { urlToPathMap[it] }
+                val localThumbnailPath = post.thumbnailUrl?.let { urlToPathMap[it] }
 
-                val localThumbnailPath = if (post.thumbnailUrl != null) {
-                    downloadMedia(post.thumbnailUrl!!, threadId, MediaType.THUMBNAIL, post.id)
-                        .getOrNull()?.relativePath
-                } else null
-
-                val convertedHtml = convertHtmlPaths(post.messageHtml, threadId)
+                // HTML内のURLを相対パスに変換
+                val convertedHtml = convertHtmlPaths(post.messageHtml, urlToPathMap)
 
                 savedPosts.add(
                     SavedPost(
@@ -138,7 +139,7 @@ class ThreadSaveService(
                         localImagePath = localImagePath,
                         originalThumbnailUrl = post.thumbnailUrl,
                         localThumbnailPath = localThumbnailPath,
-                        downloadSuccess = true
+                        downloadSuccess = localImagePath != null || post.imageUrl == null
                     )
                 )
             }
@@ -252,14 +253,14 @@ class ThreadSaveService(
     /**
      * HTML内のパスを相対パスに変換
      */
-    private fun convertHtmlPaths(html: String, threadId: String): String {
+    private fun convertHtmlPaths(html: String, urlToPathMap: Map<String, String>): String {
         var converted = html
 
         // 画像URLを相対パスに変換
         val imageRegex = """<img[^>]+src="([^"]+)"[^>]*>""".toRegex()
         converted = imageRegex.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
-            val relativePath = findLocalPath(originalUrl, threadId)
+            val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
                 matchResult.value.replace(originalUrl, relativePath)
             } else {
@@ -271,7 +272,7 @@ class ThreadSaveService(
         val linkRegex = """<a[^>]+href="([^"]+)"[^>]*>""".toRegex()
         converted = linkRegex.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
-            val relativePath = findLocalPath(originalUrl, threadId)
+            val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
                 matchResult.value.replace(originalUrl, relativePath)
             } else {
@@ -280,15 +281,6 @@ class ThreadSaveService(
         }
 
         return converted
-    }
-
-    /**
-     * ローカルパスを検索
-     */
-    private fun findLocalPath(url: String, threadId: String): String? {
-        // 実装簡略化のため、ここではnullを返す
-        // 実際の実装では、ダウンロード済みファイルのマッピングを保持して変換する
-        return null
     }
 
     /**
