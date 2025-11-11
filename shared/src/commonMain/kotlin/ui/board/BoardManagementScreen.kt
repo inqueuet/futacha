@@ -180,11 +180,13 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.min
@@ -2323,35 +2325,37 @@ fun ThreadScreen(
         onBack()
     }
 
-    val refreshThread: () -> Unit = remember(board.url, threadId, activeRepository) {
-        {
-            coroutineScope.launch {
-                uiState.value = ThreadUiState.Loading
-                try {
-                    val page = activeRepository.getThread(board.url, threadId)
-                    if (isActive) {
-                        uiState.value = ThreadUiState.Success(page)
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (isActive) {
-                        val message = when {
-                            e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
-                            e.message?.contains("404") == true -> "スレッドが見つかりません (404)"
-                            e.message?.contains("500") == true -> "サーバーエラー (500)"
-                            e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
-                            e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
-                            else -> "スレッドを読み込めませんでした: ${e.message ?: "不明なエラー"}"
+            val refreshThread: () -> Unit = remember(board.url, threadId, activeRepository) {
+                {
+                    coroutineScope.launch {
+                        uiState.value = ThreadUiState.Loading
+                        try {
+                            val page = withContext(Dispatchers.IO) {
+                                activeRepository.getThread(board.url, threadId)
+                            }
+                            if (isActive) {
+                                uiState.value = ThreadUiState.Success(page)
+                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            if (isActive) {
+                                val message = when {
+                                    e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
+                                    e.message?.contains("404") == true -> "スレッドが見つかりません (404)"
+                                    e.message?.contains("500") == true -> "サーバーエラー (500)"
+                                    e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
+                                    e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
+                                    else -> "スレッドを読み込めませんでした: ${e.message ?: "不明なエラー"}"
+                                }
+                                uiState.value = ThreadUiState.Error(message)
+                                snackbarHostState.showSnackbar(message)
+                            }
                         }
-                        uiState.value = ThreadUiState.Error(message)
-                        snackbarHostState.showSnackbar(message)
                     }
+                    Unit
                 }
             }
-            Unit
-        }
-    }
 
     LaunchedEffect(board.url, threadId) {
         refreshThread()

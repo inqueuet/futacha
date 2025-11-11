@@ -23,11 +23,20 @@ import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import version.VersionChecker
 import version.UpdateInfo
+
+private const val TAG = "FutachaApp"
 
 @OptIn(ExperimentalTime::class)
 @Composable
@@ -42,6 +51,12 @@ fun FutachaApp(
     FutachaTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             val coroutineScope = rememberCoroutineScope()
+
+            // Set coroutine scope for debouncing scroll position updates
+            LaunchedEffect(Unit) {
+                stateStore.setScrollDebounceScope(coroutineScope)
+            }
+
             // Use remember with Unit key to ensure single instance per composition lifecycle
             val remoteBoardRepository = remember(Unit) {
                 createRemoteBoardRepository()
@@ -67,7 +82,7 @@ fun FutachaApp(
                         val info = checker.checkForUpdate()
                         updateInfo = info
                     } catch (e: Exception) {
-                        println("FutachaApp: Version check failed: ${e.message}")
+                        Logger.e(TAG, "Version check failed", e)
                     }
                 }
             }
@@ -110,40 +125,67 @@ fun FutachaApp(
             val refreshHistoryEntries: suspend () -> Unit = refreshHistoryEntries@{
                 val snapshot = persistedHistory.toList()
                 if (snapshot.isEmpty()) return@refreshHistoryEntries
-                var firstError: Throwable? = null
-                snapshot.forEach { entry ->
-                    if (entry.boardUrl.isBlank() || entry.boardUrl.contains("example.com", ignoreCase = true)) {
-                        return@forEach
-                    }
-                    val boardBaseUrl = persistedBoards.firstOrNull { it.id == entry.boardId }?.url
-                        ?: runCatching {
-                            if (entry.boardUrl.isNotBlank()) {
-                                BoardUrlResolver.resolveBoardBaseUrl(entry.boardUrl)
-                            } else {
-                                null
+
+                // Fetch thread data in parallel, but collect updates first
+                val errors = mutableListOf<Throwable>()
+                val errorsMutex = Mutex()
+                val updatedEntries = mutableMapOf<String, ThreadHistoryEntry>()
+                val updatesMutex = Mutex()
+
+                coroutineScope {
+                    snapshot.map { entry ->
+                        async {
+                            if (entry.boardUrl.isBlank() || entry.boardUrl.contains("example.com", ignoreCase = true)) {
+                                return@async
                             }
-                        }.getOrNull()
-                    if (boardBaseUrl.isNullOrBlank()) {
-                        return@forEach
-                    }
-                    try {
-                        val page = remoteBoardRepository.getThread(boardBaseUrl, entry.threadId)
-                        val opPost = page.posts.firstOrNull()
-                        val updatedEntry = entry.copy(
-                            title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
-                            titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
-                            boardName = page.boardTitle ?: entry.boardName,
-                            replyCount = page.posts.size
-                        )
-                        updateHistoryEntry(updatedEntry)
-                    } catch (e: Exception) {
-                        println("FutachaApp: Failed to refresh history entry ${entry.threadId}: ${e.message}")
-                        if (firstError == null) {
-                            firstError = e
+                            val boardBaseUrl = persistedBoards.firstOrNull { it.id == entry.boardId }?.url
+                                ?: runCatching {
+                                    if (entry.boardUrl.isNotBlank()) {
+                                        BoardUrlResolver.resolveBoardBaseUrl(entry.boardUrl)
+                                    } else {
+                                        null
+                                    }
+                                }.getOrNull()
+                            if (boardBaseUrl.isNullOrBlank()) {
+                                return@async
+                            }
+                            try {
+                                val page = remoteBoardRepository.getThread(boardBaseUrl, entry.threadId)
+                                val opPost = page.posts.firstOrNull()
+                                val updatedEntry = entry.copy(
+                                    title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
+                                    titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
+                                    boardName = page.boardTitle ?: entry.boardName,
+                                    replyCount = page.posts.size
+                                )
+                                // Collect updates instead of writing immediately
+                                updatesMutex.withLock {
+                                    updatedEntries[entry.threadId] = updatedEntry
+                                }
+                            } catch (e: Exception) {
+                                Logger.e(TAG, "Failed to refresh history entry ${entry.threadId}", e)
+                                errorsMutex.withLock {
+                                    errors.add(e)
+                                }
+                            }
                         }
-                    }
+                    }.awaitAll()
                 }
-                firstError?.let { throw it }
+
+                // FIX: Batch update with proper synchronization to prevent race conditions
+                // Use a single setHistory call inside a critical section
+                if (updatedEntries.isNotEmpty()) {
+                    // Re-read current state to ensure we have the latest data
+                    val currentHistory = stateStore.history.first()
+                    val mergedHistory = currentHistory.map { entry: ThreadHistoryEntry ->
+                        updatedEntries[entry.threadId] ?: entry
+                    }
+                    // Single atomic write operation
+                    stateStore.setHistory(mergedHistory)
+                }
+
+                // Throw the first error if any occurred
+                errors.firstOrNull()?.let { throw it }
             }
             val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 val targetBoard = persistedBoards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
@@ -242,7 +284,19 @@ fun FutachaApp(
 
                     // Reduce LaunchedEffect dependencies to only essential keys to prevent excessive coroutine creation
                     // Use a key that only changes when navigating to a different thread
-                    LaunchedEffect(activeThreadId) {
+                    // Also use currentBoard.id to ensure we update when board context changes
+                    LaunchedEffect(activeThreadId, currentBoard.id) {
+                        // Check if entry already exists and is recent (within 5 seconds) to avoid unnecessary writes
+                        val existingEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
+                        val currentTime = Clock.System.now().toEpochMilliseconds()
+
+                        // Skip update if entry exists and was updated very recently (< 5 seconds ago)
+                        if (existingEntry != null &&
+                            existingEntry.boardId == currentBoard.id &&
+                            (currentTime - existingEntry.lastVisitedEpochMillis) < 5000) {
+                            return@LaunchedEffect
+                        }
+
                         val entry = ThreadHistoryEntry(
                             threadId = activeThreadId,
                             boardId = currentBoard.id,
@@ -250,10 +304,10 @@ fun FutachaApp(
                             titleImageUrl = historyThumbnail,
                             boardName = currentBoard.name,
                             boardUrl = historyThreadUrl,
-                            lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                            lastVisitedEpochMillis = currentTime,
                             replyCount = historyReplies,
-                            lastReadItemIndex = existingHistoryEntry?.lastReadItemIndex ?: 0,
-                            lastReadItemOffset = existingHistoryEntry?.lastReadItemOffset ?: 0
+                            lastReadItemIndex = existingEntry?.lastReadItemIndex ?: 0,
+                            lastReadItemOffset = existingEntry?.lastReadItemOffset ?: 0
                         )
                         val updatedHistory = buildList {
                             add(entry)
@@ -399,7 +453,7 @@ private fun normalizeBoardUrl(raw: String): String {
         trimmed.startsWith("https://", ignoreCase = true) -> trimmed
         trimmed.startsWith("http://", ignoreCase = true) -> {
             // Log warning but keep HTTP if user explicitly specified it
-            println("FutachaApp: Warning - HTTP URL detected. Connection may fail if cleartext traffic is disabled: $trimmed")
+            Logger.w(TAG, "HTTP URL detected. Connection may fail if cleartext traffic is disabled: $trimmed")
             trimmed
         }
         else -> "https://$trimmed"  // Default to HTTPS for security

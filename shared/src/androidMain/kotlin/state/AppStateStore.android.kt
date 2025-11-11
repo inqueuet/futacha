@@ -2,9 +2,11 @@ package com.valoser.futacha.shared.state
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 
 private const val DATASTORE_NAME = "futacha_state"
@@ -23,10 +25,14 @@ private class AndroidPlatformStateStorage(
     private val historyKey = stringPreferencesKey("history_json")
 
     override val boardsJson: Flow<String?> =
-        context.dataStore.data.map { prefs -> prefs[boardsKey] }
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[boardsKey] }
 
     override val historyJson: Flow<String?> =
-        context.dataStore.data.map { prefs -> prefs[historyKey] }
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[historyKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {

@@ -5,16 +5,17 @@ import android.net.Uri
 
 fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
     return try {
-        val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-        val bytes = inputStream.readBytes()
-        inputStream.close()
+        // Fix: Use 'use' to properly close InputStream even if an exception occurs
+        val bytes = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            inputStream.readBytes()
+        } ?: return null
 
-        // ファイル名を取得
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        val fileName = cursor?.use {
-            if (it.moveToFirst()) {
-                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (nameIndex >= 0) it.getString(nameIndex) else null
+        // Fix: Use projection to query only the column we need, instead of all columns
+        val projection = arrayOf(android.provider.OpenableColumns.DISPLAY_NAME)
+        val fileName = context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0) cursor.getString(nameIndex) else null
             } else null
         } ?: "image.jpg"
 

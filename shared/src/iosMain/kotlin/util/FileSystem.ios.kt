@@ -1,8 +1,13 @@
 package com.valoser.futacha.shared.util
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.*
@@ -19,12 +24,19 @@ class IosFileSystem : FileSystem {
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.Default) {
         runCatching {
             val absolutePath = resolveAbsolutePath(path)
-            fileManager.createDirectoryAtPath(
-                absolutePath,
-                withIntermediateDirectories = true,
-                attributes = null,
-                error = null
-            )
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    absolutePath,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success) {
+                    val nsError = error.value
+                    throw Exception("Failed to create directory: ${nsError?.localizedDescription ?: "Unknown error"}")
+                }
+            }
             Unit
         }
     }
@@ -33,17 +45,37 @@ class IosFileSystem : FileSystem {
         runCatching {
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
-            fileManager.createDirectoryAtPath(
-                parentDir,
-                withIntermediateDirectories = true,
-                attributes = null,
-                error = null
-            )
 
-            val data = bytes.usePinned { pinned ->
-                NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+            // Create parent directory with error checking
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
             }
-            data.writeToFile(absolutePath, atomically = true)
+
+            // Pin bytes and write atomically within the same scope for memory safety
+            val success = bytes.usePinned { pinned ->
+                val data = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+                memScoped {
+                    val error = alloc<ObjCObjectVar<NSError?>>()
+                    val writeSuccess = data.writeToFile(absolutePath, options = NSDataWritingAtomic, error = error.ptr)
+                    if (!writeSuccess) {
+                        throw Exception("Failed to write file: ${error.value?.localizedDescription ?: "Unknown error"}")
+                    }
+                    writeSuccess
+                }
+            }
+
+            if (!success) {
+                throw Exception("Failed to write file")
+            }
             Unit
         }
     }
@@ -52,19 +84,34 @@ class IosFileSystem : FileSystem {
         runCatching {
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
-            fileManager.createDirectoryAtPath(
-                parentDir,
-                withIntermediateDirectories = true,
-                attributes = null,
-                error = null
-            )
 
-            (content as NSString).writeToFile(
-                absolutePath,
-                atomically = true,
-                encoding = NSUTF8StringEncoding,
-                error = null
-            )
+            // Create parent directory with error checking
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
+            }
+
+            // Write string with error checking
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = (content as NSString).writeToFile(
+                    absolutePath,
+                    atomically = true,
+                    encoding = NSUTF8StringEncoding,
+                    error = error.ptr
+                )
+                if (!success) {
+                    throw Exception("Failed to write string: ${error.value?.localizedDescription ?: "Unknown error"}")
+                }
+            }
             Unit
         }
     }
@@ -75,7 +122,12 @@ class IosFileSystem : FileSystem {
             val data = NSData.dataWithContentsOfFile(absolutePath)
                 ?: throw Exception("File not found: $absolutePath")
 
-            val bytes = ByteArray(data.length.toInt())
+            val length = data.length.toInt()
+            if (length <= 0) {
+                return@runCatching ByteArray(0)
+            }
+
+            val bytes = ByteArray(length)
             bytes.usePinned { pinned ->
                 memcpy(pinned.addressOf(0), data.bytes, data.length)
             }
@@ -86,18 +138,31 @@ class IosFileSystem : FileSystem {
     override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.Default) {
         runCatching {
             val absolutePath = resolveAbsolutePath(path)
-            NSString.stringWithContentsOfFile(
-                absolutePath,
-                encoding = NSUTF8StringEncoding,
-                error = null
-            ) as String? ?: throw Exception("File not found: $absolutePath")
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val content = NSString.stringWithContentsOfFile(
+                    absolutePath,
+                    encoding = NSUTF8StringEncoding,
+                    error = error.ptr
+                )
+                if (content == null) {
+                    throw Exception("Failed to read file: ${error.value?.localizedDescription ?: "File not found"}")
+                }
+                content as String
+            }
         }
     }
 
     override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.Default) {
         runCatching {
             val absolutePath = resolveAbsolutePath(path)
-            fileManager.removeItemAtPath(absolutePath, error = null)
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
+                if (!success) {
+                    throw Exception("Failed to delete file: ${error.value?.localizedDescription ?: "Unknown error"}")
+                }
+            }
             Unit
         }
     }
@@ -105,7 +170,18 @@ class IosFileSystem : FileSystem {
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.Default) {
         runCatching {
             val absolutePath = resolveAbsolutePath(path)
-            fileManager.removeItemAtPath(absolutePath, error = null)
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
+                if (!success) {
+                    val nsError = error.value
+                    // If file doesn't exist, consider it a success (already deleted)
+                    if (nsError?.code == 4L) { // NSFileNoSuchFileError
+                        return@runCatching Unit
+                    }
+                    throw Exception("Failed to delete recursively: ${nsError?.localizedDescription ?: "Unknown error"}")
+                }
+            }
             Unit
         }
     }

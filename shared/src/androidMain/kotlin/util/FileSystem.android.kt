@@ -106,20 +106,53 @@ class AndroidFileSystem(
      * 共有Documentsフォルダのパスを取得
      */
     private fun getPublicDocumentsDirectory(): String {
-        val documentsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10以降: getExternalStoragePublicDirectory は非推奨だが Documents は引き続き使用可能
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-        } else {
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-        }
+        try {
+            val documentsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10以降: getExternalStoragePublicDirectory は非推奨だが Documents は引き続き使用可能
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            } else {
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            }
 
-        // アプリ専用のサブフォルダを作成
-        val appDir = File(documentsDir, "futacha")
-        if (!appDir.exists()) {
-            appDir.mkdirs()
-        }
+            // Null check for rare cases where external storage is not available
+            if (documentsDir == null) {
+                Logger.e("FileSystem.android", "External storage documents directory is null, falling back to internal storage")
+                return context.filesDir.absolutePath
+            }
 
-        return appDir.absolutePath
+            // アプリ専用のサブフォルダを作成
+            val appDir = File(documentsDir, "futacha")
+            if (!appDir.exists()) {
+                val success = appDir.mkdirs()
+                if (!success && !appDir.exists()) {
+                    // mkdirs failed and directory still doesn't exist
+                    Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}, falling back to internal storage")
+                    return File(context.filesDir, "futacha").apply {
+                        if (!exists()) {
+                            mkdirs()
+                        }
+                    }.absolutePath
+                }
+            }
+
+            return appDir.absolutePath
+        } catch (e: SecurityException) {
+            Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
+            // Fallback to internal storage
+            return File(context.filesDir, "futacha").apply {
+                if (!exists()) {
+                    mkdirs()
+                }
+            }.absolutePath
+        } catch (e: Exception) {
+            Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
+            // Fallback to internal storage
+            return File(context.filesDir, "futacha").apply {
+                if (!exists()) {
+                    mkdirs()
+                }
+            }.absolutePath
+        }
     }
 
     /**

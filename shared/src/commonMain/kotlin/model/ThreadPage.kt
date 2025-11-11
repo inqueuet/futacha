@@ -5,5 +5,7 @@ data class ThreadPage(
     val boardTitle: String?,
     val expiresAtLabel: String?,
     val deletedNotice: String?,
-    val posts: List<Post>
+    val posts: List<Post>,
+    val isTruncated: Boolean = false,
+    val truncationReason: String? = null
 )

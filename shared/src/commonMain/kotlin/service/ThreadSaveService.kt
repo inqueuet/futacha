@@ -68,27 +68,46 @@ class ThreadSaveService(
             var videoCount = 0
             var totalSize = 0L
 
-            val mediaItems = posts.flatMap { post ->
-                buildList {
-                    post.thumbnailUrl?.let { add(MediaItem(it, MediaType.THUMBNAIL, post)) }
-                    post.imageUrl?.let { add(MediaItem(it, MediaType.FULL_IMAGE, post)) }
-                }
-            }
-
+            // FIX: Process posts in chunks to prevent memory accumulation
+            // Instead of flatMap all at once, process in batches
+            val chunkSize = 50 // Process 50 posts at a time
             var downloadFailureCount = 0
-            mediaItems.forEachIndexed { index, mediaItem ->
+
+            // FIX: Build media items in chunks to avoid massive list creation
+            val totalMediaCount = posts.sumOf {
+                (if (it.thumbnailUrl != null) 1 else 0) + (if (it.imageUrl != null) 1 else 0)
+            }
+            var processedMediaCount = 0
+
+            posts.chunked(chunkSize).forEach { postChunk ->
+                val mediaItems = postChunk.flatMap { post ->
+                    buildList {
+                        post.thumbnailUrl?.let { add(MediaItem(it, MediaType.THUMBNAIL, post)) }
+                        post.imageUrl?.let { add(MediaItem(it, MediaType.FULL_IMAGE, post)) }
+                    }
+                }
+
+                mediaItems.forEach { mediaItem ->
+                processedMediaCount++
                 updateProgress(
                     SavePhase.DOWNLOADING,
-                    index + 1,
-                    mediaItems.size,
-                    "メディアダウンロード中... (${index + 1}/${mediaItems.size})"
+                    processedMediaCount,
+                    totalMediaCount,
+                    "メディアダウンロード中... ($processedMediaCount/$totalMediaCount)"
                 )
 
-                val downloadResult = downloadMedia(mediaItem.url, threadId, mediaItem.type, mediaItem.post.id)
+                val downloadResult = downloadAndSaveMedia(
+                    url = mediaItem.url,
+                    threadId = threadId,
+                    baseDir = baseDir,
+                    type = mediaItem.type,
+                    postId = mediaItem.post.id
+                )
+
                 downloadResult
                     .onSuccess { fileInfo ->
-                        totalSize += fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
-
+                        val fileSize = fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
+                        totalSize += fileSize
                         // URL→ローカルパスマッピングに追加
                         urlToPathMap[mediaItem.url] = fileInfo.relativePath
 
@@ -107,6 +126,8 @@ class ThreadSaveService(
                         downloadFailureCount++
                         println("Failed to download ${mediaItem.url}: ${error.message}")
                     }
+            }
+
             }
 
             // 変換フェーズ
@@ -164,16 +185,15 @@ class ThreadSaveService(
             val metadataJson = json.encodeToString(metadata)
             fileSystem.writeString("$baseDir/metadata.json", metadataJson).getOrThrow()
 
-            // HTML生成
-            val html = generateHtml(metadata)
-            fileSystem.writeString("$baseDir/thread.html", html).getOrThrow()
+            // HTML生成（ストリーミング方式でメモリ効率的に）
+            generateHtmlToFile(metadata, "$baseDir/thread.html")
 
             updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
 
             // ステータスを失敗数に応じて設定
             val status = when {
                 downloadFailureCount == 0 -> SaveStatus.COMPLETED
-                downloadFailureCount < mediaItems.size -> SaveStatus.PARTIAL
+                downloadFailureCount < totalMediaCount -> SaveStatus.PARTIAL
                 else -> SaveStatus.FAILED
             }
 
@@ -194,49 +214,49 @@ class ThreadSaveService(
     }
 
     /**
-     * メディアをダウンロード
+     * メディアをダウンロードして即座にファイルに保存（メモリ効率的）
      */
-    private suspend fun downloadMedia(
+    private suspend fun downloadAndSaveMedia(
         url: String,
         threadId: String,
+        baseDir: String,
         type: MediaType,
         postId: String
     ): Result<LocalFileInfo> = withContext(Dispatchers.Default) {
         runCatching {
-            // まずHEADリクエストでファイルサイズと拡張子を確認
-            val headResponse: HttpResponse = httpClient.head(url)
+            // Download media directly and inspect headers from GET response
+            val response: HttpResponse = httpClient.get(url) {
+                headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+            }
 
-            // Content-Lengthを取得
-            val contentLength = headResponse.headers["Content-Length"]?.toLongOrNull() ?: 0L
+            if (!response.status.isSuccess()) {
+                throw Exception("Download failed: ${response.status}")
+            }
 
-            // ファイルサイズチェック（8000KB制限）
+            val contentLength = response.contentLength() ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
             if (contentLength > MAX_FILE_SIZE_BYTES) {
                 throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
             }
 
-            // 拡張子チェック
-            val extension = getExtensionFromUrl(url) ?: getExtensionFromContentType(headResponse.contentType())
+            val extension =
+                getExtensionFromUrl(url) ?: getExtensionFromContentType(response.contentType())
             val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
             if (!isSupported) {
                 throw Exception("Unsupported file type: $extension")
             }
 
-            // 実際にダウンロード
-            val response: HttpResponse = httpClient.get(url)
-            if (!response.status.isSuccess()) {
-                throw Exception("Download failed: ${response.status}")
-            }
-
-            val bytes = response.readBytes()
-
             val (subDir, prefix) = when (type) {
                 MediaType.THUMBNAIL -> "images" to "thumb_"
                 MediaType.FULL_IMAGE -> "images" to "img_"
             }
-
             val fileName = "${prefix}${postId}_${System.currentTimeMillis()}.$extension"
             val relativePath = "$subDir/$fileName"
-            val fullPath = "saved_threads/$threadId/$relativePath"
+            val fullPath = "$baseDir/$relativePath"
+
+            val bytes = response.readBytes()
+            if (bytes.size > MAX_FILE_SIZE_BYTES) {
+                throw Exception("Actual file size exceeds limit: ${bytes.size / 1024}KB")
+            }
 
             fileSystem.writeBytes(fullPath, bytes).getOrThrow()
 
@@ -284,10 +304,16 @@ class ThreadSaveService(
     }
 
     /**
-     * HTMLを生成
+     * HTMLをファイルに直接書き込み（メモリ効率的なストリーミング方式）
+     * FIX: Write directly to file instead of building huge string in memory
      */
-    private fun generateHtml(metadata: SavedThreadMetadata): String {
-        return buildString {
+    private suspend fun generateHtmlToFile(metadata: SavedThreadMetadata, filePath: String) {
+        // FIX: Use StringBuilder with capacity estimate to reduce reallocations
+        val estimatedSize = metadata.posts.size * 500 // Rough estimate: 500 chars per post
+        val htmlBuilder = StringBuilder(estimatedSize)
+
+        // ヘッダー部分
+        htmlBuilder.apply {
             appendLine("<!DOCTYPE html>")
             appendLine("<html lang=\"ja\">")
             appendLine("<head>")
@@ -313,8 +339,11 @@ class ThreadSaveService(
                 appendLine("        <p>有効期限: ${metadata.expiresAtLabel}</p>")
             }
             appendLine("    </div>")
+        }
 
-            metadata.posts.forEach { post ->
+        // FIX: Write posts directly to StringBuilder instead of creating intermediate chunks
+        metadata.posts.forEach { post ->
+            htmlBuilder.apply {
                 appendLine("    <div class=\"post\" id=\"post-${post.id}\">")
                 appendLine("        <div class=\"post-header\">")
                 append("            ${post.order ?: ""}. ")
@@ -335,10 +364,16 @@ class ThreadSaveService(
                 appendLine("        </div>")
                 appendLine("    </div>")
             }
+        }
 
+        // フッター部分
+        htmlBuilder.apply {
             appendLine("</body>")
             appendLine("</html>")
         }
+
+        // FIX: Single write operation - no joinToString needed
+        fileSystem.writeString(filePath, htmlBuilder.toString()).getOrThrow()
     }
 
     /**

@@ -6,6 +6,9 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import com.valoser.futacha.shared.util.Logger
 
 interface BoardRepository {
     suspend fun getCatalog(
@@ -59,19 +62,29 @@ class DefaultBoardRepository(
 ) : BoardRepository {
     // Track which boards have been initialized with cookies
     private val initializedBoards = mutableSetOf<String>()
+    // Fix: Use Mutex to prevent race condition when multiple coroutines
+    // try to initialize the same board simultaneously
+    private val boardInitMutex = Mutex()
+
+    companion object {
+        private const val TAG = "DefaultBoardRepository"
+    }
 
     /**
      * Ensures cookies are initialized for the given board.
      * This should be called before any operations that require cookies.
      */
     private suspend fun ensureCookiesInitialized(board: String) {
-        if (!initializedBoards.contains(board)) {
-            try {
-                api.fetchCatalogSetup(board)
-                initializedBoards.add(board)
-            } catch (e: Exception) {
-                println("DefaultBoardRepository: Failed to initialize cookies for board $board: ${e.message}")
-                // Continue anyway - the operation might still work
+        // Fix: Wrap the check-then-act in a mutex to prevent race conditions
+        boardInitMutex.withLock {
+            if (!initializedBoards.contains(board)) {
+                try {
+                    api.fetchCatalogSetup(board)
+                    initializedBoards.add(board)
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Failed to initialize cookies for board $board", e)
+                    // Continue anyway - the operation might still work
+                }
             }
         }
     }

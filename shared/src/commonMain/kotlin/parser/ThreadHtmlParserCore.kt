@@ -3,7 +3,9 @@ package com.valoser.futacha.shared.parser
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.util.Logger
 import kotlin.text.concatToString
+import kotlin.time.ExperimentalTime
 
 /**
  * Minimal-yet-robust parser that understands Futaba thread markup.
@@ -12,10 +14,14 @@ import kotlin.text.concatToString
  * instead relies on lightweight regular expressions that have been verified against the captures
  * checked into `/example/thread.txt`.
  */
+@OptIn(ExperimentalTime::class)
 internal object ThreadHtmlParserCore {
+    private const val TAG = "ThreadHtmlParserCore"
     private const val DEFAULT_BASE_URL = "https://www.example.com"
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
     private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
+    private const val MAX_PARSE_TIME_MS = 5000L // 5 second timeout for parsing
+    private const val MAX_SINGLE_BLOCK_SIZE = 500_000 // 500KB max for single table block
 
     private val canonicalRegex = Regex(
         pattern = "<link[^>]+rel=['\"]canonical['\"][^>]+href=['\"]([^'\"]+)['\"]",
@@ -75,9 +81,9 @@ internal object ThreadHtmlParserCore {
         pattern = "<img[^>]+src=['\"]([^'\"]*/thumb/[^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
-    // Simplified regex to prevent ReDoS - match saidane links more carefully
+    // Simplified regex to prevent ReDoS - match saidane links with limited backtracking
     private val saidaneRegex = Regex(
-        pattern = "<a[^>]*class=['\"]?sod['\"]?[^>]*>([^<]+)</a>",
+        pattern = "<a[^>]{0,200}class=['\"]?sod['\"]?[^>]{0,200}>([^<]{0,500})</a>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val posterIdRegex = Regex("ID:[^\\s<]+")
@@ -125,33 +131,83 @@ internal object ThreadHtmlParserCore {
             val opBlock = extractOpBlock(normalized, firstReplyIndex)
             opBlock?.let { parsePostBlock(it, baseUrl, isOp = true)?.let(posts::add) }
 
+            var isTruncated = false
+            var truncationReason: String? = null
+
             if (firstReplyIndex != -1) {
                 val repliesHtml = normalized.substring(firstReplyIndex)
                 var searchStart = 0
                 var iterationCount = 0
-                val maxIterations = 5000 // Reduced to prevent ANR - allows up to 5000 posts
-                val maxPosts = 3000 // Additional safety: maximum number of posts to parse
+                // FIX: Reduce max iterations to prevent ANR - 1500 posts is more reasonable
+                val maxIterations = 1500
+                // FIX: Reduce max posts to prevent memory issues
+                val maxPosts = 2050
+                var lastSearchStart = -1 // Track previous position to detect stalling
+
+                // FIX: Add parse timeout to prevent ANR on malicious HTML
+                val parseStartTime = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
                 while (searchStart < repliesHtml.length &&
                        iterationCount < maxIterations &&
                        posts.size < maxPosts) {
                     iterationCount++
-                    val tableStart = tableRegex.find(repliesHtml, searchStart) ?: break
-                    val tableEnd = tableEndRegex.find(repliesHtml, tableStart.range.last) ?: break
+
+                    // FIX: Check for timeout every 50 iterations to prevent excessive checks
+                    if (iterationCount % 50 == 0) {
+                        val elapsed = kotlin.time.Clock.System.now().toEpochMilliseconds() - parseStartTime
+                        if (elapsed > MAX_PARSE_TIME_MS) {
+                            Logger.e(TAG, "Parse timeout exceeded ($elapsed ms), stopping parse")
+                            isTruncated = true
+                            truncationReason = "Parse timeout exceeded (${elapsed}ms > ${MAX_PARSE_TIME_MS}ms)"
+                            break
+                        }
+                    }
+
+                    // Safety check: detect if searchStart hasn't moved
+                    if (searchStart == lastSearchStart) {
+                        Logger.e(TAG, "Search position stalled at $searchStart, stopping parse")
+                        isTruncated = true
+                        truncationReason = "Parse error: search position stalled"
+                        break
+                    }
+                    lastSearchStart = searchStart
+
+                    // Find table start with safety check for regex performance
+                    val tableStart = try {
+                        tableRegex.find(repliesHtml, searchStart)
+                    } catch (e: Exception) {
+                        Logger.e(TAG, "Regex exception during table start search", e)
+                        isTruncated = true
+                        truncationReason = "Parse error: regex exception"
+                        break
+                    } ?: break
+
+                    // Find table end with safety check
+                    val tableEnd = try {
+                        tableEndRegex.find(repliesHtml, tableStart.range.last)
+                    } catch (e: Exception) {
+                        Logger.e(TAG, "Regex exception during table end search", e)
+                        isTruncated = true
+                        truncationReason = "Parse error: regex exception"
+                        break
+                    } ?: break
 
                     // Safety check to prevent infinite loop from invalid ranges
                     if (tableEnd.range.last <= tableStart.range.last) {
-                        println("ThreadHtmlParserCore: Invalid table range detected, stopping parse")
+                        Logger.e(TAG, "Invalid table range detected, stopping parse")
+                        isTruncated = true
+                        truncationReason = "Parse error: invalid table range"
                         break
                     }
 
                     val block = repliesHtml.substring(tableStart.range.first, tableEnd.range.last + 1)
 
+                    // FIX: Stricter size limits to prevent ReDoS
                     if (block.length > MAX_CHUNK_SIZE) {
-                        println("ThreadHtmlParserCore: Warning - large table block ${block.length} bytes")
-                        // Limit processing to prevent ReDoS attacks
-                        if (block.length > MAX_CHUNK_SIZE * 5) {
-                            println("ThreadHtmlParserCore: Skipping block exceeding safe size limit")
+                        Logger.w(TAG, "Large table block ${block.length} bytes")
+                        // FIX: Reduce max single block size from 1MB to 500KB
+                        if (block.length > MAX_SINGLE_BLOCK_SIZE) {
+                            Logger.w(TAG, "Skipping block exceeding safe size limit (${block.length} > $MAX_SINGLE_BLOCK_SIZE)")
                             searchStart = tableEnd.range.last + 1
                             continue
                         }
@@ -163,29 +219,37 @@ internal object ThreadHtmlParserCore {
                         parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
                     }
 
-                    searchStart = tableEnd.range.last + 1
+                    val newSearchStart = tableEnd.range.last + 1
 
-                    // Safety check to prevent searchStart from going backwards or staying the same
-                    if (searchStart <= tableEnd.range.last) {
-                        println("ThreadHtmlParserCore: Search position not advancing, stopping parse")
+                    // Safety check to prevent searchStart from going backwards
+                    if (newSearchStart <= searchStart) {
+                        Logger.e(TAG, "Search position not advancing properly (old=$searchStart, new=$newSearchStart), stopping parse")
+                        isTruncated = true
+                        truncationReason = "Parse error: search position not advancing"
                         break
                     }
+
+                    searchStart = newSearchStart
                 }
 
                 if (iterationCount >= maxIterations) {
-                    println("ThreadHtmlParserCore: Reached maximum iteration limit ($maxIterations), thread may be truncated")
+                    Logger.w(TAG, "Reached maximum iteration limit ($maxIterations), thread may be truncated")
+                    isTruncated = true
+                    truncationReason = "Exceeded maximum iteration limit ($maxIterations)"
                 }
                 if (posts.size >= maxPosts) {
-                    println("ThreadHtmlParserCore: Reached maximum post limit ($maxPosts), thread truncated")
+                    Logger.w(TAG, "Reached maximum post limit ($maxPosts), thread truncated")
+                    isTruncated = true
+                    truncationReason = "Thread has more than $maxPosts posts"
                 }
             }
 
-            val referenceCounts = computeReferencedCounts(posts)
-            val quoteReferenceMap = buildQuoteReferenceMap(posts)
+            // FIX: Build references and counts in a single pass to reduce CPU usage
+            val referenceData = buildReferencesAndCounts(posts)
             val postsWithReferences = posts.map { post ->
                 post.copy(
-                    referencedCount = referenceCounts[post.id] ?: 0,
-                    quoteReferences = quoteReferenceMap[post.id].orEmpty()
+                    referencedCount = referenceData.counts[post.id] ?: 0,
+                    quoteReferences = referenceData.references[post.id].orEmpty()
                 )
             }
 
@@ -195,10 +259,12 @@ internal object ThreadHtmlParserCore {
                 boardTitle = boardTitle,
                 expiresAtLabel = expiresAt,
                 deletedNotice = deletedNotice,
-                posts = postsWithReferences
+                posts = postsWithReferences,
+                isTruncated = isTruncated,
+                truncationReason = truncationReason
             )
         } catch (e: Exception) {
-            println("ThreadHtmlParserCore: Failed to parse thread HTML: ${e.message}")
+            Logger.e(TAG, "Failed to parse thread HTML", e)
             throw ParserException("Failed to parse thread HTML", e)
         }
     }
@@ -278,8 +344,7 @@ internal object ThreadHtmlParserCore {
     }
 
     private fun spanRegex(className: String): Regex = Regex(
-        pattern = "<span(?=[^>]*class=(?:['\"])?$className(?:['\"])?)" +
-            "[^>]*>([\\s\\S]*?)</span>",
+        pattern = "<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>([^<]*(?:<(?!/span>)[^<]*)*)</span>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
 
@@ -330,41 +395,59 @@ internal object ThreadHtmlParserCore {
         }
     }
 
-    private fun computeReferencedCounts(posts: List<Post>): Map<String, Int> {
-        if (posts.isEmpty()) return emptyMap()
+    // FIX: Combine reference counting and map building to avoid O(n²) complexity
+    private data class ReferenceData(
+        val counts: Map<String, Int>,
+        val references: Map<String, List<QuoteReference>>
+    )
+
+    private fun buildReferencesAndCounts(posts: List<Post>): ReferenceData {
+        if (posts.isEmpty()) return ReferenceData(emptyMap(), emptyMap())
+
+        // Build indexes once
         val posterIdIndex = buildPosterIdIndex(posts)
         val messageLineIndex = buildMessageLineIndex(posts)
+
         val counts = mutableMapOf<String, Int>()
+        val references = mutableMapOf<String, MutableList<QuoteReference>>()
+
+        // Single pass through posts to build both counts and references
         posts.forEach { post: Post ->
             if (post.messageHtml.isBlank()) return@forEach
-            extractQuoteLines(post.messageHtml).forEach { quoteLine: String ->
-                resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex).forEach { targetId: String ->
-                    counts[targetId] = counts[targetId]?.plus(1) ?: 1
+            val quoteLines = extractQuoteLines(post.messageHtml)
+            if (quoteLines.isEmpty()) return@forEach
+
+            val postReferences = mutableListOf<QuoteReference>()
+            quoteLines.forEach { quoteLine: String ->
+                val targets = resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex)
+                if (targets.isNotEmpty()) {
+                    // Update counts
+                    targets.forEach { targetId ->
+                        counts[targetId] = counts[targetId]?.plus(1) ?: 1
+                    }
+                    // Build reference
+                    postReferences.add(
+                        QuoteReference(
+                            text = quoteLine.trim(),
+                            targetPostIds = targets.toList()
+                        )
+                    )
                 }
             }
+            if (postReferences.isNotEmpty()) {
+                references[post.id] = postReferences
+            }
         }
-        return counts
+
+        return ReferenceData(counts, references)
+    }
+
+    private fun computeReferencedCounts(posts: List<Post>): Map<String, Int> {
+        return buildReferencesAndCounts(posts).counts
     }
 
     private fun buildQuoteReferenceMap(posts: List<Post>): Map<String, List<QuoteReference>> {
-        if (posts.isEmpty()) return emptyMap()
-        val posterIdIndex = buildPosterIdIndex(posts)
-        val messageLineIndex = buildMessageLineIndex(posts)
-        val map = mutableMapOf<String, MutableList<QuoteReference>>()
-        posts.forEach { post: Post ->
-            val quoteLines = extractQuoteLines(post.messageHtml)
-            if (quoteLines.isEmpty()) return@forEach
-            val references = quoteLines.map { quoteLine: String ->
-                val targets: List<String> = resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex)
-                    .toList()
-                QuoteReference(
-                    text = quoteLine.trim(),
-                    targetPostIds = targets
-                )
-            }
-            map[post.id] = references.toMutableList()
-        }
-        return map
+        return buildReferencesAndCounts(posts).references
     }
 
     private fun resolveUrl(path: String, baseUrl: String): String {

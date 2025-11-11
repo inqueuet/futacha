@@ -5,6 +5,8 @@ import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
@@ -20,57 +22,36 @@ class SavedThreadRepository(
         prettyPrint = true
         ignoreUnknownKeys = true
     }
+    private val indexMutex = Mutex()
 
     private val indexPath = "saved_threads/index.json"
 
     /**
      * インデックスを読み込み
      */
-    suspend fun loadIndex(): SavedThreadIndex = withContext(Dispatchers.Default) {
-        fileSystem.readString(indexPath)
-            .map { jsonString ->
-                try {
-                    json.decodeFromString<SavedThreadIndex>(jsonString)
-                } catch (e: SerializationException) {
-                    // インデックスファイルが壊れている場合は空のインデックスを返す
-                    SavedThreadIndex(
-                        threads = emptyList(),
-                        totalSize = 0L,
-                        lastUpdated = System.currentTimeMillis()
-                    )
-                }
-            }
-            .getOrElse {
-                // ファイルが存在しない場合は空のインデックスを返す
-                SavedThreadIndex(
-                    threads = emptyList(),
-                    totalSize = 0L,
-                    lastUpdated = System.currentTimeMillis()
-                )
-            }
+    suspend fun loadIndex(): SavedThreadIndex = withIndexLock {
+        readIndexUnlocked()
     }
 
     /**
      * インデックスを保存
      */
-    suspend fun saveIndex(index: SavedThreadIndex): Result<Unit> = withContext(Dispatchers.Default) {
+    suspend fun saveIndex(index: SavedThreadIndex): Result<Unit> = withIndexLock {
         runCatching {
-            fileSystem.createDirectory("saved_threads").getOrThrow()
-            val jsonString = json.encodeToString(index)
-            fileSystem.writeString(indexPath, jsonString).getOrThrow()
+            saveIndexUnlocked(index)
         }
     }
 
     /**
      * スレッドをインデックスに追加
      */
-    suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = withContext(Dispatchers.Default) {
+    suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = withIndexLock {
         runCatching {
-            val currentIndex = loadIndex()
+            val currentIndex = readIndexUnlocked()
             val updatedThreads = currentIndex.threads
-                .filterNot { it.threadId == thread.threadId } // 既存のエントリを削除
-                .plus(thread) // 新しいエントリを追加
-                .sortedByDescending { it.savedAt } // 保存日時の降順でソート
+                .filterNot { it.threadId == thread.threadId }
+                .plus(thread)
+                .sortedByDescending { it.savedAt }
 
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
@@ -78,16 +59,16 @@ class SavedThreadRepository(
                 lastUpdated = System.currentTimeMillis()
             )
 
-            saveIndex(updatedIndex).getOrThrow()
+            saveIndexUnlocked(updatedIndex)
         }
     }
 
     /**
      * スレッドをインデックスから削除
      */
-    suspend fun removeThreadFromIndex(threadId: String): Result<Unit> = withContext(Dispatchers.Default) {
+    suspend fun removeThreadFromIndex(threadId: String): Result<Unit> = withIndexLock {
         runCatching {
-            val currentIndex = loadIndex()
+            val currentIndex = readIndexUnlocked()
             val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
 
             val updatedIndex = SavedThreadIndex(
@@ -96,7 +77,7 @@ class SavedThreadRepository(
                 lastUpdated = System.currentTimeMillis()
             )
 
-            saveIndex(updatedIndex).getOrThrow()
+            saveIndexUnlocked(updatedIndex)
         }
     }
 
@@ -114,22 +95,29 @@ class SavedThreadRepository(
     /**
      * スレッドを削除
      */
-    suspend fun deleteThread(threadId: String): Result<Unit> = withContext(Dispatchers.Default) {
+    suspend fun deleteThread(threadId: String): Result<Unit> = withIndexLock {
         runCatching {
-            // ディレクトリを削除
             val threadPath = "saved_threads/$threadId"
             fileSystem.deleteRecursively(threadPath).getOrThrow()
 
-            // インデックスから削除
-            removeThreadFromIndex(threadId).getOrThrow()
+            val currentIndex = readIndexUnlocked()
+            val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
+
+            val updatedIndex = SavedThreadIndex(
+                threads = updatedThreads,
+                totalSize = updatedThreads.sumOf { it.totalSize },
+                lastUpdated = System.currentTimeMillis()
+            )
+
+            saveIndexUnlocked(updatedIndex)
         }
     }
 
     /**
      * すべての保存済みスレッドを取得
      */
-    suspend fun getAllThreads(): List<SavedThread> = withContext(Dispatchers.Default) {
-        loadIndex().threads
+    suspend fun getAllThreads(): List<SavedThread> = withIndexLock {
+        readIndexUnlocked().threads
     }
 
     /**
@@ -143,15 +131,15 @@ class SavedThreadRepository(
     /**
      * 合計ストレージサイズを取得
      */
-    suspend fun getTotalSize(): Long = withContext(Dispatchers.Default) {
-        loadIndex().totalSize
+    suspend fun getTotalSize(): Long = withIndexLock {
+        readIndexUnlocked().totalSize
     }
 
     /**
      * スレッド数を取得
      */
-    suspend fun getThreadCount(): Int = withContext(Dispatchers.Default) {
-        loadIndex().threads.size
+    suspend fun getThreadCount(): Int = withIndexLock {
+        readIndexUnlocked().threads.size
     }
 
     /**
@@ -164,9 +152,9 @@ class SavedThreadRepository(
     /**
      * スレッド情報を更新
      */
-    suspend fun updateThread(thread: SavedThread): Result<Unit> = withContext(Dispatchers.Default) {
+    suspend fun updateThread(thread: SavedThread): Result<Unit> = withIndexLock {
         runCatching {
-            val currentIndex = loadIndex()
+            val currentIndex = readIndexUnlocked()
             val updatedThreads = currentIndex.threads.map {
                 if (it.threadId == thread.threadId) thread else it
             }
@@ -177,7 +165,41 @@ class SavedThreadRepository(
                 lastUpdated = System.currentTimeMillis()
             )
 
-            saveIndex(updatedIndex).getOrThrow()
+            saveIndexUnlocked(updatedIndex)
         }
+    }
+
+    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.Default) {
+        indexMutex.withLock {
+            block()
+        }
+    }
+
+    private suspend fun readIndexUnlocked(): SavedThreadIndex {
+        return fileSystem.readString(indexPath)
+            .map { jsonString ->
+                try {
+                    json.decodeFromString<SavedThreadIndex>(jsonString)
+                } catch (e: SerializationException) {
+                    SavedThreadIndex(
+                        threads = emptyList(),
+                        totalSize = 0L,
+                        lastUpdated = System.currentTimeMillis()
+                    )
+                }
+            }
+            .getOrElse {
+                SavedThreadIndex(
+                    threads = emptyList(),
+                    totalSize = 0L,
+                    lastUpdated = System.currentTimeMillis()
+                )
+            }
+    }
+
+    private suspend fun saveIndexUnlocked(index: SavedThreadIndex) {
+        fileSystem.createDirectory("saved_threads").getOrThrow()
+        val jsonString = json.encodeToString(index)
+        fileSystem.writeString(indexPath, jsonString).getOrThrow()
     }
 }
