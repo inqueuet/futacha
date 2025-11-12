@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +53,10 @@ class AppStateStore internal constructor(
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
 
+    val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
+        decodeCatalogDisplayStyle(raw)
+    }
+
     suspend fun setBoards(boards: List<BoardSummary>) {
         boardsMutex.withLock {
             try {
@@ -80,6 +85,14 @@ class AppStateStore internal constructor(
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save privacy filter state: $enabled", e)
             // Log error but don't crash
+        }
+    }
+
+    suspend fun setCatalogDisplayStyle(style: CatalogDisplayStyle) {
+        try {
+            storage.updateCatalogDisplayStyle(style.name)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save catalog display style: ${style.name}", e)
         }
     }
 
@@ -314,6 +327,12 @@ class AppStateStore internal constructor(
         Logger.e(TAG, "Failed to decode history from JSON", e)
         emptyList()
     }
+
+    private fun decodeCatalogDisplayStyle(raw: String?): CatalogDisplayStyle {
+        return raw?.let { value ->
+            CatalogDisplayStyle.entries.firstOrNull { it.name == value }
+        } ?: CatalogDisplayStyle.Grid
+    }
 }
 
 fun createAppStateStore(platformContext: Any? = null): AppStateStore {
@@ -324,10 +343,12 @@ internal interface PlatformStateStorage {
     val boardsJson: Flow<String?>
     val historyJson: Flow<String?>
     val privacyFilterEnabled: Flow<Boolean>
+    val catalogDisplayStyle: Flow<String?>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
+    suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun seedIfEmpty(defaultBoardsJson: String, defaultHistoryJson: String)
 }
 

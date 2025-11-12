@@ -25,6 +25,7 @@ private class AndroidPlatformStateStorage(
     private val boardsKey = stringPreferencesKey("boards_json")
     private val historyKey = stringPreferencesKey("history_json")
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
+    private val displayStyleKey = stringPreferencesKey("catalog_display_style")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -40,6 +41,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[privacyFilterKey] ?: false }
+
+    override val catalogDisplayStyle: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[displayStyleKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -68,6 +74,15 @@ private class AndroidPlatformStateStorage(
             println("AndroidPlatformStateStorage: Failed to update privacy filter: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to save privacy filter state", e)
+        }
+    }
+
+    override suspend fun updateCatalogDisplayStyle(style: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[displayStyleKey] = style }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update catalog display style: ${e.message}")
+            throw StorageException("Failed to save catalog display style", e)
         }
     }
 

@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -81,6 +82,7 @@ import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material.icons.rounded.ViewModule
+import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.AlertDialog
@@ -180,6 +182,7 @@ import coil3.request.crossfade
 import coil3.size.Precision
 import coil3.size.Scale
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -1118,11 +1121,25 @@ fun CatalogScreen(
     var isSearchActive by rememberSaveable(board?.id) { mutableStateOf(false) }
     var searchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
     var showModeDialog by remember { mutableStateOf(false) }
+    var showDisplayStyleDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val catalogGridState = rememberLazyGridState()
+    val catalogListState = rememberLazyListState()
+    val persistentDisplayStyleState = stateStore?.catalogDisplayStyle?.collectAsState(initial = CatalogDisplayStyle.Grid)
+    var localCatalogDisplayStyle by rememberSaveable { mutableStateOf(CatalogDisplayStyle.Grid) }
+    val catalogDisplayStyle = persistentDisplayStyleState?.value ?: localCatalogDisplayStyle
+    val updateCatalogDisplayStyle: (CatalogDisplayStyle) -> Unit = { style ->
+        if (stateStore != null) {
+            coroutineScope.launch {
+                stateStore.setCatalogDisplayStyle(style)
+            }
+        } else {
+            localCatalogDisplayStyle = style
+        }
+    }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -1306,7 +1323,9 @@ fun CatalogScreen(
                         onThreadSelected = onThreadSelected,
                         onRefresh = performRefresh,
                         isRefreshing = isRefreshing,
+                        displayStyle = catalogDisplayStyle,
                         gridState = catalogGridState,
+                        listState = catalogListState,
                         modifier = contentModifier
                     )
                 }
@@ -1363,6 +1382,17 @@ fun CatalogScreen(
             )
         }
 
+        if (showDisplayStyleDialog) {
+            DisplayStyleDialog(
+                currentStyle = catalogDisplayStyle,
+                onStyleSelected = { style ->
+                    updateCatalogDisplayStyle(style)
+                    showDisplayStyleDialog = false
+                },
+                onDismiss = { showDisplayStyleDialog = false }
+            )
+        }
+
         if (showCreateThreadDialog) {
             CreateThreadDialog(
                 boardName = board?.name,
@@ -1408,11 +1438,20 @@ fun CatalogScreen(
                 onAction = { menuItem ->
                     when (menuItem) {
                         CatalogSettingsMenuItem.ScrollToTop -> coroutineScope.launch {
-                            if (catalogGridState.layoutInfo.totalItemsCount > 0) {
-                                catalogGridState.animateScrollToItem(0)
+                            when (catalogDisplayStyle) {
+                                CatalogDisplayStyle.Grid -> {
+                                    if (catalogGridState.layoutInfo.totalItemsCount > 0) {
+                                        catalogGridState.animateScrollToItem(0)
+                                    }
+                                }
+                                CatalogDisplayStyle.List -> {
+                                    if (catalogListState.layoutInfo.totalItemsCount > 0) {
+                                        catalogListState.animateScrollToItem(0)
+                                    }
+                                }
                             }
                         }
-                        CatalogSettingsMenuItem.DisplayStyle -> showModeDialog = true
+                        CatalogSettingsMenuItem.DisplayStyle -> showDisplayStyleDialog = true
                         CatalogSettingsMenuItem.ExternalApp -> {
                             board?.let { b ->
                                 val catalogUrl = if (catalogMode.sortParam != null) {
@@ -1893,7 +1932,9 @@ private fun CatalogSuccessContent(
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
+    displayStyle: CatalogDisplayStyle,
     gridState: LazyGridState,
+    listState: LazyListState,
     modifier: Modifier = Modifier
 ) {
     if (items.isEmpty()) {
@@ -1902,16 +1943,28 @@ private fun CatalogSuccessContent(
             modifier = modifier
         )
     } else {
-        CatalogGrid(
-            items = items,
-            board = board,
-            repository = repository,
-            onThreadSelected = onThreadSelected,
-            onRefresh = onRefresh,
-            isRefreshing = isRefreshing,
-            gridState = gridState,
-            modifier = modifier
-        )
+        when (displayStyle) {
+            CatalogDisplayStyle.Grid -> CatalogGrid(
+                items = items,
+                board = board,
+                repository = repository,
+                onThreadSelected = onThreadSelected,
+                onRefresh = onRefresh,
+                isRefreshing = isRefreshing,
+                gridState = gridState,
+                modifier = modifier
+            )
+            CatalogDisplayStyle.List -> CatalogList(
+                items = items,
+                board = board,
+                repository = repository,
+                onThreadSelected = onThreadSelected,
+                onRefresh = onRefresh,
+                isRefreshing = isRefreshing,
+                listState = listState,
+                modifier = modifier
+            )
+        }
     }
 }
 
@@ -2010,16 +2063,88 @@ private fun CatalogGrid(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun CatalogCard(
-    item: CatalogItem,
-    boardUrl: String?,
+private fun CatalogList(
+    items: List<CatalogItem>,
+    board: BoardSummary?,
     repository: BoardRepository,
-    onClick: () -> Unit,
+    onThreadSelected: (CatalogItem) -> Unit,
+    onRefresh: () -> Unit,
+    isRefreshing: Boolean,
+    listState: LazyListState,
     modifier: Modifier = Modifier
 ) {
-    val platformContext = LocalPlatformContext.current
-    val density = LocalDensity.current
+    val coroutineScope = rememberCoroutineScope()
+    var dragOffset by remember { mutableStateOf(0f) }
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            lastVisibleItem != null && lastVisibleItem.index == layoutInfo.totalItemsCount - 1
+        }
+    }
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = modifier.fillMaxSize()
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                items(
+                    items = items,
+                    key = { it.id }
+                ) { catalogItem ->
+                    CatalogListItem(
+                        item = catalogItem,
+                        boardUrl = board?.url,
+                        repository = repository,
+                        onClick = { onThreadSelected(catalogItem) }
+                    )
+                }
+            }
+
+            if (isAtBottom && !isRefreshing) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp)
+                        .align(Alignment.BottomCenter)
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragStart = { dragOffset = 0f },
+                                onDragEnd = {
+                                    if (dragOffset > 100) {
+                                        coroutineScope.launch { onRefresh() }
+                                    }
+                                    dragOffset = 0f
+                                },
+                                onDragCancel = { dragOffset = 0f },
+                                onVerticalDrag = { _, dragAmount ->
+                                    if (dragAmount < 0) {
+                                        dragOffset += -dragAmount
+                                    }
+                                }
+                            )
+                        }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberResolvedCatalogThumbnailUrl(
+    item: CatalogItem,
+    boardUrl: String?,
+    repository: BoardRepository
+): String? {
     var resolvedThumbnailUrl by remember(item.id, item.thumbnailUrl, boardUrl) {
         mutableStateOf(item.thumbnailUrl)
     }
@@ -2035,6 +2160,25 @@ private fun CatalogCard(
             resolvedThumbnailUrl = fetchedUrl
         }
     }
+
+    return resolvedThumbnailUrl
+}
+
+@Composable
+private fun CatalogCard(
+    item: CatalogItem,
+    boardUrl: String?,
+    repository: BoardRepository,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val platformContext = LocalPlatformContext.current
+    val density = LocalDensity.current
+    val resolvedThumbnailUrl = rememberResolvedCatalogThumbnailUrl(
+        item = item,
+        boardUrl = boardUrl,
+        repository = repository
+    )
 
     // 4列グリッドでの推定カードサイズ（画面幅360dpの場合約75dp）
     // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
@@ -2117,6 +2261,101 @@ private fun CatalogCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = MaterialTheme.typography.bodySmall.fontSize
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogListItem(
+    item: CatalogItem,
+    boardUrl: String?,
+    repository: BoardRepository,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val platformContext = LocalPlatformContext.current
+    val density = LocalDensity.current
+    val resolvedThumbnailUrl = rememberResolvedCatalogThumbnailUrl(
+        item = item,
+        boardUrl = boardUrl,
+        repository = repository
+    )
+    val thumbnailToShow = resolvedThumbnailUrl ?: ""
+    val targetSizePx = with(density) { 72.dp.toPx().toInt() }
+    val imageRequest = remember(thumbnailToShow, targetSizePx) {
+        ImageRequest.Builder(platformContext)
+            .data(thumbnailToShow.takeIf { it.isNotBlank() })
+            .crossfade(true)
+            .size(targetSizePx, targetSizePx)
+            .precision(Precision.INEXACT)
+            .scale(Scale.FIT)
+            .build()
+    }
+
+    ElevatedCard(
+        modifier = modifier.fillMaxWidth(),
+        onClick = onClick,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (thumbnailToShow.isBlank()) {
+                    Icon(
+                        imageVector = Icons.Outlined.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    AsyncImage(
+                        model = imageRequest,
+                        imageLoader = LocalFutachaImageLoader.current,
+                        contentDescription = item.title ?: "サムネイル",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = item.title?.takeIf { it.isNotBlank() } ?: "無題",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "No.${item.id}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(
+                horizontalAlignment = Alignment.End
+            ) {
+                Text(
+                    text = "${item.replyCount}レス",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
@@ -2351,6 +2590,46 @@ private fun CatalogSettingsSheet(
             }
         }
     }
+}
+
+@Composable
+private fun DisplayStyleDialog(
+    currentStyle: CatalogDisplayStyle,
+    onStyleSelected: (CatalogDisplayStyle) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("表示スタイル") },
+        text = {
+            Column {
+                CatalogDisplayStyle.entries.forEach { style ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onStyleSelected(style) }
+                            .padding(vertical = 12.dp, horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = style == currentStyle,
+                            onClick = { onStyleSelected(style) }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = style.label,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("閉じる")
+            }
+        }
+    )
 }
 
 private fun List<CatalogItem>.filterByQuery(query: String): List<CatalogItem> {
