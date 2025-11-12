@@ -8,7 +8,8 @@ private const val BOARDS_KEY = "boards_json"
 private const val HISTORY_KEY = "history_json"
 private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
-private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
+private const val NG_HEADERS_KEY = "ng_headers_json"
+private const val NG_WORDS_KEY = "ng_words_json"
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
     return IosPlatformStateStorage()
@@ -20,12 +21,15 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val historyState = MutableStateFlow(defaults.stringForKey(HISTORY_KEY))
     private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
-    private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
+    private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
+    private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
+    override val ngHeadersJson: Flow<String?> = ngHeadersState
+    override val ngWordsJson: Flow<String?> = ngWordsState
 
     override suspend fun updateBoardsJson(value: String) {
         defaults.setObject(value, forKey = BOARDS_KEY)
@@ -51,7 +55,24 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         displayStyleState.value = style
     }
 
-    override suspend fun seedIfEmpty(defaultBoardsJson: String, defaultHistoryJson: String) {
+    override suspend fun updateNgHeadersJson(value: String) {
+        defaults.setObject(value, forKey = NG_HEADERS_KEY)
+        defaults.synchronize()
+        ngHeadersState.value = value
+    }
+
+    override suspend fun updateNgWordsJson(value: String) {
+        defaults.setObject(value, forKey = NG_WORDS_KEY)
+        defaults.synchronize()
+        ngWordsState.value = value
+    }
+
+    override suspend fun seedIfEmpty(
+        defaultBoardsJson: String,
+        defaultHistoryJson: String,
+        defaultNgHeadersJson: String?,
+        defaultNgWordsJson: String?
+    ) {
         var updated = false
         if (defaults.stringForKey(BOARDS_KEY) == null) {
             defaults.setObject(defaultBoardsJson, forKey = BOARDS_KEY)
@@ -61,6 +82,16 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaults.stringForKey(HISTORY_KEY) == null) {
             defaults.setObject(defaultHistoryJson, forKey = HISTORY_KEY)
             historyState.value = defaultHistoryJson
+            updated = true
+        }
+        if (defaultNgHeadersJson != null && defaults.stringForKey(NG_HEADERS_KEY) == null) {
+            defaults.setObject(defaultNgHeadersJson, forKey = NG_HEADERS_KEY)
+            ngHeadersState.value = defaultNgHeadersJson
+            updated = true
+        }
+        if (defaultNgWordsJson != null && defaults.stringForKey(NG_WORDS_KEY) == null) {
+            defaults.setObject(defaultNgWordsJson, forKey = NG_WORDS_KEY)
+            ngWordsState.value = defaultNgWordsJson
             updated = true
         }
         if (updated) {

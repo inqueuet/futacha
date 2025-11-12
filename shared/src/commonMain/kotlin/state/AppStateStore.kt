@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
@@ -28,6 +29,7 @@ class AppStateStore internal constructor(
     private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
     private val boardsMutex = Mutex()
     private val historyMutex = Mutex()
+    private val stringListSerializer = ListSerializer(String.serializer())
 
     // Debouncing for scroll position updates
     private val scrollPositionJobs = mutableMapOf<String, Job>()
@@ -55,6 +57,12 @@ class AppStateStore internal constructor(
 
     val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
         decodeCatalogDisplayStyle(raw)
+    }
+    val ngHeaders: Flow<List<String>> = storage.ngHeadersJson.map { raw ->
+        decodeStringList(raw)
+    }
+    val ngWords: Flow<List<String>> = storage.ngWordsJson.map { raw ->
+        decodeStringList(raw)
     }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
@@ -93,6 +101,22 @@ class AppStateStore internal constructor(
             storage.updateCatalogDisplayStyle(style.name)
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save catalog display style: ${style.name}", e)
+        }
+    }
+
+    suspend fun setNgHeaders(headers: List<String>) {
+        try {
+            storage.updateNgHeadersJson(json.encodeToString(stringListSerializer, headers))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save NG headers (${headers.size})", e)
+        }
+    }
+
+    suspend fun setNgWords(words: List<String>) {
+        try {
+            storage.updateNgWordsJson(json.encodeToString(stringListSerializer, words))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save NG words (${words.size})", e)
         }
     }
 
@@ -273,12 +297,16 @@ class AppStateStore internal constructor(
 
     suspend fun seedIfEmpty(
         defaultBoards: List<BoardSummary>,
-        defaultHistory: List<ThreadHistoryEntry>
+        defaultHistory: List<ThreadHistoryEntry>,
+        defaultNgHeaders: List<String> = emptyList(),
+        defaultNgWords: List<String> = emptyList()
     ) {
         try {
             storage.seedIfEmpty(
                 json.encodeToString(boardsSerializer, defaultBoards),
-                json.encodeToString(historySerializer, defaultHistory)
+                json.encodeToString(historySerializer, defaultHistory),
+                json.encodeToString(stringListSerializer, defaultNgHeaders),
+                json.encodeToString(stringListSerializer, defaultNgWords)
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -333,6 +361,16 @@ class AppStateStore internal constructor(
             CatalogDisplayStyle.entries.firstOrNull { it.name == value }
         } ?: CatalogDisplayStyle.Grid
     }
+
+    private fun decodeStringList(raw: String?): List<String> {
+        if (raw == null) return emptyList()
+        return runCatching {
+            json.decodeFromString(stringListSerializer, raw)
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode NG list", e)
+            emptyList()
+        }
+    }
 }
 
 fun createAppStateStore(platformContext: Any? = null): AppStateStore {
@@ -344,12 +382,21 @@ internal interface PlatformStateStorage {
     val historyJson: Flow<String?>
     val privacyFilterEnabled: Flow<Boolean>
     val catalogDisplayStyle: Flow<String?>
+    val ngHeadersJson: Flow<String?>
+    val ngWordsJson: Flow<String?>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun updateCatalogDisplayStyle(style: String)
-    suspend fun seedIfEmpty(defaultBoardsJson: String, defaultHistoryJson: String)
+    suspend fun updateNgHeadersJson(value: String)
+    suspend fun updateNgWordsJson(value: String)
+    suspend fun seedIfEmpty(
+        defaultBoardsJson: String,
+        defaultHistoryJson: String,
+        defaultNgHeadersJson: String?,
+        defaultNgWordsJson: String?
+    )
 }
 
 internal expect fun createPlatformStateStorage(platformContext: Any? = null): PlatformStateStorage

@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -93,6 +94,7 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -1160,7 +1162,6 @@ fun CatalogScreen(
             }
         }
     }
-
 
     val performRefresh: () -> Unit = {
         if (!isRefreshing && board != null) {
@@ -2573,6 +2574,7 @@ private fun CatalogSettingsSheet(
     onAction: (CatalogSettingsMenuItem) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -2759,6 +2761,71 @@ fun ThreadScreen(
     var lastUsedDeleteKey by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var isReplyDialogVisible by remember { mutableStateOf(false) }
     var isThreadSettingsSheetVisible by remember { mutableStateOf(false) }
+    var isNgManagementVisible by remember { mutableStateOf(false) }
+    var ngHeaderPrefill by remember(board.id, threadId) { mutableStateOf<String?>(null) }
+    var ngFilteringEnabled by rememberSaveable(board.id, threadId) { mutableStateOf(true) }
+    val fallbackNgHeadersState = rememberSaveable(board.id, threadId) { mutableStateOf<List<String>>(emptyList()) }
+    val fallbackNgWordsState = rememberSaveable(board.id, threadId) { mutableStateOf<List<String>>(emptyList()) }
+    val ngHeadersState = stateStore?.ngHeaders?.collectAsState(initial = fallbackNgHeadersState.value)
+    val ngWordsState = stateStore?.ngWords?.collectAsState(initial = fallbackNgWordsState.value)
+    val ngHeaders = ngHeadersState?.value ?: fallbackNgHeadersState.value
+    val ngWords = ngWordsState?.value ?: fallbackNgWordsState.value
+    val showMessage: (String) -> Unit = { message ->
+        coroutineScope.launch { snackbarHostState.showSnackbar(message) }
+    }
+    val persistNgHeaders: (List<String>) -> Unit = { updated ->
+        if (stateStore != null) {
+            coroutineScope.launch {
+                stateStore.setNgHeaders(updated)
+            }
+        } else {
+            fallbackNgHeadersState.value = updated
+        }
+    }
+    val persistNgWords: (List<String>) -> Unit = { updated ->
+        if (stateStore != null) {
+            coroutineScope.launch {
+                stateStore.setNgWords(updated)
+            }
+        } else {
+            fallbackNgWordsState.value = updated
+        }
+    }
+
+    val addNgHeaderEntry: (String) -> Unit = { value ->
+        val trimmed = value.trim()
+        when {
+            trimmed.isEmpty() -> showMessage("NGヘッダーに含める文字列を入力してください")
+            ngHeaders.any { it.equals(trimmed, ignoreCase = true) } -> showMessage("そのNGヘッダーはすでに登録されています")
+            else -> {
+                persistNgHeaders(ngHeaders + trimmed)
+                showMessage("NGヘッダーを追加しました")
+            }
+        }
+    }
+    val addNgWordEntry: (String) -> Unit = { value ->
+        val trimmed = value.trim()
+        when {
+            trimmed.isEmpty() -> showMessage("NGワードに含める文字列を入力してください")
+            ngWords.any { it.equals(trimmed, ignoreCase = true) } -> showMessage("そのNGワードはすでに登録されています")
+            else -> {
+                persistNgWords(ngWords + trimmed)
+                showMessage("NGワードを追加しました")
+            }
+        }
+    }
+    val removeNgHeaderEntry: (String) -> Unit = { entry ->
+        persistNgHeaders(ngHeaders.filterNot { it == entry })
+        showMessage("NGヘッダーを削除しました")
+    }
+    val removeNgWordEntry: (String) -> Unit = { entry ->
+        persistNgWords(ngWords.filterNot { it == entry })
+        showMessage("NGワードを削除しました")
+    }
+    val toggleNgFiltering: () -> Unit = {
+        ngFilteringEnabled = !ngFilteringEnabled
+        showMessage(if (ngFilteringEnabled) "NG表示を有効にしました" else "NG表示を無効にしました")
+    }
     var replyName by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replyEmail by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replySubject by rememberSaveable(board.id, threadId) { mutableStateOf("") }
@@ -3043,6 +3110,17 @@ fun ThreadScreen(
         quoteSelectionTarget = post
     }
 
+    val handleNgRegistration: (Post) -> Unit = { post ->
+        isActionSheetVisible = false
+        actionTargetPost = null
+        val prefillValue = buildNgHeaderPrefillValue(post)
+        ngHeaderPrefill = prefillValue
+        if (prefillValue == null) {
+            coroutineScope.launch { snackbarHostState.showSnackbar("IDが見つかりませんでした") }
+        }
+        isNgManagementVisible = true
+    }
+
     val performRefresh: () -> Unit = {
         if (!isRefreshing) {
             coroutineScope.launch {
@@ -3306,12 +3384,15 @@ fun ThreadScreen(
                     )
 
                     is ThreadUiState.Success -> {
-                    ThreadContent(
-                        page = state.page,
-                        listState = lazyListState,
-                        saidaneOverrides = saidaneOverrides,
-                        searchHighlightRanges = postHighlightRanges,
-                        onPostLongPress = { post ->
+                        val filteredPage = remember(state.page, ngHeaders, ngWords, ngFilteringEnabled) {
+                            applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
+                        }
+                        ThreadContent(
+                            page = filteredPage,
+                            listState = lazyListState,
+                            saidaneOverrides = saidaneOverrides,
+                            searchHighlightRanges = postHighlightRanges,
+                            onPostLongPress = { post ->
                                 actionTargetPost = post
                                 isActionSheetVisible = true
                             },
@@ -3353,6 +3434,7 @@ fun ThreadScreen(
                 actionTargetPost = null
             },
             onQuote = { openQuoteSelection(sheetTarget) },
+            onNgRegister = { handleNgRegistration(sheetTarget) },
             onSaidane = { handleSaidaneAction(sheetTarget) },
             onDelRequest = { handleDelRequest(sheetTarget) },
             onDelete = { openDeleteDialog(sheetTarget) }
@@ -3534,6 +3616,10 @@ fun ThreadScreen(
             onAction = { menuItem ->
                 isThreadSettingsSheetVisible = false
                 when (menuItem) {
+                    ThreadSettingsMenuItem.NgManagement -> {
+                        ngHeaderPrefill = null
+                        isNgManagementVisible = true
+                    }
                     ThreadSettingsMenuItem.ExternalApp -> {
                         // 外部アプリで開く
                         // board.urlからfutaba.phpを削除してからres/xxx.htmを追加
@@ -3563,6 +3649,24 @@ fun ThreadScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (isNgManagementVisible) {
+        NgManagementSheet(
+            onDismiss = {
+                isNgManagementVisible = false
+                ngHeaderPrefill = null
+            },
+            ngHeaders = ngHeaders,
+            ngWords = ngWords,
+            ngFilteringEnabled = ngFilteringEnabled,
+            onAddHeader = addNgHeaderEntry,
+            onAddWord = addNgWordEntry,
+            onRemoveHeader = removeNgHeaderEntry,
+            onRemoveWord = removeNgWordEntry,
+            onToggleFiltering = toggleNgFiltering,
+            initialInput = ngHeaderPrefill
         )
     }
 
@@ -4253,6 +4357,7 @@ private fun ThreadPostActionSheet(
     post: Post,
     onDismiss: () -> Unit,
     onQuote: () -> Unit,
+    onNgRegister: () -> Unit,
     onSaidane: () -> Unit,
     onDelRequest: () -> Unit,
     onDelete: () -> Unit
@@ -4280,6 +4385,14 @@ private fun ThreadPostActionSheet(
                 headlineContent = { Text("引用") },
                 supportingContent = { Text("レス内容を返信欄にコピー") },
                 modifier = Modifier.clickable { onQuote() }
+            )
+            ListItem(
+                leadingContent = {
+                    Icon(Icons.Rounded.Block, contentDescription = null)
+                },
+                headlineContent = { Text("NG登録") },
+                supportingContent = { Text("IDやワードをNG管理に追加") },
+                modifier = Modifier.clickable { onNgRegister() }
             )
             ListItem(
                 leadingContent = {
@@ -4822,6 +4935,47 @@ private fun QuotePreviewDialog(
     }
 }
 
+private fun applyNgFilters(
+    page: ThreadPage,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    enabled: Boolean
+): ThreadPage {
+    if (!enabled) return page
+    val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    if (headerFilters.isEmpty() && wordFilters.isEmpty()) return page
+    val filteredPosts = page.posts.filterNot { post ->
+        matchesNgFilters(post, headerFilters, wordFilters)
+    }
+    return page.copy(posts = filteredPosts)
+}
+
+private fun matchesNgFilters(post: Post, headerFilters: List<String>, wordFilters: List<String>): Boolean {
+    if (headerFilters.isNotEmpty()) {
+        val headerText = buildPostHeaderText(post)
+        if (headerFilters.any { headerText.contains(it) }) {
+            return true
+        }
+    }
+    if (wordFilters.isNotEmpty()) {
+        val bodyText = messageHtmlToPlainText(post.messageHtml).lowercase()
+        if (wordFilters.any { bodyText.contains(it) }) {
+            return true
+        }
+    }
+    return false
+}
+
+private fun buildPostHeaderText(post: Post): String {
+    return listOfNotNull(
+        post.subject,
+        post.author,
+        post.posterId,
+        post.timestamp
+    ).joinToString(" ") { it.lowercase() }
+}
+
 private data class QuotePreviewState(
     val quoteText: String,
     val targetPosts: List<Post>,
@@ -5112,6 +5266,12 @@ private fun normalizePosterIdValue(raw: String?): String? {
     return withoutPrefix.trim().takeIf { it.isNotBlank() }
 }
 
+private fun buildNgHeaderPrefillValue(post: Post): String? {
+    val normalized = normalizePosterIdValue(post.posterId) ?: return null
+    val withoutSlip = normalized.substringBefore('/')
+    return withoutSlip.takeIf { it.isNotBlank() }
+}
+
 private fun formatPosterIdLabel(value: String, index: Int, total: Int): String {
     val safeIndex = index.coerceAtLeast(1)
     val safeTotal = total.coerceAtLeast(safeIndex)
@@ -5238,6 +5398,24 @@ private fun ThreadSettingsSheet(
     }
 }
 
+@Composable
+private fun SectionChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    ) {
+        Text(label)
+    }
+}
+
 private data class ReadAloudSegment(
     val postIndex: Int,
     val postId: String,
@@ -5319,6 +5497,170 @@ private enum class ThreadSettingsMenuItem(
     ExternalApp("外部アプリ", Icons.Rounded.OpenInNew),
     ReadAloud("読み上げ", Icons.Rounded.VolumeUp),
     Privacy("プライバシー", Icons.Rounded.Lock)
+}
+
+private enum class NgManagementSection {
+    Header,
+    Word
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NgManagementSheet(
+    onDismiss: () -> Unit,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    ngFilteringEnabled: Boolean,
+    onAddHeader: (String) -> Unit,
+    onAddWord: (String) -> Unit,
+    onRemoveHeader: (String) -> Unit,
+    onRemoveWord: (String) -> Unit,
+    onToggleFiltering: () -> Unit,
+    initialInput: String? = null
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var section by rememberSaveable { mutableStateOf(NgManagementSection.Header) }
+    var input by rememberSaveable(initialInput) { mutableStateOf(initialInput.orEmpty()) }
+    LaunchedEffect(initialInput) {
+        if (!initialInput.isNullOrBlank()) {
+            section = NgManagementSection.Header
+        }
+    }
+    val entries = when (section) {
+        NgManagementSection.Header -> ngHeaders
+        NgManagementSection.Word -> ngWords
+    }
+    val hint = when (section) {
+        NgManagementSection.Header -> "ヘッダーに含めたい文字列"
+        NgManagementSection.Word -> "本文に含めたい文字列"
+    }
+    val sectionLabel = when (section) {
+        NgManagementSection.Header -> "NGヘッダー"
+        NgManagementSection.Word -> "NGワード"
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column {
+                    Text(
+                        text = "NG管理",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "一致したレスが即座に非表示になります",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Rounded.Close, contentDescription = "閉じる")
+                }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SectionChip(
+                    label = "NGヘッダー",
+                    selected = section == NgManagementSection.Header,
+                    onClick = {
+                        section = NgManagementSection.Header
+                        input = initialInput?.takeIf { it.isNotBlank() } ?: ""
+                    }
+                )
+                SectionChip(
+                    label = "NGワード",
+                    selected = section == NgManagementSection.Word,
+                    onClick = {
+                        section = NgManagementSection.Word
+                        input = ""
+                    }
+                )
+            }
+
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("$sectionLabel を追加") },
+                placeholder = { Text(hint) },
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(
+                        onClick = {
+                            val trimmed = input.trim()
+                            if (trimmed.isEmpty()) return@IconButton
+                            if (section == NgManagementSection.Header) {
+                                onAddHeader(trimmed)
+                            } else {
+                                onAddWord(trimmed)
+                            }
+                            input = ""
+                        },
+                        enabled = input.isNotBlank()
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = "追加")
+                    }
+                }
+            )
+
+            if (entries.isEmpty()) {
+                Text(
+                    text = "まだ登録されていません",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(entries) { entry ->
+                        ListItem(
+                            headlineContent = { Text(entry) },
+                            trailingContent = {
+                                IconButton(
+                                    onClick = {
+                                        if (section == NgManagementSection.Header) {
+                                            onRemoveHeader(entry)
+                                        } else {
+                                            onRemoveWord(entry)
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Delete,
+                                        contentDescription = "削除"
+                                    )
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            Button(
+                onClick = onToggleFiltering,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (ngFilteringEnabled) "NGを無効にする" else "NGを有効にする")
+            }
+        }
+    }
 }
 
 private const val DEFAULT_DEL_REASON_CODE = "110"

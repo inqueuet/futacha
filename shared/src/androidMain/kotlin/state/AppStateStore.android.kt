@@ -26,6 +26,8 @@ private class AndroidPlatformStateStorage(
     private val historyKey = stringPreferencesKey("history_json")
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
+    private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
+    private val ngWordsKey = stringPreferencesKey("ng_words_json")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -46,6 +48,16 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[displayStyleKey] }
+
+    override val ngHeadersJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[ngHeadersKey] }
+
+    override val ngWordsJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[ngWordsKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -86,7 +98,30 @@ private class AndroidPlatformStateStorage(
         }
     }
 
-    override suspend fun seedIfEmpty(defaultBoardsJson: String, defaultHistoryJson: String) {
+    override suspend fun updateNgHeadersJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[ngHeadersKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update NG headers: ${e.message}")
+            throw StorageException("Failed to save NG headers", e)
+        }
+    }
+
+    override suspend fun updateNgWordsJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[ngWordsKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update NG words: ${e.message}")
+            throw StorageException("Failed to save NG words", e)
+        }
+    }
+
+    override suspend fun seedIfEmpty(
+        defaultBoardsJson: String,
+        defaultHistoryJson: String,
+        defaultNgHeadersJson: String?,
+        defaultNgWordsJson: String?
+    ) {
         try {
             context.dataStore.edit { prefs ->
                 if (!prefs.contains(boardsKey)) {
@@ -94,6 +129,12 @@ private class AndroidPlatformStateStorage(
                 }
                 if (!prefs.contains(historyKey)) {
                     prefs[historyKey] = defaultHistoryJson
+                }
+                if (defaultNgHeadersJson != null && !prefs.contains(ngHeadersKey)) {
+                    prefs[ngHeadersKey] = defaultNgHeadersJson
+                }
+                if (defaultNgWordsJson != null && !prefs.contains(ngWordsKey)) {
+                    prefs[ngWordsKey] = defaultNgWordsJson
                 }
             }
         } catch (e: Exception) {
