@@ -3965,14 +3965,54 @@ private fun messageHtmlToLines(html: String): List<String> {
         .replace(Regex("(?i)<br\\s*/?>"), "\n")
         .replace(Regex("(?i)</p>"), "\n\n")
     val withoutTags = normalized.replace(Regex("<[^>]+>"), "")
-    val decoded = withoutTags
-        .replace("&nbsp;", " ")
+    val decoded = decodeAllHtmlEntities(withoutTags)
+    return decoded.lines()
+}
+
+private fun decodeAllHtmlEntities(value: String): String {
+    var result = value
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&amp;", "&")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
-    return decoded.lines()
+        .replace("&#039;", "'")
+        .replace("&nbsp;", " ")
+
+    // Decode hexadecimal entities like &#x1F43B; (🐻)
+    result = Regex("&#x([0-9a-fA-F]+);").replace(result) { match ->
+        val hexValue = match.groupValues.getOrNull(1) ?: return@replace match.value
+        val codePoint = runCatching { hexValue.toInt(16) }.getOrNull()
+        if (codePoint != null && codePoint in 0x20..0x10FFFF) {
+            codePointToString(codePoint)
+        } else {
+            match.value
+        }
+    }
+
+    // Decode numeric entities like &#128059; (🐻)
+    result = Regex("&#(\\d+);").replace(result) { match ->
+        val numValue = match.groupValues.getOrNull(1) ?: return@replace match.value
+        val codePoint = runCatching { numValue.toInt() }.getOrNull()
+        if (codePoint != null && codePoint in 0x20..0x10FFFF) {
+            codePointToString(codePoint)
+        } else {
+            match.value
+        }
+    }
+
+    return result
+}
+
+private fun codePointToString(codePoint: Int): String {
+    return if (codePoint <= 0xFFFF) {
+        codePoint.toChar().toString()
+    } else {
+        // Handle surrogate pairs for code points > 0xFFFF
+        val high = ((codePoint - 0x10000) shr 10) + 0xD800
+        val low = ((codePoint - 0x10000) and 0x3FF) + 0xDC00
+        "${high.toChar()}${low.toChar()}"
+    }
 }
 
 private fun messageHtmlToPlainText(html: String): String {
