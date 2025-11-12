@@ -1231,6 +1231,23 @@ fun CatalogScreen(
         }
     }
 
+    val scrollCatalogToTop: () -> Unit = {
+        coroutineScope.launch {
+            when (catalogDisplayStyle) {
+                CatalogDisplayStyle.Grid -> {
+                    if (catalogGridState.layoutInfo.totalItemsCount > 0) {
+                        catalogGridState.animateScrollToItem(0)
+                    }
+                }
+                CatalogDisplayStyle.List -> {
+                    if (catalogListState.layoutInfo.totalItemsCount > 0) {
+                        catalogListState.animateScrollToItem(0)
+                    }
+                }
+            }
+        }
+    }
+
     val currentState = uiState.value
 
     ModalNavigationDrawer(
@@ -1291,6 +1308,7 @@ fun CatalogScreen(
                     onNavigate = { destination ->
                         when (destination) {
                             CatalogNavDestination.CreateThread -> showCreateThreadDialog = true
+                            CatalogNavDestination.ScrollToTop -> scrollCatalogToTop()
                             CatalogNavDestination.RefreshCatalog -> performRefresh()
                             CatalogNavDestination.Mode -> showModeDialog = true
                             CatalogNavDestination.Settings -> showSettingsMenu = true
@@ -1437,20 +1455,7 @@ fun CatalogScreen(
                 onDismiss = { showSettingsMenu = false },
                 onAction = { menuItem ->
                     when (menuItem) {
-                        CatalogSettingsMenuItem.ScrollToTop -> coroutineScope.launch {
-                            when (catalogDisplayStyle) {
-                                CatalogDisplayStyle.Grid -> {
-                                    if (catalogGridState.layoutInfo.totalItemsCount > 0) {
-                                        catalogGridState.animateScrollToItem(0)
-                                    }
-                                }
-                                CatalogDisplayStyle.List -> {
-                                    if (catalogListState.layoutInfo.totalItemsCount > 0) {
-                                        catalogListState.animateScrollToItem(0)
-                                    }
-                                }
-                            }
-                        }
+                        CatalogSettingsMenuItem.ScrollToTop -> scrollCatalogToTop()
                         CatalogSettingsMenuItem.DisplayStyle -> showDisplayStyleDialog = true
                         CatalogSettingsMenuItem.ExternalApp -> {
                             board?.let { b ->
@@ -2666,6 +2671,7 @@ private enum class CatalogSettingsMenuItem(
 
 private enum class CatalogNavDestination(val label: String, val icon: ImageVector) {
     CreateThread("スレッド作成", Icons.Rounded.Add),
+    ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop),
     RefreshCatalog("カタログ更新", Icons.Rounded.Refresh),
     Mode("モード", Icons.Rounded.Sort),
     Settings("設定", Icons.Rounded.Settings)
