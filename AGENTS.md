@@ -295,6 +295,34 @@ project-root/
   - スクロール位置永続化（LazyColumn index + offset）
   - プラットフォーム固有実装（DataStore/NSUserDefaults）
 
+##### AppStateStore内部実装（`shared/src/commonMain/kotlin/state/AppStateStore.kt`）
+- `setScrollDebounceScope()` を `FutachaApp` から渡し、スクロール位置の永続化を **500ms** デバウンス (`SCROLL_DEBOUNCE_DELAY_MS`)。
+- `updateHistoryScrollPosition()` は `scrollPositionJobs` マップと `Mutex` で排他制御し、同一位置への重複書き込みをスキップ。
+- `upsertHistoryEntry()` で履歴リストの順序を崩さず差分更新（LazyColumnスクロール復元に使用）。
+- `seedIfEmpty()` により初回起動時に共通の板リスト/履歴をDataStore・NSUserDefaultsへ投入。
+
+```kotlin
+private val scrollPositionJobs = mutableMapOf<String, Job>()
+private const val SCROLL_DEBOUNCE_DELAY_MS = 500L
+
+val coroutineScope = rememberCoroutineScope()
+LaunchedEffect(Unit) {
+    stateStore.setScrollDebounceScope(coroutineScope)
+}
+```
+
+```kotlin
+val existingEntry = currentHistory.firstOrNull { it.threadId == threadId }
+if (existingEntry != null &&
+    existingEntry.lastReadItemIndex == index &&
+    existingEntry.lastReadItemOffset == offset
+) {
+    return
+}
+```
+
+Compose側 (`shared/src/commonMain/kotlin/ui/FutachaApp.kt`) では `rememberCoroutineScope()` で取得したスコープを `setScrollDebounceScope()` に渡し、UIライフサイクルと同じタイミングでジョブ管理を行います。
+
 #### 画像・メディア
 - **Coil3 for Compose Multiplatform**
   - 非同期画像読み込み
@@ -666,8 +694,8 @@ shared/src/
 │       - createVersionChecker(Context, HttpClient)
 │
 └── iosMain/kotlin/version/
-    └── VersionChecker.ios.kt          # iOS実装 (準備中)
-        - Bundle.main.infoDictionaryから取得予定
+    └── VersionChecker.ios.kt          # iOS実装（NSBundle + GitHub API）
+        - NSBundle.mainBundleからCFBundleShortVersionString取得
 ```
 
 ### 実装詳細
@@ -731,7 +759,9 @@ GET https://api.github.com/repos/inqueuet/futacha/releases/latest
 
 アプリ起動時のみチェックするため、Rate Limitは問題なし。
 
-#### 4. Android実装
+#### 4. プラットフォーム実装
+
+##### Android (`shared/src/androidMain/kotlin/version/VersionChecker.android.kt`)
 
 ```kotlin
 class AndroidVersionChecker(
@@ -761,6 +791,40 @@ class AndroidVersionChecker(
             currentVersion = current,
             latestVersion = latest,
             message = buildUpdateMessage(current, latest, release.name)
+        )
+    }
+}
+```
+
+##### iOS (`shared/src/iosMain/kotlin/version/VersionChecker.ios.kt`)
+
+```kotlin
+class IosVersionChecker(
+    private val httpClient: HttpClient
+) : VersionChecker {
+
+    override fun getCurrentVersion(): String {
+        val bundle = NSBundle.mainBundle
+        return bundle
+            .objectForInfoDictionaryKey("CFBundleShortVersionString") as? String
+            ?: "1.0.0"
+    }
+
+    override suspend fun checkForUpdate(): UpdateInfo? {
+        val currentVersion = getCurrentVersion()
+        val release = fetchLatestVersionFromGitHub(
+            httpClient = httpClient,
+            owner = "inqueuet",
+            repo = "futacha"
+        ) ?: return null
+        val latestVersion = release.tag_name.removePrefix("v")
+        if (!isNewerVersion(currentVersion, latestVersion)) {
+            return null
+        }
+        return UpdateInfo(
+            currentVersion = currentVersion,
+            latestVersion = latestVersion,
+            message = buildUpdateMessage(currentVersion, latestVersion, release.name)
         )
     }
 }
@@ -849,7 +913,7 @@ fun FutachaApp(
 │ ThreadSaveService                                   │
 │  - saveThread(): スレッド保存処理                    │
 │  - saveProgress: StateFlow<SaveProgress>            │
-│  - downloadMedia(): メディアダウンロード（HEADチェック）│
+│  - downloadAndSaveMedia(): メディアダウンロード（GET + Content-Length/実サイズ検証）│
 │  - convertHtmlPaths(): HTML相対パス変換              │
 │  - generateHtml(): スタンドアロンHTML生成             │
 │  - urlToPathMap: URL→ローカルパスマッピング           │
@@ -937,7 +1001,27 @@ saved_threads/
 - **サポート形式**:
   - 画像: GIF, JPG, JPEG, PNG, WEBP
   - 動画: MP4, WEBM
-- **チェックタイミング**: HEADリクエストでContent-Length確認後ダウンロード
+- **チェックタイミング**: GETレスポンスの`Content-Length`ヘッダーと実際に読み込んだバイト列の両方で検証
+
+#### サイズ検証フロー（`shared/src/commonMain/kotlin/service/ThreadSaveService.kt`）
+
+```kotlin
+val response: HttpResponse = httpClient.get(url) { /* Acceptヘッダー調整 */ }
+val contentLength = response.contentLength()
+    ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+    ?: 0L
+if (contentLength > MAX_FILE_SIZE_BYTES) {
+    throw Exception("File too large: ${contentLength / 1024}KB")
+}
+
+val bytes = response.readBytes()
+if (bytes.size > MAX_FILE_SIZE_BYTES) {
+    throw Exception("Actual file size exceeds limit: ${bytes.size / 1024}KB")
+}
+fileSystem.writeBytes(fullPath, bytes).getOrThrow()
+```
+
+GETレスポンスから直接バイト列を読み込みつつ2段階でサイズを検証するため、HEADとGETを分けて叩く必要がなく、帯域の無駄も抑えられます。
 
 ### HTML変換
 
@@ -994,9 +1078,9 @@ val convertedHtml = convertHtmlPaths(post.messageHtml, urlToPathMap)
 ### エラーハンドリング
 
 #### ダウンロード失敗時の挙動
-1. **HEADリクエストでファイルサイズチェック**
-   - Content-Lengthを取得
-   - 8000KB超過 → 例外をスローしてスキップ
+1. **GETレスポンスでファイルサイズチェック**
+   - `Content-Length` ヘッダーを確認し、8MB超過なら即スキップ
+   - 実際に `readBytes()` したサイズも検証し、二重にガード
 
 2. **拡張子チェック**
    - URLまたはContent-Typeから拡張子を取得
