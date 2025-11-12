@@ -278,7 +278,8 @@ fun FutachaApp(
                         onHistoryEntryUpdated = updateHistoryEntry,
                         onHistoryRefresh = refreshHistoryEntries,
                         onHistoryCleared = clearHistory,
-                        repository = boardRepository
+                        repository = boardRepository,
+                        stateStore = stateStore
                     )
                 }
 
@@ -365,7 +366,8 @@ fun FutachaApp(
                             onScrollPositionPersist = persistScrollPosition,
                             repository = boardRepository,
                             httpClient = httpClient,
-                            fileSystem = fileSystem
+                            fileSystem = fileSystem,
+                            stateStore = stateStore
                         )
                 }
             }

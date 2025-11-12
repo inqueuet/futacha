@@ -132,6 +132,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -141,6 +142,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1093,6 +1095,7 @@ fun CatalogScreen(
     onHistoryRefresh: suspend () -> Unit = {},
     onHistoryCleared: () -> Unit = {},
     repository: BoardRepository? = null,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -1117,6 +1120,8 @@ fun CatalogScreen(
     var showModeDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
+        ?: remember { mutableStateOf(false) }
     val catalogGridState = rememberLazyGridState()
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
@@ -1308,6 +1313,15 @@ fun CatalogScreen(
             }
         }
 
+        // Privacy filter overlay - allows interactions to pass through
+        if (isPrivacyFilterEnabled) {
+            Canvas(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                drawRect(color = Color.White.copy(alpha = 0.5f))
+            }
+        }
+
         if (showModeDialog) {
             AlertDialog(
                 onDismissRequest = { showModeDialog = false },
@@ -1407,6 +1421,11 @@ fun CatalogScreen(
                                     "${b.url.trimEnd('/')}/futaba.php?mode=cat"
                                 }
                                 urlLauncher(catalogUrl)
+                            }
+                        }
+                        CatalogSettingsMenuItem.Privacy -> {
+                            coroutineScope.launch {
+                                stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
                             }
                         }
 
@@ -2396,6 +2415,7 @@ fun ThreadScreen(
     repository: BoardRepository? = null,
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -2433,6 +2453,8 @@ fun ThreadScreen(
     var previewImageUrl by remember { mutableStateOf<String?>(null) }
     var previewVideoUrl by remember { mutableStateOf<String?>(null) }
     var saveProgress by remember { mutableStateOf<com.valoser.futacha.shared.model.SaveProgress?>(null) }
+    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
+        ?: remember { mutableStateOf(false) }
     val handleMediaClick: (String, MediaType) -> Unit = { url, mediaType ->
         when (mediaType) {
             MediaType.Image -> previewImageUrl = url
@@ -3122,6 +3144,11 @@ fun ThreadScreen(
                         val threadUrl = "$baseUrl/res/${threadId}.htm"
                         urlLauncher(threadUrl)
                     }
+                    ThreadSettingsMenuItem.Privacy -> {
+                        coroutineScope.launch {
+                            stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
+                        }
+                    }
                     else -> {
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar("${menuItem.label}はモック動作です")
@@ -3130,6 +3157,15 @@ fun ThreadScreen(
                 }
             }
         )
+    }
+
+    // Privacy filter overlay - allows interactions to pass through
+    if (isPrivacyFilterEnabled) {
+        Canvas(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            drawRect(color = Color.White.copy(alpha = 0.5f))
+        }
     }
 
     // 保存進捗ダイアログ

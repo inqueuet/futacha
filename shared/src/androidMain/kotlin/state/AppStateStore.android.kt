@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -23,6 +24,7 @@ private class AndroidPlatformStateStorage(
 ) : PlatformStateStorage {
     private val boardsKey = stringPreferencesKey("boards_json")
     private val historyKey = stringPreferencesKey("history_json")
+    private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -33,6 +35,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[historyKey] }
+
+    override val privacyFilterEnabled: Flow<Boolean> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[privacyFilterKey] ?: false }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -51,6 +58,16 @@ private class AndroidPlatformStateStorage(
             println("AndroidPlatformStateStorage: Failed to update history: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to save history data", e)
+        }
+    }
+
+    override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
+        try {
+            context.dataStore.edit { prefs -> prefs[privacyFilterKey] = enabled }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update privacy filter: ${e.message}")
+            // Re-throw as a more specific exception for caller to handle
+            throw StorageException("Failed to save privacy filter state", e)
         }
     }
 

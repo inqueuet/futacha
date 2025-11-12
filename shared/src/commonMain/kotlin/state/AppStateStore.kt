@@ -50,6 +50,8 @@ class AppStateStore internal constructor(
         stored?.let { decodeHistory(it) } ?: emptyList()
     }
 
+    val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
+
     suspend fun setBoards(boards: List<BoardSummary>) {
         boardsMutex.withLock {
             try {
@@ -69,6 +71,15 @@ class AppStateStore internal constructor(
                 Logger.e(TAG, "Failed to save history with ${history.size} entries", e)
                 // Log error but don't crash - data will be lost but app continues
             }
+        }
+    }
+
+    suspend fun setPrivacyFilterEnabled(enabled: Boolean) {
+        try {
+            storage.updatePrivacyFilterEnabled(enabled)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save privacy filter state: $enabled", e)
+            // Log error but don't crash
         }
     }
 
@@ -312,9 +323,11 @@ fun createAppStateStore(platformContext: Any? = null): AppStateStore {
 internal interface PlatformStateStorage {
     val boardsJson: Flow<String?>
     val historyJson: Flow<String?>
+    val privacyFilterEnabled: Flow<Boolean>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
+    suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun seedIfEmpty(defaultBoardsJson: String, defaultHistoryJson: String)
 }
 
