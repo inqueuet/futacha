@@ -188,6 +188,7 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.isActive
@@ -1385,6 +1386,8 @@ fun CatalogScreen(
             )
         }
 
+        val urlLauncher = rememberUrlLauncher()
+
         if (showSettingsMenu) {
             CatalogSettingsSheet(
                 onDismiss = { showSettingsMenu = false },
@@ -1396,6 +1399,16 @@ fun CatalogScreen(
                             }
                         }
                         CatalogSettingsMenuItem.DisplayStyle -> showModeDialog = true
+                        CatalogSettingsMenuItem.ExternalApp -> {
+                            board?.let { b ->
+                                val catalogUrl = if (catalogMode.sortParam != null) {
+                                    "${b.url.trimEnd('/')}/futaba.php?mode=cat&sort=${catalogMode.sortParam}"
+                                } else {
+                                    "${b.url.trimEnd('/')}/futaba.php?mode=cat"
+                                }
+                                urlLauncher(catalogUrl)
+                            }
+                        }
 
                         else -> coroutineScope.launch {
                             snackbarHostState.showSnackbar("${menuItem.label} は未実装です")
@@ -2454,9 +2467,7 @@ fun ThreadScreen(
                     coroutineScope.launch {
                         uiState.value = ThreadUiState.Loading
                         try {
-                            val page = withContext(Dispatchers.IO) {
-                                activeRepository.getThread(board.url, threadId)
-                            }
+                            val page = activeRepository.getThread(board.url, threadId)
                             if (isActive) {
                                 uiState.value = ThreadUiState.Success(page)
                             }
@@ -3096,13 +3107,26 @@ fun ThreadScreen(
         )
     }
 
+    val urlLauncher = rememberUrlLauncher()
+
     if (isThreadSettingsSheetVisible) {
         ThreadSettingsSheet(
             onDismiss = { isThreadSettingsSheetVisible = false },
             onAction = { menuItem ->
                 isThreadSettingsSheetVisible = false
-                coroutineScope.launch {
-                    snackbarHostState.showSnackbar("${menuItem.label}はモック動作です")
+                when (menuItem) {
+                    ThreadSettingsMenuItem.ExternalApp -> {
+                        // 外部アプリで開く
+                        // board.urlからfutaba.phpを削除してからres/xxx.htmを追加
+                        val baseUrl = board.url.trimEnd('/').removeSuffix("/futaba.php")
+                        val threadUrl = "$baseUrl/res/${threadId}.htm"
+                        urlLauncher(threadUrl)
+                    }
+                    else -> {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("${menuItem.label}はモック動作です")
+                        }
+                    }
                 }
             }
         )
