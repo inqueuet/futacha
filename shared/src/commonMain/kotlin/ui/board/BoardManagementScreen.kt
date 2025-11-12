@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
@@ -1719,6 +1720,16 @@ private fun ThreadFormDialog(
                             maxLines = 2,
                             textStyle = MaterialTheme.typography.bodyLarge,
                             colors = textFieldColors,
+                            trailingIcon = {
+                                if (comment.isNotBlank()) {
+                                    IconButton(onClick = { onCommentChange("") }) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "コメントをクリア"
+                                        )
+                                    }
+                                }
+                            },
                             keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Default),
                             keyboardActions = KeyboardActions.Default
                         )
@@ -2741,17 +2752,18 @@ fun ThreadScreen(
     val saidaneOverrides = remember(threadId) { mutableStateMapOf<String, String>() }
     var actionTargetPost by remember { mutableStateOf<Post?>(null) }
     var deleteDialogTarget by remember { mutableStateOf<Post?>(null) }
+    var quoteSelectionTarget by remember { mutableStateOf<Post?>(null) }
     var isActionSheetVisible by remember { mutableStateOf(false) }
     var pendingDeletePassword by remember { mutableStateOf("") }
     var pendingDeleteImageOnly by remember { mutableStateOf(false) }
-    var lastUsedDeleteKey by rememberSaveable(board.id) { mutableStateOf("") }
+    var lastUsedDeleteKey by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var isReplyDialogVisible by remember { mutableStateOf(false) }
     var isThreadSettingsSheetVisible by remember { mutableStateOf(false) }
-    var replyName by rememberSaveable(board.id) { mutableStateOf("") }
-    var replyEmail by rememberSaveable(board.id) { mutableStateOf("") }
-    var replySubject by remember { mutableStateOf("") }
-    var replyComment by remember { mutableStateOf("") }
-    var replyPassword by rememberSaveable(board.id) { mutableStateOf("") }
+    var replyName by rememberSaveable(board.id, threadId) { mutableStateOf("") }
+    var replyEmail by rememberSaveable(board.id, threadId) { mutableStateOf("") }
+    var replySubject by rememberSaveable(board.id, threadId) { mutableStateOf("") }
+    var replyComment by rememberSaveable(board.id, threadId) { mutableStateOf("") }
+    var replyPassword by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replyImageData by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -3023,6 +3035,12 @@ fun ThreadScreen(
         deleteDialogTarget = post
         pendingDeletePassword = lastUsedDeleteKey
         pendingDeleteImageOnly = false
+    }
+
+    val openQuoteSelection: (Post) -> Unit = { post ->
+        isActionSheetVisible = false
+        actionTargetPost = null
+        quoteSelectionTarget = post
     }
 
     val performRefresh: () -> Unit = {
@@ -3334,6 +3352,7 @@ fun ThreadScreen(
                 isActionSheetVisible = false
                 actionTargetPost = null
             },
+            onQuote = { openQuoteSelection(sheetTarget) },
             onSaidane = { handleSaidaneAction(sheetTarget) },
             onDelRequest = { handleDelRequest(sheetTarget) },
             onDelete = { openDeleteDialog(sheetTarget) }
@@ -3377,6 +3396,30 @@ fun ThreadScreen(
                         imageOnly
                     )
                 }
+            }
+        )
+    }
+
+    val quoteTarget = quoteSelectionTarget
+    if (quoteTarget != null) {
+        QuoteSelectionDialog(
+            post = quoteTarget,
+            onDismiss = { quoteSelectionTarget = null },
+            onConfirm = { selectedLines ->
+                val quoteBody = selectedLines.joinToString("\n").trimEnd()
+                if (quoteBody.isNotBlank()) {
+                    val existing = replyComment.trimEnd()
+                    val builder = StringBuilder()
+                    if (existing.isNotBlank()) {
+                        builder.append(existing)
+                        builder.append("\n")
+                    }
+                    builder.append(quoteBody)
+                    builder.append("\n")
+                    replyComment = builder.toString()
+                    isReplyDialogVisible = true
+                }
+                quoteSelectionTarget = null
             }
         )
     }
@@ -4209,6 +4252,7 @@ private fun ThreadMessageText(
 private fun ThreadPostActionSheet(
     post: Post,
     onDismiss: () -> Unit,
+    onQuote: () -> Unit,
     onSaidane: () -> Unit,
     onDelRequest: () -> Unit,
     onDelete: () -> Unit
@@ -4228,6 +4272,14 @@ private fun ThreadPostActionSheet(
                 text = "No.${post.id} の操作",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(bottom = 8.dp)
+            )
+            ListItem(
+                leadingContent = {
+                    Icon(Icons.Outlined.FormatQuote, contentDescription = null)
+                },
+                headlineContent = { Text("引用") },
+                supportingContent = { Text("レス内容を返信欄にコピー") },
+                modifier = Modifier.clickable { onQuote() }
             )
             ListItem(
                 leadingContent = {
@@ -4300,6 +4352,108 @@ private fun DeleteByUserDialog(
                         onCheckedChange = onImageOnlyChange
                     )
                     Text("画像だけ消す")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun QuoteSelectionDialog(
+    post: Post,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit
+) {
+    val selectionItems = remember(post.id) { buildQuoteSelectionItems(post) }
+    var selectedIds by remember(post.id) {
+        mutableStateOf(
+            selectionItems
+                .filter { it.isDefault }
+                .map { it.id }
+                .toSet()
+                .ifEmpty { selectionItems.firstOrNull()?.let { setOf(it.id) } ?: emptySet() }
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val lines = selectionItems
+                        .filter { selectedIds.contains(it.id) }
+                        .map { it.content }
+                    onConfirm(lines)
+                },
+                enabled = selectedIds.isNotEmpty()
+            ) {
+                Text("コピー")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        },
+        title = { Text("引用する内容を選択") },
+        text = {
+            if (selectionItems.isEmpty()) {
+                Text(
+                    text = "引用できる内容がありません",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    selectionItems.forEach { item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .clickable {
+                                    selectedIds = if (selectedIds.contains(item.id)) {
+                                        selectedIds - item.id
+                                    } else {
+                                        selectedIds + item.id
+                                    }
+                                }
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = selectedIds.contains(item.id),
+                                onCheckedChange = { checked ->
+                                    selectedIds = if (checked) {
+                                        selectedIds + item.id
+                                    } else {
+                                        selectedIds - item.id
+                                    }
+                                }
+                            )
+                            Column(
+                                modifier = Modifier.padding(start = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = item.preview,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -4552,6 +4706,44 @@ private fun messageHtmlToPlainText(html: String): String {
         .joinToString("\n")
 }
 
+private fun buildQuoteSelectionItems(post: Post): List<QuoteSelectionItem> {
+    val items = mutableListOf<QuoteSelectionItem>()
+    items += QuoteSelectionItem(
+        id = "number-${post.id}",
+        title = "レスNo.",
+        preview = "No.${post.id}",
+        content = ">No.${post.id}",
+        isDefault = true
+    )
+    extractFileNameFromUrl(post.imageUrl)?.let { fileName ->
+        items += QuoteSelectionItem(
+            id = "file-${post.id}",
+            title = "ファイル名",
+        preview = fileName,
+        content = ">$fileName"
+    )
+    }
+    val bodyLines = messageHtmlToLines(post.messageHtml)
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    bodyLines.forEachIndexed { index, line ->
+        items += QuoteSelectionItem(
+            id = "line-$index",
+            title = "本文 ${index + 1}行目",
+            preview = line,
+            content = ">$line"
+        )
+    }
+    return items
+}
+
+private fun extractFileNameFromUrl(url: String?): String? {
+    if (url.isNullOrBlank()) return null
+    val sanitized = url.substringBefore('#').substringBefore('?')
+    val name = sanitized.substringAfterLast('/', "")
+    return name.takeIf { it.isNotBlank() }
+}
+
 private fun extractTimestampWithoutId(timestamp: String): String {
     val idx = timestamp.indexOf("ID:")
     if (idx == -1) return timestamp.trim()
@@ -4634,6 +4826,14 @@ private data class QuotePreviewState(
     val quoteText: String,
     val targetPosts: List<Post>,
     val posterIdLabels: Map<String, PosterIdLabel>
+)
+
+private data class QuoteSelectionItem(
+    val id: String,
+    val title: String,
+    val preview: String,
+    val content: String,
+    val isDefault: Boolean = false
 )
 
 private data class ThreadSearchMatch(

@@ -346,21 +346,21 @@ fun FutachaApp(
                     }
 
                     val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
-                        ThreadScreen(
+                    ThreadScreen(
                             board = currentBoard,
                             history = persistedHistory,
                             threadId = activeThreadId,
                             threadTitle = selectedThreadTitle,
                             initialReplyCount = selectedThreadReplies,
                             onBack = {
-                            selectedThreadId = null
-                            selectedThreadTitle = null
-                            selectedThreadReplies = null
-                            selectedThreadThumbnailUrl = null
-                            selectedThreadUrl = null
-                        },
-                        onHistoryEntrySelected = openHistoryEntry,
-                        onHistoryEntryDismissed = dismissHistoryEntry,
+                                selectedThreadId = null
+                                selectedThreadTitle = null
+                                selectedThreadReplies = null
+                                selectedThreadThumbnailUrl = null
+                                selectedThreadUrl = null
+                            },
+                            onHistoryEntrySelected = openHistoryEntry,
+                            onHistoryEntryDismissed = dismissHistoryEntry,
                             onHistoryEntryUpdated = updateHistoryEntry,
                             onHistoryRefresh = refreshHistoryEntries,
                             onScrollPositionPersist = persistScrollPosition,
@@ -369,9 +369,9 @@ fun FutachaApp(
                             fileSystem = fileSystem,
                             stateStore = stateStore
                         )
+                    }
                 }
             }
-        }
         }
     }
 }
