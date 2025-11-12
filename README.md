@@ -33,13 +33,13 @@
 - Pull-to-refresh (`PullToRefreshBox`) に加え、グリッド最下部にもドラッグ判定を置いて連続更新を楽にしています。
 - トップバーは検索モードとタイトル表示をトグル。検索時は back ハンドラで検索解除 → ドロワー → 画面遷移の順で戻る挙動を実装。
 - `CreateThreadDialog` が `BoardRepository.createThread()` を呼び、新規スレ作成後にカタログを再取得します。
-- 設定シートからプライバシーオーバーレイをトグル (`AppStateStore.setPrivacyFilterEnabled`)。その他メニューは現状モック。
+- 設定シート (`CatalogSettingsSheet`) は 6 項目 (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇の項目は実装済みで、NG管理は `NgManagementSheet` (ワードのみ)、外部アプリは `mode=cat` URL を開き、表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` をトグル。監視ワードは未実装で snackbar を表示。※凡例: 〇=対応、△=基本実装、無印=未実装。
 
 ### Thread
 - `ThreadTopBar` で Board 名 / ステータス / レス数を表示しつつ、スレ内検索 UI (ヒット件数と前/次ボタン付き) を提供。
 - `LazyColumn` の各投稿カードは subject/author/ID/引用/画像を表示。引用 or ID をタップすると `QuotePreviewDialog` で該当レス群をまとめて確認できます。
 - long-press で開くアクションシートは **そうだね** / **del 依頼** / **本人削除**。成功時は `Snackbar` + 楽観的 UI で通知。
-- `ThreadActionBar` の 7 ボタン: 返信 (`ThreadFormDialog` + ActivityResult/PHPicker)、最上部 / 最下部スクロール、再読み込み、ギャラリー (`ThreadImageGallery`)、保存 (Android で `ThreadSaveService` を起動)、設定 (外部アプリで開く / プライバシー)。
+- `ThreadActionBar` の 7 ボタン: 返信 (`ThreadFormDialog` + ActivityResult/PHPicker)、最上部 / 最下部スクロール、再読み込み、ギャラリー (`ThreadImageGallery`)、保存 (Android で `ThreadSaveService` を起動)、設定 (`ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示)。
 - 画像はピンチズーム可能な `ImagePreviewDialog`、動画は `PlatformVideoPlayer` を全画面ダイアログで表示。
 - スクロール位置は `snapshotFlow` + 500ms デバウンスで `AppStateStore.updateHistoryScrollPosition()` に保存されます。
 
