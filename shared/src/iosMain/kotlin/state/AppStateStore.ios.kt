@@ -11,6 +11,7 @@ private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
 private const val CATALOG_NG_WORDS_KEY = "catalog_ng_words_json"
+private const val WATCH_WORDS_KEY = "watch_words_json"
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
     return IosPlatformStateStorage()
@@ -25,6 +26,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
     private val catalogNgWordsState = MutableStateFlow(defaults.stringForKey(CATALOG_NG_WORDS_KEY))
+    private val watchWordsState = MutableStateFlow(defaults.stringForKey(WATCH_WORDS_KEY))
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
@@ -33,6 +35,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val ngHeadersJson: Flow<String?> = ngHeadersState
     override val ngWordsJson: Flow<String?> = ngWordsState
     override val catalogNgWordsJson: Flow<String?> = catalogNgWordsState
+    override val watchWordsJson: Flow<String?> = watchWordsState
 
     override suspend fun updateBoardsJson(value: String) {
         defaults.setObject(value, forKey = BOARDS_KEY)
@@ -76,12 +79,19 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         catalogNgWordsState.value = value
     }
 
+    override suspend fun updateWatchWordsJson(value: String) {
+        defaults.setObject(value, forKey = WATCH_WORDS_KEY)
+        defaults.synchronize()
+        watchWordsState.value = value
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
         defaultNgWordsJson: String?,
-        defaultCatalogNgWordsJson: String?
+        defaultCatalogNgWordsJson: String?,
+        defaultWatchWordsJson: String?
     ) {
         var updated = false
         if (defaults.stringForKey(BOARDS_KEY) == null) {
@@ -107,6 +117,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaultCatalogNgWordsJson != null && defaults.stringForKey(CATALOG_NG_WORDS_KEY) == null) {
             defaults.setObject(defaultCatalogNgWordsJson, forKey = CATALOG_NG_WORDS_KEY)
             catalogNgWordsState.value = defaultCatalogNgWordsJson
+            updated = true
+        }
+        if (defaultWatchWordsJson != null && defaults.stringForKey(WATCH_WORDS_KEY) == null) {
+            defaults.setObject(defaultWatchWordsJson, forKey = WATCH_WORDS_KEY)
+            watchWordsState.value = defaultWatchWordsJson
             updated = true
         }
         if (updated) {

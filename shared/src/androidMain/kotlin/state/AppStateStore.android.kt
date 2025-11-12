@@ -29,6 +29,7 @@ private class AndroidPlatformStateStorage(
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
     private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
+    private val watchWordsKey = stringPreferencesKey("watch_words_json")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -64,6 +65,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[catalogNgWordsKey] }
+
+    override val watchWordsJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[watchWordsKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -131,12 +137,22 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updateWatchWordsJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[watchWordsKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update watch words: ${e.message}")
+            throw StorageException("Failed to save watch words", e)
+        }
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
         defaultNgWordsJson: String?,
-        defaultCatalogNgWordsJson: String?
+        defaultCatalogNgWordsJson: String?,
+        defaultWatchWordsJson: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -154,6 +170,9 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultCatalogNgWordsJson != null && !prefs.contains(catalogNgWordsKey)) {
                     prefs[catalogNgWordsKey] = defaultCatalogNgWordsJson
+                }
+                if (defaultWatchWordsJson != null && !prefs.contains(watchWordsKey)) {
+                    prefs[watchWordsKey] = defaultWatchWordsJson
                 }
             }
         } catch (e: Exception) {

@@ -33,7 +33,7 @@
 - Pull-to-refresh (`PullToRefreshBox`) に加え、グリッド最下部にもドラッグ判定を置いて連続更新を楽にしています。
 - トップバーは検索モードとタイトル表示をトグル。検索時は back ハンドラで検索解除 → ドロワー → 画面遷移の順で戻る挙動を実装。
 - `CreateThreadDialog` が `BoardRepository.createThread()` を呼び、新規スレ作成後にカタログを再取得します。
-- 設定シート (`CatalogSettingsSheet`) は 6 項目 (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇の項目は実装済みで、NG管理は `NgManagementSheet` (ワードのみ)、外部アプリは `mode=cat` URL を開き、表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` をトグル。監視ワードは未実装で snackbar を表示。※凡例: 〇=対応、△=基本実装、無印=未実装。
+- 設定シート (`CatalogSettingsSheet`) は 6 項目 (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇の項目は実装済みで、NG管理は `NgManagementSheet` (ワードのみ)、外部アプリは `mode=cat` URL を開き、表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` をトグル。監視ワードは `WatchWordsSheet` で編集でき、登録ワードを含むタイトルのスレッドはカタログ更新時に履歴へ自動追加されます。※凡例: 〇=対応、△=基本実装、無印=未実装。
 
 ### Thread
 - `ThreadTopBar` で Board 名 / ステータス / レス数を表示しつつ、スレ内検索 UI (ヒット件数と前/次ボタン付き) を提供。

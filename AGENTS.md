@@ -46,7 +46,7 @@
   - **CreateThread**: `CreateThreadDialog` → `BoardRepository.createThread()` → snackbar + `performRefresh()`。
   - **Refresh**: `performRefresh()` で BoardRepository から再取得。
   - **Mode**: `AlertDialog` でモード一覧を選択し、`catalogMode` を更新。
-  - **Settings**: `CatalogSettingsSheet` が 6 メニュー (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇は実装済みで、NG管理は `NgManagementSheet` (ワードのみ) を開き、外部アプリは `mode=cat` URL を `rememberUrlLauncher` で開く。表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` を呼ぶ。監視ワードは未実装のため snackbar を表示。記号凡例: 〇=対応、△=基本実装、無印=未実装。
+  - **Settings**: `CatalogSettingsSheet` が 6 メニュー (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇は実装済みで、NG管理は `NgManagementSheet` (ワードのみ) を開き、外部アプリは `mode=cat` URL を `rememberUrlLauncher` で開く。表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` を呼ぶ。監視ワードは `WatchWordsSheet` で編集可能で、登録したワードと一致するタイトルを持つスレッドはカタログ更新時に履歴へ自動追加されます。記号凡例: 〇=対応、△=基本実装、無印=未実装。
 - `stateStore?.isPrivacyFilterEnabled` を collect し、true のときは半透明の Canvas オーバーレイを描画。
 - `FakeBoardRepository()` をデフォルトにし、`board.url` が `example.com` ならモックのまま、そうでなければ `FutachaApp` から渡された `BoardRepository` (リモート) を利用。
 

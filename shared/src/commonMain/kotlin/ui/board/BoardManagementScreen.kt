@@ -1132,12 +1132,51 @@ fun CatalogScreen(
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
+    var isWatchWordsVisible by remember { mutableStateOf(false) }
     var catalogNgFilteringEnabled by rememberSaveable(board?.id) { mutableStateOf(true) }
     val fallbackCatalogNgWordsState = rememberSaveable(board?.id) { mutableStateOf<List<String>>(emptyList()) }
     val catalogNgWordsState = stateStore?.catalogNgWords?.collectAsState(initial = fallbackCatalogNgWordsState.value)
     val catalogNgWords = catalogNgWordsState?.value ?: fallbackCatalogNgWordsState.value
+    val fallbackWatchWordsState = rememberSaveable(board?.id) { mutableStateOf<List<String>>(emptyList()) }
+    val watchWordsState = stateStore?.watchWords?.collectAsState(initial = fallbackWatchWordsState.value)
+    val watchWords = watchWordsState?.value ?: fallbackWatchWordsState.value
     val showNgMessage: (String) -> Unit = { message ->
         coroutineScope.launch { snackbarHostState.showSnackbar(message) }
+    }
+    var lastCatalogItems by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
+    suspend fun handleWatchWordMatches(
+        catalog: List<CatalogItem>,
+        filters: List<String> = watchWords
+    ) {
+        val normalizedFilters = filters
+            .mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+            .distinct()
+        if (normalizedFilters.isEmpty()) return
+        if (board == null || stateStore == null) return
+
+        val timestamp = Clock.System.now().toEpochMilliseconds()
+
+        catalog.forEach { item ->
+            val titleText = item.title?.lowercase().orEmpty()
+            if (titleText.isEmpty()) return@forEach
+            if (normalizedFilters.any { titleText.contains(it) }) {
+                val entry = ThreadHistoryEntry(
+                    threadId = item.id,
+                    boardId = board.id,
+                    title = item.title?.takeIf { it.isNotBlank() } ?: "無題",
+                    titleImageUrl = item.thumbnailUrl ?: "",
+                    boardName = board.name,
+                    boardUrl = board.url,
+                    lastVisitedEpochMillis = timestamp,
+                    replyCount = item.replyCount
+                )
+                try {
+                    stateStore.upsertHistoryEntry(entry)
+                } catch (_: Exception) {
+                    // Ignore failures to keep catalog refresh resilient
+                }
+            }
+        }
     }
     val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
         if (stateStore != null) {
@@ -1166,6 +1205,33 @@ fun CatalogScreen(
     val toggleCatalogNgFiltering: () -> Unit = {
         catalogNgFilteringEnabled = !catalogNgFilteringEnabled
         showNgMessage(if (catalogNgFilteringEnabled) "NG表示を有効にしました" else "NG表示を無効にしました")
+    }
+    val persistWatchWords: (List<String>) -> Unit = { updated ->
+        if (stateStore != null) {
+            coroutineScope.launch {
+                stateStore.setWatchWords(updated)
+            }
+        } else {
+            fallbackWatchWordsState.value = updated
+        }
+    }
+    val addWatchWordEntry: (String) -> Unit = { value ->
+        val trimmed = value.trim()
+        when {
+            trimmed.isEmpty() -> showNgMessage("監視ワードを入力してください")
+            watchWords.any { it.equals(trimmed, ignoreCase = true) } -> showNgMessage("そのワードはすでに登録されています")
+            else -> {
+                persistWatchWords(watchWords + trimmed)
+                showNgMessage("監視ワードを追加しました")
+                coroutineScope.launch {
+                    handleWatchWordMatches(lastCatalogItems, watchWords + trimmed)
+                }
+            }
+        }
+    }
+    val removeWatchWordEntry: (String) -> Unit = { entry ->
+        persistWatchWords(watchWords.filterNot { it == entry })
+        showNgMessage("監視ワードを削除しました")
     }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
@@ -1206,6 +1272,8 @@ fun CatalogScreen(
                 try {
                     val catalog = activeRepository.getCatalog(board.url, catalogMode)
                     uiState.value = CatalogUiState.Success(catalog)
+                    lastCatalogItems = catalog
+                    handleWatchWordMatches(catalog)
                     snackbarHostState.showSnackbar("カタログを更新しました")
                 } catch (e: Exception) {
                     if (e !is kotlinx.coroutines.CancellationException) {
@@ -1237,13 +1305,15 @@ fun CatalogScreen(
         uiState.value = CatalogUiState.Loading
 
         // Use try-finally to ensure cleanup even on cancellation
-        try {
-            val catalog = activeRepository.getCatalog(board.url, catalogMode)
-            // Check if still active before updating state
-            if (isActive) {
-                uiState.value = CatalogUiState.Success(catalog)
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
+            try {
+                val catalog = activeRepository.getCatalog(board.url, catalogMode)
+                // Check if still active before updating state
+                if (isActive) {
+                    uiState.value = CatalogUiState.Success(catalog)
+                    lastCatalogItems = catalog
+                    handleWatchWordMatches(catalog)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
             // Rethrow cancellation to properly cancel the coroutine
             throw e
         } catch (e: Exception) {
@@ -1507,6 +1577,9 @@ fun CatalogScreen(
                         CatalogSettingsMenuItem.NgManagement -> {
                             isNgManagementVisible = true
                         }
+                        CatalogSettingsMenuItem.WatchWords -> {
+                            isWatchWordsVisible = true
+                        }
                         CatalogSettingsMenuItem.ExternalApp -> {
                             board?.let { b ->
                                 val catalogUrl = if (catalogMode.sortParam != null) {
@@ -1544,6 +1617,14 @@ fun CatalogScreen(
                 onRemoveWord = removeCatalogNgWordEntry,
                 onToggleFiltering = toggleCatalogNgFiltering,
                 includeHeaderSection = false
+            )
+        }
+        if (isWatchWordsVisible) {
+            WatchWordsSheet(
+                watchWords = watchWords,
+                onAddWord = addWatchWordEntry,
+                onRemoveWord = removeWatchWordEntry,
+                onDismiss = { isWatchWordsVisible = false }
             )
         }
     }
@@ -2668,6 +2749,99 @@ private fun CatalogSettingsSheet(
                         .clip(MaterialTheme.shapes.small)
                         .clickable { onAction(menuItem) }
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WatchWordsSheet(
+    watchWords: List<String>,
+    onAddWord: (String) -> Unit,
+    onRemoveWord: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var input by remember { mutableStateOf("") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "監視ワード",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "タイトルが一致したスレを履歴に追加します",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Rounded.Close, contentDescription = "閉じる")
+                }
+            }
+
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("追加するワード") },
+                placeholder = { Text("例: 夏休み") },
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(
+                        onClick = {
+                            if (input.isNotBlank()) {
+                                onAddWord(input)
+                                input = ""
+                            }
+                        },
+                        enabled = input.isNotBlank()
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = "追加")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (watchWords.isEmpty()) {
+                Text(
+                    text = "まだ監視ワードは登録されていません",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(watchWords) { entry ->
+                        ListItem(
+                            headlineContent = { Text(entry) },
+                            trailingContent = {
+                                IconButton(onClick = { onRemoveWord(entry) }) {
+                                    Icon(Icons.Rounded.Delete, contentDescription = "削除")
+                                }
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -4258,7 +4432,7 @@ private fun ThreadPostCard(
             onReferencedByClick = onReferencedByClick
         )
         val thumbnailForDisplay = post.thumbnailUrl ?: post.imageUrl
-            thumbnailForDisplay?.let { displayUrl ->
+        thumbnailForDisplay?.let { displayUrl ->
                 AsyncImage(
                     model = ImageRequest.Builder(platformContext)
                         .data(displayUrl)
