@@ -191,7 +191,7 @@ futacha/
 
 - `VersionChecker.kt` - 共通インターフェース
 - `VersionChecker.android.kt` - Android実装 (PackageManager使用)
-- `VersionChecker.ios.kt` - iOS実装 (準備中)
+- `VersionChecker.ios.kt` - iOS実装 (NSBundle + GitHub Releases API)
 
 ---
 
@@ -251,7 +251,7 @@ futacha/
   - Android: `/Documents/futacha/saved_threads/`
   - iOS: `NSDocumentDirectory/saved_threads/`
 - **進捗表示**: リアルタイムパーセンテージ表示（準備1%、DL97%、変換1%、完了1%）
-- **ファイルサイズ制限**: 8000KB（8MB）対応、HEADリクエストで事前チェック
+- **ファイルサイズ制限**: 8000KB（8MB）まで。GETレスポンスの`Content-Length`と実際のバイト列をダブルチェック
 - **サポート形式**: GIF, JPG, PNG, WEBP, MP4, WEBM
 - **エラーハンドリング**: 一部失敗でも継続、ステータス表示（COMPLETED/PARTIAL/FAILED）
 - **URL-to-Pathマッピング**: ダウンロード時にURLとローカルパスを紐付け
@@ -299,6 +299,27 @@ futacha/
 - ダークモード切替UI
 - プッシュ通知
 - テストカバレッジ向上
+
+## 🧠 状態管理の仕組み
+
+`shared/src/commonMain/kotlin/state/AppStateStore.kt` が板リストと閲覧履歴の単一ソースを担い、`PlatformStateStorage` の expect/actual で **Android DataStore** と **iOS NSUserDefaults** に同じJSONを保存します。
+
+- `boards` / `history` は `Flow<String?>` をデコードして公開。書き込みは `Mutex` で直列化。
+- `setScrollDebounceScope()` を `FutachaApp` (`shared/src/commonMain/kotlin/ui/FutachaApp.kt`) から呼び出し、スクロール位置の永続化を **500ms** デバウンス。
+- `updateHistoryScrollPosition()` は直近のインデックス/オフセットと比較し、値が変わらない場合は書き込みをスキップしてI/Oを削減。
+- `upsertHistoryEntry()` で履歴の並び順を維持したまま部分更新、`seedIfEmpty()` で初期データを自動投入。
+
+```kotlin
+private val scrollPositionJobs = mutableMapOf<String, Job>()
+private const val SCROLL_DEBOUNCE_DELAY_MS = 500L
+
+val coroutineScope = rememberCoroutineScope()
+LaunchedEffect(Unit) {
+    stateStore.setScrollDebounceScope(coroutineScope)
+}
+```
+
+この仕組みにより、履歴のスクロール位置・レス数・板名といったメタデータがAndroid/iOSどちらでも同じ手順で永続化されます。
 
 ---
 
