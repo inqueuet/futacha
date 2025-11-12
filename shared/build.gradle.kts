@@ -48,6 +48,8 @@ kotlin {
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.jetbrains.compose.preview)
                 implementation(libs.jetbrains.compose.ui.tooling)
+                implementation(libs.androidx.media3.exoplayer)
+                implementation(libs.androidx.media3.ui)
             }
         }
         val androidUnitTest by getting

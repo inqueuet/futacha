@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -180,7 +181,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
+import coil3.compose.rememberAsyncImagePainter
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -5357,9 +5360,22 @@ private fun ImagePreviewDialog(
     onDismiss: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
+    val imageLoader = LocalFutachaImageLoader.current
+    val urlLauncher = rememberUrlLauncher()
     var scale by remember { mutableStateOf(1f) }
     var translation by remember { mutableStateOf(Offset.Zero) }
     var swipeDistance by remember { mutableStateOf(0f) }
+    val previewRequest = remember(imageUrl) {
+        ImageRequest.Builder(platformContext)
+            .data(imageUrl)
+            .crossfade(true)
+            .build()
+    }
+    val painter = rememberAsyncImagePainter(
+        model = previewRequest,
+        imageLoader = imageLoader
+    )
+    val painterState = painter.state
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -5394,27 +5410,45 @@ private fun ImagePreviewDialog(
                     }
                 }
         ) {
-            val previewRequest = remember(imageUrl) {
-                ImageRequest.Builder(platformContext)
-                    .data(imageUrl)
-                    .crossfade(true)
-                    .build()
-            }
-
-            AsyncImage(
-                model = previewRequest,
-                imageLoader = LocalFutachaImageLoader.current,
+            Image(
+                painter = painter,
                 contentDescription = "プレビュー画像",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = translation.x,
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = translation.x
                         translationY = translation.y
-                    )
+                        alpha = if (painterState is AsyncImagePainter.State.Error) 0f else 1f
+                    }
             )
+            if (painterState is AsyncImagePainter.State.Loading) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (painterState is AsyncImagePainter.State.Error) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "画像を読み込めませんでした",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    TextButton(onClick = { urlLauncher(imageUrl) }) {
+                        Text("ブラウザで開く")
+                    }
+                }
+            }
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier
@@ -5441,6 +5475,8 @@ private fun VideoPreviewDialog(
     onDismiss: () -> Unit
 ) {
     var swipeDistance by remember { mutableStateOf(0f) }
+    var playbackState by remember { mutableStateOf(VideoPlayerState.Buffering) }
+    val urlLauncher = rememberUrlLauncher()
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -5471,8 +5507,35 @@ private fun VideoPreviewDialog(
         ) {
             PlatformVideoPlayer(
                 videoUrl = videoUrl,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                onStateChanged = { playbackState = it }
             )
+            val isBuffering = playbackState == VideoPlayerState.Buffering || playbackState == VideoPlayerState.Idle
+            if (isBuffering) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (playbackState == VideoPlayerState.Error) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "動画を再生できませんでした",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    TextButton(onClick = { urlLauncher(videoUrl) }) {
+                        Text("ブラウザで開く")
+                    }
+                }
+            }
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier
