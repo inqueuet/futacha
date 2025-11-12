@@ -40,7 +40,7 @@
 - `LazyColumn` の各投稿カードは subject/author/ID/引用/画像を表示。引用 or ID をタップすると `QuotePreviewDialog` で該当レス群をまとめて確認できます。
 - long-press で開くアクションシートは **そうだね** / **del 依頼** / **本人削除**。成功時は `Snackbar` + 楽観的 UI で通知。
 - `ThreadActionBar` の 7 ボタン: 返信 (`ThreadFormDialog` + ActivityResult/PHPicker)、最上部 / 最下部スクロール、再読み込み、ギャラリー (`ThreadImageGallery`)、保存 (Android で `ThreadSaveService` を起動)、設定 (`ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示)。
-- 画像はピンチズーム可能な `ImagePreviewDialog`、動画は `PlatformVideoPlayer` を全画面ダイアログで表示。
+- 画像はピンチズーム + スワイプ dismiss 可能な `ImagePreviewDialog` を使用し、Coil のロード状態に応じてスピナー/エラーメッセージ/外部ブラウザ導線を切り替え。動画は `VideoPreviewDialog` 経由で状態管理され、Android (ExoPlayer) / iOS (AVPlayer + WEBM は WKWebView) の再生状態を UI に反映します。
 - スクロール位置は `snapshotFlow` + 500ms デバウンスで `AppStateStore.updateHistoryScrollPosition()` に保存されます。
 
 ### Saved Threads
@@ -51,7 +51,8 @@
 
 ## 💾 State, Persistence & Privacy
 - `AppStateStore`:
-  - `Flow<List<BoardSummary>> / Flow<List<ThreadHistoryEntry>> / Flow<Boolean>` を公開。
+  - `boards` / `history` / `isPrivacyFilterEnabled` に加え、`catalogDisplayStyle`、板&スレ NG (`ngHeaders`, `ngWords`, `catalogNgWords`)、監視ワード (`watchWords`) を Flow で公開。
+  - `setWatchWords()` は `WatchWordsSheet` から呼ばれ、DataStore/NSUserDefaults へ即保存。カタログ更新時には登録ワードに一致したスレッドを履歴へ自動追加します。
   - `setScrollDebounceScope()` で UI 側の `CoroutineScope` を受け取り、`scrollPositionJobs` + `Mutex` でスクロール保存の重複書き込みを抑制。
   - `upsertHistoryEntry` / `setHistory` / `setBoards` すべて `Mutex` で直列化。
   - 起動時に `seedIfEmpty(mockBoardSummaries, mockThreadHistory)` を実行。
@@ -130,7 +131,7 @@ futacha/
 - `ImagePickerButton` expect:
   - Android: `rememberLauncherForActivityResult(ActivityResultContracts.GetContent)` + `readImageDataFromUri()`
   - iOS: PHPicker → `suspend fun pickImage()` → `rememberCoroutineScope()` で結果を deliver
-- `PlatformVideoPlayer` expect: VideoView + MediaController (Android) / AVPlayerViewController (iOS)。
+- `PlatformVideoPlayer` expect: Android は Media3/ExoPlayer + `PlayerView` で WEBM/MP4 をサポートし、バッファリング/エラー状態を Compose 側へ通知。iOS は MP4 を `AVPlayerViewController`、WEBM は `WKWebView` ベースのプレーヤーで描画します。
 - `rememberUrlLauncher()` は外部ブラウザで `futaba.php` / `res/{id}.htm` を開くために Catalog/Thread 設定から使用。
 
 ---

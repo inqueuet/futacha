@@ -71,7 +71,7 @@
   - ID ラベル: `buildPosterIdLabels()` が ID ごとの通番と total count を付与 (複数出現なら強調)。
   - 引用 (`QuoteReference`) をタップすると `QuotePreviewDialog` に target posts をまとめて表示。
   - 長押しで `ThreadPostActionSheet` → そうだね / DEL 依頼 / 本人削除 (ダイアログ)。
-  - サムネ/画像/動画リンクをタップすると `handleMediaClick` → `ImagePreviewDialog` (ピンチズーム + swipe dismiss) or `VideoPreviewDialog` (PlatformVideoPlayer)。
+  - サムネ/画像/動画リンクをタップすると `handleMediaClick` → `ImagePreviewDialog` (Coil3 の状態を監視し、読み込み中はスピナー、失敗時は外部ブラウザオプション付き) or `VideoPreviewDialog`。後者はバッファリング/エラーを UI に反映し、Android は ExoPlayer で WEBM/MP4 を再生、iOS は MP4 を AVPlayer、WEBM は WKWebView 経由で描画します。
 - `ThreadContent` には `PullToRefreshBox` / カスタムスクロールバー / 500ms ごとの検索ハイライト更新 / Drawer BackHandler を実装。
 - `SaveProgressDialog` は `saveProgress` State を監視し、FINALIZING 完了後に閉じられる。
 
@@ -87,7 +87,8 @@
 ## 2. State & Persistence
 
 - `AppStateStore` (`shared/src/commonMain/kotlin/state/AppStateStore.kt`)
-  - `boards` / `history` / `isPrivacyFilterEnabled` を Flow で expose。
+  - `boards` / `history` / `isPrivacyFilterEnabled` に加えて `catalogDisplayStyle` と `ngHeaders` / `ngWords` / `catalogNgWords` / `watchWords` を Flow で expose。
+  - 監視ワード (`watchWords`) は `WatchWordsSheet` から編集され、`AppStateStore.setWatchWords()` で DataStore / NSUserDefaults に即保存。カタログ更新時はこれらのワードに一致したスレッドを履歴へ自動追加します。
   - JSON シリアライゼーション (`ListSerializer`) + `Mutex` で書き込みを直列化。
   - `setScrollDebounceScope()` + `scrollPositionJobs` でスレスクロール保存のスパムを防止。500ms 待ってから `updateHistoryScrollPositionImmediate()` を実行。
   - `upsertHistoryEntry()` で差分更新し順序を維持。履歴書き込みは常に `persistHistory()` 経由。
@@ -146,7 +147,7 @@
   - `LaunchedEffect(Unit)` で一覧/サイズをロード。`AlertDialog` で削除確認。現状は未配線。
 - Expect/actual components
   - `ImagePickerButton` & `rememberImagePickerLauncher`: Android は ActivityResultContracts.GetContent、iOS は PHPicker + suspend 呼び出し。
-  - `PlatformVideoPlayer`: VideoView + MediaController / AVPlayerViewController。
+  - `PlatformVideoPlayer`: Android は Media3/ExoPlayer + `PlayerView` で WEBM/MP4 をサポートし、バッファリング/エラー状態を callback へ通知。iOS は MP4 を `AVPlayerViewController`、WEBM は `WKWebView` ベースの簡易プレーヤーで描画し、双方とも状態を Compose 側に返します。
   - `UrlLauncher`: Android Intent / iOS UIApplication。
   - `PermissionRequest`: Android ではストレージ権限 (API < 33) を要求、iOS は即 true。
   - `PlatformBackHandler`: Android Compose BackHandler / iOS no-op。
