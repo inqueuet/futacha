@@ -1131,6 +1131,42 @@ fun CatalogScreen(
     var showDisplayStyleDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    var isNgManagementVisible by remember { mutableStateOf(false) }
+    var catalogNgFilteringEnabled by rememberSaveable(board?.id) { mutableStateOf(true) }
+    val fallbackCatalogNgWordsState = rememberSaveable(board?.id) { mutableStateOf<List<String>>(emptyList()) }
+    val catalogNgWordsState = stateStore?.catalogNgWords?.collectAsState(initial = fallbackCatalogNgWordsState.value)
+    val catalogNgWords = catalogNgWordsState?.value ?: fallbackCatalogNgWordsState.value
+    val showNgMessage: (String) -> Unit = { message ->
+        coroutineScope.launch { snackbarHostState.showSnackbar(message) }
+    }
+    val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
+        if (stateStore != null) {
+            coroutineScope.launch {
+                stateStore.setCatalogNgWords(updated)
+            }
+        } else {
+            fallbackCatalogNgWordsState.value = updated
+        }
+    }
+    val addCatalogNgWordEntry: (String) -> Unit = { value ->
+        val trimmed = value.trim()
+        when {
+            trimmed.isEmpty() -> showNgMessage("NGワードに含める文字列を入力してください")
+            catalogNgWords.any { it.equals(trimmed, ignoreCase = true) } -> showNgMessage("そのNGワードはすでに登録されています")
+            else -> {
+                persistCatalogNgWords(catalogNgWords + trimmed)
+                showNgMessage("NGワードを追加しました")
+            }
+        }
+    }
+    val removeCatalogNgWordEntry: (String) -> Unit = { entry ->
+        persistCatalogNgWords(catalogNgWords.filterNot { it == entry })
+        showNgMessage("NGワードを削除しました")
+    }
+    val toggleCatalogNgFiltering: () -> Unit = {
+        catalogNgFilteringEnabled = !catalogNgFilteringEnabled
+        showNgMessage(if (catalogNgFilteringEnabled) "NG表示を有効にしました" else "NG表示を無効にしました")
+    }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val catalogGridState = rememberLazyGridState()
@@ -1339,7 +1375,11 @@ fun CatalogScreen(
                 is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
                 is CatalogUiState.Success -> {
                     val sortedItems = catalogMode.applyLocalSort(state.items)
-                    val visibleItems = sortedItems.filterByQuery(searchQuery)
+                    val ngFilteredItems = sortedItems.filterByCatalogNgWords(
+                        catalogNgWords = catalogNgWords,
+                        enabled = catalogNgFilteringEnabled
+                    )
+                    val visibleItems = ngFilteredItems.filterByQuery(searchQuery)
                     CatalogSuccessContent(
                         items = visibleItems,
                         board = board,
@@ -1464,6 +1504,9 @@ fun CatalogScreen(
                     when (menuItem) {
                         CatalogSettingsMenuItem.ScrollToTop -> scrollCatalogToTop()
                         CatalogSettingsMenuItem.DisplayStyle -> showDisplayStyleDialog = true
+                        CatalogSettingsMenuItem.NgManagement -> {
+                            isNgManagementVisible = true
+                        }
                         CatalogSettingsMenuItem.ExternalApp -> {
                             board?.let { b ->
                                 val catalogUrl = if (catalogMode.sortParam != null) {
@@ -1486,6 +1529,21 @@ fun CatalogScreen(
                     }
                     showSettingsMenu = false
                 }
+            )
+        }
+
+        if (isNgManagementVisible) {
+            NgManagementSheet(
+                ngHeaders = emptyList(),
+                ngWords = catalogNgWords,
+                ngFilteringEnabled = catalogNgFilteringEnabled,
+                onDismiss = { isNgManagementVisible = false },
+                onAddHeader = {},
+                onAddWord = addCatalogNgWordEntry,
+                onRemoveHeader = {},
+                onRemoveWord = removeCatalogNgWordEntry,
+                onToggleFiltering = toggleCatalogNgFiltering,
+                includeHeaderSection = false
             )
         }
     }
@@ -2665,6 +2723,27 @@ private fun List<CatalogItem>.filterByQuery(query: String): List<CatalogItem> {
         val threadMatch = item.threadUrl.lowercase().contains(normalizedQuery)
         titleMatch || idMatch || threadMatch
     }
+}
+
+private fun List<CatalogItem>.filterByCatalogNgWords(
+    catalogNgWords: List<String>,
+    enabled: Boolean
+): List<CatalogItem> {
+    if (!enabled) return this
+    val wordFilters = catalogNgWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    if (wordFilters.isEmpty()) return this
+    return filterNot { item ->
+        matchesCatalogNgWords(item, wordFilters)
+    }
+}
+
+private fun matchesCatalogNgWords(
+    item: CatalogItem,
+    wordFilters: List<String>
+): Boolean {
+    val titleText = item.title?.lowercase().orEmpty()
+    if (titleText.isEmpty()) return false
+    return wordFilters.any { titleText.contains(it) }
 }
 
 private enum class CatalogMenuAction(val label: String) {
@@ -5516,14 +5595,40 @@ private fun NgManagementSheet(
     onRemoveHeader: (String) -> Unit,
     onRemoveWord: (String) -> Unit,
     onToggleFiltering: () -> Unit,
-    initialInput: String? = null
+    initialInput: String? = null,
+    includeHeaderSection: Boolean = true,
+    includeWordSection: Boolean = true
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var section by rememberSaveable { mutableStateOf(NgManagementSection.Header) }
-    var input by rememberSaveable(initialInput) { mutableStateOf(initialInput.orEmpty()) }
-    LaunchedEffect(initialInput) {
-        if (!initialInput.isNullOrBlank()) {
-            section = NgManagementSection.Header
+    val allowedSections = remember(includeHeaderSection, includeWordSection) {
+        buildList {
+            if (includeHeaderSection) add(NgManagementSection.Header)
+            if (includeWordSection) add(NgManagementSection.Word)
+        }.ifEmpty { listOf(NgManagementSection.Word) }
+    }
+    val defaultSection = remember(includeHeaderSection, includeWordSection) {
+        when {
+            includeHeaderSection -> NgManagementSection.Header
+            else -> NgManagementSection.Word
+        }
+    }
+    var section by rememberSaveable(includeHeaderSection, includeWordSection) {
+        mutableStateOf(defaultSection)
+    }
+    LaunchedEffect(allowedSections) {
+        if (section !in allowedSections) {
+            section = allowedSections.first()
+        }
+    }
+    var input by rememberSaveable(section) { mutableStateOf("") }
+    LaunchedEffect(section, initialInput) {
+        input = when (section) {
+            NgManagementSection.Header -> if (includeHeaderSection) {
+                initialInput?.takeIf { it.isNotBlank() } ?: ""
+            } else {
+                ""
+            }
+            NgManagementSection.Word -> ""
         }
     }
     val entries = when (section) {
@@ -5537,6 +5642,11 @@ private fun NgManagementSheet(
     val sectionLabel = when (section) {
         NgManagementSection.Header -> "NGヘッダー"
         NgManagementSection.Word -> "NGワード"
+    }
+    val descriptionText = if (includeHeaderSection) {
+        "一致したレスが即座に非表示になります"
+    } else {
+        "一致したスレッドが即座に非表示になります"
     }
 
     ModalBottomSheet(
@@ -5559,7 +5669,7 @@ private fun NgManagementSheet(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "一致したレスが即座に非表示になります",
+                        text = descriptionText,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -5570,25 +5680,18 @@ private fun NgManagementSheet(
                 }
             }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                SectionChip(
-                    label = "NGヘッダー",
-                    selected = section == NgManagementSection.Header,
-                    onClick = {
-                        section = NgManagementSection.Header
-                        input = initialInput?.takeIf { it.isNotBlank() } ?: ""
+            if (allowedSections.size > 1) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    allowedSections.forEach { availableSection ->
+                        SectionChip(
+                            label = if (availableSection == NgManagementSection.Header) "NGヘッダー" else "NGワード",
+                            selected = section == availableSection,
+                            onClick = { section = availableSection }
+                        )
                     }
-                )
-                SectionChip(
-                    label = "NGワード",
-                    selected = section == NgManagementSection.Word,
-                    onClick = {
-                        section = NgManagementSection.Word
-                        input = ""
-                    }
-                )
+                }
             }
 
             OutlinedTextField(
@@ -5602,10 +5705,9 @@ private fun NgManagementSheet(
                         onClick = {
                             val trimmed = input.trim()
                             if (trimmed.isEmpty()) return@IconButton
-                            if (section == NgManagementSection.Header) {
-                                onAddHeader(trimmed)
-                            } else {
-                                onAddWord(trimmed)
+                            when (section) {
+                                NgManagementSection.Header -> onAddHeader(trimmed)
+                                NgManagementSection.Word -> onAddWord(trimmed)
                             }
                             input = ""
                         },
@@ -5635,10 +5737,9 @@ private fun NgManagementSheet(
                             trailingContent = {
                                 IconButton(
                                     onClick = {
-                                        if (section == NgManagementSection.Header) {
-                                            onRemoveHeader(entry)
-                                        } else {
-                                            onRemoveWord(entry)
+                                        when (section) {
+                                            NgManagementSection.Header -> onRemoveHeader(entry)
+                                            NgManagementSection.Word -> onRemoveWord(entry)
                                         }
                                     }
                                 ) {

@@ -28,6 +28,7 @@ private class AndroidPlatformStateStorage(
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
+    private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -58,6 +59,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[ngWordsKey] }
+
+    override val catalogNgWordsJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[catalogNgWordsKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -116,11 +122,21 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updateCatalogNgWordsJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[catalogNgWordsKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update catalog NG words: ${e.message}")
+            throw StorageException("Failed to save catalog NG words", e)
+        }
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
-        defaultNgWordsJson: String?
+        defaultNgWordsJson: String?,
+        defaultCatalogNgWordsJson: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -135,6 +151,9 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultNgWordsJson != null && !prefs.contains(ngWordsKey)) {
                     prefs[ngWordsKey] = defaultNgWordsJson
+                }
+                if (defaultCatalogNgWordsJson != null && !prefs.contains(catalogNgWordsKey)) {
+                    prefs[catalogNgWordsKey] = defaultCatalogNgWordsJson
                 }
             }
         } catch (e: Exception) {

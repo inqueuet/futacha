@@ -10,6 +10,7 @@ private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
+private const val CATALOG_NG_WORDS_KEY = "catalog_ng_words_json"
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
     return IosPlatformStateStorage()
@@ -23,6 +24,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
     private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
+    private val catalogNgWordsState = MutableStateFlow(defaults.stringForKey(CATALOG_NG_WORDS_KEY))
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
@@ -30,6 +32,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val ngHeadersJson: Flow<String?> = ngHeadersState
     override val ngWordsJson: Flow<String?> = ngWordsState
+    override val catalogNgWordsJson: Flow<String?> = catalogNgWordsState
 
     override suspend fun updateBoardsJson(value: String) {
         defaults.setObject(value, forKey = BOARDS_KEY)
@@ -67,11 +70,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         ngWordsState.value = value
     }
 
+    override suspend fun updateCatalogNgWordsJson(value: String) {
+        defaults.setObject(value, forKey = CATALOG_NG_WORDS_KEY)
+        defaults.synchronize()
+        catalogNgWordsState.value = value
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
-        defaultNgWordsJson: String?
+        defaultNgWordsJson: String?,
+        defaultCatalogNgWordsJson: String?
     ) {
         var updated = false
         if (defaults.stringForKey(BOARDS_KEY) == null) {
@@ -92,6 +102,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaultNgWordsJson != null && defaults.stringForKey(NG_WORDS_KEY) == null) {
             defaults.setObject(defaultNgWordsJson, forKey = NG_WORDS_KEY)
             ngWordsState.value = defaultNgWordsJson
+            updated = true
+        }
+        if (defaultCatalogNgWordsJson != null && defaults.stringForKey(CATALOG_NG_WORDS_KEY) == null) {
+            defaults.setObject(defaultCatalogNgWordsJson, forKey = CATALOG_NG_WORDS_KEY)
+            catalogNgWordsState.value = defaultCatalogNgWordsJson
             updated = true
         }
         if (updated) {

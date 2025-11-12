@@ -64,6 +64,9 @@ class AppStateStore internal constructor(
     val ngWords: Flow<List<String>> = storage.ngWordsJson.map { raw ->
         decodeStringList(raw)
     }
+    val catalogNgWords: Flow<List<String>> = storage.catalogNgWordsJson.map { raw ->
+        decodeStringList(raw)
+    }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
         boardsMutex.withLock {
@@ -117,6 +120,14 @@ class AppStateStore internal constructor(
             storage.updateNgWordsJson(json.encodeToString(stringListSerializer, words))
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save NG words (${words.size})", e)
+        }
+    }
+
+    suspend fun setCatalogNgWords(words: List<String>) {
+        try {
+            storage.updateCatalogNgWordsJson(json.encodeToString(stringListSerializer, words))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save catalog NG words (${words.size})", e)
         }
     }
 
@@ -299,14 +310,16 @@ class AppStateStore internal constructor(
         defaultBoards: List<BoardSummary>,
         defaultHistory: List<ThreadHistoryEntry>,
         defaultNgHeaders: List<String> = emptyList(),
-        defaultNgWords: List<String> = emptyList()
+        defaultNgWords: List<String> = emptyList(),
+        defaultCatalogNgWords: List<String> = emptyList()
     ) {
         try {
             storage.seedIfEmpty(
                 json.encodeToString(boardsSerializer, defaultBoards),
                 json.encodeToString(historySerializer, defaultHistory),
                 json.encodeToString(stringListSerializer, defaultNgHeaders),
-                json.encodeToString(stringListSerializer, defaultNgWords)
+                json.encodeToString(stringListSerializer, defaultNgWords),
+                json.encodeToString(stringListSerializer, defaultCatalogNgWords)
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -384,6 +397,7 @@ internal interface PlatformStateStorage {
     val catalogDisplayStyle: Flow<String?>
     val ngHeadersJson: Flow<String?>
     val ngWordsJson: Flow<String?>
+    val catalogNgWordsJson: Flow<String?>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
@@ -391,11 +405,13 @@ internal interface PlatformStateStorage {
     suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun updateNgHeadersJson(value: String)
     suspend fun updateNgWordsJson(value: String)
+    suspend fun updateCatalogNgWordsJson(value: String)
     suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
-        defaultNgWordsJson: String?
+        defaultNgWordsJson: String?,
+        defaultCatalogNgWordsJson: String?
     )
 }
 
