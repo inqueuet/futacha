@@ -202,6 +202,7 @@ import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -3316,11 +3317,14 @@ fun ThreadScreen(
                 return@launch
             }
             actionInProgress = true
+            Logger.d(THREAD_ACTION_LOG_TAG, "Starting thread action: success='$successMessage', failure='$failurePrefix'")
             try {
                 block()
+                Logger.i(THREAD_ACTION_LOG_TAG, "Thread action succeeded: $successMessage")
                 onSuccess()
                 snackbarHostState.showSnackbar(successMessage)
             } catch (e: Exception) {
+                Logger.e(THREAD_ACTION_LOG_TAG, "Thread action failed: $failurePrefix", e)
                 val detail = e.message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
                 snackbarHostState.showSnackbar("$failurePrefix$detail")
             } finally {
@@ -4937,6 +4941,7 @@ private fun GalleryImageItem(
 }
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
+private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
 
 private fun buildAnnotatedMessage(
     html: String,

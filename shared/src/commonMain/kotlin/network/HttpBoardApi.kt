@@ -1,16 +1,28 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.util.TextEncoding
 import io.ktor.client.HttpClient
+import io.ktor.client.request.forms.FormBuilder
+import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitForm
+import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.random.Random
+import kotlin.text.RegexOption
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 class HttpBoardApi(
     private val client: HttpClient
@@ -22,7 +34,32 @@ class HttpBoardApi(
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         private const val DEFAULT_ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
         private const val MAX_RESPONSE_SIZE = 20 * 1024 * 1024 // 20MB limit
+        private const val DEFAULT_UPLOAD_FILE_NAME = "upload.bin"
+        private const val SHIFT_JIS_TEXT_MIME = "text/plain; charset=Shift_JIS"
+        private const val UTF8_TEXT_MIME = "text/plain; charset=UTF-8"
+        private const val ASCII_TEXT_MIME = "text/plain; charset=US-ASCII"
+        private const val DEFAULT_SHIFT_JIS_CHRENC_SAMPLE = "文字"
+        private const val DEFAULT_SCREEN_SPEC = "1080x1920x24"
+        private const val DEFAULT_PTUA_VALUE = "1341647872"
+        private val THREAD_ID_REGEX = """res/(\d+)\.htm""".toRegex()
+        private val SUCCESS_KEYWORDS = listOf("書き込みました", "書き込みました。", "書き込みが完了", "書きこみました")
+        private val ERROR_KEYWORDS = listOf("エラー", "error", "荒らし", "規制", "拒否", "連続投稿", "大きすぎ", "時間を置いて")
+        private val WEBP_CONTENT_TYPE = ContentType.parse("image/webp")
+        private val WEBM_CONTENT_TYPE = ContentType.parse("video/webm")
+        private val BMP_CONTENT_TYPE = ContentType.parse("image/bmp")
+        private val MP4_CONTENT_TYPE = ContentType.parse("video/mp4")
+        private val JSON_STATUS_REGEX = """"status"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
+        private val JSON_MESSAGE_REGEX = """"(error|reason|message)"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
+        private val JSON_JUMPTO_REGEX = """"jumpto"\s*:\s*(\d+)""".toRegex()
+        private val JSON_THISNO_REGEX = """"thisno"\s*:\s*(\d+)""".toRegex()
+        private val CHRENC_INPUT_REGEX =
+            Regex("""<input[^>]*name\s*=\s*["']chrenc["'][^>]*>""", RegexOption.IGNORE_CASE)
+        private val VALUE_ATTR_REGEX =
+            Regex("""value\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
     }
+
+    private val postingConfigCache = mutableMapOf<String, PostingConfig>()
+    private val postingConfigMutex = Mutex()
 
     override suspend fun fetchCatalogSetup(board: String) {
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
@@ -333,22 +370,23 @@ class HttpBoardApi(
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
+        val postingConfig = getPostingConfig(board)
+        val formData = buildPostFormData(
+            threadId = null,
+            name = name,
+            email = email,
+            subject = subject,
+            comment = comment,
+            password = password,
+            imageFile = imageFile,
+            imageFileName = imageFileName,
+            textOnly = textOnly,
+            postingConfig = postingConfig
+        )
         val response = try {
-            client.submitForm(
+            client.submitFormWithBinaryData(
                 url = url,
-                formParameters = Parameters.build {
-                    append("guid", "on")
-                    append("mode", "regist")
-                    append("MAX_FILE_SIZE", "8192000")
-                    append("name", name)
-                    append("email", email)
-                    append("sub", subject)
-                    append("com", comment)
-                    append("pwd", password)
-                    if (textOnly) {
-                        append("textonly", "on")
-                    }
-                }
+                formData = formData
             ) {
                 headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
                 headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
@@ -366,11 +404,20 @@ class HttpBoardApi(
 
         // Parse response to extract thread ID
         val responseBody = response.bodyAsText()
-        // Look for thread ID in response - it should redirect to the new thread
-        // Example: res/1364612020.htm
-        val threadIdRegex = """res/(\d+)\.htm""".toRegex()
-        val match = threadIdRegex.find(responseBody)
-        return match?.groupValues?.get(1) ?: throw NetworkException("スレッドIDの取得に失敗しました")
+        val match = THREAD_ID_REGEX.find(responseBody)
+        if (match != null) {
+            return match.groupValues[1]
+        }
+        val jsonThreadId = tryParseThreadIdFromJson(responseBody)
+        if (jsonThreadId != null) {
+            return jsonThreadId
+        }
+        val errorDetail = extractServerError(responseBody)
+        val summary = summarizeResponse(responseBody)
+        if (errorDetail != null) {
+            throw NetworkException("スレッド作成に失敗しました: $errorDetail")
+        }
+        throw NetworkException("スレッドIDの取得に失敗しました: $summary")
     }
 
     override suspend fun replyToThread(
@@ -392,24 +439,23 @@ class HttpBoardApi(
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
+        val postingConfig = getPostingConfig(board)
+        val formData = buildPostFormData(
+            threadId = threadId,
+            name = name,
+            email = email,
+            subject = subject,
+            comment = comment,
+            password = password,
+            imageFile = imageFile,
+            imageFileName = imageFileName,
+            textOnly = textOnly,
+            postingConfig = postingConfig
+        )
         val response = try {
-            client.submitForm(
+            client.submitFormWithBinaryData(
                 url = url,
-                formParameters = Parameters.build {
-                    append("guid", "on")
-                    append("mode", "regist")
-                    append("MAX_FILE_SIZE", "8192000")
-                    append("resto", threadId)
-                    append("name", name)
-                    append("email", email)
-                    append("sub", subject)
-                    append("com", comment)
-                    append("pwd", password)
-                    if (textOnly) {
-                        append("textonly", "on")
-                    }
-                    append("responsemode", "ajax")
-                }
+                formData = formData
             ) {
                 headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
                 headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
@@ -424,6 +470,318 @@ class HttpBoardApi(
         if (!response.status.isSuccess()) {
             throw NetworkException("返信に失敗しました (HTTP ${response.status.value})")
         }
+        val responseBody = response.bodyAsText()
+        if (!isSuccessfulPostResponse(responseBody)) {
+            val errorDetail = extractServerError(responseBody)
+            val summary = summarizeResponse(responseBody)
+            val detail = errorDetail ?: summary
+            throw NetworkException("返信に失敗しました: $detail")
+        }
+    }
+
+    private fun buildPostFormData(
+        threadId: String?,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean,
+        postingConfig: PostingConfig
+    ) = formData {
+        appendAsciiField("guid", "on")
+        appendAsciiField("mode", "regist")
+        appendAsciiField("MAX_FILE_SIZE", "8192000")
+        appendTextField("name", name, postingConfig.encoding)
+        appendTextField("email", email, postingConfig.encoding)
+        appendTextField("sub", subject, postingConfig.encoding)
+        appendTextField("com", comment, postingConfig.encoding)
+        appendTextField("pwd", password, postingConfig.encoding)
+        appendTextField("chrenc", postingConfig.chrencValue, postingConfig.encoding)
+        appendAsciiField("js", "on")
+        appendAsciiField("baseform", "")
+        appendAsciiField("pthb", "")
+        appendAsciiField("pthc", generateClientTimestampSeed())
+        appendAsciiField("pthd", "")
+        appendAsciiField("ptua", DEFAULT_PTUA_VALUE)
+        appendAsciiField("scsz", DEFAULT_SCREEN_SPEC)
+        appendAsciiField("hash", generateClientHash())
+        threadId?.let {
+            appendAsciiField("resto", it)
+            appendAsciiField("responsemode", "ajax")
+        }
+
+        val attachImage = shouldAttachImage(imageFile, textOnly)
+        if (attachImage) {
+            val safeName = sanitizeFileName(imageFileName)
+            append(
+                "upfile",
+                imageFile!!,
+                Headers.build {
+                    append(
+                        HttpHeaders.ContentDisposition,
+                        """form-data; name="upfile"; filename="$safeName""""
+                    )
+                    append(HttpHeaders.ContentType, guessMediaContentType(safeName).toString())
+                }
+            )
+        } else {
+            append("textonly", "on")
+            append(
+                "upfile",
+                ByteArray(0),
+                Headers.build {
+                    append(
+                        HttpHeaders.ContentDisposition,
+                        """form-data; name="upfile"; filename="""
+                    )
+                    append(HttpHeaders.ContentType, ContentType.Application.OctetStream.toString())
+                }
+            )
+        }
+    }
+
+    private fun shouldAttachImage(imageFile: ByteArray?, textOnly: Boolean): Boolean {
+        return !textOnly && imageFile != null && imageFile.isNotEmpty()
+    }
+
+    private fun sanitizeFileName(original: String?): String {
+        if (original.isNullOrBlank()) return DEFAULT_UPLOAD_FILE_NAME
+        val trimmed = original.trim()
+        val sanitized = buildString(trimmed.length) {
+            for (ch in trimmed) {
+                when {
+                    ch.isLetterOrDigit() -> append(ch)
+                    ch == '.' || ch == '-' || ch == '_' -> append(ch)
+                    ch.isWhitespace() -> append('_')
+                    else -> append('_')
+                }
+            }
+        }
+        return sanitized.ifBlank { DEFAULT_UPLOAD_FILE_NAME }
+    }
+
+    private fun guessMediaContentType(fileName: String): ContentType {
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        return when (extension) {
+            "jpg", "jpeg", "jpe" -> ContentType.Image.JPEG
+            "png" -> ContentType.Image.PNG
+            "gif" -> ContentType.Image.GIF
+            "bmp" -> BMP_CONTENT_TYPE
+            "webp" -> WEBP_CONTENT_TYPE
+            "webm" -> WEBM_CONTENT_TYPE
+            "mp4" -> MP4_CONTENT_TYPE
+            else -> ContentType.Application.OctetStream
+        }
+    }
+
+    private fun isSuccessfulPostResponse(body: String): Boolean {
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) return false
+        if (looksLikeJson(trimmed) && isJsonStatusOk(trimmed)) {
+            return true
+        }
+        if (THREAD_ID_REGEX.containsMatchIn(trimmed)) {
+            return true
+        }
+        return SUCCESS_KEYWORDS.any { keyword -> trimmed.contains(keyword) }
+    }
+
+    private fun extractServerError(body: String): String? {
+        val normalized = body.replace("\r\n", "\n")
+        if (looksLikeJson(normalized)) {
+            if (isJsonStatusOk(normalized)) {
+                return null
+            }
+            val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
+            if (message != null) {
+                return message
+            }
+            val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
+            return status?.let { "status=$it" }
+        }
+        return normalized.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { line ->
+                line.isNotEmpty() && ERROR_KEYWORDS.any { keyword ->
+                    line.contains(keyword, ignoreCase = true)
+                }
+            }
+    }
+
+    private fun summarizeResponse(body: String): String {
+        val normalized = body.replace("\r\n", "\n")
+        if (looksLikeJson(normalized)) {
+            val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
+            val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
+            return buildString {
+                append("status=${status ?: "unknown"}")
+                if (!message.isNullOrBlank()) {
+                    append(", message=")
+                    append(message)
+                }
+            }
+        }
+        return normalized.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotEmpty() }
+            ?.take(120)
+            ?: body.take(120)
+    }
+
+    private fun tryParseThreadIdFromJson(body: String): String? {
+        if (!looksLikeJson(body) || !isJsonStatusOk(body)) {
+            return null
+        }
+        val jumpto = JSON_JUMPTO_REGEX.find(body)?.groupValues?.getOrNull(1)
+        if (!jumpto.isNullOrBlank()) {
+            return jumpto
+        }
+        val thisNo = JSON_THISNO_REGEX.find(body)?.groupValues?.getOrNull(1)
+        if (!thisNo.isNullOrBlank()) {
+            return thisNo
+        }
+        return null
+    }
+
+    private fun looksLikeJson(body: String): Boolean {
+        val firstNonWhitespace = body.firstOrNull { !it.isWhitespace() }
+        return firstNonWhitespace == '{' || firstNonWhitespace == '['
+    }
+
+    private fun isJsonStatusOk(body: String): Boolean {
+        val status = JSON_STATUS_REGEX.find(body)?.groupValues?.getOrNull(1)?.lowercase()
+        return status == "ok" || status == "success"
+    }
+
+    private fun FormBuilder.appendTextField(name: String, value: String, encoding: PostEncoding) {
+        val (bytes, contentType) = when (encoding) {
+            PostEncoding.SHIFT_JIS -> TextEncoding.encodeToShiftJis(value) to SHIFT_JIS_TEXT_MIME
+            PostEncoding.UTF8 -> value.encodeToByteArray() to UTF8_TEXT_MIME
+        }
+        append(
+            name,
+            bytes,
+            Headers.build {
+                append(HttpHeaders.ContentDisposition, """form-data; name="$name"""")
+                append(HttpHeaders.ContentType, contentType)
+            }
+        )
+    }
+
+    private fun FormBuilder.appendAsciiField(name: String, value: String) {
+        append(
+            name,
+            value,
+            Headers.build {
+                append(HttpHeaders.ContentDisposition, """form-data; name="$name"""")
+                append(HttpHeaders.ContentType, ASCII_TEXT_MIME)
+            }
+        )
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private fun generateClientHash(): String {
+        val timestamp = Clock.System.now().toEpochMilliseconds()
+        val randomHex = buildString(32) {
+            repeat(16) {
+                val value = Random.nextInt(0, 256)
+                append(value.toString(16).padStart(2, '0'))
+            }
+        }
+        return "$timestamp-$randomHex"
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private fun generateClientTimestampSeed(): String =
+        Clock.System.now().toEpochMilliseconds().toString()
+
+    private suspend fun getPostingConfig(board: String): PostingConfig {
+        postingConfigMutex.withLock {
+            postingConfigCache[board]?.let { return it }
+        }
+        val fetched = fetchPostingConfig(board)
+        return postingConfigMutex.withLock {
+            postingConfigCache.getOrPut(board) { fetched }
+        }
+    }
+
+    private suspend fun fetchPostingConfig(board: String): PostingConfig {
+        return try {
+            val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
+            val url = buildString {
+                append(boardBase)
+                if (!boardBase.endsWith("/")) append('/')
+                append("futaba.htm")
+            }
+            val html = client.get(url) {
+                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                headers[HttpHeaders.CacheControl] = "no-cache"
+            }.bodyAsText()
+            val chrencValue = parseChrencValue(html) ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE
+            PostingConfig(
+                encoding = determineEncoding(chrencValue),
+                chrencValue = chrencValue
+            )
+        } catch (_: Exception) {
+            PostingConfig(
+                encoding = PostEncoding.SHIFT_JIS,
+                chrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE
+            )
+        }
+    }
+
+    private fun parseChrencValue(html: String): String? {
+        val input = CHRENC_INPUT_REGEX.find(html)?.value ?: return null
+        val match = VALUE_ATTR_REGEX.find(input) ?: return null
+        val rawValue = match.groupValues.getOrNull(1)?.trim().orEmpty()
+        if (rawValue.isEmpty()) return null
+        return decodeNumericEntities(rawValue)
+    }
+
+    private fun decodeNumericEntities(value: String): String {
+        if (!value.contains("&#")) return value
+        val numericEntityRegex = Regex("""&#(x?[0-9a-fA-F]+);""")
+        return numericEntityRegex.replace(value) { match ->
+            val payload = match.groupValues.getOrNull(1) ?: return@replace match.value
+            val codePoint = when {
+                payload.startsWith("x") || payload.startsWith("X") -> payload.drop(1).toIntOrNull(16)
+                else -> payload.toIntOrNull(10)
+            }
+            codePoint?.let {
+                if (it <= Char.MAX_VALUE.code) {
+                    Char(it).toString()
+                } else {
+                    val adjusted = it - 0x10000
+                    val high = 0xD800 + (adjusted shr 10)
+                    val low = 0xDC00 + (adjusted and 0x3FF)
+                    charArrayOf(high.toChar(), low.toChar()).concatToString()
+                }
+            } ?: match.value
+        }
+    }
+
+    private fun determineEncoding(chrencValue: String): PostEncoding {
+        val normalized = chrencValue.lowercase()
+        return if (normalized.contains("unicode") || normalized.contains("utf")) {
+            PostEncoding.UTF8
+        } else {
+            PostEncoding.SHIFT_JIS
+        }
+    }
+
+    private data class PostingConfig(
+        val encoding: PostEncoding,
+        val chrencValue: String
+    )
+
+    private enum class PostEncoding {
+        SHIFT_JIS,
+        UTF8
     }
 
     override fun close() {
