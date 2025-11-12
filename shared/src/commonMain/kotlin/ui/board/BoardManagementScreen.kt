@@ -38,6 +38,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -59,14 +60,17 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material.icons.rounded.FlashOn
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -75,6 +79,9 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Timeline
+import androidx.compose.material.icons.rounded.VerticalAlignTop
+import androidx.compose.material.icons.rounded.ViewModule
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -1108,6 +1115,8 @@ fun CatalogScreen(
     var searchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
     var showModeDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
+    val catalogGridState = rememberLazyGridState()
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -1261,9 +1270,7 @@ fun CatalogScreen(
                             CatalogNavDestination.CreateThread -> showCreateThreadDialog = true
                             CatalogNavDestination.RefreshCatalog -> performRefresh()
                             CatalogNavDestination.Mode -> showModeDialog = true
-                            CatalogNavDestination.Settings -> coroutineScope.launch {
-                                snackbarHostState.showSnackbar("設定は未実装です")
-                            }
+                            CatalogNavDestination.Settings -> showSettingsMenu = true
                         }
                     }
                 )
@@ -1293,6 +1300,7 @@ fun CatalogScreen(
                         onThreadSelected = onThreadSelected,
                         onRefresh = performRefresh,
                         isRefreshing = isRefreshing,
+                        gridState = catalogGridState,
                         modifier = contentModifier
                     )
                 }
@@ -1373,6 +1381,27 @@ fun CatalogScreen(
                             snackbarHostState.showSnackbar("スレッド作成に失敗しました: ${e.message ?: "不明なエラー"}")
                         }
                     }
+                }
+            )
+        }
+
+        if (showSettingsMenu) {
+            CatalogSettingsSheet(
+                onDismiss = { showSettingsMenu = false },
+                onAction = { menuItem ->
+                    when (menuItem) {
+                        CatalogSettingsMenuItem.ScrollToTop -> coroutineScope.launch {
+                            if (catalogGridState.layoutInfo.totalItemsCount > 0) {
+                                catalogGridState.animateScrollToItem(0)
+                            }
+                        }
+                        CatalogSettingsMenuItem.DisplayStyle -> showModeDialog = true
+
+                        else -> coroutineScope.launch {
+                            snackbarHostState.showSnackbar("${menuItem.label} は未実装です")
+                        }
+                    }
+                    showSettingsMenu = false
                 }
             )
         }
@@ -1832,6 +1861,7 @@ private fun CatalogSuccessContent(
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
+    gridState: LazyGridState,
     modifier: Modifier = Modifier
 ) {
     if (items.isEmpty()) {
@@ -1847,6 +1877,7 @@ private fun CatalogSuccessContent(
             onThreadSelected = onThreadSelected,
             onRefresh = onRefresh,
             isRefreshing = isRefreshing,
+            gridState = gridState,
             modifier = modifier
         )
     }
@@ -1878,9 +1909,9 @@ private fun CatalogGrid(
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
+    gridState: LazyGridState,
     modifier: Modifier = Modifier
 ) {
-    val gridState = rememberLazyGridState()
     val coroutineScope = rememberCoroutineScope()
     var dragOffset by remember { mutableStateOf(0f) }
     val isAtBottom by remember {
@@ -2243,6 +2274,53 @@ private fun CatalogNavigationBar(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CatalogSettingsSheet(
+    onDismiss: () -> Unit,
+    onAction: (CatalogSettingsMenuItem) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "設定メニュー",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            CatalogSettingsMenuItem.entries.forEach { menuItem ->
+                ListItem(
+                    leadingContent = { Icon(imageVector = menuItem.icon, contentDescription = null) },
+                    headlineContent = {
+                        Column {
+                            Text(menuItem.label)
+                            menuItem.description?.let { description ->
+                                Text(
+                                    text = description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { onAction(menuItem) }
+                )
+            }
+        }
+    }
+}
+
 private fun List<CatalogItem>.filterByQuery(query: String): List<CatalogItem> {
     val trimmedQuery = query.trim()
     if (trimmedQuery.isEmpty()) return this
@@ -2260,6 +2338,19 @@ private enum class CatalogMenuAction(val label: String) {
     Toolbar("ツールバー編集"),
     Settings("設定"),
     Help("ヘルプ")
+}
+
+private enum class CatalogSettingsMenuItem(
+    val label: String,
+    val icon: ImageVector,
+    val description: String?
+) {
+    WatchWords("監視ワード", Icons.Rounded.WatchLater, "監視中のワードを編集"),
+    NgManagement("NG管理", Icons.Rounded.Block, "NGワード・IDを管理"),
+    ExternalApp("外部アプリ", Icons.Rounded.OpenInNew, "外部アプリ連携を設定"),
+    DisplayStyle("表示の切り替え", Icons.Rounded.ViewModule, "カタログ表示方法を変更"),
+    ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop, "グリッドの先頭へ移動"),
+    Privacy("プライバシー", Icons.Rounded.Lock, "プライバシー設定を確認")
 }
 
 private enum class CatalogNavDestination(val label: String, val icon: ImageVector) {
@@ -2316,6 +2407,7 @@ fun ThreadScreen(
     var pendingDeleteImageOnly by remember { mutableStateOf(false) }
     var lastUsedDeleteKey by rememberSaveable(board.id) { mutableStateOf("") }
     var isReplyDialogVisible by remember { mutableStateOf(false) }
+    var isThreadSettingsSheetVisible by remember { mutableStateOf(false) }
     var replyName by rememberSaveable(board.id) { mutableStateOf("") }
     var replyEmail by rememberSaveable(board.id) { mutableStateOf("") }
     var replySubject by remember { mutableStateOf("") }
@@ -2756,6 +2848,9 @@ fun ThreadScreen(
                                     }
                                 }
                             }
+                            ThreadActionBarItem.Settings -> {
+                                isThreadSettingsSheetVisible = true
+                            }
                             else -> {
                                 coroutineScope.launch {
                                     snackbarHostState.showSnackbar("${action.label} はモック動作です")
@@ -2996,6 +3091,18 @@ fun ThreadScreen(
                     coroutineScope.launch {
                         lazyListState.animateScrollToItem(index)
                     }
+                }
+            }
+        )
+    }
+
+    if (isThreadSettingsSheetVisible) {
+        ThreadSettingsSheet(
+            onDismiss = { isThreadSettingsSheetVisible = false },
+            onAction = { menuItem ->
+                isThreadSettingsSheetVisible = false
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("${menuItem.label}はモック動作です")
                 }
             }
         )
@@ -4471,6 +4578,42 @@ private fun ThreadActionBar(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadSettingsSheet(
+    onDismiss: () -> Unit,
+    onAction: (ThreadSettingsMenuItem) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "設定メニュー",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            ThreadSettingsMenuItem.entries.forEach { menuItem ->
+                ListItem(
+                    leadingContent = { Icon(imageVector = menuItem.icon, contentDescription = null) },
+                    headlineContent = { Text(menuItem.label) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { onAction(menuItem) }
+                )
+            }
+        }
+    }
+}
+
 private enum class ThreadActionBarItem(
     val label: String,
     val icon: ImageVector
@@ -4482,6 +4625,16 @@ private enum class ThreadActionBarItem(
     Gallery("画像", Icons.Outlined.Image),
     Save("保存", Icons.Rounded.Archive),
     Settings("設定", Icons.Rounded.Settings)
+}
+
+private enum class ThreadSettingsMenuItem(
+    val label: String,
+    val icon: ImageVector
+) {
+    NgManagement("NG管理", Icons.Rounded.Block),
+    ExternalApp("外部アプリ", Icons.Rounded.OpenInNew),
+    ReadAloud("読み上げ", Icons.Rounded.VolumeUp),
+    Privacy("プライバシー", Icons.Rounded.Lock)
 }
 
 private const val DEFAULT_DEL_REASON_CODE = "110"
