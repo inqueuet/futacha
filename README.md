@@ -1,345 +1,214 @@
 # Futacha - ふたばちゃんねるブラウザ
 
-> Kotlin Multiplatformで開発された、ふたばちゃんねる専用ブラウザアプリ
-> AndroidとiOSで**完全に同一のUI/ロジック**が動作します
+> Kotlin Multiplatform × Compose Multiplatform クライアント。Android と iOS が同じ UI ツリー (`FutachaApp`) を共有し、プラットフォーム側はホスティングと依存注入だけを行います。
 
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.1.0-blue.svg)](https://kotlinlang.org/)
-[![Compose Multiplatform](https://img.shields.io/badge/Compose-1.7.0-green.svg)](https://www.jetbrains.com/lp/compose-multiplatform/)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.0%2B-blue.svg)](https://kotlinlang.org/)
+[![Compose Multiplatform](https://img.shields.io/badge/Compose_MPP-1.9-green.svg)](https://www.jetbrains.com/lp/compose-multiplatform/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
-## ✨ 特徴
+## ✨ Highlights
 
-- 🎨 **Compose Multiplatform**: Android/iOS共通のモダンUI
-- 🔄 **Kotlin Multiplatform**: ビジネスロジックを完全共有
-- 📱 **マルチストア対応**: Google Play、App Store、GitHub Releasesでの配布
-- 🔔 **自動バージョンチェック**: 起動時に最新版をお知らせ
-- 💾 **状態永続化**: 板リスト・閲覧履歴を自動保存
-- 📥 **スレッド保存機能**: HTML+画像を共有ストレージに保存、オフライン閲覧可能
-- 🌓 **ダークモード**: ライト/ダークテーマ対応
+- **Compose Multiplatform UI**: `ui/board/BoardManagementScreen.kt` (~4.7k 行) に Board/Catalog/Thread の 3 画面と共通ドロワーを集約。ホスト (MainActivity / MainViewController) は `FutachaApp` をそのまま呼び出すだけです。
+- **モック/本番両対応**: `FakeBoardRepository` が `example/` のキャプチャ HTML を返し、`BoardSummary.isMockBoard()` で `example.com` ドメインのときだけモックを利用。実際の板 URL を設定すると自動的に Ktor + Futaba API が使われます。
+- **履歴とプライバシー**: `AppStateStore` (DataStore / NSUserDefaults) が板リスト・閲覧履歴・スクロール位置・プライバシーフラグを Flow で供給。スクロール保存は 500ms デバウンス付きでディスク I/O を削減。
+- **Thread 体験**: 引用プレビュー (`QuotePreviewDialog`)、ID 別ハイライト、スレ内検索 (前/次ナビ付き)、long-press アクションシート、ギャラリーシート、画像/動画プレビュー、ヒストリードロワーがすべて共通コードで動作。
+- **スレ保存 (Android)**: `ThreadSaveService` が HTML + 画像を `saved_threads` に保存し、`SaveProgressDialog` で進捗をリアルタイム表示。`SavedThreadRepository` が `index.json` を管理。iOS はホストが `FileSystem` を渡していないため snackbar で案内されます。
+- **GitHub Releases チェック**: `version/VersionChecker.kt` が `releases/latest` を確認し、新バージョンを `UpdateNotificationDialog` で知らせます。プラットフォーム固有ロジックは VersionChecker actual に閉じ込めています。
+
+詳細な API / パーサー仕様は [codex.md](codex.md) を参照してください。
+
+---
+
+## 🖥️ Screens & UX
+
+### Board Management (`shared/src/commonMain/kotlin/ui/board/BoardManagementScreen.kt`)
+- 大きなカードで板リストを表示。ピン留め状態はアイコンで示すのみ (トグル UI は未実装)。
+- メニューから **追加** (URL バリデーション + 重複チェック)、**削除モード** (カードごとの確認ダイアログ)、**並び替えモード** (上下ボタン) を切り替え。その他メニューは現在モック通知のみ。
+- どの画面でも同じ `HistoryDrawerContent` を使うモーダルドロワーを持ち、履歴を開く/更新/一括削除/設定 (モック) をまとめて操作。
+
+### Catalog
+- 常に 5 列の `LazyVerticalGrid`。`CatalogMode` をボトム `NavigationBar` から切り替え (スレ立て/更新/モード/設定)。
+- Pull-to-refresh (`PullToRefreshBox`) に加え、グリッド最下部にもドラッグ判定を置いて連続更新を楽にしています。
+- トップバーは検索モードとタイトル表示をトグル。検索時は back ハンドラで検索解除 → ドロワー → 画面遷移の順で戻る挙動を実装。
+- `CreateThreadDialog` が `BoardRepository.createThread()` を呼び、新規スレ作成後にカタログを再取得します。
+- 設定シートからプライバシーオーバーレイをトグル (`AppStateStore.setPrivacyFilterEnabled`)。その他メニューは現状モック。
+
+### Thread
+- `ThreadTopBar` で Board 名 / ステータス / レス数を表示しつつ、スレ内検索 UI (ヒット件数と前/次ボタン付き) を提供。
+- `LazyColumn` の各投稿カードは subject/author/ID/引用/画像を表示。引用 or ID をタップすると `QuotePreviewDialog` で該当レス群をまとめて確認できます。
+- long-press で開くアクションシートは **そうだね** / **del 依頼** / **本人削除**。成功時は `Snackbar` + 楽観的 UI で通知。
+- `ThreadActionBar` の 7 ボタン: 返信 (`ThreadFormDialog` + ActivityResult/PHPicker)、最上部 / 最下部スクロール、再読み込み、ギャラリー (`ThreadImageGallery`)、保存 (Android で `ThreadSaveService` を起動)、設定 (外部アプリで開く / プライバシー)。
+- 画像はピンチズーム可能な `ImagePreviewDialog`、動画は `PlatformVideoPlayer` を全画面ダイアログで表示。
+- スクロール位置は `snapshotFlow` + 500ms デバウンスで `AppStateStore.updateHistoryScrollPosition()` に保存されます。
+
+### Saved Threads
+- `SaveProgressDialog` が進捗を描画 (閉じるボタンは完了後のみ有効)。
+- `SavedThreadsScreen` (一覧 + 削除確認) は実装済みですが、まだナビゲーションに接続されていません。
+
+---
+
+## 💾 State, Persistence & Privacy
+- `AppStateStore`:
+  - `Flow<List<BoardSummary>> / Flow<List<ThreadHistoryEntry>> / Flow<Boolean>` を公開。
+  - `setScrollDebounceScope()` で UI 側の `CoroutineScope` を受け取り、`scrollPositionJobs` + `Mutex` でスクロール保存の重複書き込みを抑制。
+  - `upsertHistoryEntry` / `setHistory` / `setBoards` すべて `Mutex` で直列化。
+  - 起動時に `seedIfEmpty(mockBoardSummaries, mockThreadHistory)` を実行。
+- `PlatformStateStorage`:
+  - **Android**: DataStore Preferences (`preferencesDataStore`) + 例外を `StorageException` にラップ。
+  - **iOS**: NSUserDefaults + `MutableStateFlow`。プライバシーフラグ Flow/更新はまだ未実装なので Android 限定機能になっています。
+- プライバシーオーバーレイ: カタログ/スレ設定からトグルすると、全面に半透明の白い Canvas を描画して覗き見対策 (タップは透過)。
+
+---
+
+## 🌐 Networking & Parsing
+- `HttpBoardApi` (Ktor Core + OkHttp/Darwin):
+  - `fetchCatalogSetup` で catset POST → `posttime/cxyl` を初期化。
+  - `fetchCatalog` / `fetchThread` / `fetchThreadHead` は 20MB 制限 + Content-Length 検査 + Referer を設定。
+  - `voteSaidane`, `requestDeletion`, `deleteByUser`, `createThread`, `replyToThread` を HTML フォームで実装。
+- `BoardUrlResolver` が板 URL から slug/base/root を計算し、ID をサニタイズしてパストラバーサルを防止。
+- `DefaultBoardRepository`:
+  - 板ごとに cookie 初期化を 1 回だけ実行 (`Mutex` + `initializedBoards` セット)。
+  - OP サムネ取得は `fetchThreadHead` + `Semaphore(OP_IMAGE_CONCURRENCY=4)` で限定。
+  - `createRemoteBoardRepository()` が HttpClient + HtmlParser を生成し、`FutachaApp` で `remember` + `DisposableEffect` によって close。
+- 共有パーサー (`CatalogHtmlParserCore`, `ThreadHtmlParserCore`):
+  - サイズ/正規表現 ReDoS 対策 (10MB, chunk, 1,500 ループ, 5 秒タイムアウト)。
+  - カタログ: `#cattable` からスレ ID/タイトル/サムネ/レス数を抽出、HTML エンティティをデコード。
+  - スレ: canonical URL から threadId、投稿 table を parse → `QuoteReference`, `PosterIdLabel`, `saidane` ラベル、削除通知、サムネ/画像リンクを抽出。
+  - `buildPostsByPosterId` / `buildReferencedPostsMap` が ID/引用の逆引きを作成し、UI のプレビュー機能に使われます。
+- `FakeBoardRepository` + `example/catalog.txt` & `example/thread.txt` が Compose プレビュー / commonTest / オフライン動作を支えます。
+
+---
+
+## 🗂️ Project Layout
+
+```
+futacha/
+├── app-android/
+│   └── src/main/java/com/valoser/futacha/MainActivity.kt
+│       ↳ Compose host, createAppStateStore(), createHttpClient(), createVersionChecker(Context, HttpClient), createFileSystem()
+├── shared/
+│   ├── src/commonMain/kotlin/ (44 files)
+│   │   ├── model/ BoardSummary, ThreadHistoryEntry, Post, SavedThread(SaveStatus/Metadata/Progress)
+│   │   ├── network/ BoardApi, HttpBoardApi, BoardUrlResolver, expect createHttpClient()
+│   │   ├── parser/ HtmlParser expect + Catalog/Thread cores
+│   │   ├── repo/ DefaultBoardRepository, BoardRepositoryFactory, mock/ (FakeBoardRepository, fixtures)
+│   │   ├── repository/ SavedThreadRepository
+│   │   ├── service/ ThreadSaveService
+│   │   ├── state/ AppStateStore + expect PlatformStateStorage
+│   │   ├── ui/
+│   │   │   ├── FutachaApp, UpdateNotificationDialog, PermissionRequest expect
+│   │   │   ├── image/ ImageLoaderProvider (LocalFutachaImageLoader)
+│   │   │   └── board/ BoardManagementScreen, SaveProgressDialog, SavedThreadsScreen, PlatformVideoPlayer expect
+│   │   ├── util/ FileSystem expect, ImagePicker expect, Logger expect, UrlLauncher expect, BoardConfig
+│   │   └── version/ VersionChecker interface + helper functions
+│   ├── src/androidMain/kotlin/ (14 files) — DataStore storage, OkHttp client, ActivityResult pickers, VideoView player, Logger/UrlLauncher/PermissionHelper actuals
+│   ├── src/iosMain/kotlin/ (14 files) — ComposeUIViewController host, NSUserDefaults storage (privacy flag TODO), Darwin client, PHPicker/AVPlayer actuals, NSLog logger, UrlLauncher
+│   └── src/commonTest/kotlin/ — Catalog/Thread parser tests + BoardManagementScreenTest
+├── example/ — Futaba HTML/スクリーンショットのキャプチャ
+├── README.md / AGENTS.md / codex.md — ドキュメント
+└── build.gradle.kts / shared/build.gradle.kts / settings.gradle.kts
+```
+
+`shared/src` 全体で 75 ファイル (commonMain 44 / androidMain 14 / iosMain 14 / commonTest 3) があり、共有率は ~94% です。
+
+---
+
+## 🧩 Media, Storage & Downloads
+- `ThreadSaveService`
+  - `MutableStateFlow<SaveProgress?>` を公開し、Compose から collect。
+  - 50 投稿ごとに chunk 化してメモリ使用量を抑制、URL→ローカルパスの辞書を用意して HTML 内リンクを置換。
+  - 8MB (`MAX_FILE_SIZE_BYTES`) 超過で即中断。現在は **サムネ / 本画像** のみを `images/` 配下に保存 (動画ダウンロードは未実装)。
+  - `SaveStatus` は download 失敗数に応じて COMPLETED / PARTIAL / FAILED を返す。
+- `SavedThreadRepository` は `saved_threads/index.json` を `Mutex` 付きで読み書きし、合計サイズや件数を即座に算出。
+- `FileSystem` expect/actual:
+  - Android: `Documents/futacha` 配下 (必要に応じて内部ストレージへフォールバック) に作成。結果として保存物は `Documents/futacha/saved_threads/...` に配置されます。
+  - iOS: `NSDocumentDirectory` をベースに `saved_threads` 配下に保存。
+- `SaveProgressDialog` は進捗バー/パーセンテージ/現在処理項目を表示し、完了時のみ「閉じる」が押せます。
+- `SavedThreadsScreen` は `SavedThreadRepository` を直接操作して一覧/削除/snackbar を提供 (未配線)。
+- `ImagePickerButton` expect:
+  - Android: `rememberLauncherForActivityResult(ActivityResultContracts.GetContent)` + `readImageDataFromUri()`
+  - iOS: PHPicker → `suspend fun pickImage()` → `rememberCoroutineScope()` で結果を deliver
+- `PlatformVideoPlayer` expect: VideoView + MediaController (Android) / AVPlayerViewController (iOS)。
+- `rememberUrlLauncher()` は外部ブラウザで `futaba.php` / `res/{id}.htm` を開くために Catalog/Thread 設定から使用。
+
+---
+
+## 🔌 Versioning, Image Loading & Permissions
+- `version/VersionChecker.kt`: `UpdateInfo`, `isNewerVersion`, `fetchLatestVersionFromGitHub` を提供。common コードから呼び出しやすいように `createVersionChecker(HttpClient)` expect を定義。
+- `AndroidVersionChecker` (Context + HttpClient) / `IosVersionChecker` (HttpClient) が実装。Android では `createVersionChecker(context, httpClient)` を明示的に呼ぶ必要があります。
+- `UpdateNotificationDialog`: シンプルな Material3 ダイアログで「OK / 後で」ボタンのみ。
+- `LocalFutachaImageLoader`: `Dispatchers.IO.limitedParallelism(3)` を fetcher/decoder に使う Coil3 ImageLoader を `remember` し、`FutachaApp` でライフサイクル管理。
+- `PermissionRequest` expect:
+  - Android: ActivityResult で `READ/WRITE_EXTERNAL_STORAGE` を (13 未満のみ) まとめてリクエストする `PermissionHelper` 実装。
+  - iOS: 即座に `onPermissionResult(true)`。
+- `PlatformBackHandler`: Android では Compose `BackHandler`、iOS では no-op で Compose 側の onBack ロジックだけを実行。
+
+---
+
+## 🔄 Build & Run
+
+```bash
+# Android デバッグビルド
+./gradlew :app-android:assembleDebug
+
+# 共有モジュールのテスト (commonTest)
+./gradlew :shared:check
+
+# iOS フレームワーク (macOS + Xcode)
+./gradlew :shared:linkDebugFrameworkIosArm64
+```
+
+モック板 (`example.com`) は常に `FakeBoardRepository` が応答するため、テスト用に安全です。本物の板 URL を追加すると `DefaultBoardRepository` + `HttpBoardApi` が使用されます。
+
+---
+
+## 🧪 Testing
+
+| Test | 内容 |
+|------|------|
+| `CatalogHtmlParserCoreTest` | カタログ HTML から ID/タイトル/サムネ/レス数を抽出 |
+| `ThreadHtmlParserCoreTest` | スレ HTML の正規化、引用解析、OP 画像抽出、削除通知など |
+| `BoardManagementScreenTest` | Compose ツリーの smoke test (モックリポジトリ) |
+
+`./gradlew :shared:check` で実行できます。現状は parser + 1 画面のみで、ネットワーク/保存系のテストは未整備です。
+
+---
+
+## ⚠️ Known gaps / next steps
+
+1. **SavedThreadsScreen** は UI こそ完成済みですが、どこからも遷移できません。ナビゲーションルート/ボタンの追加が必要です。
+2. **スレ保存 (iOS)**: `MainViewController` が `createFileSystem()` を渡していないため、保存ボタンは Android 専用です。NSUserDefaults 側の `privacyFilterEnabled` Flow も未実装で、プライバシーフラグは Android 限定。
+3. **動画ダウンロード**: `ThreadSaveService` は THUMBNAIL/FULL_IMAGE しか処理しておらず、`SUPPORTED_VIDEO_EXTENSIONS` は未使用です。
+4. **ピン留め / 並び替え**: BoardManagementScreen はピン状態を表示するだけで、トグルやドラッグ＆ドロップ並び替えは未対応 (上下ボタンのみ)。
+5. **カタログ表示モード**: グリッド固定でリスト/列数変更 UI はありません。
+6. **テストカバレッジ**: ネットワーク/Repository/ThreadSaveService/Compose UI の多くが未テスト。FakeBoardRepository/MockWeb 層の拡充が必要です。
+7. **iOS HttpClient/ファイル解放**: `MainViewController` は HttpClient を close せず、プラットフォーム側でのリソース管理が未整備です。
 
 ---
 
 ## 📥 ダウンロード
 
-### Google Play
-（準備中）
-
-### App Store
-（準備中）
-
-### GitHub Releases
-最新版は[Releases](https://github.com/inqueuet/futacha/releases/latest)からダウンロードできます。
-
----
-
-## 🚀 開発
-
-### 必要な環境
-
-- **Android開発**:
-  - JDK 11以上
-  - Android Studio Ladybug以上
-  - Android SDK (minSdk: 24, targetSdk: 36)
-
-- **iOS開発** (オプション):
-  - Xcode 15以上
-  - macOS
-
-### ビルド方法
-
-```bash
-# Androidデバッグビルド
-./gradlew :app-android:assembleDebug
-
-# Androidリリースビルド
-./gradlew :app-android:assembleRelease
-
-# 共通モジュールのテスト
-./gradlew :shared:check
-
-# iOS向けビルド (macOS + Xcodeが必要)
-./gradlew :shared:linkDebugFrameworkIosArm64
-```
-
----
-
-## 📂 プロジェクト構成
-
-```
-futacha/
-├── app-android/          # Androidアプリ (エントリーポイントのみ)
-│   └── src/main/java/com/valoser/futacha/
-│       └── MainActivity.kt
-│
-├── shared/               # 共通コード (UI + ロジック) - 78ファイル
-│   ├── src/commonMain/kotlin/  # 完全共通化 (~95%) - 47ファイル
-│   │   ├── model/        # データモデル (8ファイル)
-│   │   │   ├── Post.kt, CatalogItem.kt, ThreadPage.kt
-│   │   │   ├── BoardStateModels.kt (BoardSummary, ThreadHistoryEntry)
-│   │   │   ├── CatalogMode.kt (7種類の表示モード)
-│   │   │   ├── SavedThread.kt (保存済みスレッド、進捗情報)
-│   │   │   ├── MediaItem.kt (メディアアイテム)
-│   │   │   └── CatalogItemExtensions.kt
-│   │   │
-│   │   ├── network/      # HTTPクライアント (4ファイル)
-│   │   │   ├── BoardApi.kt (interface)
-│   │   │   ├── HttpBoardApi.kt (Ktor実装、全API機能)
-│   │   │   ├── BoardUrlResolver.kt (URL解決、パストラバーサル対策)
-│   │   │   └── HttpClientFactory.kt (expect/actual)
-│   │   │
-│   │   ├── parser/       # HTMLパーサー (6ファイル)
-│   │   │   ├── HtmlParser.kt (interface)
-│   │   │   ├── CatalogHtmlParserCore.kt (正規表現パーサー)
-│   │   │   ├── ThreadHtmlParserCore.kt (正規表現パーサー)
-│   │   │   ├── ParserFactory.kt (expect/actual)
-│   │   │   └── ParserException.kt
-│   │   │
-│   │   ├── repo/         # リポジトリ層 (6ファイル + mock/)
-│   │   │   ├── BoardRepository.kt (DefaultBoardRepository)
-│   │   │   ├── BoardRepositoryFactory.kt
-│   │   │   └── mock/ (FakeBoardRepository, Fixtures)
-│   │   │
-│   │   ├── repository/   # 保存機能リポジトリ (1ファイル)
-│   │   │   └── SavedThreadRepository.kt (保存済みスレッド管理)
-│   │   │
-│   │   ├── service/      # ビジネスロジック (1ファイル)
-│   │   │   └── ThreadSaveService.kt (スレッド保存、進捗管理、メモリ効率化)
-│   │   │
-│   │   ├── state/        # 状態管理 (1ファイル)
-│   │   │   └── AppStateStore.kt (Flow、JSON、Mutex、expect/actual)
-│   │   │
-│   │   ├── ui/           # Compose Multiplatform UI (11ファイル)
-│   │   │   ├── FutachaApp.kt (メインアプリ、画面遷移)
-│   │   │   ├── PermissionRequest.kt (expect/actual)
-│   │   │   ├── board/
-│   │   │   │   ├── BoardManagementScreen.kt (3画面統合、4400行超)
-│   │   │   │   ├── SaveProgressDialog.kt (保存進捗表示)
-│   │   │   │   ├── SavedThreadsScreen.kt (保存済み一覧)
-│   │   │   │   ├── ImagePickerButton.kt (画像選択ボタン、expect/actual)
-│   │   │   │   ├── PlatformVideoPlayer.kt (expect/actual)
-│   │   │   │   └── BoardManagementFixtures.kt
-│   │   │   ├── UpdateNotificationDialog.kt
-│   │   │   ├── theme/FutachaTheme.kt
-│   │   │   └── util/PlatformBackHandler.kt (expect/actual)
-│   │   │
-│   │   ├── util/         # ユーティリティ (4ファイル)
-│   │   │   ├── ImagePicker.kt (expect/actual)
-│   │   │   ├── FileSystem.kt (expect/actual、ファイル操作抽象化)
-│   │   │   ├── Logger.kt (expect/actual、クロスプラットフォームログ出力)
-│   │   │   └── BoardConfig.kt
-│   │   │
-│   │   └── version/      # バージョンチェック (1ファイル)
-│   │       └── VersionChecker.kt (GitHub Releases API)
-│   │
-│   ├── src/androidMain/kotlin/  # Android固有実装 (14ファイル)
-│   │   ├── parser/       # JsoupHtmlParser.kt, ParserFactory.android.kt
-│   │   ├── state/        # AppStateStore.android.kt (DataStore)
-│   │   ├── network/      # HttpClientFactory.android.kt (OkHttp)
-│   │   ├── util/         # ImagePicker, FileSystem, Logger.android.kt, PermissionHelper
-│   │   ├── ui/           # PermissionRequest.android.kt
-│   │   ├── ui/board/     # ImagePickerButton, PlatformVideoPlayer
-│   │   ├── ui/util/      # PlatformBackHandler.android.kt
-│   │   └── version/      # VersionChecker.android.kt (PackageManager)
-│   │
-│   ├── src/iosMain/kotlin/      # iOS固有実装 (14ファイル)
-│   │   ├── parser/       # AppleHtmlParser.kt, ParserFactory.ios.kt
-│   │   ├── state/        # AppStateStore.ios.kt (NSUserDefaults)
-│   │   ├── network/      # HttpClientFactory.ios.kt (Darwin)
-│   │   ├── util/         # ImagePicker, FileSystem, Logger.ios.kt
-│   │   ├── ui/           # PermissionRequest.ios.kt
-│   │   ├── ui/board/     # ImagePickerButton, PlatformVideoPlayer
-│   │   ├── ui/util/      # PlatformBackHandler.ios.kt
-│   │   ├── version/      # VersionChecker.ios.kt
-│   │   └── MainViewController.kt
-│   │
-│   └── src/commonTest/kotlin/  # 共通テスト (3ファイル)
-│       ├── parser/       # CatalogHtmlParserCoreTest, ThreadHtmlParserCoreTest
-│       └── ui/board/     # BoardManagementScreenTest
-│
-├── codex.md              # 詳細設計書（API仕様、パーサー、実装状況）
-└── README.md             # このファイル
-```
-
-詳細なアーキテクチャとAPI仕様は [codex.md](codex.md) を参照してください。
-
----
-
-## 🔔 バージョン通知機能
-
-アプリ起動時に自動的に最新バージョンをチェックし、更新がある場合はダイアログで通知します。
-
-### 仕組み
-
-1. **GitHub Releases API**を使用 (認証不要)
-2. 起動時に`https://api.github.com/repos/inqueuet/futacha/releases/latest`を取得
-3. 現在のバージョンと比較
-4. 新しいバージョンがあれば通知ダイアログを表示
-
-### 特徴
-
-- ✅ 完全無料 (GitHub API使用)
-- ✅ 認証不要
-- ✅ ストアへの誘導なし (通知のみ)
-- ✅ ユーザーが「後で」を選択可能
-- ✅ App Store/Google Playのポリシー準拠
-
-### 実装詳細
-
-バージョンチェック機能は`shared/src/commonMain/kotlin/version/`に実装されています:
-
-- `VersionChecker.kt` - 共通インターフェース
-- `VersionChecker.android.kt` - Android実装 (PackageManager使用)
-- `VersionChecker.ios.kt` - iOS実装 (NSBundle + GitHub Releases API)
-
----
-
-## 🛠️ 技術スタック
-
-| 技術 | 用途 |
-|-----|------|
-| **Kotlin 2.1.0** | プログラミング言語 |
-| **Compose Multiplatform** | 宣言的UI (Android/iOS共通) |
-| **Ktor Client** | HTTPクライアント (Shift_JIS対応) |
-| **Kotlinx Serialization** | JSONシリアライゼーション |
-| **DataStore / NSUserDefaults** | 永続化 (プラットフォーム固有) |
-| **Coil3** | 画像読み込み |
-
----
-
-## 📋 実装状況
-
-### ✅ 実装済み（Android完全対応）
-
-#### UI・画面
-- **板管理画面**: 板の追加・削除・並び替え、ピン留め機能
-- **カタログ画面**: グリッド/リスト表示、7種類の表示モード切替、検索機能
-- **スレッド画面**: 投稿表示、引用ハイライト、スクロール位置復元
-- **ドロワーナビゲーション**: スレッド閲覧履歴、メタデータ自動更新
-
-#### ネットワーク・API
-- **Ktor HttpClient**: Cookie管理、タイムアウト設定、エラーハンドリング
-- **カタログ取得**: 全7モード対応（新順、古順、レス多、勢い等）
-- **スレッド取得**: 投稿一覧、画像・動画URL抽出
-- **返信投稿**: 名前・メール・題名・本文・画像添付
-- **スレッド作成**: 新規スレッド投稿、自動遷移
-- **そうだね投票**: 楽観的UI更新
-- **削除機能**: del依頼（理由コード）、本人削除（パスワード認証）
-
-#### データ永続化・状態管理
-- **DataStore** (Android) / **NSUserDefaults** (iOS)
-- **板リスト**: JSON保存、Flow管理
-- **閲覧履歴**: 最終閲覧時刻、レス数、スクロール位置
-- **Cookie**: posttime, cxyl等の自動管理
-
-#### パーサー・セキュリティ
-- **正規表現ベースHTMLパーサー**: カタログ・スレッド対応
-- **ReDoS攻撃対策**: サイズ制限（10MB）、イテレーション制限（1500回）、投稿上限（2050件）、パースタイムアウト（5秒）
-- **パストラバーサル対策**: URL検証
-- **XSS対策**: HTMLエンティティデコード
-
-#### 画像・メディア
-- **Coil3**: 画像読み込み、キャッシュ管理
-- **画像プレビュー**: サムネイル→フルスクリーン、ピンチズーム
-- **動画再生**: プラットフォーム固有実装
-- **画像添付**: Android/iOS実装済み（ImagePicker）
-
-#### スレッド保存機能
-- **オフライン保存**: スレッド全体をHTML+画像で保存
-- **共有ストレージ**: ファイルマネージャーからアクセス可能
-  - Android: `/Documents/futacha/saved_threads/`
-  - iOS: `NSDocumentDirectory/saved_threads/`
-- **進捗表示**: リアルタイムパーセンテージ表示（準備1%、DL97%、変換1%、完了1%）
-- **ファイルサイズ制限**: 8000KB（8MB）まで。GETレスポンスの`Content-Length`と実際のバイト列をダブルチェック
-- **サポート形式**: GIF, JPG, PNG, WEBP, MP4, WEBM
-- **エラーハンドリング**: 一部失敗でも継続、ステータス表示（COMPLETED/PARTIAL/FAILED）
-- **URL-to-Pathマッピング**: ダウンロード時にURLとローカルパスを紐付け
-- **相対パス変換**: HTMLの画像URLを相対パス（`images/img_xxx.jpg`）に変換
-- **保存済み一覧**: 保存したスレッドの一覧表示・削除機能
-- **メモリ効率化**: チャンク処理（50投稿ずつ）、ストリーミングHTML生成
-
-#### スレッド作成機能
-- **新規スレッド作成**: 板からスレッドを新規作成
-- **画像添付対応**: ImagePickerButtonで画像選択
-  - Android: ActivityResultContracts使用
-  - iOS: PHPickerViewController使用
-- **フォーム入力**: 名前・メール・題名・本文
-- **自動遷移**: 作成後、新スレッドに自動遷移
-
-#### 板アイコン選択機能
-- **カスタムアイコン**: 板ごとにカスタムアイコン設定可能
-- **画像選択**: ImagePickerButtonで画像選択
-- **プラットフォーム固有実装**: Android/iOS完全対応
-
-#### その他機能
-- **バージョン通知**: GitHub Releases API連携（Android/iOS）
-- **ダークモード**: 自動対応
-- **検索・フィルター**: カタログ検索、ローカルソート
-- **ログ出力**: クロスプラットフォームLogger（Android: Log、iOS: NSLog）
-
-### ✅ iOS実装状況（完全対応）
-- ✅ 基本UI動作（板管理、カタログ、スレッド表示）
-- ✅ ネットワーク通信（Ktor Darwin）
-- ✅ 状態永続化（NSUserDefaults）
-- ✅ HTMLパーサー
-- ✅ **画像選択機能（PHPickerViewController実装完了）**
-- ✅ **バージョンチェッカー（NSBundle実装完了）**
-- ✅ **動画プレーヤー（AVPlayer実装完了）**
-- ✅ **ファイルシステム（NSFileManager実装完了）**
-- ✅ **権限処理（実装完了）**
-- ✅ **スレッド作成（画像添付対応）**
-- ✅ **板アイコン選択（ImagePickerButton）**
-- ✅ **Logger（NSLog実装完了）**
-
-**Android/iOS完全対応！** コード共有率 ~95% （78ファイル中、プラットフォーム固有は28ファイルのみ）
-
-### 📝 今後の拡張予定
-- オフラインキャッシュ
-- ダークモード切替UI
-- プッシュ通知
-- テストカバレッジ向上
-
-## 🧠 状態管理の仕組み
-
-`shared/src/commonMain/kotlin/state/AppStateStore.kt` が板リストと閲覧履歴の単一ソースを担い、`PlatformStateStorage` の expect/actual で **Android DataStore** と **iOS NSUserDefaults** に同じJSONを保存します。
-
-- `boards` / `history` は `Flow<String?>` をデコードして公開。書き込みは `Mutex` で直列化。
-- `setScrollDebounceScope()` を `FutachaApp` (`shared/src/commonMain/kotlin/ui/FutachaApp.kt`) から呼び出し、スクロール位置の永続化を **500ms** デバウンス。
-- `updateHistoryScrollPosition()` は直近のインデックス/オフセットと比較し、値が変わらない場合は書き込みをスキップしてI/Oを削減。
-- `upsertHistoryEntry()` で履歴の並び順を維持したまま部分更新、`seedIfEmpty()` で初期データを自動投入。
-
-```kotlin
-private val scrollPositionJobs = mutableMapOf<String, Job>()
-private const val SCROLL_DEBOUNCE_DELAY_MS = 500L
-
-val coroutineScope = rememberCoroutineScope()
-LaunchedEffect(Unit) {
-    stateStore.setScrollDebounceScope(coroutineScope)
-}
-```
-
-この仕組みにより、履歴のスクロール位置・レス数・板名といったメタデータがAndroid/iOSどちらでも同じ手順で永続化されます。
+- **Google Play**: 準備中
+- **App Store**: 準備中
+- **GitHub Releases**: 最新版は [Releases](https://github.com/inqueuet/futacha/releases/latest) を参照
 
 ---
 
 ## 🤝 コントリビューション
 
-Issue・Pull Requestを歓迎します！
-
-### 開発の流れ
-
-1. このリポジトリをFork
-2. Feature Branchを作成 (`git checkout -b feature/amazing-feature`)
-3. 変更をCommit (`git commit -m 'Add amazing feature'`)
-4. Branchをプッシュ (`git push origin feature/amazing-feature`)
-5. Pull Requestを作成
+1. リポジトリを Fork
+2. ブランチ作成 `git checkout -b feature/awesome`
+3. 変更をコミット `git commit -m "Add awesome feature"`
+4. Push `git push origin feature/awesome`
+5. Pull Request を作成
 
 ---
 
 ## 📄 ライセンス
 
-このプロジェクトは[MITライセンス](LICENSE)の下で公開されています。
+MIT — [LICENSE](LICENSE)
 
 ---
 
@@ -348,13 +217,13 @@ Issue・Pull Requestを歓迎します！
 - [GitHub Repository](https://github.com/inqueuet/futacha)
 - [Issue Tracker](https://github.com/inqueuet/futacha/issues)
 - [Releases](https://github.com/inqueuet/futacha/releases)
-- [詳細設計書 (codex.md)](codex.md)
+- [詳細設計 (codex.md)](codex.md)
 
 ---
 
 ## 📮 お問い合わせ
 
-質問や提案がある場合は、[GitHub Issues](https://github.com/inqueuet/futacha/issues)に投稿してください。
+質問や提案は [GitHub Issues](https://github.com/inqueuet/futacha/issues) までどうぞ。
 
 ---
 
