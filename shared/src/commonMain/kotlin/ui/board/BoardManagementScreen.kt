@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -132,6 +133,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
@@ -192,10 +194,12 @@ import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
+import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -1155,6 +1159,7 @@ fun CatalogScreen(
             }
         }
     }
+
 
     val performRefresh: () -> Unit = {
         if (!isRefreshing && board != null) {
@@ -2709,6 +2714,22 @@ fun ThreadScreen(
     val uiState = remember { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val platformContext = LocalPlatformContext.current
+    val textSpeaker = remember(platformContext) { createTextSpeaker(platformContext) }
+    var readAloudJob by remember { mutableStateOf<Job?>(null) }
+    var readAloudStatus by remember { mutableStateOf<ReadAloudStatus>(ReadAloudStatus.Idle) }
+    val stopReadAloud: () -> Unit = {
+        readAloudJob?.cancel()
+        textSpeaker.stop()
+        readAloudJob = null
+        readAloudStatus = ReadAloudStatus.Idle
+    }
+    DisposableEffect(textSpeaker) {
+        onDispose {
+            stopReadAloud()
+            textSpeaker.close()
+        }
+    }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
@@ -2824,6 +2845,14 @@ fun ThreadScreen(
         }
     }.ifBlank { null }
 
+    val readAloudSegments = remember(currentState) {
+        if (currentState is ThreadUiState.Success) {
+            buildReadAloudSegments(currentState.page.posts)
+        } else {
+            emptyList()
+        }
+    }
+
     val density = LocalDensity.current
     val backSwipeEdgePx = remember(density) { with(density) { 48.dp.toPx() } }
     val backSwipeTriggerPx = remember(density) { with(density) { 96.dp.toPx() } }
@@ -2835,6 +2864,37 @@ fun ThreadScreen(
             initialHistoryEntry?.lastReadItemIndex ?: 0,
             initialHistoryEntry?.lastReadItemOffset ?: 0
         )
+    }
+
+    val startReadAloud: () -> Unit = startReadAloud@{
+        if (readAloudSegments.isEmpty()) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("読み上げ対象がありません")
+            }
+            return@startReadAloud
+        }
+        stopReadAloud()
+        readAloudJob = coroutineScope.launch {
+            var completedNormally = false
+            try {
+                readAloudSegments.forEach { segment ->
+                    readAloudStatus = ReadAloudStatus.Speaking(segment)
+                    lazyListState.animateScrollToItem(segment.postIndex)
+                    textSpeaker.speak(segment.body)
+                }
+                completedNormally = true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // ユーザー操作で中断された場合は何もしない
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("読み上げ中にエラーが発生しました: ${e.message ?: "不明なエラー"}")
+            } finally {
+                readAloudStatus = ReadAloudStatus.Idle
+                readAloudJob = null
+                if (completedNormally) {
+                    snackbarHostState.showSnackbar("読み上げを完了しました")
+                }
+            }
+        }
     }
 
     var isSearchActive by rememberSaveable(threadId) { mutableStateOf(false) }
@@ -3253,6 +3313,15 @@ fun ThreadScreen(
                             .fillMaxWidth()
                     )
                 }
+                if (readAloudStatus is ReadAloudStatus.Speaking) {
+                    val segment = (readAloudStatus as ReadAloudStatus.Speaking).segment
+                    ReadAloudIndicator(
+                        segment = segment,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 80.dp)
+                    )
+                }
             }
         }
     }
@@ -3432,6 +3501,16 @@ fun ThreadScreen(
                     ThreadSettingsMenuItem.Privacy -> {
                         coroutineScope.launch {
                             stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
+                        }
+                    }
+                    ThreadSettingsMenuItem.ReadAloud -> {
+                        if (readAloudJob != null) {
+                            stopReadAloud()
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("読み上げを停止しました")
+                            }
+                        } else {
+                            startReadAloud()
                         }
                     }
                     else -> {
@@ -4955,6 +5034,66 @@ private fun ThreadSettingsSheet(
                         .clickable { onAction(menuItem) }
                 )
             }
+        }
+    }
+}
+
+private data class ReadAloudSegment(
+    val postIndex: Int,
+    val postId: String,
+    val body: String
+)
+
+private sealed interface ReadAloudStatus {
+    object Idle : ReadAloudStatus
+    data class Speaking(val segment: ReadAloudSegment) : ReadAloudStatus
+}
+
+@Composable
+private fun ReadAloudIndicator(
+    segment: ReadAloudSegment,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .padding(horizontal = 16.dp)
+            .wrapContentHeight(),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+    ) {
+        Text(
+            text = "読み上げ中: No.${segment.postId}",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+    }
+}
+
+private val READ_ALOUD_SKIPPED_PHRASES = listOf(
+    "スレッドを立てた人によって削除されました",
+    "書き込みをした人によって削除されました",
+    "管理者によって削除されました"
+)
+
+private fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
+    return posts.mapIndexedNotNull { index, post ->
+        if (post.isDeleted) return@mapIndexedNotNull null
+        val lines = messageHtmlToLines(post.messageHtml)
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
+        if (lines.isEmpty()) return@mapIndexedNotNull null
+        if (containsDeletionNotice(lines)) return@mapIndexedNotNull null
+        val body = lines.joinToString("\n")
+        ReadAloudSegment(index, post.id, body)
+    }
+}
+
+private fun containsDeletionNotice(lines: List<String>): Boolean {
+    if (lines.isEmpty()) return false
+    return lines.any { line ->
+        READ_ALOUD_SKIPPED_PHRASES.any { phrase ->
+            line.contains(phrase)
         }
     }
 }
