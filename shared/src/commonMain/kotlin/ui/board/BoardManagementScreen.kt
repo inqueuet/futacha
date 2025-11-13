@@ -3009,11 +3009,26 @@ fun ThreadScreen(
     val textSpeaker = remember(platformContext) { createTextSpeaker(platformContext) }
     var readAloudJob by remember { mutableStateOf<Job?>(null) }
     var readAloudStatus by remember { mutableStateOf<ReadAloudStatus>(ReadAloudStatus.Idle) }
-    val stopReadAloud: () -> Unit = {
+    var isReadAloudControlsVisible by remember { mutableStateOf(false) }
+    var currentReadAloudIndex by rememberSaveable(threadId) { mutableStateOf(0) }
+    val cancelActiveReadAloud: () -> Unit = {
         readAloudJob?.cancel()
         textSpeaker.stop()
+    }
+    val stopReadAloud: () -> Unit = {
+        cancelActiveReadAloud()
         readAloudJob = null
         readAloudStatus = ReadAloudStatus.Idle
+        currentReadAloudIndex = 0
+    }
+    val pauseReadAloud: () -> Unit = pauseReadAloud@{
+        val segment = (readAloudStatus as? ReadAloudStatus.Speaking)?.segment ?: return@pauseReadAloud
+        readAloudStatus = ReadAloudStatus.Paused(segment)
+        cancelActiveReadAloud()
+        readAloudJob = null
+        coroutineScope.launch {
+            snackbarHostState.showSnackbar("読み上げを一時停止しました")
+        }
     }
     DisposableEffect(textSpeaker) {
         onDispose {
@@ -3287,6 +3302,11 @@ fun ThreadScreen(
             emptyList()
         }
     }
+    LaunchedEffect(readAloudSegments.size) {
+        if (currentReadAloudIndex > readAloudSegments.size) {
+            currentReadAloudIndex = readAloudSegments.size
+        }
+    }
 
     val density = LocalDensity.current
     val backSwipeEdgePx = remember(density) { with(density) { 48.dp.toPx() } }
@@ -3308,26 +3328,38 @@ fun ThreadScreen(
             }
             return@startReadAloud
         }
-        stopReadAloud()
+        if (readAloudJob != null) return@startReadAloud
+        if (currentReadAloudIndex >= readAloudSegments.size) {
+            currentReadAloudIndex = 0
+        }
         readAloudJob = coroutineScope.launch {
             var completedNormally = false
+            var index = currentReadAloudIndex
             try {
-                readAloudSegments.forEach { segment ->
+                while (index < readAloudSegments.size && isActive) {
+                    val segment = readAloudSegments[index]
                     readAloudStatus = ReadAloudStatus.Speaking(segment)
                     lazyListState.animateScrollToItem(segment.postIndex)
+                    currentReadAloudIndex = index
                     textSpeaker.speak(segment.body)
+                    index++
                 }
-                completedNormally = true
+                if (index >= readAloudSegments.size && isActive) {
+                    completedNormally = true
+                    currentReadAloudIndex = 0
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // ユーザー操作で中断された場合は何もしない
             } catch (e: Exception) {
                 snackbarHostState.showSnackbar("読み上げ中にエラーが発生しました: ${e.message ?: "不明なエラー"}")
             } finally {
-                readAloudStatus = ReadAloudStatus.Idle
-                readAloudJob = null
                 if (completedNormally) {
+                    readAloudStatus = ReadAloudStatus.Idle
                     snackbarHostState.showSnackbar("読み上げを完了しました")
+                } else if (readAloudStatus !is ReadAloudStatus.Paused) {
+                    readAloudStatus = ReadAloudStatus.Idle
                 }
+                readAloudJob = null
             }
         }
     }
@@ -3991,16 +4023,30 @@ fun ThreadScreen(
                         }
                     }
                     ThreadSettingsMenuItem.ReadAloud -> {
-                        if (readAloudJob != null) {
-                            stopReadAloud()
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("読み上げを停止しました")
-                            }
-                        } else {
-                            startReadAloud()
-                        }
+                        isReadAloudControlsVisible = true
                     }
                 }
+            }
+        )
+    }
+
+    if (isReadAloudControlsVisible) {
+        ReadAloudControlSheet(
+            segments = readAloudSegments,
+            currentIndex = currentReadAloudIndex,
+            status = readAloudStatus,
+            onPlay = {
+                startReadAloud()
+            },
+            onPause = pauseReadAloud,
+            onStop = {
+                stopReadAloud()
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("読み上げを停止しました")
+                }
+            },
+            onDismiss = {
+                isReadAloudControlsVisible = false
             }
         )
     }
@@ -5868,6 +5914,7 @@ private data class ReadAloudSegment(
 private sealed interface ReadAloudStatus {
     object Idle : ReadAloudStatus
     data class Speaking(val segment: ReadAloudSegment) : ReadAloudStatus
+    data class Paused(val segment: ReadAloudSegment) : ReadAloudStatus
 }
 
 @Composable
@@ -5896,6 +5943,96 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
     "書き込みをした人によって削除されました",
     "管理者によって削除されました"
 )
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReadAloudControlSheet(
+    segments: List<ReadAloudSegment>,
+    currentIndex: Int,
+    status: ReadAloudStatus,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val totalSegments = segments.size
+    val completedSegments = currentIndex.coerceIn(0, totalSegments)
+    val currentSegment = when {
+        status is ReadAloudStatus.Speaking -> status.segment
+        status is ReadAloudStatus.Paused -> status.segment
+        segments.isNotEmpty() -> segments.getOrNull(currentIndex.coerceIn(0, segments.lastIndex))
+        else -> null
+    }
+    val isPlaying = status is ReadAloudStatus.Speaking
+    val isPaused = status is ReadAloudStatus.Paused
+    val playLabel = if (isPaused) "再開" else "再生"
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "読み上げプレーヤー",
+                style = MaterialTheme.typography.titleMedium
+            )
+            if (totalSegments > 0) {
+                Text(
+                    text = "進捗 ${completedSegments} / $totalSegments",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                LinearProgressIndicator(
+                    progress = completedSegments / totalSegments.toFloat(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                currentSegment?.let {
+                    Text(
+                        text = "現在: No.${it.postId}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            } else {
+                Text(
+                    text = "読み上げ対象スレッドがありません",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = onPlay,
+                    enabled = totalSegments > 0 && !isPlaying,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(playLabel)
+                }
+                OutlinedButton(
+                    onClick = onPause,
+                    enabled = isPlaying,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("一時停止")
+                }
+                OutlinedButton(
+                    onClick = onStop,
+                    enabled = status !is ReadAloudStatus.Idle,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("停止")
+                }
+            }
+        }
+    }
+}
 
 private fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
     return posts.mapIndexedNotNull { index, post ->
