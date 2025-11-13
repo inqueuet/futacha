@@ -146,7 +146,7 @@ futacha/
 - `LocalFutachaImageLoader`: `Dispatchers.IO.limitedParallelism(3)` を fetcher/decoder に使う Coil3 ImageLoader を `remember` し、`FutachaApp` でライフサイクル管理。32MB のメモリキャッシュと `futacha_image_cache` (最大 128MB、okio + DiskCache) を使ってカタログのサムネを安定化させる。
 - `PermissionRequest` expect:
   - Android: ActivityResult で `READ/WRITE_EXTERNAL_STORAGE` を (13 未満のみ) まとめてリクエストする `PermissionHelper` 実装。
-  - iOS: 即座に `onPermissionResult(true)`。
+  - iOS: Documents ディレクトリへの保存先を案内するダイアログを表示し、確認後に `onPermissionResult(true)` を返す（権限ダイアログは不要）。
 - `PlatformBackHandler`: Android では Compose `BackHandler`、iOS では no-op で Compose 側の onBack ロジックだけを実行。
 
 ---

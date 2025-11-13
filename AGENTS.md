@@ -151,7 +151,7 @@
   - `ImagePickerButton` & `rememberImagePickerLauncher`: Android は ActivityResultContracts.GetContent、iOS は PHPicker + suspend 呼び出し。
   - `PlatformVideoPlayer`: Android は Media3/ExoPlayer + `PlayerView` で WEBM/MP4 をサポートし、バッファリング/エラー状態を callback へ通知。iOS は MP4 を `AVPlayerViewController`、WEBM は `WKWebView` ベースの簡易プレーヤーで描画し、双方とも状態を Compose 側に返します。
   - `UrlLauncher`: Android Intent / iOS UIApplication。
-  - `PermissionRequest`: Android ではストレージ権限 (API < 33) を要求、iOS は即 true。
+  - `PermissionRequest`: Android ではストレージ権限 (API < 33) を要求、iOS はアプリの保存先 (Documents/futacha) を案内するダイアログを表示したうえで即 true。
   - `PlatformBackHandler`: Android Compose BackHandler / iOS no-op。
 - `LocalFutachaImageLoader`: Coil3 ImageLoader を再利用し、`Dispatchers.IO.limitedParallelism(3)` でフェッチ/デコードを制限。32MB のメモリキャッシュと `futacha_image_cache`（最大 128MB、okio + DiskCache）を作ってカタログのサムネ描画を安定化させている。
 
