@@ -19,7 +19,7 @@
 - **投稿の安定化**: `HttpBoardApi` が板ごとの `chrenc` 設定をキャッシュし、新設の `TextEncoding` util で Shift_JIS/UTF-8 を切り替えつつ `ptua`/`hash` などのメタを付与して `createThread`/`replyToThread` を送信、応答からスレッドIDやエラー理由を拾って結果を伝えます。
 - **ImageLoader のキャッシュ**: `LocalFutachaImageLoader` はメモリキャッシュと任意のディスクキャッシュを持つ Coil3 ImageLoader を提供し、カタログ Thumbnail の描画を安定化させます。
 
-詳細な API / パーサー仕様は [codex.md](codex.md) を参照してください。
+詳細な API / パーサー仕様は [AGENTS.md](AGENTS.md) を参照してください。
 
 ---
 
