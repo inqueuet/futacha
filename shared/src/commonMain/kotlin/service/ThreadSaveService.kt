@@ -10,12 +10,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 /**
  * スレッド保存サービス
  */
+@OptIn(ExperimentalTime::class)
 class ThreadSaveService(
     private val httpClient: HttpClient,
     private val fileSystem: FileSystem
@@ -175,7 +181,7 @@ class ThreadSaveService(
                 boardName = boardName,
                 boardUrl = boardUrl,
                 title = title,
-                savedAt = System.currentTimeMillis(),
+                savedAt = Clock.System.now().toEpochMilliseconds(),
                 expiresAtLabel = expiresAtLabel,
                 posts = savedPosts,
                 totalSize = totalSize,
@@ -249,7 +255,7 @@ class ThreadSaveService(
                 MediaType.THUMBNAIL -> "images" to "thumb_"
                 MediaType.FULL_IMAGE -> "images" to "img_"
             }
-            val fileName = "${prefix}${postId}_${System.currentTimeMillis()}.$extension"
+            val fileName = "${prefix}${postId}_${Clock.System.now().toEpochMilliseconds()}.$extension"
             val relativePath = "$subDir/$fileName"
             val fullPath = "$baseDir/$relativePath"
 
@@ -303,6 +309,29 @@ class ThreadSaveService(
         return converted
     }
 
+    @OptIn(ExperimentalTime::class)
+    private fun formatTimestamp(epochMillis: Long): String {
+        val instant = Instant.fromEpochMilliseconds(epochMillis)
+        val localDateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+
+        fun Int.pad2() = toString().padStart(2, '0')
+        fun Int.pad4() = toString().padStart(4, '0')
+
+        return buildString {
+            append(localDateTime.year.pad4())
+            append('/')
+            append(localDateTime.monthNumber.pad2())
+            append('/')
+            append(localDateTime.dayOfMonth.pad2())
+            append(' ')
+            append(localDateTime.hour.pad2())
+            append(':')
+            append(localDateTime.minute.pad2())
+            append(':')
+            append(localDateTime.second.pad2())
+        }
+    }
+
     /**
      * HTMLをファイルに直接書き込み（メモリ効率的なストリーミング方式）
      * FIX: Write directly to file instead of building huge string in memory
@@ -333,7 +362,7 @@ class ThreadSaveService(
             appendLine("    <div class=\"metadata\">")
             appendLine("        <h1>${metadata.title}</h1>")
             appendLine("        <p>板: ${metadata.boardName}</p>")
-            appendLine("        <p>保存日時: ${java.text.SimpleDateFormat("yyyy/MM/dd HH:mm:ss").format(java.util.Date(metadata.savedAt))}</p>")
+            appendLine("        <p>保存日時: ${formatTimestamp(metadata.savedAt)}</p>")
             appendLine("        <p>投稿数: ${metadata.posts.size}</p>")
             if (metadata.expiresAtLabel != null) {
                 appendLine("        <p>有効期限: ${metadata.expiresAtLabel}</p>")
