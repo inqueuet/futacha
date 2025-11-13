@@ -2919,8 +2919,6 @@ private fun matchesCatalogNgWords(
 }
 
 private enum class CatalogMenuAction(val label: String) {
-    Display("表示オプション"),
-    Toolbar("ツールバー編集"),
     Settings("設定"),
     Help("ヘルプ")
 }
@@ -4078,7 +4076,7 @@ private fun ThreadTopBar(
                 }
                 IconButton(onClick = onOpenHistory) {
                     Icon(
-                        imageVector = Icons.Outlined.MoreVert,
+                        imageVector = Icons.Rounded.History,
                         contentDescription = "履歴を開く"
                     )
                 }

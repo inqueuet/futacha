@@ -8,7 +8,6 @@ import kotlinx.datetime.toInstant
 import kotlin.time.ExperimentalTime
 
 enum class BoardManagementMenuAction(val label: String) {
-    LIST("板一覧"),
     ADD("新規追加"),
     REORDER("並び替え"),
     DELETE("削除"),
