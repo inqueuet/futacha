@@ -17,6 +17,8 @@
   - `createRemoteBoardRepository()` を `remember` し、`DisposableEffect` で `close()`。
   - `setScrollDebounceScope()`、version チェック (`VersionChecker`)、`LocalFutachaImageLoader` のライフサイクル管理、履歴更新 (`refreshHistoryEntries`) を担当。
   - `selectedBoardId` / `selectedThreadId` で Board → Catalog → Thread を切り替え。`BoardSummary.isMockBoard()` によりモック/リモートを選択。
+  - `fileSystem` から `AUTO_SAVE_DIRECTORY` を使った `SavedThreadRepository` を `remember` し、自動セーブ用インデックスを管理。履歴エントリ削除・クリア時には関連する auto-save ディレクトリを削除し、`ThreadScreen` にオフラインフォールバックを提供する。
+  - `VersionChecker` から取得した `appVersion` を `remember` し、それを global settings と各画面に渡すことでバージョン情報の表示や `GlobalSettingsScreen` の動作に利用。
 
 ---
 
@@ -30,9 +32,9 @@
   - **ADD**: `AddBoardDialog` (URL スキーマ確認、重複チェック、`slugify` で ID 生成)。
   - **DELETE**: カード右端に削除ボタンを出し、`DeleteBoardDialog` で確認 → `onBoardDeleted` → `AppStateStore.setBoards()`。
   - **REORDER**: `BoardSummaryCardWithReorder` が上下ボタンを表示 (`onBoardsReordered` コールバック)。ドラッグ&ドロップは未実装。
-  - HELP/SETTINGS は snackbar でモック通知。
+  - **SETTINGS**: `GlobalSettingsScreen` を表示し、X/Email/GitHub へのリンクや `appVersion` 行を含む共通設定画面を開く。
 - 履歴ドロワー (`HistoryDrawerContent`):
-  - `SwipeToDismissBox` で履歴をスワイプ削除。下部バーから board 画面へ戻る / 更新 / 一括削除 / 設定 (モック)。
+  - `SwipeToDismissBox` で履歴をスワイプ削除。下部バーから board 画面へ戻る / 更新 / 一括削除 / 設定 (`GlobalSettingsScreen`)。
   - このコンポーネントは Catalog / Thread でも再利用されます。
 
 ### 1.2 CatalogScreen
@@ -49,6 +51,7 @@
   - **Settings**: `CatalogSettingsSheet` が 6 メニュー (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇は実装済みで、NG管理は `NgManagementSheet` (ワードのみ) を開き、外部アプリは `mode=cat` URL を `rememberUrlLauncher` で開く。表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` を呼ぶ。監視ワードは `WatchWordsSheet` で編集可能で、登録したワードと一致するタイトルを持つスレッドはカタログ更新時に履歴へ自動追加されます。記号凡例: 〇=対応、△=基本実装、無印=未実装。
 - `stateStore?.isPrivacyFilterEnabled` を collect し、true のときは半透明の Canvas オーバーレイを描画。
 - `FakeBoardRepository()` をデフォルトにし、`board.url` が `example.com` ならモックのまま、そうでなければ `FutachaApp` から渡された `BoardRepository` (リモート) を利用。
+- `CatalogTopBar` の `CatalogMenuAction.Settings` で `GlobalSettingsScreen` を開き、X/Email/GitHub への導線や `appVersion` 行を再利用した共通設定画面を表示している。
 
 ### 1.3 ThreadScreen
 
@@ -59,7 +62,7 @@
 - `ThreadTopBar`:
   - Default: Thread title + Board name + reply count / status label。
   - Search mode: `TextField` + ヒット件数表示 + `KeyboardArrowUp/Down` ナビ。`currentSearchResultIndex` を `moveToNext/PreviousSearchMatch` で更新。
-  - Actions: Search icon → `isSearchActive = true`、MoreVert → 履歴ドロワー。
+  - Actions: Search icon → `isSearchActive = true`、History icon → ドロワーを開く、MoreVert → `ThreadMenuAction.Settings` を開いて `GlobalSettingsScreen` を表示。
 - `ThreadActionBarItem` (Row of IconButtons):
   1. Reply → `ThreadReplyDialog` (`ThreadFormDialog` ベース、メールプリセット/削除キー/画像or動画選択)。
   2. ScrollToTop / ScrollToBottom → `animateScrollToItem`.
@@ -67,6 +70,7 @@
   4. Gallery → `ThreadImageGallery` (ModalBottomSheet でサムネ一覧)。
  5. Save → `ThreadSaveService` (httpClient & fileSystem がある場合のみ)。結果を `SavedThreadRepository.addThreadToIndex()` に保存し snackbar を表示。Android / iOS ともに依存関係が注入されるようになったので保存ボタンが有効です。
   6. Settings → `ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示。〇は即動作し、NG管理は `NgManagementSheet` でヘッダー/ワードを編集、外部アプリは `res/{threadId}.htm` を開く、プライバシーは `AppStateStore` のフラグをトグル。△の読み上げは `TextSpeaker` で投稿本文を順次再生し、再タップで停止できる基本実装。記号凡例は Catalog と同じです。
+- 自動セーブ / オフラインフォールバック: `autoSavedThreadRepository` に `AUTO_SAVE_DIRECTORY` を使って `ThreadSaveService(baseDirectory = AUTO_SAVE_DIRECTORY)` で 60 秒ごとにスレッドを保存。`loadThreadWithOfflineFallback` は保存済みメタデータを `SavedThreadMetadata.toThreadPage()` で `ThreadPage` に変換して表示し、ネットワーク不通時には snackbar でローカルコピーを通知 (`isShowingOfflineCopy` フラグ)。履歴を削除またはクリアすると `FutachaApp` が該当する auto-save ディレクトリを `SavedThreadRepository` 経由で削除するので、古いローカルコピーも掃除される。
 - 投稿カード (`ThreadPostCard`):
   - ID ラベル: `buildPosterIdLabels()` が ID ごとの通番と total count を付与 (複数出現なら強調)。
   - 引用 (`QuoteReference`) をタップすると `QuotePreviewDialog` に target posts をまとめて表示。
@@ -81,6 +85,12 @@
 - `SavedThreadRepository` を受け取り、`getAllThreads()` / `getTotalSize()` を `LaunchedEffect` でロード。
 - `AlertDialog` で削除確認、`SnackbarHostState` で成功/失敗を表示。
 - まだ `FutachaApp` から遷移する導線が無いため未使用。ナビゲーション機能を追加する必要あり。
+
+### 1.5 GlobalSettingsScreen
+
+- `GlobalSettingsScreen` は Board のメニュー `SETTINGS`、Catalog の `CatalogMenuAction.Settings`、Thread の `ThreadMenuAction.Settings`、履歴ドロワーの設定ボタンから開く共通設定ダイアログ。
+- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。
+- `FutachaApp` は `VersionChecker` からバージョン名 (`appVersion`) を `remember` し、全画面に注入しているので、最新リリース通知 (`UpdateNotificationDialog`) と合わせて UI 側でもバージョン参照が一貫している。
 
 ---
 
@@ -99,6 +109,7 @@
 - `ThreadHistoryEntry`:
   - `lastVisitedEpochMillis`, `lastReadItemIndex`, `lastReadItemOffset` を保持し、Thread 画面遷移時に scroll state を復元。
   - `BoardHistoryDrawer` のカードは ID/タイトル/板名/サムネ/レス数/lastVisited を表示。
+- `autoSavedThreadRepository` は `SavedThreadRepository(baseDirectory = AUTO_SAVE_DIRECTORY)` で `FutachaApp` により `remember` され、履歴エントリを削除/クリアする際に関連する auto-save ディレクトリも `deleteThread`/`deleteAllThreads` で掃除される。`SavedThreadMetadata.toThreadPage()` はオフラインフォールバックと `ThreadScreen` での復元に使われる。
 
 ---
 
@@ -139,9 +150,12 @@
     - `convertHtmlPaths()` が `<img src>` / `<a href>` / `<video src>` / `<source src>` の URL をローカル相対パスに差し替える。
     - `SavedThread` (thumbnailPath, imageCount, videoCount, totalSize, SaveStatus) と `SavedThreadMetadata` (posts, local paths, version) を生成。
     - `savedAt` 値とファイル命名には `Clock.System` + `kotlinx.datetime` を使い、`formatTimestamp()` でローカルタイム (yyyy/MM/dd HH:mm:ss) の文字列を metadata に出力するようになった。
-- `SavedThreadRepository`
-  - `indexMutex` で `saved_threads/index.json` を守り、`addThreadToIndex()` / `removeThreadFromIndex()` / `updateThread()` でスレ一覧と `totalSize` / `lastUpdated` を集計。
-  - `deleteThread()` は `FileSystem.deleteRecursively("saved_threads/$threadId")` → index 更新。
+    - `baseDirectory` パラメータ (デフォルト `MANUAL_SAVE_DIRECTORY`) を受け取り、必ずディレクトリを作成したうえで手動保存・自動保存の両方で同じロジックを使えるようにした。
+  - `SaveDirectories.kt`
+    - `MANUAL_SAVE_DIRECTORY` / `AUTO_SAVE_DIRECTORY` の定数が切り出され、手動保存と自動保存でフォルダを分離する。
+  - `SavedThreadRepository`
+    - `baseDirectory` で管理対象を切り替えられるようになり、`MANUAL_SAVE_DIRECTORY` は手動保存、`AUTO_SAVE_DIRECTORY` は auto-save ジョブで使われる。`indexMutex` で `index.json` を保護しつつ `add`/`remove`/`update` を提供し、`deleteThread()` は対象のフォルダを再帰削除して index を再計算する。
+    - `SavedThreadMetadata.toThreadPage()` (new extension) を使って autosave ディレクトリからロードした metadata を `ThreadPage` に変換し、`ThreadScreen` のオフラインフォールバックで再利用している。
 - `FileSystem` expect
   - Android (`util/FileSystem.android.kt`): `Documents/futacha` をベースにし、必要なら内部ストレージにフォールバック。`createDirectory` / `writeBytes` / `writeString` は `Dispatchers.IO` で実行。
   - iOS (`util/FileSystem.ios.kt`): `NSFileManager` + `NSData` で IO。`resolveAbsolutePath` は `NSDocumentDirectory` 配下。
