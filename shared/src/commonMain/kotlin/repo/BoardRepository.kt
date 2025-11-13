@@ -6,11 +6,11 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import com.valoser.futacha.shared.util.Logger
 
 interface BoardRepository {
     suspend fun getCatalog(
@@ -57,11 +57,15 @@ interface BoardRepository {
      * Close the repository and release resources (e.g., HTTP client connections)
      */
     fun close()
+
+    suspend fun clearOpImageCache(board: String? = null, threadId: String? = null)
 }
 
 class DefaultBoardRepository(
     private val api: BoardApi,
-    private val parser: HtmlParser
+    private val parser: HtmlParser,
+    private val opImageCacheTtlMillis: Long = DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS,
+    private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES
 ) : BoardRepository {
     // Track which boards have been initialized with cookies
     private val initializedBoards = mutableSetOf<String>()
@@ -69,10 +73,15 @@ class DefaultBoardRepository(
     // try to initialize the same board simultaneously
     private val boardInitMutex = Mutex()
 
+    private val opImageCacheMutex = Mutex()
+    private val opImageCache = createOpImageCache()
+
     companion object {
         private const val TAG = "DefaultBoardRepository"
         private const val OP_IMAGE_LINE_LIMIT = 65
         private const val OP_IMAGE_CONCURRENCY = 4
+        private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
+        private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
     }
 
     private val opImageSemaphore = Semaphore(OP_IMAGE_CONCURRENCY)
@@ -107,11 +116,15 @@ class DefaultBoardRepository(
     }
 
     override suspend fun fetchOpImageUrl(board: String, threadId: String): String? {
-        ensureCookiesInitialized(board)
         if (threadId.isBlank()) return null
-        return opImageSemaphore.withPermit {
+        val key = OpImageKey(board, threadId)
+        getCachedOpImageUrl(key)?.let { return it }
+        ensureCookiesInitialized(board)
+        val resolvedUrl = opImageSemaphore.withPermit {
             resolveOpImageUrl(board, threadId)
         }
+        saveOpImageUrlToCache(key, resolvedUrl)
+        return resolvedUrl
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
@@ -175,6 +188,77 @@ class DefaultBoardRepository(
     override fun close() {
         // Close the underlying API if it supports cleanup
         (api as? AutoCloseable)?.close()
+        if (opImageCacheMutex.tryLock()) {
+            try {
+                opImageCache.clear()
+            } finally {
+                opImageCacheMutex.unlock()
+            }
+        }
+    }
+
+    override suspend fun clearOpImageCache(board: String?, threadId: String?) {
+        opImageCacheMutex.withLock {
+            if (board == null && threadId == null) {
+                opImageCache.clear()
+                return
+            }
+            val iterator = opImageCache.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                val key = entry.key
+                val boardMatches = board == null || key.board == board
+                val threadMatches = threadId == null || key.threadId == threadId
+                if (boardMatches && threadMatches) {
+                    iterator.remove()
+                }
+            }
+        }
+    }
+
+    private data class OpImageKey(val board: String, val threadId: String)
+
+    private data class OpImageCacheEntry(val url: String?, val recordedAtMillis: Long)
+
+    private fun createOpImageCache() = object : LinkedHashMap<OpImageKey, OpImageCacheEntry>(
+        opImageCacheMaxEntries,
+        0.75f,
+        true
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<OpImageKey, OpImageCacheEntry>?): Boolean {
+            return size > opImageCacheMaxEntries
+        }
+    }
+
+    private suspend fun getCachedOpImageUrl(key: OpImageKey): String? {
+        val now = System.currentTimeMillis()
+        return opImageCacheMutex.withLock {
+            val entry = opImageCache[key]
+            if (entry == null) return@withLock null
+            if (now - entry.recordedAtMillis <= opImageCacheTtlMillis) {
+                return@withLock entry.url
+            }
+            opImageCache.remove(key)
+            return@withLock null
+        }
+    }
+
+    private suspend fun saveOpImageUrlToCache(key: OpImageKey, url: String?) {
+        val now = System.currentTimeMillis()
+        opImageCacheMutex.withLock {
+            opImageCache[key] = OpImageCacheEntry(url, now)
+            purgeExpiredEntriesLocked(now)
+        }
+    }
+
+    private fun purgeExpiredEntriesLocked(now: Long) {
+        val iterator = opImageCache.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (now - entry.value.recordedAtMillis > opImageCacheTtlMillis) {
+                iterator.remove()
+            }
+        }
     }
 
     private suspend fun resolveOpImageUrl(

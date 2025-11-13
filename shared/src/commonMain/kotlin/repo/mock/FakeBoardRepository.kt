@@ -89,6 +89,10 @@ class FakeBoardRepository(
         return "1234567890"
     }
 
+    override suspend fun clearOpImageCache(board: String?, threadId: String?) {
+        onAccess()
+    }
+
     override fun close() {
         // No resources to clean up for fake repository
     }
