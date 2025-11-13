@@ -33,4 +33,25 @@ class CatalogHtmlParserCoreTest {
         assertEquals("チュートリアル", items[1].title)
         assertEquals(0, items[1].replyCount)
     }
+
+    @Test
+    fun parseCatalog_decodesSupplementaryEntities() {
+        val expected = String(Character.toChars(0x2E81C))
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td><a href='res/4000000000.htm'></a><br><small>&#188604;</small><br><font size=2>1</font></td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = CatalogHtmlParserCore.parseCatalog(html)
+
+        assertEquals(1, items.size)
+        assertEquals(expected, items[0].title)
+    }
 }

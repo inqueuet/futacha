@@ -1,3 +1,5 @@
+@file:kotlin.OptIn(kotlin.ExperimentalMultiplatform::class)
+
 package com.valoser.futacha.shared.audio
 
 import android.content.Context
@@ -44,8 +46,19 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                 handleUtteranceResult(utteranceId, null)
             }
 
+            @Deprecated(
+                message = "Legacy callback for older APIs",
+                replaceWith = ReplaceWith("onError(utteranceId, TextToSpeech.ERROR)", "android.speech.tts.TextToSpeech")
+            )
             override fun onError(utteranceId: String?) {
                 handleUtteranceResult(utteranceId, IOException("読み上げ中にエラーが発生しました"))
+            }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                handleUtteranceResult(
+                    utteranceId,
+                    IOException("読み上げ中にエラーが発生しました (code: $errorCode)")
+                )
             }
         })
     }

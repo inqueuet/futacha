@@ -253,7 +253,7 @@ class ThreadSaveService(
             val relativePath = "$subDir/$fileName"
             val fullPath = "$baseDir/$relativePath"
 
-            val bytes = response.readBytes()
+            val bytes = response.readRawBytes()
             if (bytes.size > MAX_FILE_SIZE_BYTES) {
                 throw Exception("Actual file size exceeds limit: ${bytes.size / 1024}KB")
             }

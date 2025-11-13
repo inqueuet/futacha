@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 plugins {
     id("org.jetbrains.kotlin.multiplatform")
     id("com.android.library")
@@ -8,6 +9,10 @@ plugins {
 
 kotlin {
     applyDefaultHierarchyTemplate()
+
+    tasks.withType<KotlinCompile>().configureEach {
+        compilerOptions.freeCompilerArgs.add("-Xexpect-actual-classes")
+    }
 
     androidTarget {
         compilerOptions {

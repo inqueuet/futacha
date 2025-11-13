@@ -61,8 +61,6 @@ internal object CatalogHtmlParserCore {
     )
     private val threadIdRegex = Regex("res/(\\d+)\\.htm")
     private val htmlTagRegex = Regex("<[^>]+>")
-    private val numericEntityRegex = Regex("&#(\\d+);")
-    private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
     private val knownTitles = mapOf(
         "1364612020" to "チュートリアル",
     )
@@ -186,45 +184,6 @@ internal object CatalogHtmlParserCore {
 
     private fun cleanText(raw: String): String {
         val withoutTags = htmlTagRegex.replace(raw, "")
-
-        // Decode numeric entities first
-        val decodedNumeric = numericEntityRegex.replace(withoutTags) { match ->
-            val value = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return@replace match.value
-            // Only allow safe Unicode characters, excluding control characters
-            if (value in 0x20..0xD7FF || value in 0xE000..0xFFFD) {
-                val char = value.toChar()
-                // Re-escape potentially dangerous characters for display
-                when (char) {
-                    '<' -> "&lt;"
-                    '>' -> "&gt;"
-                    '&' -> "&amp;"
-                    '"' -> "&quot;"
-                    '\'' -> "&apos;"
-                    else -> char.toString()
-                }
-            } else {
-                match.value
-            }
-        }
-
-        val decodedHex = hexEntityRegex.replace(decodedNumeric) { match ->
-            val value = match.groupValues.getOrNull(1)?.toIntOrNull(16) ?: return@replace match.value
-            if (value in 0x20..0xD7FF || value in 0xE000..0xFFFD) {
-                val char = value.toChar()
-                when (char) {
-                    '<' -> "&lt;"
-                    '>' -> "&gt;"
-                    '&' -> "&amp;"
-                    '"' -> "&quot;"
-                    '\'' -> "&apos;"
-                    else -> char.toString()
-                }
-            } else {
-                match.value
-            }
-        }
-
-        // Keep HTML entities escaped for safe display
-        return decodedHex.trim()
+        return HtmlEntityDecoder.decode(withoutTags).trim()
     }
 }

@@ -16,6 +16,8 @@
 - **Thread 体験**: 引用プレビュー (`QuotePreviewDialog`)、ID 別ハイライト、スレ内検索 (前/次ナビ付き)、long-press アクションシート、ギャラリーシート、画像/動画プレビュー、ヒストリードロワーがすべて共通コードで動作。
 - **スレ保存 (Android)**: `ThreadSaveService` が HTML + 画像を `saved_threads` に保存し、`SaveProgressDialog` で進捗をリアルタイム表示。`SavedThreadRepository` が `index.json` を管理。iOS はホストが `FileSystem` を渡していないため snackbar で案内されます。
 - **GitHub Releases チェック**: `version/VersionChecker.kt` が `releases/latest` を確認し、新バージョンを `UpdateNotificationDialog` で知らせます。プラットフォーム固有ロジックは VersionChecker actual に閉じ込めています。
+- **投稿の安定化**: `HttpBoardApi` が板ごとの `chrenc` 設定をキャッシュし、新設の `TextEncoding` util で Shift_JIS/UTF-8 を切り替えつつ `ptua`/`hash` などのメタを付与して `createThread`/`replyToThread` を送信、応答からスレッドIDやエラー理由を拾って結果を伝えます。
+- **ImageLoader のキャッシュ**: `LocalFutachaImageLoader` はメモリキャッシュと任意のディスクキャッシュを持つ Coil3 ImageLoader を提供し、カタログ Thumbnail の描画を安定化させます。
 
 詳細な API / パーサー仕様は [codex.md](codex.md) を参照してください。
 
@@ -63,15 +65,15 @@
 
 ---
 
-## 🌐 Networking & Parsing
 - `HttpBoardApi` (Ktor Core + OkHttp/Darwin):
   - `fetchCatalogSetup` で catset POST → `posttime/cxyl` を初期化。
   - `fetchCatalog` / `fetchThread` / `fetchThreadHead` は 20MB 制限 + Content-Length 検査 + Referer を設定。
-  - `voteSaidane`, `requestDeletion`, `deleteByUser`, `createThread`, `replyToThread` を HTML フォームで実装。
+  - `voteSaidane`, `requestDeletion`, `deleteByUser` を HTML フォームで実装。
+  - `createThread` / `replyToThread` は板の `chrenc` input を `TextEncoding` expect で Shift_JIS/UTF-8 に変換し、`postingConfig` をキャッシュ、`ptua`/`hash` などのメタを付与して `submitFormWithBinaryData` で送信。レスポンスからスレIDやエラー理由を抜き出して呼び出し元へ返す。
 - `BoardUrlResolver` が板 URL から slug/base/root を計算し、ID をサニタイズしてパストラバーサルを防止。
 - `DefaultBoardRepository`:
   - 板ごとに cookie 初期化を 1 回だけ実行 (`Mutex` + `initializedBoards` セット)。
-  - OP サムネ取得は `fetchThreadHead` + `Semaphore(OP_IMAGE_CONCURRENCY=4)` で限定。
+  - OP サムネ取得は `fetchThreadHead` + `Semaphore(OP_IMAGE_CONCURRENCY=4)` で限定。取得結果は TTL 15 分・最大 512 件の LRU キャッシュに入り、`clearOpImageCache()` で板/スレ単位または全体を消去可能。
   - `createRemoteBoardRepository()` が HttpClient + HtmlParser を生成し、`FutachaApp` で `remember` + `DisposableEffect` によって close。
 - 共有パーサー (`CatalogHtmlParserCore`, `ThreadHtmlParserCore`):
   - サイズ/正規表現 ReDoS 対策 (10MB, chunk, 1,500 ループ, 5 秒タイムアウト)。
@@ -102,7 +104,7 @@ futacha/
 │   │   │   ├── FutachaApp, UpdateNotificationDialog, PermissionRequest expect
 │   │   │   ├── image/ ImageLoaderProvider (LocalFutachaImageLoader)
 │   │   │   └── board/ BoardManagementScreen, SaveProgressDialog, SavedThreadsScreen, PlatformVideoPlayer expect
-│   │   ├── util/ FileSystem expect, ImagePicker expect, Logger expect, UrlLauncher expect, BoardConfig
+│   │   ├── util/ FileSystem expect, ImagePicker expect, Logger expect, UrlLauncher expect, BoardConfig, TextEncoding expect
 │   │   └── version/ VersionChecker interface + helper functions
 │   ├── src/androidMain/kotlin/ (14 files) — DataStore storage, OkHttp client, ActivityResult pickers, VideoView player, Logger/UrlLauncher/PermissionHelper actuals
 │   ├── src/iosMain/kotlin/ (14 files) — ComposeUIViewController host, NSUserDefaults storage (privacy flag TODO), Darwin client, PHPicker/AVPlayer actuals, NSLog logger, UrlLauncher
@@ -140,7 +142,7 @@ futacha/
 - `version/VersionChecker.kt`: `UpdateInfo`, `isNewerVersion`, `fetchLatestVersionFromGitHub` を提供。common コードから呼び出しやすいように `createVersionChecker(HttpClient)` expect を定義。
 - `AndroidVersionChecker` (Context + HttpClient) / `IosVersionChecker` (HttpClient) が実装。Android では `createVersionChecker(context, httpClient)` を明示的に呼ぶ必要があります。
 - `UpdateNotificationDialog`: シンプルな Material3 ダイアログで「OK / 後で」ボタンのみ。
-- `LocalFutachaImageLoader`: `Dispatchers.IO.limitedParallelism(3)` を fetcher/decoder に使う Coil3 ImageLoader を `remember` し、`FutachaApp` でライフサイクル管理。
+- `LocalFutachaImageLoader`: `Dispatchers.IO.limitedParallelism(3)` を fetcher/decoder に使う Coil3 ImageLoader を `remember` し、`FutachaApp` でライフサイクル管理。32MB のメモリキャッシュと `futacha_image_cache` (最大 128MB、okio + DiskCache) を使ってカタログのサムネを安定化させる。
 - `PermissionRequest` expect:
   - Android: ActivityResult で `READ/WRITE_EXTERNAL_STORAGE` を (13 未満のみ) まとめてリクエストする `PermissionHelper` 実装。
   - iOS: 即座に `onPermissionResult(true)`。

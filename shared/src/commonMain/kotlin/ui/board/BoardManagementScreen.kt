@@ -72,23 +72,21 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.VideoLibrary
-import androidx.compose.material.icons.rounded.FlashOn
-import androidx.compose.material.icons.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material.icons.rounded.ViewList
-import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.WatchLater
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -151,6 +149,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -210,6 +209,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -698,16 +698,14 @@ private fun DismissibleHistoryEntry(
     onDismissed: (ThreadHistoryEntry) -> Unit,
     onClicked: () -> Unit
 ) {
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.StartToEnd) {
+    val dismissState = rememberSwipeToDismissBoxState()
+    LaunchedEffect(entry, dismissState) {
+        snapshotFlow { dismissState.currentValue }
+            .filter { it == SwipeToDismissBoxValue.StartToEnd }
+            .collect {
                 onDismissed(entry)
-                true
-            } else {
-                false
             }
-        }
-    )
+    }
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromEndToStart = false,
@@ -1599,10 +1597,6 @@ fun CatalogScreen(
                                 stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
                             }
                         }
-
-                        else -> coroutineScope.launch {
-                            snackbarHostState.showSnackbar("${menuItem.label} は未実装です")
-                        }
                     }
                     showSettingsMenu = false
                 }
@@ -2007,7 +2001,7 @@ private fun ThreadFormDialog(
                             enabled = isSubmitEnabled
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Send,
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
                                 contentDescription = sendDescription,
                                 tint = MaterialTheme.colorScheme.onPrimary
                             )
@@ -2938,7 +2932,7 @@ private enum class CatalogSettingsMenuItem(
 ) {
     WatchWords("監視ワード", Icons.Rounded.WatchLater, "監視中のワードを編集"),
     NgManagement("NG管理", Icons.Rounded.Block, "NGワード・IDを管理"),
-    ExternalApp("外部アプリ", Icons.Rounded.OpenInNew, "外部アプリ連携を設定"),
+    ExternalApp("外部アプリ", Icons.AutoMirrored.Rounded.OpenInNew, "外部アプリ連携を設定"),
     DisplayStyle("表示の切り替え", Icons.Rounded.ViewModule, "カタログ表示方法を変更"),
     ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop, "グリッドの先頭へ移動"),
     Privacy("プライバシー", Icons.Rounded.Lock, "プライバシー設定を確認")
@@ -2948,7 +2942,7 @@ private enum class CatalogNavDestination(val label: String, val icon: ImageVecto
     CreateThread("スレッド作成", Icons.Rounded.Add),
     ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop),
     RefreshCatalog("カタログ更新", Icons.Rounded.Refresh),
-    Mode("モード", Icons.Rounded.Sort),
+    Mode("モード", Icons.AutoMirrored.Rounded.Sort),
     Settings("設定", Icons.Rounded.Settings)
 }
 
@@ -3585,11 +3579,6 @@ fun ThreadScreen(
                             ThreadActionBarItem.Settings -> {
                                 isThreadSettingsSheetVisible = true
                             }
-                            else -> {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("${action.label} はモック動作です")
-                                }
-                            }
                         }
                     }
                 )
@@ -3900,11 +3889,6 @@ fun ThreadScreen(
                             }
                         } else {
                             startReadAloud()
-                        }
-                    }
-                    else -> {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("${menuItem.label}はモック動作です")
                         }
                     }
                 }
@@ -5815,8 +5799,8 @@ private enum class ThreadSettingsMenuItem(
     val icon: ImageVector
 ) {
     NgManagement("NG管理", Icons.Rounded.Block),
-    ExternalApp("外部アプリ", Icons.Rounded.OpenInNew),
-    ReadAloud("読み上げ", Icons.Rounded.VolumeUp),
+    ExternalApp("外部アプリ", Icons.AutoMirrored.Rounded.OpenInNew),
+    ReadAloud("読み上げ", Icons.AutoMirrored.Rounded.VolumeUp),
     Privacy("プライバシー", Icons.Rounded.Lock)
 }
 

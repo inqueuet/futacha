@@ -42,6 +42,10 @@ data class GitHubRelease(
     val body: String? = null
 )
 
+private val json = Json {
+    ignoreUnknownKeys = true
+}
+
 /**
  * バージョン文字列を比較
  * @return latestVersion > currentVersion の場合 true
@@ -80,7 +84,7 @@ suspend fun fetchLatestVersionFromGitHub(
     return try {
         val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
         val response = httpClient.get(url).bodyAsText()
-        Json { ignoreUnknownKeys = true }.decodeFromString<GitHubRelease>(response)
+        json.decodeFromString<GitHubRelease>(response)
     } catch (e: Exception) {
         println("Failed to fetch latest version from GitHub: ${e.message}")
         null

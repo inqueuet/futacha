@@ -11,6 +11,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 interface BoardRepository {
     suspend fun getCatalog(
@@ -203,15 +205,10 @@ class DefaultBoardRepository(
                 opImageCache.clear()
                 return
             }
-            val iterator = opImageCache.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                val key = entry.key
+            opImageCache.removeIf { key, _ ->
                 val boardMatches = board == null || key.board == board
                 val threadMatches = threadId == null || key.threadId == threadId
-                if (boardMatches && threadMatches) {
-                    iterator.remove()
-                }
+                boardMatches && threadMatches
             }
         }
     }
@@ -220,18 +217,65 @@ class DefaultBoardRepository(
 
     private data class OpImageCacheEntry(val url: String?, val recordedAtMillis: Long)
 
-    private fun createOpImageCache() = object : LinkedHashMap<OpImageKey, OpImageCacheEntry>(
-        opImageCacheMaxEntries,
-        0.75f,
-        true
-    ) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<OpImageKey, OpImageCacheEntry>?): Boolean {
-            return size > opImageCacheMaxEntries
+    private class LruCache<K, V>(private val maxEntries: Int) {
+        private val cache = mutableMapOf<K, V>()
+        private val accessOrder = mutableListOf<K>()
+
+        operator fun get(key: K): V? {
+            val value = cache[key]
+            if (value != null) {
+                accessOrder.remove(key)
+                accessOrder.add(key)
+            }
+            return value
         }
+
+        operator fun set(key: K, value: V) {
+            if (cache.containsKey(key)) {
+                accessOrder.remove(key)
+            } else if (cache.size >= maxEntries) {
+                val eldest = accessOrder.removeAt(0)
+                cache.remove(eldest)
+            }
+            cache[key] = value
+            accessOrder.add(key)
+        }
+
+        fun remove(key: K): V? {
+            accessOrder.remove(key)
+            return cache.remove(key)
+        }
+
+        fun clear() {
+            cache.clear()
+            accessOrder.clear()
+        }
+
+        fun removeIf(predicate: (K, V) -> Boolean) {
+            val keysToRemove = mutableListOf<K>()
+            for ((key, value) in cache) {
+                if (predicate(key, value)) {
+                    keysToRemove.add(key)
+                }
+            }
+            for (key in keysToRemove) {
+                remove(key)
+            }
+        }
+
+        fun forEach(action: (K, V) -> Unit) {
+            cache.forEach { (key, value) -> action(key, value) }
+        }
+
+        val size: Int
+            get() = cache.size
     }
 
+    private fun createOpImageCache() = LruCache<OpImageKey, OpImageCacheEntry>(opImageCacheMaxEntries)
+
+    @OptIn(ExperimentalTime::class)
     private suspend fun getCachedOpImageUrl(key: OpImageKey): String? {
-        val now = System.currentTimeMillis()
+        val now = Clock.System.now().toEpochMilliseconds()
         return opImageCacheMutex.withLock {
             val entry = opImageCache[key]
             if (entry == null) return@withLock null
@@ -243,8 +287,9 @@ class DefaultBoardRepository(
         }
     }
 
+    @OptIn(ExperimentalTime::class)
     private suspend fun saveOpImageUrlToCache(key: OpImageKey, url: String?) {
-        val now = System.currentTimeMillis()
+        val now = Clock.System.now().toEpochMilliseconds()
         opImageCacheMutex.withLock {
             opImageCache[key] = OpImageCacheEntry(url, now)
             purgeExpiredEntriesLocked(now)
@@ -252,12 +297,8 @@ class DefaultBoardRepository(
     }
 
     private fun purgeExpiredEntriesLocked(now: Long) {
-        val iterator = opImageCache.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            if (now - entry.value.recordedAtMillis > opImageCacheTtlMillis) {
-                iterator.remove()
-            }
+        opImageCache.removeIf { _, entry ->
+            now - entry.recordedAtMillis > opImageCacheTtlMillis
         }
     }
 

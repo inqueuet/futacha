@@ -109,14 +109,15 @@
   - `fetchCatalog()` / `fetchThread()` / `fetchThreadHead()` は 20MB を上限に二重チェック (headers + body length)。
   - `voteSaidane()` は `sd.php?{boardSlug}.{postId}` を GET → 応答 "1" を検証。
   - `requestDeletion()` は `del.php` にフォーム送信 (`reasonCode` 固定 110)。
-  - `deleteByUser()` / `createThread()` / `replyToThread()` は `futaba.php?guid=on` にフォーム送信。Shift_JIS ではなく UTF-8 のままですが、現状は HTML 応答解析を行っていません。
+  - `deleteByUser()` は `futaba.php?guid=on` にフォーム送信。
+  - `createThread()` / `replyToThread()` は `futaba.htm` から `chrenc` 入力を抜き出して `TextEncoding` expect で Shift_JIS/UTF-8 を切り替えつつ `postingConfig` をキャッシュ。`ptua`/`hash`/`pt` 系の form field を補完し、`submitFormWithBinaryData` で送信。レスポンス内の `res/1234` / JSON / 失敗キーワードを拾ってスレIDもしくはエラー詳細を返すことで応答解析が強化された。
 - `BoardUrlResolver`
   - `resolveCatalogUrl(boardUrl, mode)` で `mode=cat&sort=x` を組み立て。
   - `resolveThreadUrl` / `resolveBoardBaseUrl` / `resolveSiteRoot` により referer を正しく付与。
   - `sanitizePostId()` が数値以外を弾く。
 - `DefaultBoardRepository`
   - `ensureCookiesInitialized()` を board ごとに 1 回だけ実行 (`Mutex` + `initializedBoards` set)。
-  - `fetchOpImageUrl()` は `HttpBoardApi.fetchThreadHead()` で 65 行だけ取得し、`parser.extractOpImageUrl()` に渡す。並列数は `Semaphore(4)`。
+  - `fetchOpImageUrl()` は `HttpBoardApi.fetchThreadHead()` で 65 行だけ取得し、`parser.extractOpImageUrl()` に渡す。並列数は `Semaphore(4)`、OP 画像 URL は TTL 15 分・最大 512 件の LRU キャッシュに入り、`clearOpImageCache(board?, threadId?)` で個別/全体のキャッシュを削除できる。
   - リモート操作 (`voteSaidane`, `requestDeletion`, `deleteByUser`, `replyToThread`, `createThread`) は cookie 初期化後に API を呼ぶだけの薄いラッパー。
 - パーサー (`shared/src/commonMain/kotlin/parser`)
   - `HtmlParser` expect/actual の実装は Android/iOS ともに `CatalogHtmlParserCore` / `ThreadHtmlParserCore` を呼ぶだけ (Jsoup 依存なし)。
@@ -151,7 +152,7 @@
   - `UrlLauncher`: Android Intent / iOS UIApplication。
   - `PermissionRequest`: Android ではストレージ権限 (API < 33) を要求、iOS は即 true。
   - `PlatformBackHandler`: Android Compose BackHandler / iOS no-op。
-  - `LocalFutachaImageLoader`: Coil3 ImageLoader を再利用し、`Dispatchers.IO.limitedParallelism(3)` でフェッチ/デコードを制限。
+- `LocalFutachaImageLoader`: Coil3 ImageLoader を再利用し、`Dispatchers.IO.limitedParallelism(3)` でフェッチ/デコードを制限。32MB のメモリキャッシュと `futacha_image_cache`（最大 128MB、okio + DiskCache）を作ってカタログのサムネ描画を安定化させている。
 
 ---
 
@@ -183,7 +184,7 @@ shared/
 │   │   ├── FutachaApp, PermissionRequest expect, UpdateNotificationDialog
 │   │   ├── image/ ImageLoaderProvider (LocalFutachaImageLoader)
 │   │   └── board/ BoardManagementScreen, SaveProgressDialog, SavedThreadsScreen, PlatformVideoPlayer expect
-│   ├── util/ FileSystem expect, ImagePicker expect, Logger expect, UrlLauncher expect, BoardConfig
+│   ├── util/ FileSystem expect, ImagePicker expect, Logger expect, UrlLauncher expect, BoardConfig, TextEncoding expect
 │   └── version/ VersionChecker
 ├── src/androidMain/kotlin/ — DataStore storage, OkHttp client, ActivityResult pickers, VideoView, UrlLauncher, Logger, PermissionHelper
 ├── src/iosMain/kotlin/ — Compose host, NSUserDefaults storage (privacy flag TODO), Darwin client, PHPicker, AVPlayer, UrlLauncher, Logger
