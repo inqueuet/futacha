@@ -66,6 +66,7 @@ class ThreadSaveService(
 
             // URL→ローカルパスのマッピング
             val urlToPathMap = mutableMapOf<String, String>()
+            val urlToFileInfoMap = mutableMapOf<String, LocalFileInfo>()
 
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
@@ -116,6 +117,7 @@ class ThreadSaveService(
                         totalSize += fileSize
                         // URL→ローカルパスマッピングに追加
                         urlToPathMap[mediaItem.url] = fileInfo.relativePath
+                        urlToFileInfoMap[mediaItem.url] = fileInfo
 
                         when (fileInfo.fileType) {
                             FileType.THUMBNAIL -> {
@@ -124,7 +126,7 @@ class ThreadSaveService(
                                 }
                             }
                             FileType.FULL_IMAGE -> imageCount++
-                            FileType.VIDEO -> {} // 現在は動画なし
+                            FileType.VIDEO -> videoCount++
                         }
                     }
                     .onFailure { error ->
@@ -148,8 +150,19 @@ class ThreadSaveService(
                 )
 
                 // マッピングからローカルパスを取得（再ダウンロードしない）
-                val localImagePath = post.imageUrl?.let { urlToPathMap[it] }
-                val localThumbnailPath = post.thumbnailUrl?.let { urlToPathMap[it] }
+                val imageFileInfo = post.imageUrl?.let { urlToFileInfoMap[it] }
+                val thumbnailFileInfo = post.thumbnailUrl?.let { urlToFileInfoMap[it] }
+                val localImagePath = imageFileInfo
+                    ?.takeIf { it.fileType == FileType.FULL_IMAGE }
+                    ?.relativePath
+                val originalImageUrl = post.imageUrl
+                    ?.takeIf { imageFileInfo?.fileType == FileType.FULL_IMAGE }
+                val localVideoPath = imageFileInfo
+                    ?.takeIf { it.fileType == FileType.VIDEO }
+                    ?.relativePath
+                val originalVideoUrl = post.imageUrl
+                    ?.takeIf { imageFileInfo?.fileType == FileType.VIDEO }
+                val localThumbnailPath = thumbnailFileInfo?.relativePath
 
                 // HTML内のURLを相対パスに変換
                 val convertedHtml = convertHtmlPaths(post.messageHtml, urlToPathMap)
@@ -162,11 +175,13 @@ class ThreadSaveService(
                         subject = post.subject,
                         timestamp = post.timestamp,
                         messageHtml = convertedHtml,
-                        originalImageUrl = post.imageUrl,
+                        originalImageUrl = originalImageUrl,
                         localImagePath = localImagePath,
+                        originalVideoUrl = originalVideoUrl,
+                        localVideoPath = localVideoPath,
                         originalThumbnailUrl = post.thumbnailUrl,
                         localThumbnailPath = localThumbnailPath,
-                        downloadSuccess = localImagePath != null || post.imageUrl == null
+                        downloadSuccess = post.imageUrl == null || localImagePath != null || localVideoPath != null
                     )
                 )
             }
@@ -244,16 +259,22 @@ class ThreadSaveService(
                 throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
             }
 
-            val extension =
-                getExtensionFromUrl(url) ?: getExtensionFromContentType(response.contentType())
+            val extension = (getExtensionFromUrl(url) ?: getExtensionFromContentType(response.contentType()))
+                .lowercase()
             val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
             if (!isSupported) {
                 throw Exception("Unsupported file type: $extension")
             }
 
-            val (subDir, prefix) = when (type) {
-                MediaType.THUMBNAIL -> "images" to "thumb_"
-                MediaType.FULL_IMAGE -> "images" to "img_"
+            val fileType = when {
+                type == MediaType.THUMBNAIL -> FileType.THUMBNAIL
+                extension in SUPPORTED_VIDEO_EXTENSIONS -> FileType.VIDEO
+                else -> FileType.FULL_IMAGE
+            }
+            val (subDir, prefix) = when (fileType) {
+                FileType.THUMBNAIL -> "images" to "thumb_"
+                FileType.FULL_IMAGE -> "images" to "img_"
+                FileType.VIDEO -> "videos" to "video_"
             }
             val fileName = "${prefix}${postId}_${Clock.System.now().toEpochMilliseconds()}.$extension"
             val relativePath = "$subDir/$fileName"
@@ -268,10 +289,7 @@ class ThreadSaveService(
 
             LocalFileInfo(
                 relativePath = relativePath,
-                fileType = when (type) {
-                    MediaType.THUMBNAIL -> FileType.THUMBNAIL
-                    MediaType.FULL_IMAGE -> FileType.FULL_IMAGE
-                }
+                fileType = fileType
             )
         }
     }
@@ -283,7 +301,7 @@ class ThreadSaveService(
         var converted = html
 
         // 画像URLを相対パスに変換
-        val imageRegex = """<img[^>]+src="([^"]+)"[^>]*>""".toRegex()
+        val imageRegex = """<img[^>]+src="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
         converted = imageRegex.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
             val relativePath = urlToPathMap[originalUrl]
@@ -295,8 +313,32 @@ class ThreadSaveService(
         }
 
         // リンクURLを相対パスに変換
-        val linkRegex = """<a[^>]+href="([^"]+)"[^>]*>""".toRegex()
+        val linkRegex = """<a[^>]+href="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
         converted = linkRegex.replace(converted) { matchResult ->
+            val originalUrl = matchResult.groupValues[1]
+            val relativePath = urlToPathMap[originalUrl]
+            if (relativePath != null) {
+                matchResult.value.replace(originalUrl, relativePath)
+            } else {
+                matchResult.value
+            }
+        }
+
+        // videoタグのsrcを相対パスに変換
+        val videoRegex = """<video[^>]+src="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
+        converted = videoRegex.replace(converted) { matchResult ->
+            val originalUrl = matchResult.groupValues[1]
+            val relativePath = urlToPathMap[originalUrl]
+            if (relativePath != null) {
+                matchResult.value.replace(originalUrl, relativePath)
+            } else {
+                matchResult.value
+            }
+        }
+
+        // sourceタグのsrcも相対パスに変換
+        val sourceRegex = """<source[^>]+src="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
+        converted = sourceRegex.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
             val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
@@ -355,6 +397,8 @@ class ThreadSaveService(
             appendLine("        .post-header { font-weight: bold; color: #007bff; }")
             appendLine("        .post-body { margin-top: 10px; }")
             appendLine("        .post-image { max-width: 100%; height: auto; }")
+            appendLine("        .post-video-container { margin-top: 10px; }")
+            appendLine("        .post-video-container video { max-width: 100%; height: auto; border-radius: 4px; }")
             appendLine("        .metadata { background: #f5f5f5; padding: 10px; margin-bottom: 20px; }")
             appendLine("    </style>")
             appendLine("</head>")
@@ -380,6 +424,13 @@ class ThreadSaveService(
                 if (post.subject != null) append("<strong>${post.subject}</strong> ")
                 appendLine(post.timestamp)
                 appendLine("        </div>")
+
+                post.localVideoPath?.let { videoPath ->
+                    val posterAttr = post.localThumbnailPath?.let { " poster=\"$it\"" } ?: ""
+                    appendLine("        <div class=\"post-video-container\">")
+                    appendLine("            <video controls preload=\"metadata\" class=\"post-video\" src=\"$videoPath\"$posterAttr></video>")
+                    appendLine("        </div>")
+                }
 
                 if (post.localThumbnailPath != null || post.localImagePath != null) {
                     val imagePath = post.localImagePath ?: post.localThumbnailPath

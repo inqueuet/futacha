@@ -65,7 +65,7 @@
   2. ScrollToTop / ScrollToBottom → `animateScrollToItem`.
   3. Refresh → `BoardRepository.getThread()` でページ更新・レス数更新。
   4. Gallery → `ThreadImageGallery` (ModalBottomSheet でサムネ一覧)。
-  5. Save → `ThreadSaveService` (httpClient & fileSystem がある場合のみ)。結果を `SavedThreadRepository.addThreadToIndex()` に保存し snackbar を表示。iOS は `null` なので snackbar で機能不可を通知。
+ 5. Save → `ThreadSaveService` (httpClient & fileSystem がある場合のみ)。結果を `SavedThreadRepository.addThreadToIndex()` に保存し snackbar を表示。Android / iOS ともに依存関係が注入されるようになったので保存ボタンが有効です。
   6. Settings → `ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示。〇は即動作し、NG管理は `NgManagementSheet` でヘッダー/ワードを編集、外部アプリは `res/{threadId}.htm` を開く、プライバシーは `AppStateStore` のフラグをトグル。△の読み上げは `TextSpeaker` で投稿本文を順次再生し、再タップで停止できる基本実装。記号凡例は Catalog と同じです。
 - 投稿カード (`ThreadPostCard`):
   - ID ラベル: `buildPosterIdLabels()` が ID ごとの通番と total count を付与 (複数出現なら強調)。
@@ -95,7 +95,7 @@
   - `seedIfEmpty()` がモック板/履歴を DataStore/NSUserDefaults に書き込み、初回起動でも UI が埋まるようにしている。
 - `PlatformStateStorage` expect/actual
   - Android: `preferencesDataStore`, `StorageException`, `seedIfEmpty` で missing key のみ初期投入。
-  - iOS: `NSUserDefaults` + `MutableStateFlow`。`privacyFilterEnabled` / `updatePrivacyFilterEnabled` が未実装のため、iOS では `isPrivacyFilterEnabled` Flow が空 (TODO)。
+  - iOS: `NSUserDefaults` + `MutableStateFlow`。`privacyFilterEnabled` Flow と更新処理が実装済みで、Android と同等にプライバシーフィルタの状態を永続化できます。
 - `ThreadHistoryEntry`:
   - `lastVisitedEpochMillis`, `lastReadItemIndex`, `lastReadItemOffset` を保持し、Thread 画面遷移時に scroll state を復元。
   - `BoardHistoryDrawer` のカードは ID/タイトル/板名/サムネ/レス数/lastVisited を表示。
@@ -221,15 +221,12 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 
 ## 8. Known gaps / TODO
 
-1. **SavedThreadsScreen 導線**: UI は存在するが遷移が無い。Board/Catalog/Thread のどこかに入口を追加する必要があります。
-2. **Thread 保存 (iOS)**: MainViewController が `createFileSystem()` を注入しておらず、`ThreadActionBarItem.Save` が無効。NSUserDefaults 側の `privacyFilterEnabled` Flow も未実装。
-3. **動画保存**: `ThreadSaveService` は画像のみ処理。`SUPPORTED_VIDEO_EXTENSIONS` や `videos/` ディレクトリは未使用。
-4. **Board ピン & 並び替え UX**: ピン状態の編集 UI・ドラッグ並び替えが無く、上下ボタンのみ。
-5. **Catalog レイアウト切替**: グリッド固定。リスト表示や列数変更、モードごとのフィルタ UI などは TODO。
-6. **エラーハンドリング**: `createThread` / `reply` / `del` / `deleteByUser` は HTML 応答の詳細を解析しておらず、snackbar で汎用メッセージを出すだけ。
-7. **テスト不足**: Repository/Service 層や `ThreadSaveService` のユニットテストが無い。MockEngine/ファイルシステムのフェイクが必要。
-8. **iOS リソース管理**: `MainViewController` で作成した HttpClient を close していない。将来的に `remember` + `DisposableEffect` 相当の仕組みを導入する必要あり。
-9. **プラットフォーム設定**: プライバシーフラグ (`AppStateStore.isPrivacyFilterEnabled`) は Android でしか永続化されないため、iOS 実装を追加する。
+1. **SavedThreadsScreen 導線**: UI は存在するが遷移が無いため、Board/Catalog/Thread のどこかに入口を追加する必要があります。
+2. **動画保存**: `ThreadSaveService` は画像のみ処理。`SUPPORTED_VIDEO_EXTENSIONS` や `videos/` ディレクトリは未使用です。
+3. **Board ピン & 並び替え UX**: ピン状態の編集 UI・ドラッグ＆ドロップ並び替えが未対応で、上下ボタンしかありません。
+4. **Catalog レイアウト切替**: グリッド固定。リスト表示や列数変更、モードごとのフィルタ UI などが TODO。
+5. **エラーハンドリング**: `createThread` / `reply` / `del` / `deleteByUser` は HTML 応答の詳細を解析しておらず、snackbar で汎用メッセージを出すだけ。
+6. **テスト不足**: Repository/Service 層や `ThreadSaveService` のユニットテストがないため、MockEngine/ファイルシステムのフェイクが必要です。
 
 ---
 

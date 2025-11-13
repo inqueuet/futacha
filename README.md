@@ -14,7 +14,7 @@
 - **モック/本番両対応**: `FakeBoardRepository` が `example/` のキャプチャ HTML を返し、`BoardSummary.isMockBoard()` で `example.com` ドメインのときだけモックを利用。実際の板 URL を設定すると自動的に Ktor + Futaba API が使われます。
 - **履歴とプライバシー**: `AppStateStore` (DataStore / NSUserDefaults) が板リスト・閲覧履歴・スクロール位置・プライバシーフラグを Flow で供給。スクロール保存は 500ms デバウンス付きでディスク I/O を削減。
 - **Thread 体験**: 引用プレビュー (`QuotePreviewDialog`)、ID 別ハイライト、スレ内検索 (前/次ナビ付き)、long-press アクションシート、ギャラリーシート、画像/動画プレビュー、ヒストリードロワーがすべて共通コードで動作。
-- **スレ保存 (Android)**: `ThreadSaveService` が HTML + 画像を `saved_threads` に保存し、`SaveProgressDialog` で進捗をリアルタイム表示。`SavedThreadRepository` が `index.json` を管理。iOS はホストが `FileSystem` を渡していないため snackbar で案内されます。メタデータの `savedAt` は `Clock.System` + `kotlinx.datetime` で取得/整形され、保存日時がローカルタイム (yyyy/MM/dd HH:mm:ss) で HTML に書き出されます。
+- **スレ保存**: `ThreadSaveService` が HTML + 画像を `saved_threads` に保存し、`SaveProgressDialog` で進捗をリアルタイム表示。`SavedThreadRepository` が `index.json` を管理。Android / iOS のホストが `FileSystem` / `HttpClient` を注入するようになったので、両プラットフォームで保存機能が利用できます。メタデータの `savedAt` は `Clock.System` + `kotlinx.datetime` で取得/整形され、保存日時がローカルタイム (yyyy/MM/dd HH:mm:ss) で HTML に書き出されます。
 - **GitHub Releases チェック**: `version/VersionChecker.kt` が `releases/latest` を確認し、新バージョンを `UpdateNotificationDialog` で知らせます。プラットフォーム固有ロジックは VersionChecker actual に閉じ込めています。
 - **投稿の安定化**: `HttpBoardApi` が板ごとの `chrenc` 設定をキャッシュし、新設の `TextEncoding` util で Shift_JIS/UTF-8 を切り替えつつ `ptua`/`hash` などのメタを付与して `createThread`/`replyToThread` を送信、応答からスレッドIDやエラー理由を拾って結果を伝えます。
 - **ImageLoader のキャッシュ**: `LocalFutachaImageLoader` はメモリキャッシュと任意のディスクキャッシュを持つ Coil3 ImageLoader を提供し、カタログ Thumbnail の描画を安定化させます。
@@ -41,7 +41,7 @@
 - `ThreadTopBar` で Board 名 / ステータス / レス数を表示しつつ、スレ内検索 UI (ヒット件数と前/次ボタン付き) を提供。
 - `LazyColumn` の各投稿カードは subject/author/ID/引用/画像を表示。引用 or ID をタップすると `QuotePreviewDialog` で該当レス群をまとめて確認できます。
 - long-press で開くアクションシートは **そうだね** / **del 依頼** / **本人削除**。成功時は `Snackbar` + 楽観的 UI で通知。
-- `ThreadActionBar` の 7 ボタン: 返信 (`ThreadFormDialog` + ActivityResult/PHPicker)、最上部 / 最下部スクロール、再読み込み、ギャラリー (`ThreadImageGallery`)、保存 (Android で `ThreadSaveService` を起動)、設定 (`ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示)。
+- `ThreadActionBar` の 7 ボタン: 返信 (`ThreadFormDialog` + ActivityResult/PHPicker)、最上部 / 最下部スクロール、再読み込み、ギャラリー (`ThreadImageGallery`)、保存 (`ThreadSaveService` を起動)、設定 (`ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示)。
 - 画像はピンチズーム + スワイプ dismiss 可能な `ImagePreviewDialog` を使用し、Coil のロード状態に応じてスピナー/エラーメッセージ/外部ブラウザ導線を切り替え。動画は `VideoPreviewDialog` 経由で状態管理され、Android (ExoPlayer) / iOS (AVPlayer + WEBM は WKWebView) の再生状態を UI に反映します。
 - スクロール位置は `snapshotFlow` + 500ms デバウンスで `AppStateStore.updateHistoryScrollPosition()` に保存されます。
 
@@ -60,7 +60,7 @@
   - 起動時に `seedIfEmpty(mockBoardSummaries, mockThreadHistory)` を実行。
 - `PlatformStateStorage`:
   - **Android**: DataStore Preferences (`preferencesDataStore`) + 例外を `StorageException` にラップ。
-  - **iOS**: NSUserDefaults + `MutableStateFlow`。プライバシーフラグ Flow/更新はまだ未実装なので Android 限定機能になっています。
+- **iOS**: NSUserDefaults + `MutableStateFlow`。privacyFilterEnabled Flow と同じ `AppStateStore.setPrivacyFilterEnabled()` / `PlatformStateStorage.updatePrivacyFilterEnabled()` が Android と同等に動作します。
 - プライバシーオーバーレイ: カタログ/スレ設定からトグルすると、全面に半透明の白い Canvas を描画して覗き見対策 (タップは透過)。
 
 ---
@@ -107,7 +107,7 @@ futacha/
 │   │   ├── util/ FileSystem expect, ImagePicker expect, Logger expect, UrlLauncher expect, BoardConfig, TextEncoding expect
 │   │   └── version/ VersionChecker interface + helper functions
 │   ├── src/androidMain/kotlin/ (14 files) — DataStore storage, OkHttp client, ActivityResult pickers, VideoView player, Logger/UrlLauncher/PermissionHelper actuals
-│   ├── src/iosMain/kotlin/ (14 files) — ComposeUIViewController host, NSUserDefaults storage (privacy flag TODO), Darwin client, PHPicker/AVPlayer actuals, NSLog logger, UrlLauncher
+│   ├── src/iosMain/kotlin/ (14 files) — ComposeUIViewController host, NSUserDefaults storage (privacy flag wired), Darwin client, PHPicker/AVPlayer actuals, NSLog logger, UrlLauncher
 │   └── src/commonTest/kotlin/ — Catalog/Thread parser tests + BoardManagementScreenTest
 ├── example/ — Futaba HTML/スクリーンショットのキャプチャ
 ├── README.md / AGENTS.md / codex.md — ドキュメント
@@ -183,12 +183,10 @@ futacha/
 ## ⚠️ Known gaps / next steps
 
 1. **SavedThreadsScreen** は UI こそ完成済みですが、どこからも遷移できません。ナビゲーションルート/ボタンの追加が必要です。
-2. **スレ保存 (iOS)**: `MainViewController` が `createFileSystem()` を渡していないため、保存ボタンは Android 専用です。NSUserDefaults 側の `privacyFilterEnabled` Flow も未実装で、プライバシーフラグは Android 限定。
-3. **動画ダウンロード**: `ThreadSaveService` は THUMBNAIL/FULL_IMAGE しか処理しておらず、`SUPPORTED_VIDEO_EXTENSIONS` は未使用です。
-4. **ピン留め / 並び替え**: BoardManagementScreen はピン状態を表示するだけで、トグルやドラッグ＆ドロップ並び替えは未対応 (上下ボタンのみ)。
-5. **カタログ表示モード**: グリッド固定でリスト/列数変更 UI はありません。
-6. **テストカバレッジ**: ネットワーク/Repository/ThreadSaveService/Compose UI の多くが未テスト。FakeBoardRepository/MockWeb 層の拡充が必要です。
-7. **iOS HttpClient/ファイル解放**: `MainViewController` は HttpClient を close せず、プラットフォーム側でのリソース管理が未整備です。
+2. **動画ダウンロード**: `ThreadSaveService` は THUMBNAIL/FULL_IMAGE しか処理しておらず、`SUPPORTED_VIDEO_EXTENSIONS` は未使用です。
+3. **ピン留め / 並び替え**: BoardManagementScreen はピン状態を表示するだけで、トグルやドラッグ＆ドロップ並び替えは未対応 (上下ボタンのみ)。
+4. **カタログ表示モード**: グリッド固定でリスト/列数変更 UI はありません。
+5. **テストカバレッジ**: ネットワーク/Repository/ThreadSaveService/Compose UI の多くが未テスト。FakeBoardRepository/MockWeb 層の拡充が必要です。
 
 ---
 

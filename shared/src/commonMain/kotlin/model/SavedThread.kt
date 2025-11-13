@@ -61,6 +61,8 @@ data class SavedPost(
     val messageHtml: String,           // ローカルパス変換済み
     val originalImageUrl: String?,     // 元のURL（参照用）
     val localImagePath: String?,       // ローカルパス（相対）
+    val originalVideoUrl: String?,     // 動画の元URL（参照用）
+    val localVideoPath: String?,       // 動画のローカルパス（相対）
     val originalThumbnailUrl: String?, // 元のURL（参照用）
     val localThumbnailPath: String?,   // ローカルパス（相対）
     val downloadSuccess: Boolean = true // ダウンロード成功フラグ
