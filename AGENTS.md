@@ -132,13 +132,13 @@
 
 ## 4. Media, Storage & Platform Utilities
 
-- `ThreadSaveService`
-  - `saveThread()` → PREPARING (dir 作成) → DOWNLOADING (chunked media download) → CONVERTING (HTML 書き換え) → FINALIZING (metadata + HTML)。
-  - `MediaItem` は `THUMBNAIL` / `FULL_IMAGE` のみ。動画ダウンロードは今後の課題。
-  - Ktor GET → `Content-Length` で 8MB を超えないかチェックし、`FileSystem.writeBytes()` で保存。
-  - `convertHtmlPaths()` が `<img src>` / `<a href>` の URL をローカル相対パスに差し替える。
-  - `SavedThread` (thumbnailPath, imageCount, videoCount, totalSize, SaveStatus) と `SavedThreadMetadata` (posts, local paths, version) を生成。
-  - `savedAt` 値とファイル命名には `Clock.System` + `kotlinx.datetime` を使い、`formatTimestamp()` でローカルタイム (yyyy/MM/dd HH:mm:ss) の文字列を metadata に出力するようになった。
+  - `ThreadSaveService`
+    - `saveThread()` → PREPARING (dir 作成) → DOWNLOADING (chunked media download) → CONVERTING (HTML 書き換え) → FINALIZING (metadata + HTML)。
+    - `MediaItem` は `THUMBNAIL` / `FULL_IMAGE` に加え `SUPPORTED_VIDEO_EXTENSIONS` を検知して新たに `FileType.VIDEO` を扱い、`videos/` 下に動画を保存。`SavedPost` に `originalVideoUrl`/`localVideoPath` を記録し、HTML では `<video>`/`<source>` `src` をローカルパスへ差し替えて `poster` にセーブ済みサムネも当てる。
+    - Ktor GET → `Content-Length` で 8MB を超えないかチェックし、`FileSystem.writeBytes()` で保存。
+    - `convertHtmlPaths()` が `<img src>` / `<a href>` / `<video src>` / `<source src>` の URL をローカル相対パスに差し替える。
+    - `SavedThread` (thumbnailPath, imageCount, videoCount, totalSize, SaveStatus) と `SavedThreadMetadata` (posts, local paths, version) を生成。
+    - `savedAt` 値とファイル命名には `Clock.System` + `kotlinx.datetime` を使い、`formatTimestamp()` でローカルタイム (yyyy/MM/dd HH:mm:ss) の文字列を metadata に出力するようになった。
 - `SavedThreadRepository`
   - `indexMutex` で `saved_threads/index.json` を守り、`addThreadToIndex()` / `removeThreadFromIndex()` / `updateThread()` でスレ一覧と `totalSize` / `lastUpdated` を集計。
   - `deleteThread()` は `FileSystem.deleteRecursively("saved_threads/$threadId")` → index 更新。
@@ -222,7 +222,7 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 ## 8. Known gaps / TODO
 
 1. **SavedThreadsScreen 導線**: UI は存在するが遷移が無いため、Board/Catalog/Thread のどこかに入口を追加する必要があります。
-2. **動画保存**: `ThreadSaveService` は画像のみ処理。`SUPPORTED_VIDEO_EXTENSIONS` や `videos/` ディレクトリは未使用です。
+2. **動画保存**: `ThreadSaveService` は画像／動画を両方処理し、`videos/` 配下へ媒体別に保存、HTML 内 `<video>`/`<source>` もローカルパスへ差し替えるようになったので保存後の HTML が動画を再生できます。
 3. **Board ピン & 並び替え UX**: ピン状態の編集 UI・ドラッグ＆ドロップ並び替えが未対応で、上下ボタンしかありません。
 4. **Catalog レイアウト切替**: グリッド固定。リスト表示や列数変更、モードごとのフィルタ UI などが TODO。
 5. **エラーハンドリング**: `createThread` / `reply` / `del` / `deleteByUser` は HTML 応答の詳細を解析しておらず、snackbar で汎用メッセージを出すだけ。

@@ -183,7 +183,7 @@ futacha/
 ## ⚠️ Known gaps / next steps
 
 1. **SavedThreadsScreen** は UI こそ完成済みですが、どこからも遷移できません。ナビゲーションルート/ボタンの追加が必要です。
-2. **動画ダウンロード**: `ThreadSaveService` は THUMBNAIL/FULL_IMAGE しか処理しておらず、`SUPPORTED_VIDEO_EXTENSIONS` は未使用です。
+2. **動画ダウンロード**: `ThreadSaveService` は画像／動画ともに `SUPPORTED_VIDEO_EXTENSIONS` をチェックして `videos/` 実ディレクトリに保存し、`SavedPost`/`SavedThread` metadata と HTML 上の `<video>`/`<source>` をローカルパスに差し替えるようになりました（動画保存時はサムネイルを `poster` に流用）。`SavedThreadsScreen` や index から動画付きスレッドの再生も可能です（保存後の HTML では `<video>` タグが `controls` 付きで表示されます）。
 3. **ピン留め / 並び替え**: BoardManagementScreen はピン状態を表示するだけで、トグルやドラッグ＆ドロップ並び替えは未対応 (上下ボタンのみ)。
 4. **カタログ表示モード**: グリッド固定でリスト/列数変更 UI はありません。
 5. **テストカバレッジ**: ネットワーク/Repository/ThreadSaveService/Compose UI の多くが未テスト。FakeBoardRepository/MockWeb 層の拡充が必要です。
