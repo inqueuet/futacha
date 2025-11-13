@@ -18,6 +18,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.createRemoteBoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
@@ -73,6 +75,10 @@ fun FutachaApp(
                 createRemoteBoardRepository()
             }
 
+            val autoSavedThreadRepository = remember(fileSystem) {
+                fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
+            }
+
             // Clean up repository when composable leaves composition
             // Add Unit key to ensure DisposableEffect runs only once per composition
             DisposableEffect(Unit) {
@@ -108,6 +114,9 @@ fun FutachaApp(
 
             val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
             val persistedHistory by stateStore.history.collectAsState(initial = history)
+            val appVersion = remember(versionChecker) {
+                versionChecker?.getCurrentVersion() ?: "1.0"
+            }
 
             var selectedBoardId by rememberSaveable { mutableStateOf<String?>(null) }
             var selectedThreadId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -121,6 +130,10 @@ fun FutachaApp(
                 val updatedHistory = persistedHistory.filterNot { it.threadId == entry.threadId }
                 coroutineScope.launch {
                     stateStore.setHistory(updatedHistory)
+                    autoSavedThreadRepository?.deleteThread(entry.threadId)
+                        ?.onFailure {
+                            Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
+                        }
                 }
             }
             val updateHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -131,6 +144,10 @@ fun FutachaApp(
             val clearHistory: () -> Unit = {
                 coroutineScope.launch {
                     stateStore.setHistory(emptyList())
+                    autoSavedThreadRepository?.deleteAllThreads()
+                        ?.onFailure {
+                            Logger.e(TAG, "Failed to clear auto saved threads", it)
+                        }
                 }
             }
             val refreshHistoryEntries: suspend () -> Unit = refreshHistoryEntries@{
@@ -249,7 +266,8 @@ fun FutachaApp(
                             coroutineScope.launch {
                                 stateStore.setBoards(reorderedBoards)
                             }
-                        }
+                        },
+                        appVersion = appVersion
                     )
                 }
 
@@ -279,7 +297,8 @@ fun FutachaApp(
                         onHistoryRefresh = refreshHistoryEntries,
                         onHistoryCleared = clearHistory,
                         repository = boardRepository,
-                        stateStore = stateStore
+                        stateStore = stateStore,
+                        appVersion = appVersion
                     )
                 }
 
@@ -346,7 +365,7 @@ fun FutachaApp(
                     }
 
                     val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
-                    ThreadScreen(
+                        ThreadScreen(
                             board = currentBoard,
                             history = persistedHistory,
                             threadId = activeThreadId,
@@ -367,7 +386,9 @@ fun FutachaApp(
                             repository = boardRepository,
                             httpClient = httpClient,
                             fileSystem = fileSystem,
-                            stateStore = stateStore
+                            stateStore = stateStore,
+                            autoSavedThreadRepository = autoSavedThreadRepository,
+                            appVersion = appVersion
                         )
                     }
                 }

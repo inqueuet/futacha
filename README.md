@@ -1,4 +1,4 @@
-# Futacha - ふたばちゃんねるブラウザ
+# ふたちゃ - ふたばちゃんねるブラウザ
 
 > Kotlin Multiplatform × Compose Multiplatform クライアント。Android と iOS が同じ UI ツリー (`FutachaApp`) を共有し、プラットフォーム側はホスティングと依存注入だけを行います。
 

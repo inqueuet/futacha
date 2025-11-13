@@ -74,10 +74,13 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material.icons.rounded.ViewModule
@@ -107,6 +110,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
@@ -197,8 +201,12 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.model.toThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
@@ -237,6 +245,7 @@ fun BoardManagementScreen(
     onHistoryCleared: () -> Unit = {},
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
+    appVersion: String,
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
@@ -247,6 +256,7 @@ fun BoardManagementScreen(
     var isDeleteMode by rememberSaveable { mutableStateOf(false) }
     var isReorderMode by rememberSaveable { mutableStateOf(false) }
     var boardToDelete by remember { mutableStateOf<BoardSummary?>(null) }
+    var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
@@ -300,9 +310,7 @@ fun BoardManagementScreen(
                 onRefreshClick = handleHistoryRefresh,
                 onBatchDeleteClick = handleBatchDelete,
                 onSettingsClick = {
-                    scope.launch {
-                        snackbarHostState.showSnackbar("設定はモック動作です")
-                    }
+                    isGlobalSettingsVisible = true
                 }
             )
         }
@@ -370,10 +378,8 @@ fun BoardManagementScreen(
                                                 isReorderMode = !isReorderMode
                                                 isDeleteMode = false
                                             }
-                                            else -> {
-                                                scope.launch {
-                                                    snackbarHostState.showSnackbar("${action.label} はモック動作です")
-                                                }
+                                            BoardManagementMenuAction.SETTINGS -> {
+                                                isGlobalSettingsVisible = true
                                             }
                                         }
                                     }
@@ -478,6 +484,13 @@ fun BoardManagementScreen(
                     snackbarHostState.showSnackbar("\"${board.name}\" を削除しました")
                 }
             }
+        )
+    }
+
+    if (isGlobalSettingsVisible) {
+        GlobalSettingsScreen(
+            onBack = { isGlobalSettingsVisible = false },
+            appVersion = appVersion
         )
     }
 }
@@ -1109,6 +1122,8 @@ fun CatalogScreen(
     onHistoryCleared: () -> Unit = {},
     repository: BoardRepository? = null,
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
+    autoSavedThreadRepository: SavedThreadRepository? = null,
+    appVersion: String,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -1134,6 +1149,7 @@ fun CatalogScreen(
     var showDisplayStyleDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var isWatchWordsVisible by remember { mutableStateOf(false) }
     var catalogNgFilteringEnabled by rememberSaveable(board?.id) { mutableStateOf(true) }
@@ -1364,8 +1380,6 @@ fun CatalogScreen(
         }
     }
 
-    val currentState = uiState.value
-
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = isDrawerOpen,
@@ -1386,9 +1400,7 @@ fun CatalogScreen(
                 },
                 onBatchDeleteClick = handleBatchDelete,
                 onSettingsClick = {
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("設定はモック動作です")
-                    }
+                    isGlobalSettingsVisible = true
                 }
             )
         }
@@ -1412,8 +1424,12 @@ fun CatalogScreen(
                     onNavigationClick = { coroutineScope.launch { drawerState.open() } },
                     onModeSelected = { catalogMode = it },
                     onMenuAction = { action ->
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                        if (action == CatalogMenuAction.Settings) {
+                            isGlobalSettingsVisible = true
+                        } else {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                            }
                         }
                     }
                 )
@@ -1443,6 +1459,7 @@ fun CatalogScreen(
                         coroutineScope.launch { drawerState.close() }
                     }
                 }
+            val currentState = uiState.value
             when (val state = currentState) {
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
                 is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
@@ -1601,6 +1618,13 @@ fun CatalogScreen(
                     }
                     showSettingsMenu = false
                 }
+            )
+        }
+
+        if (isGlobalSettingsVisible) {
+            GlobalSettingsScreen(
+                onBack = { isGlobalSettingsVisible = false },
+                appVersion = appVersion
             )
         }
 
@@ -2920,8 +2944,7 @@ private fun matchesCatalogNgWords(
 }
 
 private enum class CatalogMenuAction(val label: String) {
-    Settings("設定"),
-    Help("ヘルプ")
+    Settings("設定")
 }
 
 private enum class CatalogSettingsMenuItem(
@@ -2944,6 +2967,9 @@ private enum class CatalogNavDestination(val label: String, val icon: ImageVecto
     Mode("モード", Icons.AutoMirrored.Rounded.Sort),
     Settings("設定", Icons.Rounded.Settings)
 }
+
+private const val AUTO_SAVE_INTERVAL_MS = 60_000L
+private const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
 
 sealed interface ThreadUiState {
     data object Loading : ThreadUiState
@@ -2969,6 +2995,8 @@ fun ThreadScreen(
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
+    autoSavedThreadRepository: SavedThreadRepository? = null,
+    appVersion: String,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -2993,6 +3021,15 @@ fun ThreadScreen(
             textSpeaker.close()
         }
     }
+    val autoSaveRepository = autoSavedThreadRepository
+    var autoSaveJob by remember { mutableStateOf<Job?>(null) }
+    val lastAutoSaveTimestamp = rememberSaveable(threadId) { mutableStateOf(0L) }
+    var isShowingOfflineCopy by rememberSaveable(threadId) { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            autoSaveJob?.cancel()
+        }
+    }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
@@ -3011,6 +3048,7 @@ fun ThreadScreen(
     var lastUsedDeleteKey by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var isReplyDialogVisible by remember { mutableStateOf(false) }
     var isThreadSettingsSheetVisible by remember { mutableStateOf(false) }
+    var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var ngHeaderPrefill by remember(board.id, threadId) { mutableStateOf<String?>(null) }
     var ngFilteringEnabled by rememberSaveable(board.id, threadId) { mutableStateOf(true) }
@@ -3112,6 +3150,66 @@ fun ThreadScreen(
         }
     }
 
+    suspend fun loadOfflineThread(): ThreadPage? {
+        val repository = autoSaveRepository ?: return null
+        val localFileSystem = fileSystem ?: return null
+        val metadata = repository.loadThreadMetadata(threadId).getOrNull() ?: return null
+        return metadata.toThreadPage(localFileSystem, AUTO_SAVE_DIRECTORY)
+    }
+
+    suspend fun loadThreadWithOfflineFallback(allowOfflineFallback: Boolean): Pair<ThreadPage, Boolean> {
+        try {
+            isShowingOfflineCopy = false
+            val page = activeRepository.getThread(board.url, threadId)
+            return page to false
+        } catch (e: Exception) {
+            if (!allowOfflineFallback) throw e
+            val offlinePage = loadOfflineThread()
+            if (offlinePage != null) {
+                isShowingOfflineCopy = true
+                return offlinePage to true
+            }
+            throw e
+        }
+    }
+
+    fun startAutoSave(page: ThreadPage) {
+        val repository = autoSaveRepository ?: return
+        val client = httpClient ?: return
+        val localFileSystem = fileSystem ?: return
+        val now = Clock.System.now().toEpochMilliseconds()
+        if (now - lastAutoSaveTimestamp.value < AUTO_SAVE_INTERVAL_MS) return
+        lastAutoSaveTimestamp.value = now
+        autoSaveJob?.cancel()
+        autoSaveJob = coroutineScope.launch {
+            val result = runCatching {
+                val saveService = ThreadSaveService(client, localFileSystem)
+                saveService.saveThread(
+                    threadId = threadId,
+                    boardId = board.id,
+                    boardName = board.name,
+                    boardUrl = board.url,
+                    title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
+                    expiresAtLabel = page.expiresAtLabel,
+                    posts = page.posts,
+                    baseDirectory = AUTO_SAVE_DIRECTORY
+                )
+            }
+            result.onSuccess { saveResult ->
+                saveResult.onSuccess { savedThread ->
+                    repository.addThreadToIndex(savedThread)
+                        .onFailure {
+                            Logger.e(THREAD_AUTO_SAVE_TAG, "Failed to index auto-saved thread $threadId", it)
+                        }
+                }.onFailure {
+                    Logger.e(THREAD_AUTO_SAVE_TAG, "Auto-save failed for thread $threadId", it)
+                }
+            }.onFailure {
+                Logger.e(THREAD_AUTO_SAVE_TAG, "Auto-save job failed unexpectedly for thread $threadId", it)
+            }
+        }
+    }
+
     PlatformBackHandler(enabled = isDrawerOpen) {
         coroutineScope.launch { drawerState.close() }
     }
@@ -3124,9 +3222,12 @@ fun ThreadScreen(
                     coroutineScope.launch {
                         uiState.value = ThreadUiState.Loading
                         try {
-                            val page = activeRepository.getThread(board.url, threadId)
+                            val (page, usedOffline) = loadThreadWithOfflineFallback(allowOfflineFallback = true)
                             if (isActive) {
                                 uiState.value = ThreadUiState.Success(page)
+                                if (usedOffline) {
+                                    snackbarHostState.showSnackbar("ローカルコピーを表示しています")
+                                }
                             }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
@@ -3154,6 +3255,11 @@ fun ThreadScreen(
     }
 
     val currentState = uiState.value
+    LaunchedEffect(currentState, isShowingOfflineCopy, httpClient, fileSystem) {
+        if (currentState is ThreadUiState.Success && !isShowingOfflineCopy) {
+            startAutoSave(currentState.page)
+        }
+    }
     val resolvedReplyCount: Int? = when (currentState) {
         is ThreadUiState.Success -> currentState.page.posts.size
         else -> initialReplyCount
@@ -3381,7 +3487,7 @@ fun ThreadScreen(
                 val savedIndex = lazyListState.firstVisibleItemIndex
                 val savedOffset = lazyListState.firstVisibleItemScrollOffset
                 try {
-                    val page = activeRepository.getThread(board.url, threadId)
+                    val (page, usedOffline) = loadThreadWithOfflineFallback(allowOfflineFallback = true)
                     uiState.value = ThreadUiState.Success(page)
                     lazyListState.scrollToItem(savedIndex, savedOffset)
 
@@ -3396,7 +3502,12 @@ fun ThreadScreen(
                         onHistoryEntryUpdated(updatedEntry)
                     }
 
-                    snackbarHostState.showSnackbar("スレッドを更新しました")
+                    val successMessage = if (usedOffline) {
+                        "ネットワーク接続不可: ローカルコピーを表示しています"
+                    } else {
+                        "スレッドを更新しました"
+                    }
+                    snackbarHostState.showSnackbar(successMessage)
                 } catch (e: Exception) {
                     if (e !is kotlinx.coroutines.CancellationException) {
                         snackbarHostState.showSnackbar("更新に失敗しました")
@@ -3438,9 +3549,7 @@ fun ThreadScreen(
                 },
                 onBatchDeleteClick = handleBatchDelete,
                 onSettingsClick = {
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("設定はモック動作です")
-                    }
+                    isGlobalSettingsVisible = true
                 }
             )
         }
@@ -3465,7 +3574,8 @@ fun ThreadScreen(
                     onSearchClose = { isSearchActive = false },
                     onBack = onBack,
                     onOpenHistory = { coroutineScope.launch { drawerState.open() } },
-                    onSearch = { isSearchActive = true }
+                    onSearch = { isSearchActive = true },
+                    onMenuSettings = { isGlobalSettingsVisible = true }
                 )
             },
             bottomBar = {
@@ -3929,6 +4039,13 @@ fun ThreadScreen(
             saveProgress = null
         }
     )
+
+    if (isGlobalSettingsVisible) {
+        GlobalSettingsScreen(
+            onBack = { isGlobalSettingsVisible = false },
+            appVersion = appVersion
+        )
+    }
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -3948,7 +4065,8 @@ private fun ThreadTopBar(
     onSearchClose: () -> Unit,
     onBack: () -> Unit,
     onOpenHistory: () -> Unit,
-    onSearch: () -> Unit
+    onSearch: () -> Unit,
+    onMenuSettings: () -> Unit
 ) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(isSearchActive) {
@@ -3956,6 +4074,7 @@ private fun ThreadTopBar(
             focusRequester.requestFocus()
         }
     }
+    var isMenuExpanded by remember { mutableStateOf(false) }
     val displayIndex = if (totalSearchMatches <= 0) {
         0
     } else {
@@ -4080,6 +4199,26 @@ private fun ThreadTopBar(
                         imageVector = Icons.Rounded.History,
                         contentDescription = "履歴を開く"
                     )
+                }
+                Box {
+                    IconButton(onClick = { isMenuExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = "その他"
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = isMenuExpanded,
+                        onDismissRequest = { isMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(ThreadMenuAction.Settings.label) },
+                            onClick = {
+                                isMenuExpanded = false
+                                onMenuSettings()
+                            }
+                        )
+                    }
                 }
             }
         },
@@ -5793,6 +5932,10 @@ private enum class ThreadActionBarItem(
     Settings("設定", Icons.Rounded.Settings)
 }
 
+private enum class ThreadMenuAction(val label: String) {
+    Settings("設定")
+}
+
 private enum class ThreadSettingsMenuItem(
     val label: String,
     val icon: ImageVector
@@ -5998,4 +6141,113 @@ internal fun incrementSaidaneLabel(current: String?): String {
     } ?: 0
     val next = (existing + 1).coerceAtLeast(1)
     return "そうだねx$next"
+}
+
+private data class GlobalSettingsEntry(
+    val label: String,
+    val description: String,
+    val icon: ImageVector,
+    val action: GlobalSettingsAction
+)
+
+private val globalSettingsEntries = listOf(
+    GlobalSettingsEntry(
+        label = "作者",
+        description = "X (旧Twitter) で最新の動作報告を確認",
+        icon = Icons.Rounded.Person,
+        action = GlobalSettingsAction.X
+    ),
+    GlobalSettingsEntry(
+        label = "お問い合わせ",
+        description = "admin@valoser.com 宛にメールを送信します",
+        icon = Icons.Rounded.Email,
+        action = GlobalSettingsAction.Email
+    ),
+    GlobalSettingsEntry(
+        label = "開発元",
+        description = "GitHub でソースコードと issue を確認",
+        icon = Icons.Rounded.Link,
+        action = GlobalSettingsAction.Developer
+    )
+)
+
+private enum class GlobalSettingsAction {
+    Email,
+    X,
+    Developer
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GlobalSettingsScreen(
+    onBack: () -> Unit,
+    appVersion: String
+) {
+    val urlLauncher = rememberUrlLauncher()
+    PlatformBackHandler(onBack = onBack)
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("設定") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "戻る"
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            contentPadding = PaddingValues(vertical = 12.dp)
+        ) {
+            items(globalSettingsEntries) { entry ->
+                ListItem(
+                    leadingContent = { Icon(imageVector = entry.icon, contentDescription = null) },
+                    headlineContent = { Text(entry.label) },
+                    supportingContent = {
+                        Text(
+                            text = entry.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable {
+                            when (entry.action) {
+                                GlobalSettingsAction.Email -> {
+                                    urlLauncher("mailto:admin@valoser.com?subject=お問い合わせ")
+                                }
+                                GlobalSettingsAction.X -> {
+                                    urlLauncher("https://x.com/may_012345")
+                                }
+                                GlobalSettingsAction.Developer -> {
+                                    urlLauncher("https://github.com/inqueuet/futacha")
+                                }
+                            }
+                            onBack()
+                        }
+                )
+                Divider()
+            }
+            item {
+                Divider()
+                ListItem(
+                    headlineContent = { Text("アプリバージョン") },
+                    trailingContent = { Text(appVersion) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+            }
+        }
+    }
 }

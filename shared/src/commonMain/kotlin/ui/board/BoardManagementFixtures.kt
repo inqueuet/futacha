@@ -12,7 +12,6 @@ enum class BoardManagementMenuAction(val label: String) {
     REORDER("並び替え"),
     DELETE("削除"),
     SETTINGS("設定"),
-    HELP("ヘルプ")
 }
 
 val mockBoardSummaries = listOf(

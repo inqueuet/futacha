@@ -53,13 +53,15 @@ class ThreadSaveService(
         boardUrl: String,
         title: String,
         expiresAtLabel: String?,
-        posts: List<Post>
+        posts: List<Post>,
+        baseDirectory: String = MANUAL_SAVE_DIRECTORY
     ): Result<SavedThread> = withContext(Dispatchers.Default) {
         runCatching {
             // 準備フェーズ
             updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
-            val baseDir = "saved_threads/$threadId"
+            val baseDir = "$baseDirectory/$threadId"
+            fileSystem.createDirectory(baseDirectory).getOrThrow()
             fileSystem.createDirectory(baseDir).getOrThrow()
             fileSystem.createDirectory("$baseDir/images").getOrThrow()
             fileSystem.createDirectory("$baseDir/videos").getOrThrow()

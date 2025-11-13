@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.repository
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -16,7 +17,8 @@ import kotlinx.serialization.json.Json
  * 保存済みスレッドリポジトリ
  */
 class SavedThreadRepository(
-    private val fileSystem: FileSystem
+    private val fileSystem: FileSystem,
+    private val baseDirectory: String = MANUAL_SAVE_DIRECTORY
 ) {
     private val json = Json {
         prettyPrint = true
@@ -24,7 +26,7 @@ class SavedThreadRepository(
     }
     private val indexMutex = Mutex()
 
-    private val indexPath = "saved_threads/index.json"
+    private val indexPath = "$baseDirectory/index.json"
 
     /**
      * インデックスを読み込み
@@ -86,7 +88,7 @@ class SavedThreadRepository(
      */
     suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.Default) {
         runCatching {
-            val metadataPath = "saved_threads/$threadId/metadata.json"
+            val metadataPath = "$baseDirectory/$threadId/metadata.json"
             val jsonString = fileSystem.readString(metadataPath).getOrThrow()
             json.decodeFromString<SavedThreadMetadata>(jsonString)
         }
@@ -97,7 +99,7 @@ class SavedThreadRepository(
      */
     suspend fun deleteThread(threadId: String): Result<Unit> = withIndexLock {
         runCatching {
-            val threadPath = "saved_threads/$threadId"
+            val threadPath = "$baseDirectory/$threadId"
             fileSystem.deleteRecursively(threadPath).getOrThrow()
 
             val currentIndex = readIndexUnlocked()
@@ -114,6 +116,25 @@ class SavedThreadRepository(
     }
 
     /**
+     * すべてのスレッドを削除
+     */
+    suspend fun deleteAllThreads(): Result<Unit> = withIndexLock {
+        runCatching {
+            val currentIndex = readIndexUnlocked()
+            currentIndex.threads.forEach { thread ->
+                val threadPath = "$baseDirectory/${thread.threadId}"
+                fileSystem.deleteRecursively(threadPath).getOrThrow()
+            }
+            val updatedIndex = SavedThreadIndex(
+                threads = emptyList(),
+                totalSize = 0L,
+                lastUpdated = System.currentTimeMillis()
+            )
+            saveIndexUnlocked(updatedIndex)
+        }
+    }
+
+    /**
      * すべての保存済みスレッドを取得
      */
     suspend fun getAllThreads(): List<SavedThread> = withIndexLock {
@@ -124,7 +145,7 @@ class SavedThreadRepository(
      * スレッドが存在するか確認
      */
     suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.Default) {
-        val threadPath = "saved_threads/$threadId"
+        val threadPath = "$baseDirectory/$threadId"
         fileSystem.exists(threadPath)
     }
 
@@ -146,7 +167,7 @@ class SavedThreadRepository(
      * スレッドHTMLパスを取得
      */
     fun getThreadHtmlPath(threadId: String): String {
-        return fileSystem.resolveAbsolutePath("saved_threads/$threadId/thread.html")
+        return fileSystem.resolveAbsolutePath("$baseDirectory/$threadId/thread.html")
     }
 
     /**
@@ -198,7 +219,7 @@ class SavedThreadRepository(
     }
 
     private suspend fun saveIndexUnlocked(index: SavedThreadIndex) {
-        fileSystem.createDirectory("saved_threads").getOrThrow()
+        fileSystem.createDirectory(baseDirectory).getOrThrow()
         val jsonString = json.encodeToString(index)
         fileSystem.writeString(indexPath, jsonString).getOrThrow()
     }
