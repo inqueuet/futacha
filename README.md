@@ -14,7 +14,7 @@
 - **モック/本番両対応**: `FakeBoardRepository` が `example/` のキャプチャ HTML を返し、`BoardSummary.isMockBoard()` で `example.com` ドメインのときだけモックを利用。実際の板 URL を設定すると自動的に Ktor + Futaba API が使われます。
 - **履歴とプライバシー**: `AppStateStore` (DataStore / NSUserDefaults) が板リスト・閲覧履歴・スクロール位置・プライバシーフラグを Flow で供給。スクロール保存は 500ms デバウンス付きでディスク I/O を削減。
 - **Thread 体験**: 引用プレビュー (`QuotePreviewDialog`)、ID 別ハイライト、スレ内検索 (前/次ナビ付き)、long-press アクションシート、ギャラリーシート、画像/動画プレビュー、ヒストリードロワーがすべて共通コードで動作。
-- **スレ保存 (Android)**: `ThreadSaveService` が HTML + 画像を `saved_threads` に保存し、`SaveProgressDialog` で進捗をリアルタイム表示。`SavedThreadRepository` が `index.json` を管理。iOS はホストが `FileSystem` を渡していないため snackbar で案内されます。
+- **スレ保存 (Android)**: `ThreadSaveService` が HTML + 画像を `saved_threads` に保存し、`SaveProgressDialog` で進捗をリアルタイム表示。`SavedThreadRepository` が `index.json` を管理。iOS はホストが `FileSystem` を渡していないため snackbar で案内されます。メタデータの `savedAt` は `Clock.System` + `kotlinx.datetime` で取得/整形され、保存日時がローカルタイム (yyyy/MM/dd HH:mm:ss) で HTML に書き出されます。
 - **GitHub Releases チェック**: `version/VersionChecker.kt` が `releases/latest` を確認し、新バージョンを `UpdateNotificationDialog` で知らせます。プラットフォーム固有ロジックは VersionChecker actual に閉じ込めています。
 - **投稿の安定化**: `HttpBoardApi` が板ごとの `chrenc` 設定をキャッシュし、新設の `TextEncoding` util で Shift_JIS/UTF-8 を切り替えつつ `ptua`/`hash` などのメタを付与して `createThread`/`replyToThread` を送信、応答からスレッドIDやエラー理由を拾って結果を伝えます。
 - **ImageLoader のキャッシュ**: `LocalFutachaImageLoader` はメモリキャッシュと任意のディスクキャッシュを持つ Coil3 ImageLoader を提供し、カタログ Thumbnail の描画を安定化させます。
@@ -124,6 +124,7 @@ futacha/
   - 50 投稿ごとに chunk 化してメモリ使用量を抑制、URL→ローカルパスの辞書を用意して HTML 内リンクを置換。
   - 8MB (`MAX_FILE_SIZE_BYTES`) 超過で即中断。現在は **サムネ / 本画像** のみを `images/` 配下に保存 (動画ダウンロードは未実装)。
   - `SaveStatus` は download 失敗数に応じて COMPLETED / PARTIAL / FAILED を返す。
+  - `savedAt` は `Clock.System` + `kotlinx.datetime` で決め、`formatTimestamp()` でローカルタイム (yyyy/MM/dd HH:mm:ss) を metadata に書き出すようになっており、ファイル名も同じ仕組みで一意化される。
 - `SavedThreadRepository` は `saved_threads/index.json` を `Mutex` 付きで読み書きし、合計サイズや件数を即座に算出。
 - `FileSystem` expect/actual:
   - Android: `Documents/futacha` 配下 (必要に応じて内部ストレージへフォールバック) に作成。結果として保存物は `Documents/futacha/saved_threads/...` に配置されます。

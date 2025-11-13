@@ -138,6 +138,7 @@
   - Ktor GET → `Content-Length` で 8MB を超えないかチェックし、`FileSystem.writeBytes()` で保存。
   - `convertHtmlPaths()` が `<img src>` / `<a href>` の URL をローカル相対パスに差し替える。
   - `SavedThread` (thumbnailPath, imageCount, videoCount, totalSize, SaveStatus) と `SavedThreadMetadata` (posts, local paths, version) を生成。
+  - `savedAt` 値とファイル命名には `Clock.System` + `kotlinx.datetime` を使い、`formatTimestamp()` でローカルタイム (yyyy/MM/dd HH:mm:ss) の文字列を metadata に出力するようになった。
 - `SavedThreadRepository`
   - `indexMutex` で `saved_threads/index.json` を守り、`addThreadToIndex()` / `removeThreadFromIndex()` / `updateThread()` でスレ一覧と `totalSize` / `lastUpdated` を集計。
   - `deleteThread()` は `FileSystem.deleteRecursively("saved_threads/$threadId")` → index 更新。
