@@ -69,8 +69,9 @@ class FakeBoardRepository(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ) {
+    ): String? {
         onAccess()
+        return null
     }
 
     override suspend fun createThread(

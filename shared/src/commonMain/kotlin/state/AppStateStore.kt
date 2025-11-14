@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
@@ -29,6 +30,8 @@ class AppStateStore internal constructor(
     private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
     private val boardsMutex = Mutex()
     private val historyMutex = Mutex()
+    private val selfPostIdentifiersMutex = Mutex()
+    private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListSerializer = ListSerializer(String.serializer())
 
     // Debouncing for scroll position updates
@@ -39,6 +42,7 @@ class AppStateStore internal constructor(
     companion object {
         private const val TAG = "AppStateStore"
         private const val SCROLL_DEBOUNCE_DELAY_MS = 500L // Debounce scroll updates by 500ms
+        private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
     }
 
     fun setScrollDebounceScope(scope: CoroutineScope) {
@@ -69,6 +73,9 @@ class AppStateStore internal constructor(
     }
     val watchWords: Flow<List<String>> = storage.watchWordsJson.map { raw ->
         decodeStringList(raw)
+    }
+    val selfPostIdentifiers: Flow<List<String>> = storage.selfPostIdentifiersJson.map { raw ->
+        aggregateIdentifiers(decodeSelfPostIdentifierMap(raw))
     }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
@@ -139,6 +146,45 @@ class AppStateStore internal constructor(
             storage.updateWatchWordsJson(json.encodeToString(stringListSerializer, words))
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save watch words (${words.size})", e)
+        }
+    }
+
+    suspend fun addSelfPostIdentifier(threadId: String, identifier: String) {
+        val trimmed = identifier.trim().takeIf { it.isNotBlank() } ?: return
+        selfPostIdentifiersMutex.withLock {
+            val currentMap = readSelfPostIdentifierMapSnapshot()
+            val existingForThread = currentMap[threadId] ?: emptyList()
+            val normalized = existingForThread
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .toMutableList()
+            if (normalized.none { it.equals(trimmed, ignoreCase = true) }) {
+                normalized.add(trimmed)
+            }
+            val updatedThreadList = normalized
+                .asSequence()
+                .distinctBy { it.lowercase() }
+                .take(SELF_IDENTIFIER_MAX_ENTRIES)
+                .toList()
+            val updatedMap = currentMap.toMutableMap()
+            updatedMap[threadId] = updatedThreadList
+            persistSelfPostIdentifierMap(updatedMap)
+        }
+    }
+
+    suspend fun removeSelfPostIdentifiersForThread(threadId: String) {
+        selfPostIdentifiersMutex.withLock {
+            val currentMap = readSelfPostIdentifierMapSnapshot()
+            if (threadId !in currentMap) return
+            val updatedMap = currentMap.toMutableMap()
+            updatedMap.remove(threadId)
+            persistSelfPostIdentifierMap(updatedMap)
+        }
+    }
+
+    suspend fun clearSelfPostIdentifiers() {
+        selfPostIdentifiersMutex.withLock {
+            persistSelfPostIdentifierMap(emptyMap())
         }
     }
 
@@ -323,7 +369,8 @@ class AppStateStore internal constructor(
         defaultNgHeaders: List<String> = emptyList(),
         defaultNgWords: List<String> = emptyList(),
         defaultCatalogNgWords: List<String> = emptyList(),
-        defaultWatchWords: List<String> = emptyList()
+        defaultWatchWords: List<String> = emptyList(),
+        defaultSelfPostIdentifierMap: Map<String, List<String>> = emptyMap()
     ) {
         try {
             storage.seedIfEmpty(
@@ -332,7 +379,8 @@ class AppStateStore internal constructor(
                 json.encodeToString(stringListSerializer, defaultNgHeaders),
                 json.encodeToString(stringListSerializer, defaultNgWords),
                 json.encodeToString(stringListSerializer, defaultCatalogNgWords),
-                json.encodeToString(stringListSerializer, defaultWatchWords)
+                json.encodeToString(stringListSerializer, defaultWatchWords),
+                json.encodeToString(selfPostIdentifierMapSerializer, defaultSelfPostIdentifierMap)
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -397,6 +445,49 @@ class AppStateStore internal constructor(
             emptyList()
         }
     }
+
+    private fun decodeSelfPostIdentifierMap(raw: String?): Map<String, List<String>> {
+        if (raw == null) return emptyMap()
+        return runCatching {
+            json.decodeFromString(selfPostIdentifierMapSerializer, raw)
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode self post identifiers map", e)
+            emptyMap()
+        }
+    }
+
+    private fun aggregateIdentifiers(map: Map<String, List<String>>): List<String> {
+        val seenKeys = mutableSetOf<String>()
+        val aggregated = mutableListOf<String>()
+        map.values.forEach { identifiers ->
+            identifiers.forEach { identifier ->
+                val trimmed = identifier.trim()
+                if (trimmed.isBlank()) return@forEach
+                val key = trimmed.lowercase()
+                if (key in seenKeys) return@forEach
+                aggregated.add(trimmed)
+                seenKeys.add(key)
+                if (aggregated.size >= SELF_IDENTIFIER_MAX_ENTRIES) {
+                    return aggregated
+                }
+            }
+        }
+        return aggregated
+    }
+
+    private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {
+        return try {
+            val raw = storage.selfPostIdentifiersJson.first()
+            decodeSelfPostIdentifierMap(raw)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to read self post identifier map", e)
+            emptyMap()
+        }
+    }
+
+    private suspend fun persistSelfPostIdentifierMap(map: Map<String, List<String>>) {
+        storage.updateSelfPostIdentifiersJson(json.encodeToString(selfPostIdentifierMapSerializer, map))
+    }
 }
 
 fun createAppStateStore(platformContext: Any? = null): AppStateStore {
@@ -412,6 +503,7 @@ internal interface PlatformStateStorage {
     val ngWordsJson: Flow<String?>
     val catalogNgWordsJson: Flow<String?>
     val watchWordsJson: Flow<String?>
+    val selfPostIdentifiersJson: Flow<String?>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
@@ -421,13 +513,16 @@ internal interface PlatformStateStorage {
     suspend fun updateNgWordsJson(value: String)
     suspend fun updateCatalogNgWordsJson(value: String)
     suspend fun updateWatchWordsJson(value: String)
+    suspend fun updateSelfPostIdentifiersJson(value: String)
+
     suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
         defaultNgWordsJson: String?,
         defaultCatalogNgWordsJson: String?,
-        defaultWatchWordsJson: String?
+        defaultWatchWordsJson: String?,
+        defaultSelfPostIdentifiersJson: String?
     )
 }
 

@@ -30,6 +30,7 @@ private class AndroidPlatformStateStorage(
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
     private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
     private val watchWordsKey = stringPreferencesKey("watch_words_json")
+    private val selfPostIdentifiersKey = stringPreferencesKey("self_post_identifiers_json")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -70,6 +71,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[watchWordsKey] }
+
+    override val selfPostIdentifiersJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[selfPostIdentifiersKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -146,13 +152,23 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updateSelfPostIdentifiersJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[selfPostIdentifiersKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update self post identifiers: ${e.message}")
+            throw StorageException("Failed to save self post identifiers", e)
+        }
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
         defaultNgHeadersJson: String?,
         defaultNgWordsJson: String?,
         defaultCatalogNgWordsJson: String?,
-        defaultWatchWordsJson: String?
+        defaultWatchWordsJson: String?,
+        defaultSelfPostIdentifiersJson: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -173,6 +189,9 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultWatchWordsJson != null && !prefs.contains(watchWordsKey)) {
                     prefs[watchWordsKey] = defaultWatchWordsJson
+                }
+                if (defaultSelfPostIdentifiersJson != null && !prefs.contains(selfPostIdentifiersKey)) {
+                    prefs[selfPostIdentifiersKey] = defaultSelfPostIdentifiersJson
                 }
             }
         } catch (e: Exception) {

@@ -88,7 +88,7 @@ fun FutachaApp(
             }
 
             LaunchedEffect(stateStore, boardList, history) {
-                stateStore.seedIfEmpty(boardList, history)
+                stateStore.seedIfEmpty(boardList, history, defaultSelfPostIdentifierMap = emptyMap())
             }
 
             // バージョンチェック
@@ -129,6 +129,7 @@ fun FutachaApp(
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 val updatedHistory = persistedHistory.filterNot { it.threadId == entry.threadId }
                 coroutineScope.launch {
+                    stateStore.removeSelfPostIdentifiersForThread(entry.threadId)
                     stateStore.setHistory(updatedHistory)
                     autoSavedThreadRepository?.deleteThread(entry.threadId)
                         ?.onFailure {
@@ -143,6 +144,7 @@ fun FutachaApp(
             }
             val clearHistory: () -> Unit = {
                 coroutineScope.launch {
+                    stateStore.clearSelfPostIdentifiers()
                     stateStore.setHistory(emptyList())
                     autoSavedThreadRepository?.deleteAllThreads()
                         ?.onFailure {

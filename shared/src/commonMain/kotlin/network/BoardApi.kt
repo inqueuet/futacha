@@ -40,7 +40,7 @@ interface BoardApi {
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    )
+    ): String?
     suspend fun createThread(
         board: String,
         name: String,

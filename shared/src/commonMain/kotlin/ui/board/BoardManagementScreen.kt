@@ -3075,7 +3075,8 @@ fun ThreadScreen(
     var selectedThreadFilterOptions by remember { mutableStateOf(emptySet<ThreadFilterOption>()) }
     var selectedThreadSortOption by rememberSaveable { mutableStateOf<ThreadFilterSortOption?>(null) }
     var threadFilterKeyword by rememberSaveable { mutableStateOf("") }
-    var threadSelfFilter by rememberSaveable { mutableStateOf("") }
+    val persistedSelfPostIdentifiersState = stateStore?.selfPostIdentifiers?.collectAsState(initial = emptyList())
+    val persistedSelfPostIdentifiers = persistedSelfPostIdentifiersState?.value ?: emptyList()
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var ngHeaderPrefill by remember(board.id, threadId) { mutableStateOf<String?>(null) }
@@ -3315,6 +3316,7 @@ fun ThreadScreen(
             startAutoSave(currentState.page)
         }
     }
+
     val resolvedReplyCount: Int? = when (currentState) {
         is ThreadUiState.Success -> currentState.page.posts.size
         else -> initialReplyCount
@@ -3476,11 +3478,11 @@ fun ThreadScreen(
         onHistoryEntrySelected(entry)
     }
 
-    fun launchThreadAction(
+    fun <T> launchThreadAction(
         successMessage: String,
         failurePrefix: String,
-        onSuccess: () -> Unit = {},
-        block: suspend () -> Unit
+        onSuccess: (T) -> Unit = {},
+        block: suspend () -> T
     ) {
         coroutineScope.launch {
             if (actionInProgress) {
@@ -3490,9 +3492,9 @@ fun ThreadScreen(
             actionInProgress = true
             Logger.d(THREAD_ACTION_LOG_TAG, "Starting thread action: success='$successMessage', failure='$failurePrefix'")
             try {
-                block()
+                val result = block()
                 Logger.i(THREAD_ACTION_LOG_TAG, "Thread action succeeded: $successMessage")
-                onSuccess()
+                onSuccess(result)
                 snackbarHostState.showSnackbar(successMessage)
             } catch (e: Exception) {
                 Logger.e(THREAD_ACTION_LOG_TAG, "Thread action failed: $failurePrefix", e)
@@ -3817,13 +3819,13 @@ fun ThreadScreen(
                         val threadFilterCriteria = remember(
                             selectedThreadFilterOptions,
                             threadFilterKeyword,
-                            threadSelfFilter,
-                            selectedThreadSortOption
+                            selectedThreadSortOption,
+                            persistedSelfPostIdentifiers
                         ) {
                             ThreadFilterCriteria(
                                 options = selectedThreadFilterOptions,
                                 keyword = threadFilterKeyword,
-                                selfIdentifier = threadSelfFilter,
+                                selfPostIdentifiers = persistedSelfPostIdentifiers,
                                 sortOption = selectedThreadSortOption
                             )
                         }
@@ -3998,7 +4000,16 @@ fun ThreadScreen(
                 launchThreadAction(
                     successMessage = "返信を送信しました",
                     failurePrefix = "返信の送信に失敗しました",
-                    onSuccess = { refreshThread() }
+                    onSuccess = { thisNo ->
+                        if (!thisNo.isNullOrBlank()) {
+                            stateStore?.let { store ->
+                                coroutineScope.launch {
+                                    store.addSelfPostIdentifier(threadId, thisNo)
+                                }
+                            }
+                        }
+                        refreshThread()
+                    }
                 ) {
                     activeRepository.replyToThread(
                         board.url,
@@ -4089,25 +4100,22 @@ fun ThreadScreen(
     }
 
     if (isThreadFilterSheetVisible) {
-        ThreadFilterSheet(
-            selectedOptions = selectedThreadFilterOptions,
-            activeSortOption = selectedThreadSortOption,
-            keyword = threadFilterKeyword,
-            selfIdentifier = threadSelfFilter,
-            onOptionToggle = handleThreadFilterToggle,
-            onKeywordChange = { threadFilterKeyword = it },
-            onSelfIdentifierChange = { threadSelfFilter = it },
-            onClear = {
-                selectedThreadFilterOptions = emptySet()
-                selectedThreadSortOption = null
-                threadFilterKeyword = ""
-                threadSelfFilter = ""
-            },
-            onDismiss = {
-                isThreadFilterSheetVisible = false
-            }
-        )
-    }
+            ThreadFilterSheet(
+                selectedOptions = selectedThreadFilterOptions,
+                activeSortOption = selectedThreadSortOption,
+                keyword = threadFilterKeyword,
+                onOptionToggle = handleThreadFilterToggle,
+                onKeywordChange = { threadFilterKeyword = it },
+                onClear = {
+                    selectedThreadFilterOptions = emptySet()
+                    selectedThreadSortOption = null
+                    threadFilterKeyword = ""
+                },
+                onDismiss = {
+                    isThreadFilterSheetVisible = false
+                }
+            )
+        }
 
     if (isReadAloudControlsVisible) {
         ReadAloudControlSheet(
@@ -5508,7 +5516,7 @@ private fun matchesThreadFilters(post: Post, criteria: ThreadFilterCriteria): Bo
     return filterOptions.any { option ->
         when (option) {
             ThreadFilterOption.SelfPosts ->
-                matchesSelfFilter(post, criteria.selfIdentifier, lowerText, headerText)
+                matchesSelfFilter(post, criteria.selfPostIdentifiers)
             ThreadFilterOption.Deleted -> post.isDeleted
             ThreadFilterOption.Url -> THREAD_FILTER_URL_REGEX.containsMatchIn(lowerText)
             ThreadFilterOption.Image -> post.imageUrl?.isNotBlank() == true
@@ -5520,16 +5528,15 @@ private fun matchesThreadFilters(post: Post, criteria: ThreadFilterCriteria): Bo
 
 private fun matchesSelfFilter(
     post: Post,
-    selfIdentifier: String,
-    lowerText: String,
-    headerText: String
+    storedIdentifiers: List<String>
 ): Boolean {
-    val keyword = selfIdentifier.trim().lowercase()
-    if (keyword.isBlank()) return false
-    val posterId = post.posterId?.lowercase() ?: ""
-    if (posterId.contains(keyword)) return true
-    if (headerText.contains(keyword)) return true
-    return lowerText.contains(keyword)
+    val normalizedStored = storedIdentifiers
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    if (normalizedStored.isEmpty()) return false
+    return normalizedStored.any { storedId ->
+        post.id == storedId
+    }
 }
 
 private fun parseSaidaneCount(label: String?): Int? {
@@ -5583,6 +5590,7 @@ private fun buildPostHeaderText(post: Post): String {
         post.subject,
         post.author,
         post.posterId,
+        "No.${post.id}",
         post.timestamp
     ).joinToString(" ") { it.lowercase() }
 }
@@ -6022,11 +6030,24 @@ private fun ThreadActionBar(
         ) {
             ThreadActionBarItem.entries.forEach { action ->
                 IconButton(onClick = { onAction(action) }) {
-                    Icon(
-                        imageVector = action.icon,
-                        contentDescription = action.label,
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = action.icon,
+                            contentDescription = action.label,
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Text(
+                            text = action.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
             }
         }
@@ -6075,10 +6096,8 @@ private fun ThreadFilterSheet(
     selectedOptions: Set<ThreadFilterOption>,
     activeSortOption: ThreadFilterSortOption?,
     keyword: String,
-    selfIdentifier: String,
     onOptionToggle: (ThreadFilterOption) -> Unit,
     onKeywordChange: (String) -> Unit,
-    onSelfIdentifierChange: (String) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -6093,20 +6112,20 @@ private fun ThreadFilterSheet(
                 .fillMaxWidth()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
                 text = "レスフィルター",
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "絞り込みたい条件を選んでください",
+                text = "絞り込みたい条件をタップしてオン／オフしてください",
                 style = MaterialTheme.typography.bodySmall
             )
             Divider()
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 ThreadFilterOption.entries.forEachIndexed { index, option ->
                     val selected = option in selectedOptions
@@ -6149,27 +6168,19 @@ private fun ThreadFilterSheet(
                     if (index < ThreadFilterOption.entries.lastIndex) {
                         Divider()
                     }
+                    if (option == ThreadFilterOption.Keyword && selected) {
+                        OutlinedTextField(
+                            value = keyword,
+                            onValueChange = onKeywordChange,
+                            label = { Text("キーワード") },
+                            placeholder = { Text("表示したいキーワードをカンマ区切りで") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        )
+                    }
                 }
-            }
-            if (ThreadFilterOption.SelfPosts in selectedOptions) {
-                TextField(
-                    value = selfIdentifier,
-                    onValueChange = onSelfIdentifierChange,
-                    label = { Text("ID/名前") },
-                    placeholder = { Text("例: ID:abcd1234 や ハンドルネーム") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            if (ThreadFilterOption.Keyword in selectedOptions) {
-                TextField(
-                    value = keyword,
-                    onValueChange = onKeywordChange,
-                    label = { Text("キーワード") },
-                    placeholder = { Text("表示したいキーワードをカンマ区切りで") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
             Divider()
             Row(
@@ -6411,7 +6422,7 @@ private enum class ThreadFilterOption(
 private data class ThreadFilterCriteria(
     val options: Set<ThreadFilterOption>,
     val keyword: String,
-    val selfIdentifier: String,
+    val selfPostIdentifiers: List<String>,
     val sortOption: ThreadFilterSortOption?
 )
 

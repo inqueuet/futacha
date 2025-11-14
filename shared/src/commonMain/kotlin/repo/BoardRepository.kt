@@ -41,7 +41,7 @@ interface BoardRepository {
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    )
+    ): String?
 
     suspend fun createThread(
         board: String,
@@ -167,9 +167,9 @@ class DefaultBoardRepository(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ) {
+    ): String? {
         ensureCookiesInitialized(board)
-        api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        return api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
     }
 
     override suspend fun createThread(

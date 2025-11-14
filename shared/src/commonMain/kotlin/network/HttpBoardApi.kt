@@ -431,7 +431,7 @@ class HttpBoardApi(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ) {
+    ): String? {
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         val url = buildString {
@@ -477,6 +477,7 @@ class HttpBoardApi(
             val detail = errorDetail ?: summary
             throw NetworkException("返信に失敗しました: $detail")
         }
+        return tryExtractThisNo(responseBody)
     }
 
     private fun buildPostFormData(
@@ -644,6 +645,11 @@ class HttpBoardApi(
             return thisNo
         }
         return null
+    }
+
+    private fun tryExtractThisNo(body: String): String? {
+        val match = JSON_THISNO_REGEX.find(body)
+        return match?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
     }
 
     private fun looksLikeJson(body: String): Boolean {
