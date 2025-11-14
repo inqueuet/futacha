@@ -447,13 +447,10 @@ internal object ThreadHtmlParserCore {
             if (quoteLines.isEmpty()) return@forEach
 
             val postReferences = mutableListOf<QuoteReference>()
+            val referencedTargets = mutableSetOf<String>()
             quoteLines.forEach { quoteLine: String ->
                 val targets = resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex)
                 if (targets.isNotEmpty()) {
-                    // Update counts
-                    targets.forEach { targetId ->
-                        counts[targetId] = counts[targetId]?.plus(1) ?: 1
-                    }
                     // Build reference
                     postReferences.add(
                         QuoteReference(
@@ -461,9 +458,13 @@ internal object ThreadHtmlParserCore {
                             targetPostIds = targets.toList()
                         )
                     )
+                    referencedTargets += targets
                 }
             }
             if (postReferences.isNotEmpty()) {
+                referencedTargets.forEach { targetId ->
+                    counts[targetId] = counts[targetId]?.plus(1) ?: 1
+                }
                 references[post.id] = postReferences
             }
         }

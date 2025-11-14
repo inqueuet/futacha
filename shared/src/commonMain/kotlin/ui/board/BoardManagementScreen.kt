@@ -71,13 +71,18 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.ReplyAll
+import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Link
@@ -87,6 +92,7 @@ import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material.icons.rounded.WatchLater
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -3065,6 +3071,11 @@ fun ThreadScreen(
     var lastUsedDeleteKey by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var isReplyDialogVisible by remember { mutableStateOf(false) }
     var isThreadSettingsSheetVisible by remember { mutableStateOf(false) }
+    var isThreadFilterSheetVisible by remember { mutableStateOf(false) }
+    var selectedThreadFilterOptions by remember { mutableStateOf(emptySet<ThreadFilterOption>()) }
+    var selectedThreadSortOption by rememberSaveable { mutableStateOf<ThreadFilterSortOption?>(null) }
+    var threadFilterKeyword by rememberSaveable { mutableStateOf("") }
+    var threadSelfFilter by rememberSaveable { mutableStateOf("") }
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var ngHeaderPrefill by remember(board.id, threadId) { mutableStateOf<String?>(null) }
@@ -3097,6 +3108,23 @@ fun ThreadScreen(
         }
     }
     val urlLauncher = rememberUrlLauncher()
+
+    val handleThreadFilterToggle: (ThreadFilterOption) -> Unit = { option ->
+        val currentlySelected = option in selectedThreadFilterOptions
+        var updatedOptions = if (currentlySelected) {
+            selectedThreadFilterOptions - option
+        } else {
+            selectedThreadFilterOptions + option
+        }
+        if (option.sortOption != null && !currentlySelected) {
+            updatedOptions = updatedOptions.filter { it.sortOption == null || it == option }.toSet()
+        }
+        selectedThreadFilterOptions = updatedOptions
+
+        option.sortOption?.let { sortOption ->
+            selectedThreadSortOption = if (currentlySelected) null else sortOption
+        }
+    }
 
     val addNgHeaderEntry: (String) -> Unit = { value ->
         val trimmed = value.trim()
@@ -3726,6 +3754,9 @@ fun ThreadScreen(
                                     }
                                 }
                             }
+                            ThreadActionBarItem.Filter -> {
+                                isThreadFilterSheetVisible = true
+                            }
                             ThreadActionBarItem.Settings -> {
                                 isThreadSettingsSheetVisible = true
                             }
@@ -3783,8 +3814,28 @@ fun ThreadScreen(
                     )
 
                     is ThreadUiState.Success -> {
-                        val filteredPage = remember(state.page, ngHeaders, ngWords, ngFilteringEnabled) {
-                            applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
+                        val threadFilterCriteria = remember(
+                            selectedThreadFilterOptions,
+                            threadFilterKeyword,
+                            threadSelfFilter,
+                            selectedThreadSortOption
+                        ) {
+                            ThreadFilterCriteria(
+                                options = selectedThreadFilterOptions,
+                                keyword = threadFilterKeyword,
+                                selfIdentifier = threadSelfFilter,
+                                sortOption = selectedThreadSortOption
+                            )
+                        }
+                        val filteredPage = remember(
+                            state.page,
+                            ngHeaders,
+                            ngWords,
+                            ngFilteringEnabled,
+                            threadFilterCriteria
+                        ) {
+                            val ngFiltered = applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
+                            applyThreadFilters(ngFiltered, threadFilterCriteria)
                         }
                         ThreadContent(
                             page = filteredPage,
@@ -4033,6 +4084,27 @@ fun ThreadScreen(
                         isReadAloudControlsVisible = true
                     }
                 }
+            }
+        )
+    }
+
+    if (isThreadFilterSheetVisible) {
+        ThreadFilterSheet(
+            selectedOptions = selectedThreadFilterOptions,
+            activeSortOption = selectedThreadSortOption,
+            keyword = threadFilterKeyword,
+            selfIdentifier = threadSelfFilter,
+            onOptionToggle = handleThreadFilterToggle,
+            onKeywordChange = { threadFilterKeyword = it },
+            onSelfIdentifierChange = { threadSelfFilter = it },
+            onClear = {
+                selectedThreadFilterOptions = emptySet()
+                selectedThreadSortOption = null
+                threadFilterKeyword = ""
+                threadSelfFilter = ""
+            },
+            onDismiss = {
+                isThreadFilterSheetVisible = false
             }
         )
     }
@@ -5416,6 +5488,80 @@ private fun applyNgFilters(
     return page.copy(posts = filteredPosts)
 }
 
+private fun applyThreadFilters(
+    page: ThreadPage,
+    criteria: ThreadFilterCriteria
+): ThreadPage {
+    if (criteria.options.isEmpty()) return page
+    val filteredPosts = page.posts.filter { post ->
+        matchesThreadFilters(post, criteria)
+    }
+    val sortedPosts = sortThreadPosts(filteredPosts, criteria.sortOption)
+    return page.copy(posts = sortedPosts)
+}
+
+private fun matchesThreadFilters(post: Post, criteria: ThreadFilterCriteria): Boolean {
+    val filterOptions = criteria.options.filter { it.sortOption == null }
+    if (filterOptions.isEmpty()) return true
+    val lowerText = messageHtmlToPlainText(post.messageHtml).lowercase()
+    val headerText = buildPostHeaderText(post)
+    return filterOptions.any { option ->
+        when (option) {
+            ThreadFilterOption.SelfPosts ->
+                matchesSelfFilter(post, criteria.selfIdentifier, lowerText, headerText)
+            ThreadFilterOption.Deleted -> post.isDeleted
+            ThreadFilterOption.Url -> THREAD_FILTER_URL_REGEX.containsMatchIn(lowerText)
+            ThreadFilterOption.Image -> post.imageUrl?.isNotBlank() == true
+            ThreadFilterOption.Keyword -> matchesKeyword(lowerText, post.subject ?: "", criteria.keyword)
+            else -> true
+        }
+    }
+}
+
+private fun matchesSelfFilter(
+    post: Post,
+    selfIdentifier: String,
+    lowerText: String,
+    headerText: String
+): Boolean {
+    val keyword = selfIdentifier.trim().lowercase()
+    if (keyword.isBlank()) return false
+    val posterId = post.posterId?.lowercase() ?: ""
+    if (posterId.contains(keyword)) return true
+    if (headerText.contains(keyword)) return true
+    return lowerText.contains(keyword)
+}
+
+private fun parseSaidaneCount(label: String?): Int? {
+    val source = label ?: return null
+    return Regex("""\d+""").find(source)?.value?.toIntOrNull()
+}
+
+private fun sortThreadPosts(
+    posts: List<Post>,
+    sortOption: ThreadFilterSortOption?
+): List<Post> {
+    return when (sortOption) {
+        ThreadFilterSortOption.Saidane -> posts.sortedByDescending { parseSaidaneCount(it.saidaneLabel) ?: 0 }
+        ThreadFilterSortOption.Replies -> posts.sortedByDescending { it.referencedCount }
+        null -> posts
+    }
+}
+
+private fun matchesKeyword(lowerText: String, subject: String, keywordInput: String): Boolean {
+    val keywords = keywordInput
+        .split(',')
+        .mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    if (keywords.isEmpty()) return false
+    val lowerSubject = subject.lowercase()
+    return keywords.any { keyword ->
+        lowerText.contains(keyword) || lowerSubject.contains(keyword)
+    }
+}
+
+private val THREAD_FILTER_URL_REGEX =
+    Regex("""https?://[^\s"'<>]+|www\.[^\s"'<>]+""", RegexOption.IGNORE_CASE)
+
 private fun matchesNgFilters(post: Post, headerFilters: List<String>, wordFilters: List<String>): Boolean {
     if (headerFilters.isNotEmpty()) {
         val headerText = buildPostHeaderText(post)
@@ -5923,6 +6069,125 @@ private fun ThreadSettingsSheet(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThreadFilterSheet(
+    selectedOptions: Set<ThreadFilterOption>,
+    activeSortOption: ThreadFilterSortOption?,
+    keyword: String,
+    selfIdentifier: String,
+    onOptionToggle: (ThreadFilterOption) -> Unit,
+    onKeywordChange: (String) -> Unit,
+    onSelfIdentifierChange: (String) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scrollState = rememberScrollState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "レスフィルター",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "絞り込みたい条件を選んでください",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Divider()
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ThreadFilterOption.entries.forEachIndexed { index, option ->
+                    val selected = option in selectedOptions
+                    val isActiveSort = option.sortOption != null && activeSortOption == option.sortOption
+                    ListItem(
+                        leadingContent = {
+                            Icon(imageVector = option.icon, contentDescription = null)
+                        },
+                        headlineContent = {
+                            Text(option.label)
+                        },
+                        supportingContent = {
+                            if (isActiveSort) {
+                                Text(
+                                    text = "表示: ${option.sortOption?.displayLabel}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        },
+                        trailingContent = {
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "選択済み",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (isActiveSort) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                else Color.Transparent
+                            )
+                            .clickable {
+                                onOptionToggle(option)
+                            }
+                    )
+                    if (index < ThreadFilterOption.entries.lastIndex) {
+                        Divider()
+                    }
+                }
+            }
+            if (ThreadFilterOption.SelfPosts in selectedOptions) {
+                TextField(
+                    value = selfIdentifier,
+                    onValueChange = onSelfIdentifierChange,
+                    label = { Text("ID/名前") },
+                    placeholder = { Text("例: ID:abcd1234 や ハンドルネーム") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (ThreadFilterOption.Keyword in selectedOptions) {
+                TextField(
+                    value = keyword,
+                    onValueChange = onKeywordChange,
+                    label = { Text("キーワード") },
+                    placeholder = { Text("表示したいキーワードをカンマ区切りで") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Divider()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TextButton(onClick = onClear) {
+                    Text("フィルターをクリア")
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) {
+                    Text("閉じる")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionChip(
     label: String,
@@ -6102,6 +6367,7 @@ private enum class ThreadActionBarItem(
     Refresh("更新", Icons.Rounded.Refresh),
     Gallery("画像", Icons.Outlined.Image),
     Save("保存", Icons.Rounded.Archive),
+    Filter("レスフィルター", Icons.Rounded.FilterList),
     Settings("設定", Icons.Rounded.Settings)
 }
 
@@ -6118,6 +6384,36 @@ private enum class ThreadSettingsMenuItem(
     ReadAloud("読み上げ", Icons.AutoMirrored.Rounded.VolumeUp),
     Privacy("プライバシー", Icons.Rounded.Lock)
 }
+
+private enum class ThreadFilterSortOption(val displayLabel: String) {
+    Saidane("そうだね数が多い順"),
+    Replies("返信数が多い順")
+}
+
+private enum class ThreadFilterOption(
+    val label: String,
+    val icon: ImageVector,
+    val sortOption: ThreadFilterSortOption? = null
+) {
+    SelfPosts("自分の書き込み", Icons.Rounded.Person),
+    HighSaidane("そうだねが多い", Icons.Rounded.ThumbUp, ThreadFilterSortOption.Saidane),
+    HighReplies("返信が多い", Icons.Rounded.ReplyAll, ThreadFilterSortOption.Replies),
+    Deleted("削除されたレス", Icons.Rounded.DeleteSweep),
+    Url("URLを含むレス", Icons.Rounded.Link),
+    Image("画像レス", Icons.Outlined.Image),
+    Keyword("キーワード", Icons.Rounded.Search);
+
+    companion object {
+        val entries = values().toList()
+    }
+}
+
+private data class ThreadFilterCriteria(
+    val options: Set<ThreadFilterOption>,
+    val keyword: String,
+    val selfIdentifier: String,
+    val sortOption: ThreadFilterSortOption?
+)
 
 private enum class NgManagementSection {
     Header,

@@ -10,8 +10,7 @@
   - `createAppStateStore(applicationContext)` / `createHttpClient()` / `createVersionChecker(context, httpClient)` / `createFileSystem(applicationContext)` を `remember`。
   - `DisposableEffect` で HttpClient を close。`FutachaApp` に stateStore / httpClient / fileSystem / versionChecker を注入。
 - `shared/src/iosMain/kotlin/MainViewController.kt`
-  - `ComposeUIViewController { FutachaApp(...) }` を返すシンプルなホスト。
-  - 現状は `createFileSystem()` を渡していないため、Thread 保存は snackbar でブロックされます (TODO)。
+  - `stateStore` / `httpClient` / `versionChecker` / `fileSystem` を `remember` し、`DisposableEffect` で HttpClient を close。`ComposeUIViewController { FutachaApp(...) }` を返すシンプルなホストとして `fileSystem` まで渡され、Thread 保存やスナックバーの挙動も Android と同じように動作します。
 - `shared/src/commonMain/kotlin/ui/FutachaApp.kt`
   - `mockBoardSummaries` / `mockThreadHistory` で初回起動をシード。
   - `createRemoteBoardRepository()` を `remember` し、`DisposableEffect` で `close()`。
