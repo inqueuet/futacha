@@ -6030,24 +6030,11 @@ private fun ThreadActionBar(
         ) {
             ThreadActionBarItem.entries.forEach { action ->
                 IconButton(onClick = { onAction(action) }) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = action.icon,
-                            contentDescription = action.label,
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Text(
-                            text = action.label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = action.icon,
+                        contentDescription = action.label,
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
                 }
             }
         }
