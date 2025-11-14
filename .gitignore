@@ -16,6 +16,7 @@ build/
 .externalNativeBuild/
 .cxx/
 captures/
+app-android/release/
 
 ### Android ###
 local.properties
