@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -224,6 +225,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.min
+import kotlin.text.RegexOption
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
@@ -3094,6 +3096,7 @@ fun ThreadScreen(
             fallbackNgWordsState.value = updated
         }
     }
+    val urlLauncher = rememberUrlLauncher()
 
     val addNgHeaderEntry: (String) -> Unit = { value ->
         val trimmed = value.trim()
@@ -3237,13 +3240,22 @@ fun ThreadScreen(
                     coroutineScope.launch {
                         uiState.value = ThreadUiState.Loading
                         try {
-                            val (page, usedOffline) = loadThreadWithOfflineFallback(allowOfflineFallback = true)
-                            if (isActive) {
-                                uiState.value = ThreadUiState.Success(page)
-                                if (usedOffline) {
-                                    snackbarHostState.showSnackbar("ローカルコピーを表示しています")
-                                }
-                            }
+                    val (page, usedOffline) = loadThreadWithOfflineFallback(allowOfflineFallback = true)
+                    if (isActive) {
+                        uiState.value = ThreadUiState.Success(page)
+                        onHistoryEntryUpdated(
+                            buildHistoryEntryFromPage(
+                                page = page,
+                                history = history,
+                                threadId = threadId,
+                                threadTitle = threadTitle,
+                                board = board
+                            )
+                        )
+                        if (usedOffline) {
+                            snackbarHostState.showSnackbar("ローカルコピーを表示しています")
+                        }
+                    }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -3523,16 +3535,13 @@ fun ThreadScreen(
                     uiState.value = ThreadUiState.Success(page)
                     lazyListState.scrollToItem(savedIndex, savedOffset)
 
-                    // 履歴のエントリーを更新
-                    val currentEntry = history.firstOrNull { it.threadId == threadId }
-                    if (currentEntry != null) {
-                        val updatedEntry = currentEntry.copy(
-                            replyCount = page.posts.size,
-                            title = page.posts.firstOrNull()?.subject ?: currentEntry.title,
-                            lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
-                        )
-                        onHistoryEntryUpdated(updatedEntry)
-                    }
+                    onHistoryEntryUpdated(buildHistoryEntryFromPage(
+                        page = page,
+                        history = history,
+                        threadId = threadId,
+                        threadTitle = threadTitle,
+                        board = board
+                    ))
 
                     val successMessage = if (usedOffline) {
                         "ネットワーク接続不可: ローカルコピーを表示しています"
@@ -3788,6 +3797,7 @@ fun ThreadScreen(
                             },
                             onSaidaneClick = handleSaidaneAction,
                             onMediaClick = handleMediaClick,
+                            onUrlClick = urlLauncher,
                             onRefresh = performRefresh,
                             isRefreshing = isRefreshing,
                             modifier = Modifier.matchParentSize()
@@ -3997,9 +4007,6 @@ fun ThreadScreen(
             }
         )
     }
-
-    val urlLauncher = rememberUrlLauncher()
-
     if (isThreadSettingsSheetVisible) {
         ThreadSettingsSheet(
             onDismiss = { isThreadSettingsSheetVisible = false },
@@ -4324,6 +4331,7 @@ private fun ThreadContent(
     onPostLongPress: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onUrlClick: (String) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     modifier: Modifier = Modifier
@@ -4385,6 +4393,7 @@ private fun ThreadContent(
                             )
                         }
                     },
+                    onUrlClick = onUrlClick,
                     onPosterIdClick = normalizedPosterId
                         ?.let { normalizedId ->
                             postsByPosterId[normalizedId]
@@ -4476,6 +4485,7 @@ private fun ThreadContent(
             state = state,
             onDismiss = { quotePreviewState = null },
             onMediaClick = onMediaClick,
+            onUrlClick = onUrlClick,
             onQuoteClick = { reference ->
                 val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
                 if (targets.isNotEmpty()) {
@@ -4555,6 +4565,7 @@ private fun ThreadPostCard(
     saidaneLabelOverride: String?,
     highlightRanges: List<IntRange> = emptyList(),
     onQuoteClick: (QuoteReference) -> Unit,
+    onUrlClick: (String) -> Unit,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
@@ -4632,6 +4643,7 @@ private fun ThreadPostCard(
             isDeleted = post.isDeleted,
             quoteReferences = post.quoteReferences,
             onQuoteClick = onQuoteClick,
+            onUrlClick = onUrlClick,
             highlightRanges = highlightRanges
         )
     }
@@ -4741,6 +4753,7 @@ private fun ThreadMessageText(
     isDeleted: Boolean,
     quoteReferences: List<QuoteReference>,
     onQuoteClick: (QuoteReference) -> Unit,
+    onUrlClick: (String) -> Unit,
     highlightRanges: List<IntRange> = emptyList(),
     modifier: Modifier = Modifier
 ) {
@@ -4756,27 +4769,37 @@ private fun ThreadMessageText(
         MaterialTheme.colorScheme.onSurface
     }
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-    Text(
-        modifier = modifier.pointerInput(annotated, quoteReferences) {
-            detectTapGestures { position ->
-                val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
-                annotated
-                    .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
-                    .firstOrNull()
-                    ?.item
-                    ?.toIntOrNull()
-                    ?.let { index ->
-                        quoteReferences
-                            .getOrNull(index)
-                            ?.takeIf { it.targetPostIds.isNotEmpty() }
-                            ?.let(onQuoteClick)
+    SelectionContainer {
+        Text(
+            modifier = modifier.pointerInput(annotated, quoteReferences) {
+                detectTapGestures { position ->
+                    val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
+                    val url = annotated
+                        .getStringAnnotations(URL_ANNOTATION_TAG, offset, offset)
+                        .firstOrNull()
+                        ?.item
+                    if (url != null) {
+                        onUrlClick(url)
+                        return@detectTapGestures
                     }
-            }
-        },
-        text = annotated,
-        style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
-        onTextLayout = { textLayoutResult = it }
-    )
+                    annotated
+                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                        .firstOrNull()
+                        ?.item
+                        ?.toIntOrNull()
+                        ?.let { index ->
+                            quoteReferences
+                                .getOrNull(index)
+                                ?.takeIf { it.targetPostIds.isNotEmpty() }
+                                ?.let(onQuoteClick)
+                        }
+                }
+            },
+            text = annotated,
+            style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
+            onTextLayout = { textLayoutResult = it }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -5109,6 +5132,8 @@ private fun GalleryImageItem(
 }
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
+private const val URL_ANNOTATION_TAG = "url"
+private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
 
 private fun buildAnnotatedMessage(
@@ -5144,6 +5169,15 @@ private fun buildAnnotatedMessage(
             if (index != lines.lastIndex) {
                 append("\n")
             }
+        }
+        val builtText = toString()
+        URL_REGEX.findAll(builtText).forEach { matchResult ->
+            addStringAnnotation(
+                tag = URL_ANNOTATION_TAG,
+                annotation = matchResult.value,
+                start = matchResult.range.first,
+                end = matchResult.range.last + 1
+            )
         }
     }
 }
@@ -5297,6 +5331,7 @@ private fun QuotePreviewDialog(
     state: QuotePreviewState,
     onDismiss: () -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onUrlClick: (String) -> Unit,
     onQuoteClick: (QuoteReference) -> Unit
 ) {
     Dialog(
@@ -5343,6 +5378,7 @@ private fun QuotePreviewDialog(
                         posterIdValue = normalizePosterIdValue(post.posterId),
                         saidaneLabelOverride = null,
                         onQuoteClick = onQuoteClick,
+                        onUrlClick = onUrlClick,
                         onSaidaneClick = null,
                         onLongPress = null,
                         onMediaClick = onMediaClick,
@@ -6387,4 +6423,47 @@ private fun GlobalSettingsScreen(
             }
         }
     }
+}
+
+@OptIn(ExperimentalTime::class)
+private fun buildHistoryEntryFromPage(
+    page: ThreadPage,
+    history: List<ThreadHistoryEntry>,
+    threadId: String,
+    threadTitle: String?,
+    board: BoardSummary
+): ThreadHistoryEntry {
+    val existingEntry = history.firstOrNull { it.threadId == threadId }
+    val firstPost = page.posts.firstOrNull()
+    val firstLineFromBody = firstPost
+        ?.let { post ->
+            messageHtmlToLines(post.messageHtml)
+                .firstOrNull { it.isNotBlank() }
+                ?.trim()
+        }
+        .orEmpty()
+        .ifBlank { null }
+    val candidateTitle = firstLineFromBody
+        ?: firstPost?.subject?.takeIf { it.isNotBlank() }
+        ?: threadTitle?.takeIf { it.isNotBlank() }
+        ?: existingEntry?.title
+        ?: "無題"
+    val resolvedImageUrl = existingEntry?.titleImageUrl?.takeIf { it.isNotBlank() }
+        ?: page.posts.firstOrNull()?.thumbnailUrl.orEmpty()
+    val timestamp = Clock.System.now().toEpochMilliseconds()
+    return existingEntry?.copy(
+        title = candidateTitle,
+        titleImageUrl = resolvedImageUrl,
+        replyCount = page.posts.size,
+        lastVisitedEpochMillis = timestamp
+    ) ?: ThreadHistoryEntry(
+        threadId = threadId,
+        boardId = board.id,
+        title = candidateTitle,
+        titleImageUrl = resolvedImageUrl,
+        boardName = board.name,
+        boardUrl = board.url,
+        lastVisitedEpochMillis = timestamp,
+        replyCount = page.posts.size
+    )
 }
