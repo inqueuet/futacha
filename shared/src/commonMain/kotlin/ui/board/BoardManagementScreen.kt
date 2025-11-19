@@ -2451,23 +2451,29 @@ private fun rememberResolvedCatalogThumbnailUrl(
     boardUrl: String?,
     repository: BoardRepository
 ): String? {
-    var resolvedThumbnailUrl by remember(item.id, item.thumbnailUrl, boardUrl) {
-        mutableStateOf(item.thumbnailUrl)
+    // サムネイル画像を保持（初期値）
+    val thumbnailUrl = item.thumbnailUrl
+
+    // フルサイズ画像のURLを保持
+    var fullsizeUrl by remember(item.id, boardUrl) {
+        mutableStateOf<String?>(null)
     }
     var opImageRequested by remember(item.id, boardUrl) {
         mutableStateOf(false)
     }
 
+    // フルサイズ画像を非同期で取得
     LaunchedEffect(item.id, boardUrl, repository) {
         if (boardUrl.isNullOrBlank() || item.id.isBlank() || opImageRequested) return@LaunchedEffect
         opImageRequested = true
         val fetchedUrl = repository.fetchOpImageUrl(boardUrl, item.id)
-        if (!fetchedUrl.isNullOrBlank()) {
-            resolvedThumbnailUrl = fetchedUrl
+        if (!fetchedUrl.isNullOrBlank() && fetchedUrl != thumbnailUrl) {
+            fullsizeUrl = fetchedUrl
         }
     }
 
-    return resolvedThumbnailUrl
+    // フルサイズ画像が取得できていればそれを使用、そうでなければサムネイルを使用
+    return fullsizeUrl ?: thumbnailUrl
 }
 
 @Composable
@@ -2489,16 +2495,43 @@ private fun CatalogCard(
     // 4列グリッドでの推定カードサイズ（画面幅360dpの場合約75dp）
     // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
-    val thumbnailToShow = resolvedThumbnailUrl ?: ""
-    val imageRequest = remember(thumbnailToShow, targetSizePx) {
+
+    // サムネイル画像（初期表示用）
+    val thumbnailUrl = item.thumbnailUrl ?: ""
+
+    // 表示する画像URL（フルサイズまたはサムネイル）
+    val imageUrlToShow = resolvedThumbnailUrl ?: ""
+
+    // 画像リクエストを作成（resolvedThumbnailUrlが変わったときのみ再作成）
+    val imageRequest = remember(imageUrlToShow, targetSizePx) {
         ImageRequest.Builder(platformContext)
-            .data(thumbnailToShow.takeIf { it.isNotBlank() })
+            .data(imageUrlToShow.takeIf { it.isNotBlank() })
             .crossfade(true)
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
             .build()
     }
+
+    // サムネイル画像のリクエスト（フォールバック用）
+    val thumbnailRequest = remember(thumbnailUrl, targetSizePx) {
+        ImageRequest.Builder(platformContext)
+            .data(thumbnailUrl.takeIf { it.isNotBlank() })
+            .size(targetSizePx, targetSizePx)
+            .precision(Precision.INEXACT)
+            .scale(Scale.FIT)
+            .build()
+    }
+
+    val imageLoader = LocalFutachaImageLoader.current
+    val imagePainter = rememberAsyncImagePainter(
+        model = imageRequest,
+        imageLoader = imageLoader
+    )
+    val thumbnailPainter = rememberAsyncImagePainter(
+        model = thumbnailRequest,
+        imageLoader = imageLoader
+    )
 
     ElevatedCard(
         modifier = modifier
@@ -2523,20 +2556,37 @@ private fun CatalogCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (thumbnailToShow.isBlank()) {
+                if (imageUrlToShow.isBlank()) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    AsyncImage(
-                        model = imageRequest,
-                        imageLoader = LocalFutachaImageLoader.current,
-                        contentDescription = item.title ?: "サムネイル",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    // フルサイズ画像がロード中またはエラーの場合はサムネイルを表示
+                    val painterState = imagePainter.state
+                    val shouldShowThumbnail = thumbnailUrl.isNotBlank() &&
+                                             imageUrlToShow != thumbnailUrl &&
+                                             (painterState is AsyncImagePainter.State.Loading ||
+                                              painterState is AsyncImagePainter.State.Error)
+
+                    if (shouldShowThumbnail) {
+                        // サムネイル画像を表示（フルサイズ画像のロード中）
+                        Image(
+                            painter = thumbnailPainter,
+                            contentDescription = item.title ?: "サムネイル",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        // フルサイズ画像またはサムネイルのみの場合
+                        Image(
+                            painter = imagePainter,
+                            contentDescription = item.title ?: "サムネイル",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
                 if (item.replyCount > 0) {
                     Surface(
@@ -2588,17 +2638,44 @@ private fun CatalogListItem(
         boardUrl = boardUrl,
         repository = repository
     )
-    val thumbnailToShow = resolvedThumbnailUrl ?: ""
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
-    val imageRequest = remember(thumbnailToShow, targetSizePx) {
+
+    // サムネイル画像（初期表示用）
+    val thumbnailUrl = item.thumbnailUrl ?: ""
+
+    // 表示する画像URL（フルサイズまたはサムネイル）
+    val imageUrlToShow = resolvedThumbnailUrl ?: ""
+
+    // 画像リクエストを作成
+    val imageRequest = remember(imageUrlToShow, targetSizePx) {
         ImageRequest.Builder(platformContext)
-            .data(thumbnailToShow.takeIf { it.isNotBlank() })
+            .data(imageUrlToShow.takeIf { it.isNotBlank() })
             .crossfade(true)
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
             .build()
     }
+
+    // サムネイル画像のリクエスト（フォールバック用）
+    val thumbnailRequest = remember(thumbnailUrl, targetSizePx) {
+        ImageRequest.Builder(platformContext)
+            .data(thumbnailUrl.takeIf { it.isNotBlank() })
+            .size(targetSizePx, targetSizePx)
+            .precision(Precision.INEXACT)
+            .scale(Scale.FIT)
+            .build()
+    }
+
+    val imageLoader = LocalFutachaImageLoader.current
+    val imagePainter = rememberAsyncImagePainter(
+        model = imageRequest,
+        imageLoader = imageLoader
+    )
+    val thumbnailPainter = rememberAsyncImagePainter(
+        model = thumbnailRequest,
+        imageLoader = imageLoader
+    )
 
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
@@ -2620,20 +2697,37 @@ private fun CatalogListItem(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (thumbnailToShow.isBlank()) {
+                if (imageUrlToShow.isBlank()) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    AsyncImage(
-                        model = imageRequest,
-                        imageLoader = LocalFutachaImageLoader.current,
-                        contentDescription = item.title ?: "サムネイル",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    // フルサイズ画像がロード中またはエラーの場合はサムネイルを表示
+                    val painterState = imagePainter.state
+                    val shouldShowThumbnail = thumbnailUrl.isNotBlank() &&
+                                             imageUrlToShow != thumbnailUrl &&
+                                             (painterState is AsyncImagePainter.State.Loading ||
+                                              painterState is AsyncImagePainter.State.Error)
+
+                    if (shouldShowThumbnail) {
+                        // サムネイル画像を表示（フルサイズ画像のロード中）
+                        Image(
+                            painter = thumbnailPainter,
+                            contentDescription = item.title ?: "サムネイル",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        // フルサイズ画像またはサムネイルのみの場合
+                        Image(
+                            painter = imagePainter,
+                            contentDescription = item.title ?: "サムネイル",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))
