@@ -246,4 +246,47 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 
 ---
 
+## 9. 最近のコード変更履歴
+
+### 2025-11-19: HTMLエンティティのデコード処理を改善
+
+**問題**: `(1523&ndash;1563)` が `(1523–1563)` と正しく表示されず、HTMLエンティティがそのまま表示される問題が発生。
+
+**原因特定**:
+1. `HtmlEntityDecoder.kt` の `namedEntityMap` に `ndash` (エンダッシュ) などの一般的なHTMLエンティティが含まれていなかった
+2. `ThreadHtmlParserCore.kt` が独自の `decodeHtmlEntities()` 実装を持ち、`HtmlEntityDecoder` を使用せず基本的なエンティティしか処理していなかった
+
+**修正内容**:
+
+1. **`shared/src/commonMain/kotlin/parser/HtmlEntityDecoder.kt`** を拡張
+   - 基本エンティティ: `lt`, `gt`, `amp`, `quot`, `apos`, `nbsp`
+   - ダッシュ: `ndash` (–), `mdash` (—)
+   - 引用符: `lsquo` ('), `rsquo` ('), `ldquo` ("), `rdquo` ("), `sbquo` (‚), `bdquo` („)
+   - 記号: `hellip` (…), `bull` (•), `middot` (·)
+   - 矢印: `larr` (←), `rarr` (→), `uarr` (↑), `darr` (↓)
+   - 数学記号: `times` (×), `divide` (÷), `plusmn` (±), `minus` (−)
+   - その他: `deg` (°), `copy` (©), `reg` (®), `trade` (™), `sect` (§), `para` (¶), `dagger` (†), `Dagger` (‡)
+   - **合計33種類のHTMLエンティティに対応**
+
+2. **`shared/src/commonMain/kotlin/parser/ThreadHtmlParserCore.kt`** のリファクタリング
+   - 独自実装の `decodeHtmlEntities()` を削除し、`HtmlEntityDecoder.decode()` を使用するように変更
+   - 不要になった以下のコードを削除:
+     - `numericEntityRegex` (行94-95)
+     - `hexEntityRegex` (行95)
+     - `codePointToString()` 関数 (行387-396)
+   - コードの重複を排除し、メンテナンス性を向上
+
+3. **確認済み**: `CatalogHtmlParserCore.kt` は既に `HtmlEntityDecoder.decode()` を使用しているため問題なし
+
+**影響範囲**:
+- スレッド表示、カタログ表示での全てのHTMLエンティティが正しくデコードされるようになった
+- 年号の範囲表示 (例: `1523–1563`) などが正常に表示される
+- その他の一般的な記号 (©, ®, ™, …, など) も正しく表示される
+
+**変更ファイル**:
+- `shared/src/commonMain/kotlin/parser/HtmlEntityDecoder.kt` (+30行)
+- `shared/src/commonMain/kotlin/parser/ThreadHtmlParserCore.kt` (-25行, リファクタリング)
+
+---
+
 このドキュメントは `README.md` / `codex.md` と合わせて参照することで、モジュール構成・UI フロー・ネットワーク層・保存処理の全体像を把握できるようになっています。追加の質問があれば Issues でどうぞ。***
