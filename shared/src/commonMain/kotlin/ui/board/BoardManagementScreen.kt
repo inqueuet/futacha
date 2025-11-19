@@ -11,6 +11,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -34,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -145,7 +148,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -155,14 +157,19 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -2190,67 +2197,122 @@ private fun CatalogGrid(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var dragOffset by remember { mutableStateOf(0f) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val maxOverscroll = 80.dp
+    val maxOverscrollPx = with(LocalDensity.current) { maxOverscroll.toPx() }
+    val density = LocalDensity.current
+
+    // アニメーション用のオフセット
+    val overscrollOffset = remember { Animatable(0f) }
+
+    val isAtTop by remember {
+        derivedStateOf {
+            val layoutInfo = gridState.layoutInfo
+            val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
+            firstVisibleItem != null && firstVisibleItem.index == 0 && firstVisibleItem.offset.y <= 0
+        }
+    }
+
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
             val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-            lastVisibleItem != null && lastVisibleItem.index == layoutInfo.totalItemsCount - 1
+            val totalItems = layoutInfo.totalItemsCount
+            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 1
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = onRefresh,
-        modifier = modifier.fillMaxSize()
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            LazyVerticalGrid(
-                state = gridState,
-                modifier = Modifier.padding(horizontal = 8.dp),
-                columns = GridCells.Fixed(5),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
-            ) {
-                items(
-                    items = items,
-                    key = { it.id }
-                ) { catalogItem ->
-                    CatalogCard(
-                        item = catalogItem,
-                        boardUrl = board?.url,
-                        repository = repository,
-                        onClick = { onThreadSelected(catalogItem) }
-                    )
-                }
-            }
-
-            if (isAtBottom && !isRefreshing) {
-                Spacer(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .align(Alignment.BottomCenter)
-                        .pointerInput(Unit) {
-                            detectVerticalDragGestures(
-                                onDragStart = { dragOffset = 0f },
-                                onDragEnd = {
-                                    if (dragOffset > 100) {
-                                        coroutineScope.launch { onRefresh() }
-                                    }
-                                    dragOffset = 0f
-                                },
-                                onDragCancel = { dragOffset = 0f },
-                                onVerticalDrag = { _, dragAmount ->
-                                    if (dragAmount < 0) {
-                                        dragOffset += -dragAmount
-                                    }
-                                }
-                            )
-                        }
+    // リフレッシュ完了時にアニメーションで空間を戻す
+    LaunchedEffect(isRefreshing) {
+        if (!isRefreshing) {
+            overscrollOffset.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
                 )
-            }
+            )
+        }
+    }
+
+    LazyVerticalGrid(
+        state = gridState,
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 8.dp)
+            .offset { IntOffset(0, overscrollOffset.value.toInt()) }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var totalDrag = 0f
+
+                    do {
+                        val event = awaitPointerEvent()
+                        val dragEvent = event.changes.firstOrNull()
+
+                        if (dragEvent != null && dragEvent.pressed) {
+                            val delta = dragEvent.positionChange().y
+
+                            // 上端で下向きにドラッグ
+                            if (isAtTop && delta > 0 && !isRefreshing) {
+                                totalDrag += delta
+                                val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                coroutineScope.launch {
+                                    overscrollOffset.snapTo(newOffset)
+                                }
+                                dragEvent.consume()
+                            }
+                            // 下端で上向きにドラッグ
+                            else if (isAtBottom && delta < 0 && !isRefreshing) {
+                                totalDrag += delta
+                                val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                coroutineScope.launch {
+                                    overscrollOffset.snapTo(newOffset)
+                                }
+                                dragEvent.consume()
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+
+                    // ドラッグ終了
+                    if (totalDrag > 100) {
+                        coroutineScope.launch { onRefresh() }
+                    } else if (totalDrag < -100) {
+                        coroutineScope.launch { onRefresh() }
+                    }
+
+                    totalDrag = 0f
+                    coroutineScope.launch {
+                        overscrollOffset.animateTo(
+                            targetValue = 0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            )
+                        )
+                    }
+                }
+            },
+        columns = GridCells.Fixed(5),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        contentPadding = PaddingValues(
+            start = 4.dp,
+            end = 4.dp,
+            top = 8.dp,
+            bottom = 8.dp
+        )
+    ) {
+        items(
+            items = items,
+            key = { it.id }
+        ) { catalogItem ->
+            CatalogCard(
+                item = catalogItem,
+                boardUrl = board?.url,
+                repository = repository,
+                onClick = { onThreadSelected(catalogItem) }
+            )
         }
     }
 }
@@ -2268,65 +2330,117 @@ private fun CatalogList(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var dragOffset by remember { mutableStateOf(0f) }
+    val maxOverscroll = 80.dp
+    val maxOverscrollPx = with(LocalDensity.current) { maxOverscroll.toPx() }
+
+    // アニメーション用のオフセット
+    val overscrollOffset = remember { Animatable(0f) }
+
+    val isAtTop by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
+            firstVisibleItem != null && firstVisibleItem.index == 0 && firstVisibleItem.offset <= 0
+        }
+    }
+
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-            lastVisibleItem != null && lastVisibleItem.index == layoutInfo.totalItemsCount - 1
+            val totalItems = layoutInfo.totalItemsCount
+            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 1
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = onRefresh,
-        modifier = modifier.fillMaxSize()
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                items(
-                    items = items,
-                    key = { it.id }
-                ) { catalogItem ->
-                    CatalogListItem(
-                        item = catalogItem,
-                        boardUrl = board?.url,
-                        repository = repository,
-                        onClick = { onThreadSelected(catalogItem) }
-                    )
-                }
-            }
-
-            if (isAtBottom && !isRefreshing) {
-                Spacer(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .align(Alignment.BottomCenter)
-                        .pointerInput(Unit) {
-                            detectVerticalDragGestures(
-                                onDragStart = { dragOffset = 0f },
-                                onDragEnd = {
-                                    if (dragOffset > 100) {
-                                        coroutineScope.launch { onRefresh() }
-                                    }
-                                    dragOffset = 0f
-                                },
-                                onDragCancel = { dragOffset = 0f },
-                                onVerticalDrag = { _, dragAmount ->
-                                    if (dragAmount < 0) {
-                                        dragOffset += -dragAmount
-                                    }
-                                }
-                            )
-                        }
+    // リフレッシュ完了時にアニメーションで空間を戻す
+    LaunchedEffect(isRefreshing) {
+        if (!isRefreshing) {
+            overscrollOffset.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
                 )
-            }
+            )
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier
+            .fillMaxSize()
+            .offset { IntOffset(0, overscrollOffset.value.toInt()) }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var totalDrag = 0f
+
+                    do {
+                        val event = awaitPointerEvent()
+                        val dragEvent = event.changes.firstOrNull()
+
+                        if (dragEvent != null && dragEvent.pressed) {
+                            val delta = dragEvent.positionChange().y
+
+                            // 上端で下向きにドラッグ
+                            if (isAtTop && delta > 0 && !isRefreshing) {
+                                totalDrag += delta
+                                val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                coroutineScope.launch {
+                                    overscrollOffset.snapTo(newOffset)
+                                }
+                                dragEvent.consume()
+                            }
+                            // 下端で上向きにドラッグ
+                            else if (isAtBottom && delta < 0 && !isRefreshing) {
+                                totalDrag += delta
+                                val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                coroutineScope.launch {
+                                    overscrollOffset.snapTo(newOffset)
+                                }
+                                dragEvent.consume()
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+
+                    // ドラッグ終了
+                    if (totalDrag > 100) {
+                        coroutineScope.launch { onRefresh() }
+                    } else if (totalDrag < -100) {
+                        coroutineScope.launch { onRefresh() }
+                    }
+
+                    totalDrag = 0f
+                    coroutineScope.launch {
+                        overscrollOffset.animateTo(
+                            targetValue = 0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            )
+                        )
+                    }
+                }
+            },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(
+            start = 12.dp,
+            end = 12.dp,
+            top = 8.dp,
+            bottom = 8.dp
+        )
+    ) {
+        items(
+            items = items,
+            key = { it.id }
+        ) { catalogItem ->
+            CatalogListItem(
+                item = catalogItem,
+                boardUrl = board?.url,
+                repository = repository,
+                onClick = { onThreadSelected(catalogItem) }
+            )
         }
     }
 }
@@ -4333,25 +4447,23 @@ private fun ThreadTopBar(
                         contentDescription = "履歴を開く"
                     )
                 }
-                Box {
-                    IconButton(onClick = { isMenuExpanded = true }) {
-                        Icon(
-                            imageVector = Icons.Outlined.MoreVert,
-                            contentDescription = "その他"
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = isMenuExpanded,
-                        onDismissRequest = { isMenuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(ThreadMenuAction.Settings.label) },
-                            onClick = {
-                                isMenuExpanded = false
-                                onMenuSettings()
-                            }
-                        )
-                    }
+                IconButton(onClick = { isMenuExpanded = true }) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "その他"
+                    )
+                }
+                DropdownMenu(
+                    expanded = isMenuExpanded,
+                    onDismissRequest = { isMenuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(ThreadMenuAction.Settings.label) },
+                        onClick = {
+                            isMenuExpanded = false
+                            onMenuSettings()
+                        }
+                    )
                 }
             }
         },
@@ -4424,27 +4536,106 @@ private fun ThreadContent(
     val postsByPosterId = remember(page.posts) { buildPostsByPosterId(page.posts) }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val coroutineScope = rememberCoroutineScope()
-    var dragOffset by remember { mutableStateOf(0f) }
+    val maxOverscroll = 80.dp
+    val maxOverscrollPx = with(LocalDensity.current) { maxOverscroll.toPx() }
+
+    // アニメーション用のオフセット
+    val overscrollOffset = remember { Animatable(0f) }
+
+    val isAtTop by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
+            firstVisibleItem != null && firstVisibleItem.index == 0 && firstVisibleItem.offset <= 0
+        }
+    }
+
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-            lastVisibleItem != null && lastVisibleItem.index == layoutInfo.totalItemsCount - 1
+            val totalItems = layoutInfo.totalItemsCount
+            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 1
+        }
+    }
+
+    // リフレッシュ完了時にアニメーションで空間を戻す
+    LaunchedEffect(isRefreshing) {
+        if (!isRefreshing) {
+            overscrollOffset.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                )
+            )
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize()
-        ) {
         Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .offset { IntOffset(0, overscrollOffset.value.toInt()) }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var totalDrag = 0f
+
+                        do {
+                            val event = awaitPointerEvent()
+                            val dragEvent = event.changes.firstOrNull()
+
+                            if (dragEvent != null && dragEvent.pressed) {
+                                val delta = dragEvent.positionChange().y
+
+                                // 上端で下向きにドラッグ
+                                if (isAtTop && delta > 0 && !isRefreshing) {
+                                    totalDrag += delta
+                                    val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                    coroutineScope.launch {
+                                        overscrollOffset.snapTo(newOffset)
+                                    }
+                                    dragEvent.consume()
+                                }
+                                // 下端で上向きにドラッグ
+                                else if (isAtBottom && delta < 0 && !isRefreshing) {
+                                    totalDrag += delta
+                                    val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                    coroutineScope.launch {
+                                        overscrollOffset.snapTo(newOffset)
+                                    }
+                                    dragEvent.consume()
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+
+                        // ドラッグ終了
+                        if (totalDrag > 100) {
+                            coroutineScope.launch { onRefresh() }
+                        } else if (totalDrag < -100) {
+                            coroutineScope.launch { onRefresh() }
+                        }
+
+                        totalDrag = 0f
+                        coroutineScope.launch {
+                            overscrollOffset.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                    stiffness = Spring.StiffnessMedium
+                                )
+                            )
+                        }
+                    }
+                },
             state = listState,
             verticalArrangement = Arrangement.spacedBy(0.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
+            contentPadding = PaddingValues(
+                top = 8.dp,
+                bottom = 24.dp
+            )
         ) {
             page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
                 item(key = "thread-notice") {
@@ -4526,39 +4717,13 @@ private fun ThreadContent(
             }
         }
 
-            if (isAtBottom && !isRefreshing) {
-                Spacer(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .align(Alignment.BottomCenter)
-                        .pointerInput(Unit) {
-                            detectVerticalDragGestures(
-                                onDragStart = { dragOffset = 0f },
-                                onDragEnd = {
-                                    if (dragOffset > 100) {
-                                        coroutineScope.launch { onRefresh() }
-                                    }
-                                    dragOffset = 0f
-                                },
-                                onDragCancel = { dragOffset = 0f },
-                                onVerticalDrag = { _, dragAmount ->
-                                    if (dragAmount < 0) {
-                                        dragOffset += -dragAmount
-                                    }
-                                }
-                            )
-                        }
-                )
-            }
-        }
-        }
         ThreadScrollbar(
             listState = listState,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(vertical = 12.dp, horizontal = 4.dp)
         )
+        }
     }
     quotePreviewState?.let { state ->
         QuotePreviewDialog(
@@ -6024,7 +6189,8 @@ private fun ThreadActionBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .navigationBarsPadding(),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {

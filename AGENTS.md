@@ -49,6 +49,7 @@
   - **Mode**: `AlertDialog` でモード一覧を選択し、`catalogMode` を更新。
   - **Settings**: `CatalogSettingsSheet` が 6 メニュー (監視ワード、NG管理(〇)、外部アプリ(〇)、表示の切り替え(〇)、一番上に行く(〇)、プライバシー(〇)) を提供。〇は実装済みで、NG管理は `NgManagementSheet` (ワードのみ) を開き、外部アプリは `mode=cat` URL を `rememberUrlLauncher` で開く。表示切替は `DisplayStyleDialog`、一番上は `scrollCatalogToTop()`、プライバシーは `AppStateStore.setPrivacyFilterEnabled()` を呼ぶ。監視ワードは `WatchWordsSheet` で編集可能で、登録したワードと一致するタイトルを持つスレッドはカタログ更新時に履歴へ自動追加されます。記号凡例: 〇=対応、△=基本実装、無印=未実装。
 - `stateStore?.isPrivacyFilterEnabled` を collect し、true のときは半透明の Canvas オーバーレイを描画。
+- カタログカードの画像表示は OP画像(URL)を取得後、サムネイルURLからフルサイズURLへ切り替える。Coil が自動的にキャッシュを管理するため、フルサイズ画像がキャッシュに存在すればすぐに表示され、なければダウンロードして表示する。動画/サムネなしといった本来の空画像ケースでは既存のサムネイルを維持しつつブランク状態に陥らない。
 - `FakeBoardRepository()` をデフォルトにし、`board.url` が `example.com` ならモックのまま、そうでなければ `FutachaApp` から渡された `BoardRepository` (リモート) を利用。
 - `CatalogTopBar` の `CatalogMenuAction.Settings` で `GlobalSettingsScreen` を開き、X/Email/GitHub への導線や `appVersion` 行を再利用した共通設定画面を表示している。
 
@@ -67,8 +68,10 @@
   2. ScrollToTop / ScrollToBottom → `animateScrollToItem`.
   3. Refresh → `BoardRepository.getThread()` でページ更新・レス数更新。
   4. Gallery → `ThreadImageGallery` (ModalBottomSheet でサムネ一覧)。
- 5. Save → `ThreadSaveService` (httpClient & fileSystem がある場合のみ)。結果を `SavedThreadRepository.addThreadToIndex()` に保存し snackbar を表示。Android / iOS ともに依存関係が注入されるようになったので保存ボタンが有効です。
-  6. Settings → `ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示。〇は即動作し、NG管理は `NgManagementSheet` でヘッダー/ワードを編集、外部アプリは `res/{threadId}.htm` を開く、プライバシーは `AppStateStore` のフラグをトグル。△の読み上げは `TextSpeaker` で投稿本文を順次再生し、再タップで停止できる基本実装。記号凡例は Catalog と同じです。
+  5. Save → `ThreadSaveService` (httpClient & fileSystem がある場合のみ)。結果を `SavedThreadRepository.addThreadToIndex()` に保存し snackbar を表示。Android / iOS ともに依存関係が注入されるようになったので保存ボタンが有効です。
+  6. Filter → `ThreadFilterSheet` でスレッド内のレス絞り込み・ソート機能を提供。
+  7. Settings → `ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示。〇は即動作し、NG管理は `NgManagementSheet` でヘッダー/ワードを編集、外部アプリは `res/{threadId}.htm` を開く、プライバシーは `AppStateStore` のフラグをトグル。△の読み上げは `TextSpeaker` で投稿本文を順次再生し、再タップで停止できる基本実装。記号凡例は Catalog と同じです。
+- `ThreadActionBar` は `.navigationBarsPadding()` を適用し、Androidのシステムナビゲーションバー（3点メニュー）の上に配置されるため、ボトムバーとシステムUIが重ならず正常に操作できます。
 - 自動セーブ / オフラインフォールバック: `autoSavedThreadRepository` に `AUTO_SAVE_DIRECTORY` を使って `ThreadSaveService(baseDirectory = AUTO_SAVE_DIRECTORY)` で 60 秒ごとにスレッドを保存。`loadThreadWithOfflineFallback` は保存済みメタデータを `SavedThreadMetadata.toThreadPage()` で `ThreadPage` に変換して表示し、ネットワーク不通時には snackbar でローカルコピーを通知 (`isShowingOfflineCopy` フラグ)。履歴を削除またはクリアすると `FutachaApp` が該当する auto-save ディレクトリを `SavedThreadRepository` 経由で削除するので、古いローカルコピーも掃除される。
 - 投稿カード (`ThreadPostCard`):
   - ID ラベル: `buildPosterIdLabels()` が ID ごとの通番と total count を付与 (複数出現なら強調)。
