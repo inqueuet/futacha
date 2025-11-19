@@ -2,12 +2,46 @@ package com.valoser.futacha.shared.parser
 
 internal object HtmlEntityDecoder {
     private val namedEntityMap = mapOf(
+        // 基本的なHTML
         "lt" to "<",
         "gt" to ">",
         "amp" to "&",
         "quot" to "\"",
         "apos" to "'",
-        "nbsp" to " "
+        "nbsp" to " ",
+        // ダッシュ
+        "ndash" to "–",
+        "mdash" to "—",
+        // 引用符
+        "lsquo" to "'",
+        "rsquo" to "'",
+        "ldquo" to """,
+        "rdquo" to """,
+        "sbquo" to "‚",
+        "bdquo" to "„",
+        // 記号
+        "hellip" to "…",
+        "bull" to "•",
+        "middot" to "·",
+        // 矢印
+        "larr" to "←",
+        "rarr" to "→",
+        "uarr" to "↑",
+        "darr" to "↓",
+        // 数学記号
+        "times" to "×",
+        "divide" to "÷",
+        "plusmn" to "±",
+        "minus" to "−",
+        // その他の記号
+        "deg" to "°",
+        "copy" to "©",
+        "reg" to "®",
+        "trade" to "™",
+        "sect" to "§",
+        "para" to "¶",
+        "dagger" to "†",
+        "Dagger" to "‡"
     )
 
     private val namedEntityRegex = Regex("&([a-zA-Z]+);")

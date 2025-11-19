@@ -91,8 +91,6 @@ internal object ThreadHtmlParserCore {
     private val leadingNumberRegex = Regex("^(\\d+)")
     private val idReferenceRegex = Regex("ID:[^\\s>]+")
     private val htmlTagRegex = Regex("<[^>]+>")
-    private val numericEntityRegex = Regex("&#(\\d+);")
-    private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
     private val videoExtensions = setOf("mp4", "webm", "mkv", "mov", "avi", "ts", "flv")
 
     fun parseThread(html: String): ThreadPage {
@@ -383,45 +381,7 @@ internal object ThreadHtmlParserCore {
     )
 
     private fun decodeHtmlEntities(value: String): String {
-        var result = value
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&#039;", "'")
-            .replace("&nbsp;", " ")
-
-        result = hexEntityRegex.replace(result) { match ->
-            val value = match.groupValues.getOrNull(1) ?: return@replace ""
-            val codePoint = runCatching { value.toInt(16) }.getOrNull()
-            if (codePoint != null && codePoint in 0x20..0x10FFFF) {
-                codePointToString(codePoint)
-            } else {
-                match.value
-            }
-        }
-        result = numericEntityRegex.replace(result) { match ->
-            val value = match.groupValues.getOrNull(1) ?: return@replace ""
-            val codePoint = runCatching { value.toInt() }.getOrNull()
-            if (codePoint != null && codePoint in 0x20..0x10FFFF) {
-                codePointToString(codePoint)
-            } else {
-                match.value
-            }
-        }
-        return result
-    }
-
-    private fun codePointToString(codePoint: Int): String {
-        return if (codePoint <= 0xFFFF) {
-            codePoint.toChar().toString()
-        } else {
-            val cpPrime = codePoint - 0x10000
-            val highSurrogate = ((cpPrime shr 10) + 0xD800).toChar()
-            val lowSurrogate = ((cpPrime and 0x3FF) + 0xDC00).toChar()
-            charArrayOf(highSurrogate, lowSurrogate).concatToString()
-        }
+        return HtmlEntityDecoder.decode(value)
     }
 
     // FIX: Combine reference counting and map building to avoid O(n²) complexity
