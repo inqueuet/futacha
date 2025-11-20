@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.util
 import android.content.Context
 import android.os.Build
 import android.os.Environment
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -98,7 +99,12 @@ class AndroidFileSystem(
         return if (relativePath.startsWith("/")) {
             relativePath
         } else {
-            File(getAppDataDirectory(), relativePath).absolutePath
+            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY)) {
+                getPrivateAppDataDirectory()
+            } else {
+                getAppDataDirectory()
+            }
+            File(baseDir, relativePath).absolutePath
         }
     }
 
@@ -153,6 +159,20 @@ class AndroidFileSystem(
                 }
             }.absolutePath
         }
+    }
+
+    /**
+     * FilesDir 配下のアプリ専用ディレクトリを取得 (ファイラーからは見えない)
+     */
+    private fun getPrivateAppDataDirectory(): String {
+        val appDir = File(context.filesDir, "futacha")
+        if (!appDir.exists()) {
+            val created = appDir.mkdirs()
+            if (!created && !appDir.exists()) {
+                Logger.e("FileSystem.android", "Failed to create private app directory at ${appDir.absolutePath}")
+            }
+        }
+        return appDir.absolutePath
     }
 
     /**

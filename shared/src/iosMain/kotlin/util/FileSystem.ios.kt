@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.util
 
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
@@ -216,8 +217,43 @@ class IosFileSystem : FileSystem {
         return if (relativePath.startsWith("/")) {
             relativePath
         } else {
-            "${getAppDataDirectory()}/$relativePath"
+            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY)) {
+                getPrivateAppDataDirectory()
+            } else {
+                getAppDataDirectory()
+            }
+            "$baseDir/$relativePath"
         }
+    }
+
+    /**
+     * ライブラリ配下のアプリ専用ディレクトリを取得 (Filesアプリには表示されない)
+     */
+    private fun getPrivateAppDataDirectory(): String {
+        val paths = NSSearchPathForDirectoriesInDomains(
+            NSApplicationSupportDirectory,
+            NSUserDomainMask,
+            true
+        )
+        val basePath = (paths.firstOrNull() as? String) ?: getAppDataDirectory()
+        val appDir = "$basePath/futacha"
+
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileManager.createDirectoryAtPath(
+                appDir,
+                withIntermediateDirectories = true,
+                attributes = null,
+                error = error.ptr
+            )
+
+            if (!success && error.value != null) {
+                // フォールバックとして Documents を使いつつ、既存の挙動は維持する
+                return getAppDataDirectory()
+            }
+        }
+
+        return appDir
     }
 }
 

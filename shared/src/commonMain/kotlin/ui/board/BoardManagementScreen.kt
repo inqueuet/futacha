@@ -170,6 +170,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -183,6 +184,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
@@ -3378,17 +3380,9 @@ fun ThreadScreen(
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
-    var previewImageUrl by remember { mutableStateOf<String?>(null) }
-    var previewVideoUrl by remember { mutableStateOf<String?>(null) }
     var saveProgress by remember { mutableStateOf<com.valoser.futacha.shared.model.SaveProgress?>(null) }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
-    val handleMediaClick: (String, MediaType) -> Unit = { url, mediaType ->
-        when (mediaType) {
-            MediaType.Image -> previewImageUrl = url
-            MediaType.Video -> previewVideoUrl = url
-        }
-    }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -3519,6 +3513,22 @@ fun ThreadScreen(
     }
 
     val currentState = uiState.value
+    val currentSuccessState = currentState as? ThreadUiState.Success
+    val mediaPreviewEntries = remember(currentSuccessState?.page?.posts) {
+        buildMediaPreviewEntries(currentSuccessState?.page?.posts ?: emptyList())
+    }
+    var previewMediaIndex by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(mediaPreviewEntries.size) {
+        if (previewMediaIndex != null && previewMediaIndex !in mediaPreviewEntries.indices) {
+            previewMediaIndex = null
+        }
+    }
+    val handleMediaClick: (String, MediaType) -> Unit = { url, mediaType ->
+        val targetIndex = mediaPreviewEntries.indexOfFirst { it.url == url && it.mediaType == mediaType }
+        if (targetIndex >= 0) {
+            previewMediaIndex = targetIndex
+        }
+    }
     LaunchedEffect(currentState, isShowingOfflineCopy, httpClient, fileSystem) {
         if (currentState is ThreadUiState.Success && !isShowingOfflineCopy) {
             startAutoSave(currentState.page)
@@ -4244,25 +4254,39 @@ fun ThreadScreen(
         )
     }
 
-    previewImageUrl?.let { imageUrl ->
-        ImagePreviewDialog(
-            imageUrl = imageUrl,
-            onDismiss = {
-                previewImageUrl = null
-            }
-        )
+    val totalMediaCount = mediaPreviewEntries.size
+    val previewMediaEntry = previewMediaIndex?.let { mediaPreviewEntries.getOrNull(it) }
+    val navigateToNextMedia: () -> Unit = next@{
+        if (totalMediaCount == 0) return@next
+        val currentIndex = previewMediaIndex ?: 0
+        previewMediaIndex = (currentIndex + 1) % totalMediaCount
+    }
+    val navigateToPreviousMedia: () -> Unit = previous@{
+        if (totalMediaCount == 0) return@previous
+        val currentIndex = previewMediaIndex ?: 0
+        previewMediaIndex = (currentIndex + totalMediaCount - 1) % totalMediaCount
+    }
+    previewMediaEntry?.let { entry ->
+        when (entry.mediaType) {
+            MediaType.Image -> ImagePreviewDialog(
+                entry = entry,
+                currentIndex = previewMediaIndex ?: 0,
+                totalCount = totalMediaCount,
+                onDismiss = { previewMediaIndex = null },
+                onNavigateNext = navigateToNextMedia,
+                onNavigatePrevious = navigateToPreviousMedia
+            )
+            MediaType.Video -> VideoPreviewDialog(
+                entry = entry,
+                currentIndex = previewMediaIndex ?: 0,
+                totalCount = totalMediaCount,
+                onDismiss = { previewMediaIndex = null },
+                onNavigateNext = navigateToNextMedia,
+                onNavigatePrevious = navigateToPreviousMedia
+            )
+        }
     }
 
-    previewVideoUrl?.let { videoUrl ->
-        VideoPreviewDialog(
-            videoUrl = videoUrl,
-            onDismiss = {
-                previewVideoUrl = null
-            }
-        )
-    }
-
-    val currentSuccessState = uiState.value as? ThreadUiState.Success
     if (isGalleryVisible && currentSuccessState != null) {
         ThreadImageGallery(
             posts = currentSuccessState.page.posts,
@@ -5978,8 +6002,12 @@ private fun computeHighlightRanges(text: String, normalizedQuery: String): List<
 
 @Composable
 private fun ImagePreviewDialog(
-    imageUrl: String,
-    onDismiss: () -> Unit
+    entry: MediaPreviewEntry,
+    currentIndex: Int,
+    totalCount: Int,
+    onDismiss: () -> Unit,
+    onNavigateNext: () -> Unit,
+    onNavigatePrevious: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
@@ -5987,9 +6015,15 @@ private fun ImagePreviewDialog(
     var scale by remember { mutableStateOf(1f) }
     var translation by remember { mutableStateOf(Offset.Zero) }
     var swipeDistance by remember { mutableStateOf(0f) }
-    val previewRequest = remember(imageUrl) {
+    var previewSize by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(entry.url) {
+        scale = 1f
+        translation = Offset.Zero
+        swipeDistance = 0f
+    }
+    val previewRequest = remember(entry.url) {
         ImageRequest.Builder(platformContext)
-            .data(imageUrl)
+            .data(entry.url)
             .crossfade(true)
             .build()
     }
@@ -6011,6 +6045,7 @@ private fun ImagePreviewDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .onSizeChanged { previewSize = it }
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onHorizontalDrag = { change, dragAmount ->
@@ -6029,6 +6064,17 @@ private fun ImagePreviewDialog(
                     detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
                         scale = (scale * zoom).coerceIn(1f, 6f)
                         translation += pan
+                    }
+                }
+                .pointerInput(entry.url, previewSize.width) {
+                    detectTapGestures { offset ->
+                        val width = previewSize.width.toFloat()
+                        if (width <= 0f) return@detectTapGestures
+                        if (offset.x < width / 2f) {
+                            onNavigatePrevious()
+                        } else {
+                            onNavigateNext()
+                        }
                     }
                 }
         ) {
@@ -6066,9 +6112,36 @@ private fun ImagePreviewDialog(
                         style = MaterialTheme.typography.bodyLarge,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
-                    TextButton(onClick = { urlLauncher(imageUrl) }) {
+                    TextButton(onClick = { urlLauncher(entry.url) }) {
                         Text("ブラウザで開く")
                     }
+                }
+            }
+            Surface(
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 32.dp, start = 16.dp, end = 16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = entry.title,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${currentIndex + 1}/${totalCount}",
+                        color = Color.White.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
             IconButton(
@@ -6093,11 +6166,16 @@ private fun ImagePreviewDialog(
 
 @Composable
 private fun VideoPreviewDialog(
-    videoUrl: String,
-    onDismiss: () -> Unit
+    entry: MediaPreviewEntry,
+    currentIndex: Int,
+    totalCount: Int,
+    onDismiss: () -> Unit,
+    onNavigateNext: () -> Unit,
+    onNavigatePrevious: () -> Unit
 ) {
     var swipeDistance by remember { mutableStateOf(0f) }
     var playbackState by remember { mutableStateOf(VideoPlayerState.Buffering) }
+    var previewSize by remember { mutableStateOf(IntSize.Zero) }
     val urlLauncher = rememberUrlLauncher()
 
     Dialog(
@@ -6112,6 +6190,7 @@ private fun VideoPreviewDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .onSizeChanged { previewSize = it }
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onHorizontalDrag = { change, dragAmount ->
@@ -6126,9 +6205,20 @@ private fun VideoPreviewDialog(
                         onDragCancel = { swipeDistance = 0f }
                     )
                 }
+                .pointerInput(entry.url, previewSize.width) {
+                    detectTapGestures { offset ->
+                        val width = previewSize.width.toFloat()
+                        if (width <= 0f) return@detectTapGestures
+                        if (offset.x < width / 2f) {
+                            onNavigatePrevious()
+                        } else {
+                            onNavigateNext()
+                        }
+                    }
+                }
         ) {
             PlatformVideoPlayer(
-                videoUrl = videoUrl,
+                videoUrl = entry.url,
                 modifier = Modifier.fillMaxSize(),
                 onStateChanged = { playbackState = it }
             )
@@ -6153,9 +6243,36 @@ private fun VideoPreviewDialog(
                         style = MaterialTheme.typography.bodyLarge,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
-                    TextButton(onClick = { urlLauncher(videoUrl) }) {
+                    TextButton(onClick = { urlLauncher(entry.url) }) {
                         Text("ブラウザで開く")
                     }
+                }
+            }
+            Surface(
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 32.dp, start = 16.dp, end = 16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = entry.title,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${currentIndex + 1}/${totalCount}",
+                        color = Color.White.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
             IconButton(
@@ -6191,6 +6308,35 @@ private fun determineMediaType(url: String): MediaType {
     } else {
         MediaType.Image
     }
+}
+
+private data class MediaPreviewEntry(
+    val url: String,
+    val mediaType: MediaType,
+    val postId: String,
+    val title: String
+)
+
+private fun buildMediaPreviewEntries(posts: List<Post>): List<MediaPreviewEntry> {
+    return posts.mapNotNull { post ->
+        val targetUrl = post.imageUrl?.takeIf { it.isNotBlank() }
+            ?: post.thumbnailUrl?.takeIf { it.isNotBlank() }
+        if (targetUrl.isNullOrBlank()) return@mapNotNull null
+        MediaPreviewEntry(
+            url = targetUrl,
+            mediaType = determineMediaType(targetUrl),
+            postId = post.id,
+            title = extractPreviewTitle(post)
+        )
+    }
+}
+
+private fun extractPreviewTitle(post: Post): String {
+    val firstLine = messageHtmlToLines(post.messageHtml).firstOrNull()?.trim()
+    if (!firstLine.isNullOrBlank()) return firstLine
+    val subject = post.subject?.trim()
+    if (!subject.isNullOrBlank()) return subject
+    return "No.${post.id}"
 }
 
 private fun normalizePosterIdValue(raw: String?): String? {
