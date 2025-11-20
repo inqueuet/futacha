@@ -248,6 +248,18 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 
 ## 9. 最近のコード変更履歴
 
+### 2026-01-XX: 読み上げ時に URL を除外
+
+**問題**: スレッドの読み上げ (TTS) が本文内の URL まで読み上げてしまい、耳障りかつ不要な情報が流れていた。
+
+**修正内容**:
+- `shared/src/commonMain/kotlin/ui/board/BoardManagementScreen.kt`  
+  - 読み上げ用セグメント生成時に URL を正規表現で除去する `stripUrlsForReadAloud()` を追加。  
+  - TTS に渡す本文を URL 抜きのテキストへ置き換え、空白を圧縮して可読性を維持。
+
+**影響範囲**:
+- ThreadScreen の読み上げ機能がリンクを読み上げなくなり、音声出力が本文に集中する。
+
 ### 2025-11-19: HTMLエンティティのデコード処理を改善
 
 **問題**: `(1523&ndash;1563)` が `(1523–1563)` と正しく表示されず、HTMLエンティティがそのまま表示される問題が発生。
