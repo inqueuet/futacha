@@ -6122,18 +6122,22 @@ private fun ImagePreviewDialog(
                 shape = MaterialTheme.shapes.small,
                 tonalElevation = 6.dp,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
+                    .align(Alignment.TopStart)
                     .padding(top = 32.dp, start = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
             ) {
-                Column(
+                Row(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = entry.title,
                         color = Color.White,
                         style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -6253,18 +6257,22 @@ private fun VideoPreviewDialog(
                 shape = MaterialTheme.shapes.small,
                 tonalElevation = 6.dp,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
+                    .align(Alignment.TopStart)
                     .padding(top = 32.dp, start = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
             ) {
-                Column(
+                Row(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = entry.title,
                         color = Color.White,
                         style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -6648,6 +6656,7 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
     "書き込みをした人によって削除されました",
     "管理者によって削除されました"
 )
+private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?://\\S+|\\bttp://\\S+")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -6743,13 +6752,18 @@ private fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
     return posts.mapIndexedNotNull { index, post ->
         if (post.isDeleted) return@mapIndexedNotNull null
         val lines = messageHtmlToLines(post.messageHtml)
-            .map { it.trim() }
+            .map { stripUrlsForReadAloud(it).trim() }
             .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
         if (lines.isEmpty()) return@mapIndexedNotNull null
         if (containsDeletionNotice(lines)) return@mapIndexedNotNull null
         val body = lines.joinToString("\n")
         ReadAloudSegment(index, post.id, body)
     }
+}
+
+private fun stripUrlsForReadAloud(value: String): String {
+    val withoutUrls = READ_ALOUD_URL_REGEX.replace(value, "")
+    return withoutUrls.replace(Regex("\\s{2,}"), " ")
 }
 
 private fun containsDeletionNotice(lines: List<String>): Boolean {
