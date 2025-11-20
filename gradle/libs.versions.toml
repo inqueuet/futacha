@@ -6,7 +6,6 @@ espressoCore = "3.7.0"
 appcompat = "1.7.1"
 material = "1.13.0"
 composeBom = "2025.11.01"
-composeCompiler = "1.5.15"
 activityCompose = "1.12.0"
 composeMultiplatform = "1.9.3"
 composeMultiplatformMaterial3 = "1.9.0"
@@ -66,7 +65,6 @@ androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.re
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebase" }
 firebase-analytics = { module = "com.google.firebase:firebase-analytics" }
 firebase-crashlytics = { module = "com.google.firebase:firebase-crashlytics" }
-google-services = { module = "com.google.gms:google-services" , name = "google-services" ,version.ref="gms" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
