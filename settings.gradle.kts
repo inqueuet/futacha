@@ -12,12 +12,14 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("org.jetbrains.kotlin.multiplatform") version "2.2.21"
-        id("org.jetbrains.kotlin.android") version "2.2.21"
-        id("org.jetbrains.kotlin.plugin.compose") version "2.2.21"
-        id("org.jetbrains.kotlin.plugin.serialization") version "2.2.21"
-        id("com.android.library") version "8.12.3"
-        id("com.android.application") version "8.12.3"
+        alias(libs.plugins.kotlin.multiplatform)
+        alias(libs.plugins.kotlin.android)
+        alias(libs.plugins.kotlin.compose)
+        alias(libs.plugins.kotlin.serialization)
+        alias(libs.plugins.android.library)
+        alias(libs.plugins.android.application)
+        alias(libs.plugins.google.services)
+        alias(libs.plugins.firebase.crashlytics)
     }
 }
 dependencyResolutionManagement {
