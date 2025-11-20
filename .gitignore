@@ -25,3 +25,9 @@ local.properties
 ### Misc ###
 *.keystore
 *.jks
+
+### Claude ###
+.claude
+
+### GMS ###
+google-services.json
