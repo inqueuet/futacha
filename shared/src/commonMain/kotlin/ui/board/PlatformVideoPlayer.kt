@@ -14,5 +14,7 @@ enum class VideoPlayerState {
 expect fun PlatformVideoPlayer(
     videoUrl: String,
     modifier: Modifier = Modifier,
-    onStateChanged: (VideoPlayerState) -> Unit = {}
+    onStateChanged: (VideoPlayerState) -> Unit = {},
+    volume: Float = 1f,
+    isMuted: Boolean = false
 )

@@ -7,7 +7,9 @@ import coil3.ImageLoader
 import coil3.compose.LocalPlatformContext
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import okio.FileSystem
 import okio.Path
 
@@ -21,12 +23,13 @@ val LocalFutachaImageLoader = staticCompositionLocalOf<ImageLoader> {
 }
 
 @Composable
+@OptIn(ExperimentalCoroutinesApi::class)
 fun rememberFutachaImageLoader(
     maxParallelism: Int = MAX_IMAGE_LOADER_PARALLELISM
 ): ImageLoader {
     val platformContext = LocalPlatformContext.current
-    val fetcherDispatcher = remember(maxParallelism) {
-        Dispatchers.IO.limitedParallelism(maxParallelism.coerceAtLeast(1))
+    val fetcherDispatcher: CoroutineDispatcher = remember(maxParallelism) {
+        Dispatchers.Default.limitedParallelism(maxParallelism.coerceAtLeast(1))
     }
     val memoryCache = remember {
         MemoryCache.Builder()
@@ -61,7 +64,5 @@ private fun createImageDiskCache(): DiskCache? {
 }
 
 private fun ensureCacheDirectory(): Path {
-    val cacheDir = FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(IMAGE_DISK_CACHE_DIR)
-    FileSystem.SYSTEM.createDirectories(cacheDir, mustCreate = false)
-    return cacheDir
+    return FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(IMAGE_DISK_CACHE_DIR)
 }

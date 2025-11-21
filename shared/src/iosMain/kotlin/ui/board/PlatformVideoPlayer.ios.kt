@@ -32,7 +32,9 @@ import platform.darwin.NSObject
 actual fun PlatformVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
-    onStateChanged: (VideoPlayerState) -> Unit
+    onStateChanged: (VideoPlayerState) -> Unit,
+    volume: Float,
+    isMuted: Boolean
 ) {
     val extension = remember(videoUrl) {
         videoUrl.substringBefore('?')
@@ -44,13 +46,17 @@ actual fun PlatformVideoPlayer(
         WebVideoPlayer(
             videoUrl = videoUrl,
             modifier = modifier,
-            onStateChanged = { currentCallback(it) }
+            onStateChanged = { currentCallback(it) },
+            volume = volume,
+            isMuted = isMuted
         )
     } else {
         AvKitVideoPlayer(
             videoUrl = videoUrl,
             modifier = modifier,
-            onStateChanged = { currentCallback(it) }
+            onStateChanged = { currentCallback(it) },
+            volume = volume,
+            isMuted = isMuted
         )
     }
 }
@@ -60,7 +66,9 @@ actual fun PlatformVideoPlayer(
 private fun AvKitVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
-    onStateChanged: (VideoPlayerState) -> Unit
+    onStateChanged: (VideoPlayerState) -> Unit,
+    volume: Float,
+    isMuted: Boolean
 ) {
     val player = remember(videoUrl) {
         NSURL.URLWithString(videoUrl)?.let { AVPlayer(uRL = it) }
@@ -93,6 +101,13 @@ private fun AvKitVideoPlayer(
             delay(120)
         }
     }
+    LaunchedEffect(volume, isMuted, player) {
+        val clampedVolume = volume.coerceIn(0f, 1f)
+        player?.apply {
+            muted = isMuted
+            this.volume = if (isMuted) 0f else clampedVolume
+        }
+    }
     DisposableEffect(player) {
         onDispose {
             player?.pause()
@@ -114,7 +129,9 @@ private fun AvKitVideoPlayer(
 private fun WebVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
-    onStateChanged: (VideoPlayerState) -> Unit
+    onStateChanged: (VideoPlayerState) -> Unit,
+    volume: Float,
+    isMuted: Boolean
 ) {
     val delegate = remember { WebVideoNavigationDelegate() }
     val html = remember(videoUrl) {
@@ -128,7 +145,7 @@ private fun WebVideoPlayer(
         </style>
         </head>
         <body>
-        <video controls playsinline autoplay src="$videoUrl"></video>
+        <video controls playsinline autoplay src="$videoUrl" ${if (isMuted) "muted" else ""}></video>
         </body>
         </html>
         """.trimIndent()
@@ -156,6 +173,13 @@ private fun WebVideoPlayer(
             if (view.tag.toLong() != desiredTag) {
                 view.tag = desiredTag
                 view.loadHTMLString(html, baseURL = null)
+            } else {
+                val mutedFlag = if (isMuted) "true" else "false"
+                val volumeValue = volume.coerceIn(0f, 1f)
+                view.evaluateJavaScript(
+                    "var v=document.querySelector('video'); if(v){ v.muted=$mutedFlag; v.volume=$volumeValue; }",
+                    completionHandler = null
+                )
             }
         }
     )

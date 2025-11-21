@@ -26,11 +26,6 @@ fun UpdateNotificationDialog(
             TextButton(onClick = onDismiss) {
                 Text("OK")
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("後で")
-            }
         }
     )
 }

@@ -100,6 +100,8 @@ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -137,6 +139,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -198,6 +202,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
@@ -6180,6 +6185,8 @@ private fun VideoPreviewDialog(
     var swipeDistance by remember { mutableStateOf(0f) }
     var playbackState by remember { mutableStateOf(VideoPlayerState.Buffering) }
     var previewSize by remember { mutableStateOf(IntSize.Zero) }
+    var isMuted by remember { mutableStateOf(false) }
+    var volume by remember { mutableFloatStateOf(0.9f) }
     val urlLauncher = rememberUrlLauncher()
 
     Dialog(
@@ -6224,7 +6231,9 @@ private fun VideoPreviewDialog(
             PlatformVideoPlayer(
                 videoUrl = entry.url,
                 modifier = Modifier.fillMaxSize(),
-                onStateChanged = { playbackState = it }
+                onStateChanged = { playbackState = it },
+                volume = volume,
+                isMuted = isMuted
             )
             val isBuffering = playbackState == VideoPlayerState.Buffering || playbackState == VideoPlayerState.Idle
             if (isBuffering) {
@@ -6298,6 +6307,73 @@ private fun VideoPreviewDialog(
                     imageVector = Icons.Rounded.Close,
                     contentDescription = "プレビューを閉じる"
                 )
+            }
+            Surface(
+                color = Color.Black.copy(alpha = 0.65f),
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 8.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp, vertical = 20.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { isMuted = !isMuted },
+                                colors = IconButtonDefaults.iconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = if (isMuted || volume <= 0f) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                                    contentDescription = if (isMuted) "ミュート解除" else "ミュート",
+                                    tint = Color.White
+                                )
+                            }
+                            Text(
+                                text = if (isMuted) "ミュート中" else "音量 ${(volume * 100).roundToInt()}%",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        TextButton(onClick = { volume = 1f; isMuted = false }) {
+                            Text(
+                                text = "リセット",
+                                color = Color.White
+                            )
+                        }
+                    }
+                    Slider(
+                        value = volume,
+                        onValueChange = {
+                            volume = it
+                            if (isMuted && it > 0f) {
+                                isMuted = false
+                            }
+                        },
+                        valueRange = 0f..1f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                        )
+                    )
+                }
             }
         }
     }

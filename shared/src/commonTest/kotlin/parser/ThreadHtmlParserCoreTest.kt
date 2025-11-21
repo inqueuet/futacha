@@ -25,7 +25,7 @@ class ThreadHtmlParserCoreTest {
         assertEquals(0, op.order)
         assertEquals("そうだねx1", op.saidaneLabel)
         assertEquals(false, op.isDeleted)
-        assertEquals(2, op.referencedCount)
+        assertEquals(1, op.referencedCount)
         assertEquals(
             "https://www.example.com/t/src/1762145224666.jpg",
             op.imageUrl
@@ -42,7 +42,7 @@ class ThreadHtmlParserCoreTest {
         assertEquals(1, reply.order)
         assertEquals("そうだねx5", reply.saidaneLabel)
         assertEquals("ID:IDA1", reply.posterId)
-        assertEquals(2, reply.referencedCount)
+        assertEquals(1, reply.referencedCount)
         assertEquals(null, reply.imageUrl)
 
         val imageReply = page.posts[2]
@@ -93,6 +93,48 @@ class ThreadHtmlParserCoreTest {
         val page = ThreadHtmlParserCore.parseThread(legacyHtml)
 
         assertEquals("1月18日頃消えます", page.expiresAtLabel)
+    }
+
+    @Test
+    fun quoteCounting_requiresAllQuoteLinesToAgree() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="100">
+            <span class="csb">OP</span>Name<span class="cnm">名無しさん</span>
+            <span class="cnw">25/01/01(月)00:00:00 ID:IDOP</span><span class="cno">No.100</span>
+            <blockquote>alpha<br>beta</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span id="delcheck101" class="rsc">1</span>
+            <span class="csb">Reply</span>Name<span class="cnm">Tester</span>
+            <span class="cnw">25/01/01(月)00:01:00 ID:ID1</span><span class="cno">No.101</span>
+            <blockquote>&gt;alpha<br>&gt;beta</blockquote>
+            </td></tr>
+            </table>
+            <table border=0>
+            <tr><td class=rtd>
+            <span id="delcheck102" class="rsc">2</span>
+            <span class="csb">Another</span>Name<span class="cnm">Tester</span>
+            <span class="cnw">25/01/01(月)00:02:00 ID:ID2</span><span class="cno">No.102</span>
+            <blockquote>&gt;alpha<br>&gt;gamma</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = ThreadHtmlParserCore.parseThread(html)
+
+        val op = page.posts[0]
+        val firstReply = page.posts[1]
+        val secondReply = page.posts[2]
+
+        assertEquals(3, page.posts.size)
+        assertEquals(1, op.referencedCount)
+        assertEquals(0, firstReply.referencedCount)
+        assertEquals(0, secondReply.referencedCount)
     }
 }
 

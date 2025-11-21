@@ -403,24 +403,82 @@ internal object ThreadHtmlParserCore {
         // Single pass through posts to build both counts and references
         posts.forEach { post: Post ->
             if (post.messageHtml.isBlank()) return@forEach
-            val quoteLines = extractQuoteLines(post.messageHtml)
-            if (quoteLines.isEmpty()) return@forEach
+            val lines = decodeHtmlEntities(stripTags(post.messageHtml))
+                .lines()
+                .map { it.trimStart() }
+            if (lines.isEmpty()) return@forEach
 
             val postReferences = mutableListOf<QuoteReference>()
             val referencedTargets = mutableSetOf<String>()
-            quoteLines.forEach { quoteLine: String ->
-                val targets = resolveQuoteTargets(quoteLine, posterIdIndex, messageLineIndex)
-                if (targets.isNotEmpty()) {
-                    // Build reference
+            val pendingContentLines = mutableListOf<String>()
+            var pendingContentTargets: Set<String>? = null
+            var isContentBlockInvalid = false
+
+            fun flushPendingContentBlock() {
+                val targets = pendingContentTargets
+                if (pendingContentLines.isNotEmpty() &&
+                    !isContentBlockInvalid &&
+                    targets != null &&
+                    targets.isNotEmpty()
+                ) {
                     postReferences.add(
                         QuoteReference(
-                            text = quoteLine.trim(),
+                            text = pendingContentLines.joinToString("\n").trim(),
                             targetPostIds = targets.toList()
                         )
                     )
                     referencedTargets += targets
                 }
+                pendingContentLines.clear()
+                pendingContentTargets = null
+                isContentBlockInvalid = false
             }
+
+            lines.forEach { rawLine ->
+                val trimmedLine = rawLine.trimStart()
+                if (!(trimmedLine.startsWith(">") || trimmedLine.startsWith("＞"))) {
+                    flushPendingContentBlock()
+                    return@forEach
+                }
+
+                val resolution = resolveQuoteTargets(trimmedLine, posterIdIndex, messageLineIndex)
+                if (resolution.isExplicit) {
+                    flushPendingContentBlock()
+                    if (resolution.targets.isNotEmpty()) {
+                        postReferences.add(
+                            QuoteReference(
+                                text = trimmedLine.trim(),
+                                targetPostIds = resolution.targets.toList()
+                            )
+                        )
+                        referencedTargets += resolution.targets
+                    }
+                    return@forEach
+                }
+
+                if (resolution.targets.isEmpty()) {
+                    isContentBlockInvalid = true
+                    pendingContentTargets = null
+                    pendingContentLines.add(trimmedLine.trim())
+                    return@forEach
+                }
+
+                val updatedTargets = pendingContentTargets
+                    ?.intersect(resolution.targets)
+                    ?: resolution.targets
+
+                pendingContentLines.add(trimmedLine.trim())
+
+                if (updatedTargets.isEmpty()) {
+                    isContentBlockInvalid = true
+                    pendingContentTargets = null
+                } else {
+                    pendingContentTargets = updatedTargets
+                }
+            }
+
+            flushPendingContentBlock()
+
             if (postReferences.isNotEmpty()) {
                 referencedTargets.forEach { targetId ->
                     counts[targetId] = counts[targetId]?.plus(1) ?: 1
@@ -482,35 +540,34 @@ internal object ThreadHtmlParserCore {
         return index
     }
 
-    private fun extractQuoteLines(messageHtml: String): List<String> {
-        if (messageHtml.isBlank()) return emptyList()
-        return decodeHtmlEntities(stripTags(messageHtml))
-            .lines()
-            .map { it.trimStart() }
-            .filter { it.startsWith(">") || it.startsWith("＞") }
-    }
+    private data class QuoteLineResolution(
+        val targets: Set<String>,
+        val isExplicit: Boolean
+    )
 
     private fun resolveQuoteTargets(
         quoteLine: String,
         posterIdIndex: Map<String, Set<String>>,
         messageLineIndex: Map<String, Set<String>>
-    ): Set<String> {
+    ): QuoteLineResolution {
         val trimmed = quoteLine.trim()
-        if (trimmed.isBlank()) return emptySet()
+        if (trimmed.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
         val content = trimmed.trimStart { it == '>' || it == '＞' }.trim()
-        if (content.isBlank()) return emptySet()
+        if (content.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
         val explicitNumber = noReferenceRegex.find(content)?.groupValues?.getOrNull(1)
             ?: leadingNumberRegex.find(content)?.groupValues?.getOrNull(1)
         if (explicitNumber != null) {
-            return setOf(explicitNumber)
+            return QuoteLineResolution(setOf(explicitNumber), isExplicit = true)
         }
         val idMatch = idReferenceRegex.find(content)?.value
-        idMatch?.let { id ->
-            posterIdIndex[id]?.let { return it }
+        if (idMatch != null) {
+            val targets = posterIdIndex[idMatch].orEmpty()
+            return QuoteLineResolution(targets, isExplicit = true)
         }
         val normalized = normalizeQuoteText(content)
-        if (normalized.isBlank()) return emptySet()
-        return messageLineIndex[normalized] ?: emptySet()
+        if (normalized.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
+        val targets = messageLineIndex[normalized].orEmpty()
+        return QuoteLineResolution(targets, isExplicit = false)
     }
 
     private fun normalizeQuoteText(value: String): String {

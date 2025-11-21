@@ -19,7 +19,9 @@ import androidx.media3.ui.PlayerView
 actual fun PlatformVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
-    onStateChanged: (VideoPlayerState) -> Unit
+    onStateChanged: (VideoPlayerState) -> Unit,
+    volume: Float,
+    isMuted: Boolean
 ) {
     val context = LocalContext.current
     val currentCallback by rememberUpdatedState(onStateChanged)
@@ -36,6 +38,11 @@ actual fun PlatformVideoPlayer(
         currentCallback(VideoPlayerState.Buffering)
         player.setMediaItem(mediaItem)
         player.prepare()
+    }
+
+    LaunchedEffect(volume, isMuted, player) {
+        val clampedVolume = volume.coerceIn(0f, 1f)
+        player.volume = if (isMuted) 0f else clampedVolume
     }
 
     AndroidView(
