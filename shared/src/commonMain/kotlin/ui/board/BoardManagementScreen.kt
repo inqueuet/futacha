@@ -16,6 +16,8 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -4948,10 +4950,9 @@ private fun ThreadPostCard(
     }
     val saidaneLabel = saidaneLabelOverride ?: post.saidaneLabel
     val cardModifier = if (onLongPress != null) {
-        modifier.combinedClickable(
-            onClick = {},
-            onLongClick = onLongPress
-        )
+        modifier.pointerInput(onLongPress) {
+            detectTapGestures(onLongPress = { onLongPress() })
+        }
     } else {
         modifier
     }
@@ -5139,17 +5140,49 @@ private fun ThreadMessageText(
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     SelectionContainer {
         Text(
-            modifier = modifier.pointerInput(annotated, quoteReferences) {
-                detectTapGestures { position ->
-                    val offset = textLayoutResult?.getOffsetForPosition(position) ?: return@detectTapGestures
-                    val url = annotated
-                        .getStringAnnotations(URL_ANNOTATION_TAG, offset, offset)
+            modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
+                awaitEachGesture {
+                    val layout = textLayoutResult ?: return@awaitEachGesture
+                    var downChange: PointerInputChange? = null
+                    // Listen in Initial pass to beat selection/long-press handlers
+                    while (downChange == null) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        downChange = event.changes.firstOrNull { it.changedToDownIgnoreConsumed() }
+                        if (event.changes.none { it.pressed }) return@awaitEachGesture
+                    }
+                    val downOffset = layout.getOffsetForPosition(downChange.position)
+                    val urlOnDown = annotated
+                        .getStringAnnotations(URL_ANNOTATION_TAG, downOffset, downOffset)
                         .firstOrNull()
                         ?.item
-                    if (url != null) {
-                        onUrlClick(url)
-                        return@detectTapGestures
+                    if (urlOnDown != null) {
+                        downChange.consume()
+                        var upChange: PointerInputChange? = null
+                        while (upChange == null) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            upChange = event.changes.firstOrNull { it.changedToUpIgnoreConsumed() }
+                            if (event.changes.none { it.pressed }) break
+                        }
+                        val upPosition = upChange?.position ?: downChange.position
+                        val upOffset = layout.getOffsetForPosition(upPosition)
+                        val urlOnUp = annotated
+                            .getStringAnnotations(URL_ANNOTATION_TAG, upOffset, upOffset)
+                            .firstOrNull()
+                            ?.item
+                        if (urlOnUp != null) {
+                            onUrlClick(urlOnUp)
+                            upChange?.consume()
+                        }
+                        return@awaitEachGesture
                     }
+                    var upChange: PointerInputChange? = null
+                    while (upChange == null) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        upChange = event.changes.firstOrNull { it.changedToUpIgnoreConsumed() }
+                        if (event.changes.none { it.pressed }) break
+                    }
+                    val upPosition = upChange?.position ?: downChange.position
+                    val offset = layout.getOffsetForPosition(upPosition)
                     annotated
                         .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
                         .firstOrNull()
@@ -5502,7 +5535,19 @@ private fun GalleryImageItem(
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
+private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
+private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
 private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
+
+private val urlSpanStyle = SpanStyle(
+    color = Color(0xFF1E88E5),
+    textDecoration = TextDecoration.Underline
+)
+
+private data class UrlMatch(
+    val url: String,
+    val range: IntRange
+)
 
 private fun buildAnnotatedMessage(
     html: String,
@@ -5512,7 +5557,8 @@ private fun buildAnnotatedMessage(
 ): AnnotatedString {
     val lines = messageHtmlToLines(html)
     var quoteIndex = 0
-    return buildAnnotatedString {
+    val urlMatches = mutableListOf<UrlMatch>()
+    val built = buildAnnotatedString {
         val normalizedHighlights = highlightRanges
             .filter { it.first >= 0 && it.last >= it.first }
             .sortedBy { it.first }
@@ -5538,16 +5584,37 @@ private fun buildAnnotatedMessage(
                 append("\n")
             }
         }
-        val builtText = toString()
-        URL_REGEX.findAll(builtText).forEach { matchResult ->
-            addStringAnnotation(
-                tag = URL_ANNOTATION_TAG,
-                annotation = matchResult.value,
-                start = matchResult.range.first,
-                end = matchResult.range.last + 1
-            )
-        }
     }
+    val builtText = built.toString()
+    urlMatches += URL_REGEX.findAll(builtText).map { match ->
+        UrlMatch(url = match.value, range = match.range)
+    }
+    urlMatches += SCHEMELESS_URL_REGEX.findAll(builtText).map { match ->
+        UrlMatch(url = "h${match.value}", range = match.range)
+    }
+    urlMatches += URL_LINK_TEXT_REGEX.findAll(builtText).mapNotNull { match ->
+        val target = match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val normalized = if (target.startsWith("http")) target else "https://$target"
+        UrlMatch(url = normalized, range = match.range)
+    }
+    val distinct = urlMatches
+        .sortedBy { it.range.first }
+        .distinctBy { it.range.first to it.range.last }
+    val builder = AnnotatedString.Builder(built)
+    distinct.forEach { match ->
+        builder.addStringAnnotation(
+            tag = URL_ANNOTATION_TAG,
+            annotation = match.url,
+            start = match.range.first,
+            end = match.range.last + 1
+        )
+        builder.addStyle(
+            style = urlSpanStyle,
+            start = match.range.first,
+            end = match.range.last + 1
+        )
+    }
+    return builder.toAnnotatedString()
 }
 
 private fun AnnotatedString.Builder.appendWithHighlights(
