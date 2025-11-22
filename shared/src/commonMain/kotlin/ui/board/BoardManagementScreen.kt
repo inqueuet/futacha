@@ -5556,7 +5556,7 @@ private fun buildAnnotatedMessage(
     highlightStyle: SpanStyle
 ): AnnotatedString {
     val lines = messageHtmlToLines(html)
-    var quoteIndex = 0
+    var referenceIndex = 0
     val urlMatches = mutableListOf<UrlMatch>()
     val built = buildAnnotatedString {
         val normalizedHighlights = highlightRanges
@@ -5567,16 +5567,15 @@ private fun buildAnnotatedMessage(
             val isQuote = content.startsWith(">") || content.startsWith("＞")
             if (isQuote) {
                 val spanStyle = SpanStyle(color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
-                val annotationIndex = quoteIndex
-                val reference = quoteReferences.getOrNull(annotationIndex)
+                val reference = quoteReferences.getOrNull(referenceIndex)
                 if (reference != null && reference.targetPostIds.isNotEmpty()) {
-                    pushStringAnnotation(QUOTE_ANNOTATION_TAG, annotationIndex.toString())
+                    pushStringAnnotation(QUOTE_ANNOTATION_TAG, referenceIndex.toString())
                     appendWithHighlights(content, spanStyle, normalizedHighlights, highlightStyle)
                     pop()
+                    referenceIndex += 1
                 } else {
                     appendWithHighlights(content, spanStyle, normalizedHighlights, highlightStyle)
                 }
-                quoteIndex += 1
             } else {
                 appendWithHighlights(content, SpanStyle(), normalizedHighlights, highlightStyle)
             }

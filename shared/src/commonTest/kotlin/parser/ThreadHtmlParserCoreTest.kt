@@ -136,6 +136,183 @@ class ThreadHtmlParserCoreTest {
         assertEquals(0, firstReply.referencedCount)
         assertEquals(0, secondReply.referencedCount)
     }
+
+    @Test
+    fun quoteCounting_countsMediaFilenames() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="200">
+            <span class="csb">OP</span>Name<span class="cnm">名無しさん</span>
+            <span class="cnw">25/01/01(月)00:00:00 ID:IDOP</span><span class="cno">No.200</span>
+            画像ファイル名：<a href="/src/200.jpg">200.jpg</a>
+            <img src="/thumb/200s.jpg">
+            <blockquote>op body</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:01:00 ID:ID1</span><span class="cno">No.201</span>
+            <blockquote>&gt;200.jpg<br>&gt;&gt;No.200</blockquote>
+            </td></tr>
+            </table>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:02:00 ID:ID2</span><span class="cno">No.202</span>
+            画像ファイル名：<a href="/src/202.webm">202.webm</a>
+            <img src="/thumb/202s.jpg">
+            <blockquote>&gt;202.webm</blockquote>
+            </td></tr>
+            </table>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:03:00 ID:ID3</span><span class="cno">No.203</span>
+            <blockquote>&gt;202.webm</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = ThreadHtmlParserCore.parseThread(html)
+
+        assertEquals(4, page.posts.size)
+        val op = page.posts[0]
+        val firstReply = page.posts[1]
+        val videoPost = page.posts[2]
+        val videoReply = page.posts[3]
+
+        // 200.jpg + >>No.200 の両方を引用しても1件としてカウント
+        assertEquals(1, op.referencedCount)
+        assertEquals(0, firstReply.referencedCount)
+        // webm へのファイル名引用を逆引き
+        assertEquals(1, videoPost.referencedCount)
+        assertEquals(0, videoReply.referencedCount)
+
+        // media filename が quoteReferences にも反映される
+        val videoReference = videoReply.quoteReferences.single()
+        assertEquals(listOf("202"), videoReference.targetPostIds)
+        assertTrue(videoReference.text.contains("202.webm"))
+    }
+
+    @Test
+    fun quoteCounting_prefersMediaOverLeadingDigits() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="300">
+            <span class="cnw">25/01/01(月)00:00:00 ID:IDOP</span><span class="cno">No.300</span>
+            画像ファイル名：<a href="/src/1763808769494.jpg">1763808769494.jpg</a>
+            <img src="/thumb/1763808769494s.jpg">
+            <blockquote>op</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:01:00 ID:ID1</span><span class="cno">No.301</span>
+            <blockquote>&gt;1763808769494.jpg</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = ThreadHtmlParserCore.parseThread(html)
+        assertEquals(2, page.posts.size)
+        val op = page.posts[0]
+        val reply = page.posts[1]
+
+        // ファイル名の数字部分を投稿番号として扱わず、メディア優先で逆引きされる
+        assertEquals(1, op.referencedCount)
+        assertEquals(0, reply.referencedCount)
+
+        val ref = reply.quoteReferences.single()
+        assertEquals(listOf("300"), ref.targetPostIds)
+        assertTrue(ref.text.contains("1763808769494.jpg"))
+    }
+
+    @Test
+    fun quoteCounting_matchesQuotesWithoutPlainTextSource() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="400">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.400</span>
+            <blockquote>
+            &gt;そういえば今日で結婚8年目ので<br>
+            &gt;まだ関係は良好ので
+            </blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:05:00 ID:Reply</span><span class="cno">No.401</span>
+            <blockquote>
+            &gt;&gt;そういえば今日で結婚8年目ので<br>
+            &gt;&gt;まだ関係は良好ので<br>
+            僕は結婚もしていないし、同棲もしたことないので
+            </blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = ThreadHtmlParserCore.parseThread(html)
+        assertEquals(2, page.posts.size)
+        val op = page.posts[0]
+        val reply = page.posts[1]
+
+        assertEquals(1, op.referencedCount)
+        assertEquals(0, reply.referencedCount)
+
+        val ref = reply.quoteReferences.single()
+        assertEquals(listOf("400"), ref.targetPostIds)
+        assertTrue(ref.text.contains("結婚8年目"))
+    }
+
+    @Test
+    fun quoteCounting_partialTextMatchWhenQuotedSubset() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="500">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.500</span>
+            <blockquote>
+            &gt;ふう、月曜に買ったお肉を回鍋肉としてやっと使い切ったので<br>
+            &gt;ジャンボパックはやはり悪…ので
+            </blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:02:00 ID:Reply1</span><span class="cno">No.501</span>
+            <blockquote>ポリ袋に小分けして冷凍するといいので</blockquote>
+            </td></tr>
+            </table>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:04:00 ID:Reply2</span><span class="cno">No.502</span>
+            <blockquote>
+            &gt;小分けして冷凍<br>
+            小分けンモー<br>
+            冷凍庫になんか母が冷凍したと思われる何年ものかわからぬ小間肉が凍ってるので
+            </blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = ThreadHtmlParserCore.parseThread(html)
+        assertEquals(3, page.posts.size)
+        val firstReply = page.posts[1]
+        val secondReply = page.posts[2]
+
+        // 部分一致で No.501 が引用されたとみなされる
+        assertEquals(1, firstReply.referencedCount)
+        assertEquals(0, secondReply.referencedCount)
+
+        val ref = secondReply.quoteReferences.single()
+        assertEquals(listOf("501"), ref.targetPostIds)
+        assertTrue(ref.text.contains("小分けして冷凍"))
+    }
 }
 
 private val sampleThreadHtml = """

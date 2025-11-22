@@ -92,6 +92,11 @@ internal object ThreadHtmlParserCore {
     private val idReferenceRegex = Regex("ID:[^\\s>]+")
     private val htmlTagRegex = Regex("<[^>]+>")
     private val videoExtensions = setOf("mp4", "webm", "mkv", "mov", "avi", "ts", "flv")
+    private const val MIN_PARTIAL_MATCH_LENGTH = 6
+    private val mediaFilenameRegex = Regex(
+        pattern = "([A-Za-z0-9._-]+\\.(?:jpe?g|png|gif|webp|bmp|mp4|webm|mkv|mov|avi|ts|flv|m4v))",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
 
     fun parseThread(html: String): ThreadPage {
         if (html.length > MAX_HTML_SIZE) {
@@ -393,14 +398,13 @@ internal object ThreadHtmlParserCore {
     private fun buildReferencesAndCounts(posts: List<Post>): ReferenceData {
         if (posts.isEmpty()) return ReferenceData(emptyMap(), emptyMap())
 
-        // Build indexes once
-        val posterIdIndex = buildPosterIdIndex(posts)
-        val messageLineIndex = buildMessageLineIndex(posts)
-
+        val posterIdIndex = mutableMapOf<String, MutableSet<String>>()
+        val messageLineIndex = mutableMapOf<String, LineTargets>()
+        val mediaFileIndex = mutableMapOf<String, MutableSet<String>>()
         val counts = mutableMapOf<String, Int>()
         val references = mutableMapOf<String, MutableList<QuoteReference>>()
 
-        // Single pass through posts to build both counts and references
+        // Single pass through posts in order; only以前の投稿を参照対象とする
         posts.forEach { post: Post ->
             if (post.messageHtml.isBlank()) return@forEach
             val lines = decodeHtmlEntities(stripTags(post.messageHtml))
@@ -441,7 +445,12 @@ internal object ThreadHtmlParserCore {
                     return@forEach
                 }
 
-                val resolution = resolveQuoteTargets(trimmedLine, posterIdIndex, messageLineIndex)
+                val resolution = resolveQuoteTargets(
+                    quoteLine = trimmedLine,
+                    posterIdIndex = posterIdIndex,
+                    messageLineIndex = messageLineIndex,
+                    mediaFileIndex = mediaFileIndex
+                )
                 if (resolution.isExplicit) {
                     flushPendingContentBlock()
                     if (resolution.targets.isNotEmpty()) {
@@ -457,22 +466,24 @@ internal object ThreadHtmlParserCore {
                 }
 
                 if (resolution.targets.isEmpty()) {
-                    isContentBlockInvalid = true
-                    pendingContentTargets = null
-                    pendingContentLines.add(trimmedLine.trim())
+                    flushPendingContentBlock()
                     return@forEach
                 }
 
-                val updatedTargets = pendingContentTargets
-                    ?.intersect(resolution.targets)
-                    ?: resolution.targets
-
-                pendingContentLines.add(trimmedLine.trim())
+                val currentTargets = pendingContentTargets
+                val updatedTargets = when {
+                    currentTargets == null -> resolution.targets
+                    else -> currentTargets.intersect(resolution.targets)
+                }
 
                 if (updatedTargets.isEmpty()) {
-                    isContentBlockInvalid = true
-                    pendingContentTargets = null
+                    // Targets changed mid-block; close previous block and start a new one
+                    flushPendingContentBlock()
+                    pendingContentLines.add(trimmedLine.trim())
+                    pendingContentTargets = resolution.targets
+                    isContentBlockInvalid = false
                 } else {
+                    pendingContentLines.add(trimmedLine.trim())
                     pendingContentTargets = updatedTargets
                 }
             }
@@ -481,10 +492,16 @@ internal object ThreadHtmlParserCore {
 
             if (postReferences.isNotEmpty()) {
                 referencedTargets.forEach { targetId ->
+                    if (targetId == post.id) return@forEach
                     counts[targetId] = counts[targetId]?.plus(1) ?: 1
                 }
                 references[post.id] = postReferences
             }
+
+            // 現在の投稿を以降の引用解析の対象としてインデックスに追加
+            addPosterIdToIndex(posterIdIndex, post)
+            addMessageLinesToIndex(messageLineIndex, post)
+            addMediaToIndex(mediaFileIndex, post)
         }
 
         return ReferenceData(counts, references)
@@ -515,29 +532,33 @@ internal object ThreadHtmlParserCore {
         return if (slashIndex == -1) url else url.substring(0, slashIndex)
     }
 
-    private fun buildPosterIdIndex(posts: List<Post>): Map<String, Set<String>> {
-        return posts
-            .mapNotNull { post: Post ->
-                val id = post.posterId?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                id to post.id
-            }
-            .groupBy({ it.first }, { it.second })
-            .mapValues { entry -> entry.value.toSet() }
+    private fun addPosterIdToIndex(
+        index: MutableMap<String, MutableSet<String>>,
+        post: Post
+    ) {
+        val id = post.posterId?.takeIf { it.isNotBlank() } ?: return
+        val normalized = id.trim()
+        index.getOrPut(normalized) { mutableSetOf() }.add(post.id)
     }
 
-    private fun buildMessageLineIndex(posts: List<Post>): Map<String, Set<String>> {
-        val index = mutableMapOf<String, MutableSet<String>>()
-        posts.forEach { post: Post ->
-            if (post.messageHtml.isBlank()) return@forEach
-            decodeHtmlEntities(stripTags(post.messageHtml))
-                .lines()
-                .map { normalizeQuoteText(it) }
-                .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
-                .forEach { line: String ->
-                    index.getOrPut(line) { mutableSetOf() }.add(post.id)
-                }
-        }
-        return index
+    private fun addMessageLinesToIndex(
+        index: MutableMap<String, LineTargets>,
+        post: Post
+    ) {
+        if (post.messageHtml.isBlank()) return
+        decodeHtmlEntities(stripTags(post.messageHtml))
+            .lines()
+            .forEach { rawLine ->
+                val trimmed = rawLine.trim()
+                if (trimmed.isBlank()) return@forEach
+                val isQuoted = trimmed.startsWith(">") || trimmed.startsWith("＞")
+                val withoutMarkers = trimmed.trimStart { it == '>' || it == '＞' }.trim()
+                if (withoutMarkers.isBlank()) return@forEach
+                val normalized = normalizeQuoteText(withoutMarkers)
+                if (normalized.isBlank()) return@forEach
+                val bucket = index.getOrPut(normalized) { LineTargets() }
+                if (isQuoted) bucket.quoted.add(post.id) else bucket.plain.add(post.id)
+            }
     }
 
     private data class QuoteLineResolution(
@@ -548,12 +569,17 @@ internal object ThreadHtmlParserCore {
     private fun resolveQuoteTargets(
         quoteLine: String,
         posterIdIndex: Map<String, Set<String>>,
-        messageLineIndex: Map<String, Set<String>>
+        messageLineIndex: Map<String, LineTargets>,
+        mediaFileIndex: Map<String, MutableSet<String>>
     ): QuoteLineResolution {
         val trimmed = quoteLine.trim()
         if (trimmed.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
         val content = trimmed.trimStart { it == '>' || it == '＞' }.trim()
         if (content.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
+        val mediaTargets = resolveMediaTargets(content, mediaFileIndex)
+        if (mediaTargets.isNotEmpty()) {
+            return QuoteLineResolution(mediaTargets, isExplicit = true)
+        }
         val explicitNumber = noReferenceRegex.find(content)?.groupValues?.getOrNull(1)
             ?: leadingNumberRegex.find(content)?.groupValues?.getOrNull(1)
         if (explicitNumber != null) {
@@ -566,11 +592,74 @@ internal object ThreadHtmlParserCore {
         }
         val normalized = normalizeQuoteText(content)
         if (normalized.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
-        val targets = messageLineIndex[normalized].orEmpty()
-        return QuoteLineResolution(targets, isExplicit = false)
+        val targets = messageLineIndex[normalized]?.resolve()
+        if (!targets.isNullOrEmpty()) {
+            return QuoteLineResolution(targets, isExplicit = false)
+        }
+        val partialTargets = findPartialLineTargets(normalized, messageLineIndex)
+        return QuoteLineResolution(partialTargets, isExplicit = false)
+    }
+
+    private fun resolveMediaTargets(
+        content: String,
+        mediaFileIndex: Map<String, MutableSet<String>>
+    ): Set<String> {
+        if (mediaFileIndex.isEmpty()) return emptySet()
+        val matches = mediaFilenameRegex.findAll(content)
+        if (!matches.iterator().hasNext()) return emptySet()
+        val targets = mutableSetOf<String>()
+        matches.forEach { match ->
+            val normalized = match.value.lowercase()
+            targets += mediaFileIndex[normalized].orEmpty()
+        }
+        return targets
     }
 
     private fun normalizeQuoteText(value: String): String {
         return value.replace("\\s+".toRegex(), " ").trim()
+    }
+
+    private fun findPartialLineTargets(
+        normalizedQuote: String,
+        index: Map<String, LineTargets>
+    ): Set<String> {
+        if (normalizedQuote.length < MIN_PARTIAL_MATCH_LENGTH) return emptySet()
+        if (index.isEmpty()) return emptySet()
+        val targets = mutableSetOf<String>()
+        index.forEach { (line, ids) ->
+            if (line.length < MIN_PARTIAL_MATCH_LENGTH) return@forEach
+            if (line.contains(normalizedQuote) || normalizedQuote.contains(line)) {
+                targets += ids.resolve()
+            }
+        }
+        return targets
+    }
+
+    private data class LineTargets(
+        val plain: MutableSet<String> = mutableSetOf(),
+        val quoted: MutableSet<String> = mutableSetOf()
+    ) {
+        fun resolve(): Set<String> = if (plain.isNotEmpty()) plain else quoted
+    }
+
+    private fun addMediaToIndex(
+        index: MutableMap<String, MutableSet<String>>,
+        post: Post
+    ) {
+        extractFileName(post.imageUrl)?.let { file ->
+            index.getOrPut(file) { mutableSetOf() }.add(post.id)
+        }
+        extractFileName(post.thumbnailUrl)?.let { file ->
+            index.getOrPut(file) { mutableSetOf() }.add(post.id)
+        }
+    }
+
+    private fun extractFileName(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        val cleaned = url.substringBefore('?').substringAfterLast('/', "")
+        if (cleaned.isBlank()) return null
+        val lower = cleaned.lowercase()
+        val match = mediaFilenameRegex.matchEntire(lower) ?: return null
+        return match.value
     }
 }
