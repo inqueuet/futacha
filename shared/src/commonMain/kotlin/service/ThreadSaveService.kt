@@ -10,12 +10,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlin.time.ExperimentalTime
 
 /**
@@ -354,25 +354,28 @@ class ThreadSaveService(
     }
 
     @OptIn(ExperimentalTime::class)
+    @Suppress("DEPRECATION")
     private fun formatTimestamp(epochMillis: Long): String {
         val instant = Instant.fromEpochMilliseconds(epochMillis)
         val localDateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+        val date = localDateTime.date
+        val time = localDateTime.time
 
         fun Int.pad2() = toString().padStart(2, '0')
         fun Int.pad4() = toString().padStart(4, '0')
 
         return buildString {
-            append(localDateTime.year.pad4())
+            append(date.year.pad4())
             append('/')
-            append(localDateTime.monthNumber.pad2())
+            append(date.monthNumber.pad2())
             append('/')
-            append(localDateTime.dayOfMonth.pad2())
+            append(date.dayOfMonth.pad2())
             append(' ')
-            append(localDateTime.hour.pad2())
+            append(time.hour.pad2())
             append(':')
-            append(localDateTime.minute.pad2())
+            append(time.minute.pad2())
             append(':')
-            append(localDateTime.second.pad2())
+            append(time.second.pad2())
         }
     }
 

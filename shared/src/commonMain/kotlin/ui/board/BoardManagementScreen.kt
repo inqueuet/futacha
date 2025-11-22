@@ -86,7 +86,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.ReplyAll
+import androidx.compose.material.icons.automirrored.rounded.ReplyAll
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -102,8 +102,7 @@ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
-import androidx.compose.material.icons.rounded.VolumeOff
-import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -2592,27 +2591,31 @@ private fun CatalogCard(
                 } else {
                     // フルサイズ画像がロード中またはエラーの場合はサムネイルを表示
                     val painterState = imagePainter.state
+                    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
                     val shouldShowThumbnail = thumbnailUrl.isNotBlank() &&
                                              imageUrlToShow != thumbnailUrl &&
                                              (painterState is AsyncImagePainter.State.Loading ||
                                               painterState is AsyncImagePainter.State.Error)
 
-                    if (shouldShowThumbnail) {
-                        // サムネイル画像を表示（フルサイズ画像のロード中）
-                        Image(
-                            painter = thumbnailPainter,
-                            contentDescription = item.title ?: "サムネイル",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        // フルサイズ画像またはサムネイルのみの場合
-                        Image(
-                            painter = imagePainter,
-                            contentDescription = item.title ?: "サムネイル",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                    when {
+                        shouldShowThumbnail -> {
+                            // サムネイル画像を表示（フルサイズ画像のロード中）
+                            Image(
+                                painter = thumbnailPainter,
+                                contentDescription = item.title ?: "サムネイル",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        else -> {
+                            // フルサイズ画像またはサムネイルのみの場合
+                            Image(
+                                painter = imagePainter,
+                                contentDescription = item.title ?: "サムネイル",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
                 if (item.replyCount > 0) {
@@ -2733,27 +2736,31 @@ private fun CatalogListItem(
                 } else {
                     // フルサイズ画像がロード中またはエラーの場合はサムネイルを表示
                     val painterState = imagePainter.state
+                    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
                     val shouldShowThumbnail = thumbnailUrl.isNotBlank() &&
                                              imageUrlToShow != thumbnailUrl &&
                                              (painterState is AsyncImagePainter.State.Loading ||
                                               painterState is AsyncImagePainter.State.Error)
 
-                    if (shouldShowThumbnail) {
-                        // サムネイル画像を表示（フルサイズ画像のロード中）
-                        Image(
-                            painter = thumbnailPainter,
-                            contentDescription = item.title ?: "サムネイル",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        // フルサイズ画像またはサムネイルのみの場合
-                        Image(
-                            painter = imagePainter,
-                            contentDescription = item.title ?: "サムネイル",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                    when {
+                        shouldShowThumbnail -> {
+                            // サムネイル画像を表示（フルサイズ画像のロード中）
+                            Image(
+                                painter = thumbnailPainter,
+                                contentDescription = item.title ?: "サムネイル",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        else -> {
+                            // フルサイズ画像またはサムネイルのみの場合
+                            Image(
+                                painter = imagePainter,
+                                contentDescription = item.title ?: "サムネイル",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
             }
@@ -6131,6 +6138,10 @@ private fun ImagePreviewDialog(
         imageLoader = imageLoader
     )
     val painterState = painter.state
+    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
+    val isLoadingState = painterState is AsyncImagePainter.State.Loading
+    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
+    val isErrorState = painterState is AsyncImagePainter.State.Error
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -6188,16 +6199,16 @@ private fun ImagePreviewDialog(
                         scaleY = scale
                         translationX = translation.x
                         translationY = translation.y
-                        alpha = if (painterState is AsyncImagePainter.State.Error) 0f else 1f
+                        alpha = if (isErrorState) 0f else 1f
                     }
             )
-            if (painterState is AsyncImagePainter.State.Loading) {
+            if (isLoadingState) {
                 androidx.compose.material3.CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
                     color = MaterialTheme.colorScheme.primary
                 )
             }
-            if (painterState is AsyncImagePainter.State.Error) {
+            if (isErrorState) {
                 Column(
                     modifier = Modifier
                         .align(Alignment.Center)
@@ -6434,7 +6445,7 @@ private fun VideoPreviewDialog(
                                 )
                             ) {
                                 Icon(
-                                    imageVector = if (isMuted || volume <= 0f) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                                    imageVector = if (isMuted || volume <= 0f) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
                                     contentDescription = if (isMuted) "ミュート解除" else "ミュート",
                                     tint = Color.White
                                 )
@@ -6693,7 +6704,7 @@ private fun ThreadFilterSheet(
                 text = "絞り込みたい条件をタップしてオン／オフしてください",
                 style = MaterialTheme.typography.bodySmall
             )
-            Divider()
+            HorizontalDivider()
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -6737,7 +6748,7 @@ private fun ThreadFilterSheet(
                             }
                     )
                     if (index < ThreadFilterOption.entries.lastIndex) {
-                        Divider()
+                        HorizontalDivider()
                     }
                     if (option == ThreadFilterOption.Keyword && selected) {
                         OutlinedTextField(
@@ -6753,7 +6764,7 @@ private fun ThreadFilterSheet(
                     }
                 }
             }
-            Divider()
+            HorizontalDivider()
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -6872,7 +6883,7 @@ private fun ReadAloudControlSheet(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 LinearProgressIndicator(
-                    progress = completedSegments / totalSegments.toFloat(),
+                    progress = { completedSegments / totalSegments.toFloat() },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -6985,7 +6996,7 @@ private enum class ThreadFilterOption(
 ) {
     SelfPosts("自分の書き込み", Icons.Rounded.Person),
     HighSaidane("そうだねが多い", Icons.Rounded.ThumbUp, ThreadFilterSortOption.Saidane),
-    HighReplies("返信が多い", Icons.Rounded.ReplyAll, ThreadFilterSortOption.Replies),
+    HighReplies("返信が多い", Icons.AutoMirrored.Rounded.ReplyAll, ThreadFilterSortOption.Replies),
     Deleted("削除されたレス", Icons.Rounded.DeleteSweep),
     Url("URLを含むレス", Icons.Rounded.Link),
     Image("画像レス", Icons.Outlined.Image),
@@ -7293,10 +7304,10 @@ private fun GlobalSettingsScreen(
                             onBack()
                         }
                 )
-                Divider()
+                HorizontalDivider()
             }
             item {
-                Divider()
+                HorizontalDivider()
                 ListItem(
                     headlineContent = { Text("アプリバージョン") },
                     trailingContent = { Text(appVersion) },
