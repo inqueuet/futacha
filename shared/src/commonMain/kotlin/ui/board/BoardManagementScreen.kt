@@ -2206,10 +2206,10 @@ private fun CatalogGrid(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-    val maxOverscroll = 80.dp
-    val maxOverscrollPx = with(LocalDensity.current) { maxOverscroll.toPx() }
     val density = LocalDensity.current
+    val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
+    val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
 
     // アニメーション用のオフセット
     val overscrollOffset = remember { Animatable(0f) }
@@ -2218,7 +2218,9 @@ private fun CatalogGrid(
         derivedStateOf {
             val layoutInfo = gridState.layoutInfo
             val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
-            firstVisibleItem != null && firstVisibleItem.index == 0 && firstVisibleItem.offset.y <= 0
+            firstVisibleItem != null &&
+            firstVisibleItem.index == 0 &&
+            firstVisibleItem.offset.y.toFloat() <= edgeOffsetTolerancePx
         }
     }
 
@@ -2227,7 +2229,13 @@ private fun CatalogGrid(
             val layoutInfo = gridState.layoutInfo
             val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
             val totalItems = layoutInfo.totalItemsCount
-            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 1
+            if (lastVisibleItem == null || totalItems == 0) return@derivedStateOf false
+            if (lastVisibleItem.index < totalItems - 1) return@derivedStateOf false
+            val viewportEnd = layoutInfo.viewportEndOffset
+            val lastItemEnd = lastVisibleItem.offset.y + lastVisibleItem.size.height
+            val remainingSpace = viewportEnd - lastItemEnd
+            remainingSpace.toFloat() <= edgeOffsetTolerancePx ||
+                layoutInfo.visibleItemsInfo.size >= totalItems
         }
     }
 
@@ -2284,9 +2292,9 @@ private fun CatalogGrid(
                     } while (event.changes.any { it.pressed })
 
                     // ドラッグ終了
-                    if (totalDrag > 100) {
+                    if (totalDrag > refreshTriggerPx) {
                         coroutineScope.launch { onRefresh() }
-                    } else if (totalDrag < -100) {
+                    } else if (totalDrag < -refreshTriggerPx) {
                         coroutineScope.launch { onRefresh() }
                     }
 
@@ -2339,8 +2347,10 @@ private fun CatalogList(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
-    val maxOverscroll = 80.dp
-    val maxOverscrollPx = with(LocalDensity.current) { maxOverscroll.toPx() }
+    val density = LocalDensity.current
+    val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
+    val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
 
     // アニメーション用のオフセット
     val overscrollOffset = remember { Animatable(0f) }
@@ -2349,7 +2359,9 @@ private fun CatalogList(
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
-            firstVisibleItem != null && firstVisibleItem.index == 0 && firstVisibleItem.offset <= 0
+            firstVisibleItem != null &&
+            firstVisibleItem.index == 0 &&
+            firstVisibleItem.offset.toFloat() <= edgeOffsetTolerancePx
         }
     }
 
@@ -2358,7 +2370,13 @@ private fun CatalogList(
             val layoutInfo = listState.layoutInfo
             val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
             val totalItems = layoutInfo.totalItemsCount
-            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 1
+            if (lastVisibleItem == null || totalItems == 0) return@derivedStateOf false
+            if (lastVisibleItem.index < totalItems - 1) return@derivedStateOf false
+            val viewportEnd = layoutInfo.viewportEndOffset
+            val lastItemEnd = lastVisibleItem.offset + lastVisibleItem.size
+            val remainingSpace = viewportEnd - lastItemEnd
+            remainingSpace.toFloat() <= edgeOffsetTolerancePx ||
+                layoutInfo.visibleItemsInfo.size >= totalItems
         }
     }
 
@@ -2414,9 +2432,9 @@ private fun CatalogList(
                     } while (event.changes.any { it.pressed })
 
                     // ドラッグ終了
-                    if (totalDrag > 100) {
+                    if (totalDrag > refreshTriggerPx) {
                         coroutineScope.launch { onRefresh() }
-                    } else if (totalDrag < -100) {
+                    } else if (totalDrag < -refreshTriggerPx) {
                         coroutineScope.launch { onRefresh() }
                     }
 
@@ -4661,8 +4679,10 @@ private fun ThreadContent(
     val postsByPosterId = remember(page.posts) { buildPostsByPosterId(page.posts) }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val coroutineScope = rememberCoroutineScope()
-    val maxOverscroll = 80.dp
-    val maxOverscrollPx = with(LocalDensity.current) { maxOverscroll.toPx() }
+    val density = LocalDensity.current
+    val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
+    val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
 
     // アニメーション用のオフセット
     val overscrollOffset = remember { Animatable(0f) }
@@ -4671,7 +4691,9 @@ private fun ThreadContent(
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
-            firstVisibleItem != null && firstVisibleItem.index == 0 && firstVisibleItem.offset <= 0
+            firstVisibleItem != null &&
+            firstVisibleItem.index == 0 &&
+            firstVisibleItem.offset.toFloat() <= edgeOffsetTolerancePx
         }
     }
 
@@ -4680,7 +4702,13 @@ private fun ThreadContent(
             val layoutInfo = listState.layoutInfo
             val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
             val totalItems = layoutInfo.totalItemsCount
-            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 1
+            if (lastVisibleItem == null || totalItems == 0) return@derivedStateOf false
+            if (lastVisibleItem.index < totalItems - 1) return@derivedStateOf false
+            val viewportEnd = layoutInfo.viewportEndOffset
+            val lastItemEnd = lastVisibleItem.offset + lastVisibleItem.size
+            val remainingSpace = viewportEnd - lastItemEnd
+            remainingSpace.toFloat() <= edgeOffsetTolerancePx ||
+                layoutInfo.visibleItemsInfo.size >= totalItems
         }
     }
 
@@ -4737,9 +4765,9 @@ private fun ThreadContent(
                         } while (event.changes.any { it.pressed })
 
                         // ドラッグ終了
-                        if (totalDrag > 100) {
+                        if (totalDrag > refreshTriggerPx) {
                             coroutineScope.launch { onRefresh() }
-                        } else if (totalDrag < -100) {
+                        } else if (totalDrag < -refreshTriggerPx) {
                             coroutineScope.launch { onRefresh() }
                         }
 
