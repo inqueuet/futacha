@@ -4694,8 +4694,8 @@ private fun ThreadContent(
     val isScrolling by remember {
         derivedStateOf { listState.isScrollInProgress }
     }
-    val showQuotePreview: (String, List<Post>) -> Unit = { quoteText, targets ->
-        if (isScrolling || targets.isEmpty()) return@showQuotePreview
+    val showQuotePreview: (String, List<Post>) -> Unit = preview@ { quoteText, targets ->
+        if (isScrolling || targets.isEmpty()) return@preview
         quotePreviewState = QuotePreviewState(
             quoteText = quoteText,
             targetPosts = targets,
@@ -4837,10 +4837,7 @@ private fun ThreadContent(
                                     ?.takeIf { it.isNotEmpty() }
                                     ?.let { sameIdPosts ->
                                         {
-                                            showQuotePreview(
-                                                quoteText = "ID:$normalizedId のレス",
-                                                targets = sameIdPosts
-                                            )
+                                            showQuotePreview("ID:$normalizedId のレス", sameIdPosts)
                                         }
                                     }
                             },
@@ -4848,10 +4845,7 @@ private fun ThreadContent(
                             ?.takeIf { it.isNotEmpty() }
                             ?.let { referencingPosts ->
                                 {
-                                    showQuotePreview(
-                                        quoteText = ">>${post.id} を引用したレス",
-                                        targets = referencingPosts
-                                    )
+                                    showQuotePreview(">>${post.id} を引用したレス", referencingPosts)
                                 }
                         },
                         onSaidaneClick = { onSaidaneClick(post) },
