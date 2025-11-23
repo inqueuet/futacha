@@ -4691,6 +4691,17 @@ private fun ThreadContent(
     val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
     val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
     val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
+    val isScrolling by remember {
+        derivedStateOf { listState.isScrollInProgress }
+    }
+    val showQuotePreview: (String, List<Post>) -> Unit = { quoteText, targets ->
+        if (isScrolling || targets.isEmpty()) return@showQuotePreview
+        quotePreviewState = QuotePreviewState(
+            quoteText = quoteText,
+            targetPosts = targets,
+            posterIdLabels = posterIdLabels
+        )
+    }
 
     // アニメーション用のオフセット
     val overscrollOffset = remember { Animatable(0f) }
@@ -4817,13 +4828,7 @@ private fun ThreadContent(
                         highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
                         onQuoteClick = { reference ->
                             val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
-                            if (targets.isNotEmpty()) {
-                                quotePreviewState = QuotePreviewState(
-                                    quoteText = reference.text,
-                                    targetPosts = targets,
-                                    posterIdLabels = posterIdLabels
-                                )
-                            }
+                            showQuotePreview(reference.text, targets)
                         },
                         onUrlClick = onUrlClick,
                         onPosterIdClick = normalizedPosterId
@@ -4832,10 +4837,9 @@ private fun ThreadContent(
                                     ?.takeIf { it.isNotEmpty() }
                                     ?.let { sameIdPosts ->
                                         {
-                                            quotePreviewState = QuotePreviewState(
+                                            showQuotePreview(
                                                 quoteText = "ID:$normalizedId のレス",
-                                                targetPosts = sameIdPosts,
-                                                posterIdLabels = posterIdLabels
+                                                targets = sameIdPosts
                                             )
                                         }
                                     }
@@ -4844,10 +4848,9 @@ private fun ThreadContent(
                             ?.takeIf { it.isNotEmpty() }
                             ?.let { referencingPosts ->
                                 {
-                                    quotePreviewState = QuotePreviewState(
+                                    showQuotePreview(
                                         quoteText = ">>${post.id} を引用したレス",
-                                        targetPosts = referencingPosts,
-                                        posterIdLabels = posterIdLabels
+                                        targets = referencingPosts
                                     )
                                 }
                         },
@@ -4898,12 +4901,7 @@ private fun ThreadContent(
             onUrlClick = onUrlClick,
             onQuoteClick = { reference ->
                 val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
-                if (targets.isNotEmpty()) {
-                    quotePreviewState = state.copy(
-                        quoteText = reference.text,
-                        targetPosts = targets
-                    )
-                }
+                showQuotePreview(reference.text, targets)
             }
         )
     }
