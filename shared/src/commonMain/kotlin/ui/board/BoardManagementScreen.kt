@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -243,6 +244,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.min
@@ -2263,11 +2265,11 @@ private fun CatalogGrid(
                     var totalDrag = 0f
 
                     do {
-                        val event = awaitPointerEvent()
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
                         val dragEvent = event.changes.firstOrNull()
 
                         if (dragEvent != null && dragEvent.pressed) {
-                            val delta = dragEvent.positionChange().y
+                            val delta = dragEvent.positionChangeIgnoreConsumed().y
 
                             // 上端で下向きにドラッグ
                             if (isAtTop && delta > 0 && !isRefreshing) {
@@ -2403,11 +2405,11 @@ private fun CatalogList(
                     var totalDrag = 0f
 
                     do {
-                        val event = awaitPointerEvent()
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
                         val dragEvent = event.changes.firstOrNull()
 
                         if (dragEvent != null && dragEvent.pressed) {
-                            val delta = dragEvent.positionChange().y
+                            val delta = dragEvent.positionChangeIgnoreConsumed().y
 
                             // 上端で下向きにドラッグ
                             if (isAtTop && delta > 0 && !isRefreshing) {
@@ -4734,155 +4736,159 @@ private fun ThreadContent(
 
     Box(modifier = modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .offset { IntOffset(0, overscrollOffset.value.toInt()) }
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var totalDrag = 0f
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(0, overscrollOffset.value.toInt()) }
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var totalDrag = 0f
 
-                        do {
-                            val event = awaitPointerEvent()
-                            val dragEvent = event.changes.firstOrNull()
+                            do {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val dragEvent = event.changes.firstOrNull()
 
-                            if (dragEvent != null && dragEvent.pressed) {
-                                val delta = dragEvent.positionChange().y
+                                if (dragEvent != null && dragEvent.pressed) {
+                                    val delta = dragEvent.positionChangeIgnoreConsumed().y
 
-                                // 上端で下向きにドラッグ
-                                if (isAtTop && delta > 0 && !isRefreshing) {
-                                    totalDrag += delta
-                                    val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
-                                    coroutineScope.launch {
-                                        overscrollOffset.snapTo(newOffset)
+                                    // 上端で下向きにドラッグ
+                                    if (isAtTop && delta > 0 && !isRefreshing) {
+                                        totalDrag += delta
+                                        val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                        coroutineScope.launch {
+                                            overscrollOffset.snapTo(newOffset)
+                                        }
+                                        dragEvent.consume()
                                     }
-                                    dragEvent.consume()
-                                }
-                                // 下端で上向きにドラッグ
-                                else if (isAtBottom && delta < 0 && !isRefreshing) {
-                                    totalDrag += delta
-                                    val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
-                                    coroutineScope.launch {
-                                        overscrollOffset.snapTo(newOffset)
+                                    // 下端で上向きにドラッグ
+                                    else if (isAtBottom && delta < 0 && !isRefreshing) {
+                                        totalDrag += delta
+                                        val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                        coroutineScope.launch {
+                                            overscrollOffset.snapTo(newOffset)
+                                        }
+                                        dragEvent.consume()
                                     }
-                                    dragEvent.consume()
                                 }
+                            } while (event.changes.any { it.pressed })
+
+                            // ドラッグ終了
+                            if (totalDrag > refreshTriggerPx) {
+                                coroutineScope.launch { onRefresh() }
+                            } else if (totalDrag < -refreshTriggerPx) {
+                                coroutineScope.launch { onRefresh() }
                             }
-                        } while (event.changes.any { it.pressed })
 
-                        // ドラッグ終了
-                        if (totalDrag > refreshTriggerPx) {
-                            coroutineScope.launch { onRefresh() }
-                        } else if (totalDrag < -refreshTriggerPx) {
-                            coroutineScope.launch { onRefresh() }
-                        }
-
-                        totalDrag = 0f
-                        coroutineScope.launch {
-                            overscrollOffset.animateTo(
-                                targetValue = 0f,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessMedium
+                            totalDrag = 0f
+                            coroutineScope.launch {
+                                overscrollOffset.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMedium
+                                    )
                                 )
-                            )
-                        }
-                    }
-                },
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(0.dp),
-            contentPadding = PaddingValues(
-                top = 8.dp,
-                bottom = 24.dp
-            )
-        ) {
-            page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
-                item(key = "thread-notice") {
-                    ThreadNoticeCard(message = notice)
-                }
-            }
-            itemsIndexed(
-                items = page.posts,
-                key = { _, post -> post.id }
-            ) { index, post ->
-                val normalizedPosterId = normalizePosterIdValue(post.posterId)
-                ThreadPostCard(
-                    post = post,
-                    isOp = index == 0,
-                    posterIdLabel = posterIdLabels[post.id],
-                    posterIdValue = normalizedPosterId,
-                    saidaneLabelOverride = saidaneOverrides[post.id],
-                    highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
-                    onQuoteClick = { reference ->
-                        val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
-                        if (targets.isNotEmpty()) {
-                            quotePreviewState = QuotePreviewState(
-                                quoteText = reference.text,
-                                targetPosts = targets,
-                                posterIdLabels = posterIdLabels
-                            )
+                            }
                         }
                     },
-                    onUrlClick = onUrlClick,
-                    onPosterIdClick = normalizedPosterId
-                        ?.let { normalizedId ->
-                            postsByPosterId[normalizedId]
-                                ?.takeIf { it.isNotEmpty() }
-                                ?.let { sameIdPosts ->
-                                    {
-                                        quotePreviewState = QuotePreviewState(
-                                            quoteText = "ID:$normalizedId のレス",
-                                            targetPosts = sameIdPosts,
-                                            posterIdLabels = posterIdLabels
-                                        )
-                                    }
-                                }
-                        },
-                    onReferencedByClick = referencedByMap[post.id]
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let { referencingPosts ->
-                            {
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                contentPadding = PaddingValues(
+                    top = 8.dp,
+                    bottom = 24.dp
+                )
+            ) {
+                page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+                    item(key = "thread-notice") {
+                        ThreadNoticeCard(message = notice)
+                    }
+                }
+                itemsIndexed(
+                    items = page.posts,
+                    key = { _, post -> post.id }
+                ) { index, post ->
+                    val normalizedPosterId = normalizePosterIdValue(post.posterId)
+                    ThreadPostCard(
+                        post = post,
+                        isOp = index == 0,
+                        posterIdLabel = posterIdLabels[post.id],
+                        posterIdValue = normalizedPosterId,
+                        saidaneLabelOverride = saidaneOverrides[post.id],
+                        highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
+                        onQuoteClick = { reference ->
+                            val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
+                            if (targets.isNotEmpty()) {
                                 quotePreviewState = QuotePreviewState(
-                                    quoteText = ">>${post.id} を引用したレス",
-                                    targetPosts = referencingPosts,
+                                    quoteText = reference.text,
+                                    targetPosts = targets,
                                     posterIdLabels = posterIdLabels
                                 )
                             }
                         },
-                    onSaidaneClick = { onSaidaneClick(post) },
-                    onMediaClick = onMediaClick,
-                    onLongPress = { onPostLongPress(post) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (index != page.posts.lastIndex) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                        thickness = 1.dp
+                        onUrlClick = onUrlClick,
+                        onPosterIdClick = normalizedPosterId
+                            ?.let { normalizedId ->
+                                postsByPosterId[normalizedId]
+                                    ?.takeIf { it.isNotEmpty() }
+                                    ?.let { sameIdPosts ->
+                                        {
+                                            quotePreviewState = QuotePreviewState(
+                                                quoteText = "ID:$normalizedId のレス",
+                                                targetPosts = sameIdPosts,
+                                                posterIdLabels = posterIdLabels
+                                            )
+                                        }
+                                    }
+                            },
+                        onReferencedByClick = referencedByMap[post.id]
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { referencingPosts ->
+                                {
+                                    quotePreviewState = QuotePreviewState(
+                                        quoteText = ">>${post.id} を引用したレス",
+                                        targetPosts = referencingPosts,
+                                        posterIdLabels = posterIdLabels
+                                    )
+                                }
+                        },
+                        onSaidaneClick = { onSaidaneClick(post) },
+                        onMediaClick = onMediaClick,
+                        onLongPress = {
+                            if (quotePreviewState == null) {
+                                onPostLongPress(post)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    if (index != page.posts.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                            thickness = 1.dp
+                        )
+                    }
+                }
+                page.expiresAtLabel?.takeIf { it.isNotBlank() }?.let { footerLabel ->
+                    item(key = "thread-expires-label") {
+                        Text(
+                            text = footerLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp, horizontal = 16.dp)
+                        )
+                    }
                 }
             }
-            page.expiresAtLabel?.takeIf { it.isNotBlank() }?.let { footerLabel ->
-                item(key = "thread-expires-label") {
-                    Text(
-                        text = footerLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 12.dp, horizontal = 16.dp)
-                    )
-                }
-            }
-        }
 
-        ThreadScrollbar(
-            listState = listState,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(vertical = 12.dp, horizontal = 4.dp)
-        )
+            ThreadScrollbar(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(vertical = 12.dp, horizontal = 4.dp)
+            )
         }
     }
     quotePreviewState?.let { state ->
@@ -5190,6 +5196,11 @@ private fun ThreadMessageText(
                         .getStringAnnotations(URL_ANNOTATION_TAG, downOffset, downOffset)
                         .firstOrNull()
                         ?.item
+                    val quoteIndexOnDown = annotated
+                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, downOffset, downOffset)
+                        .firstOrNull()
+                        ?.item
+                        ?.toIntOrNull()
                     if (urlOnDown != null) {
                         downChange.consume()
                         var upChange: PointerInputChange? = null
@@ -5207,6 +5218,39 @@ private fun ThreadMessageText(
                         if (urlOnUp != null) {
                             onUrlClick(urlOnUp)
                             upChange?.consume()
+                        }
+                        return@awaitEachGesture
+                    }
+                    if (quoteIndexOnDown != null) {
+                        val reference = quoteReferences
+                            .getOrNull(quoteIndexOnDown)
+                            ?.takeIf { it.targetPostIds.isNotEmpty() }
+                        if (reference != null) {
+                            val touchSlop = viewConfiguration.touchSlop
+                            val holdSucceeded = withTimeoutOrNull(QUOTE_PREVIEW_HOLD_MS) {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == downChange.id } ?: continue
+                                    if (change.changedToUpIgnoreConsumed()) {
+                                        return@withTimeoutOrNull false
+                                    }
+                                    val distance = (change.position - downChange.position).getDistance()
+                                    if (distance > touchSlop) {
+                                        return@withTimeoutOrNull false
+                                    }
+                                }
+                            } != false
+                            if (holdSucceeded) {
+                                onQuoteClick(reference)
+                                downChange.consume()
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == downChange.id }
+                                    if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
+                                        break
+                                    }
+                                }
+                            }
                         }
                         return@awaitEachGesture
                     }
@@ -5569,6 +5613,7 @@ private fun GalleryImageItem(
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
+private const val QUOTE_PREVIEW_HOLD_MS = 200L
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
