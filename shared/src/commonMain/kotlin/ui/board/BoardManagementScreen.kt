@@ -85,6 +85,7 @@ import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.automirrored.rounded.ReplyAll
 import androidx.compose.material.icons.rounded.ThumbUp
@@ -7270,13 +7271,20 @@ private val globalSettingsEntries = listOf(
         description = "GitHub でソースコードと issue を確認",
         icon = Icons.Rounded.Link,
         action = GlobalSettingsAction.Developer
+    ),
+    GlobalSettingsEntry(
+        label = "プライバシーポリシー",
+        description = "外部サイトでプライバシーポリシーを表示",
+        icon = Icons.Rounded.PrivacyTip,
+        action = GlobalSettingsAction.PrivacyPolicy
     )
 )
 
 private enum class GlobalSettingsAction {
     Email,
     X,
-    Developer
+    Developer,
+    PrivacyPolicy
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -7333,6 +7341,9 @@ private fun GlobalSettingsScreen(
                                 }
                                 GlobalSettingsAction.Developer -> {
                                     urlLauncher("https://github.com/inqueuet/futacha")
+                                }
+                                GlobalSettingsAction.PrivacyPolicy -> {
+                                    urlLauncher("https://note.com/inqueuet/n/nc6ebcc1d6a67")
                                 }
                             }
                             onBack()
