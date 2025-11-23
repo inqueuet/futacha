@@ -395,6 +395,20 @@ internal object ThreadHtmlParserCore {
         val references: Map<String, List<QuoteReference>>
     )
 
+    /**
+     * オフライン復元など既存の Post リストから引用情報を付け直す用途向け。
+     */
+    fun rebuildReferences(posts: List<Post>): List<Post> {
+        if (posts.isEmpty()) return posts
+        val referenceData = buildReferencesAndCounts(posts)
+        return posts.map { post ->
+            post.copy(
+                referencedCount = referenceData.counts[post.id] ?: 0,
+                quoteReferences = referenceData.references[post.id].orEmpty()
+            )
+        }
+    }
+
     private fun buildReferencesAndCounts(posts: List<Post>): ReferenceData {
         if (posts.isEmpty()) return ReferenceData(emptyMap(), emptyMap())
 

@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.model
 
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
 
 fun SavedThreadMetadata.toThreadPage(
     fileSystem: FileSystem,
@@ -31,13 +32,14 @@ fun SavedThreadMetadata.toThreadPage(
             quoteReferences = emptyList()
         )
     }
+    val postsWithReferences = ThreadHtmlParserCore.rebuildReferences(convertedPosts)
 
     return ThreadPage(
         threadId = threadId,
         boardTitle = boardName,
         expiresAtLabel = expiresAtLabel,
         deletedNotice = null,
-        posts = convertedPosts,
+        posts = postsWithReferences,
         isTruncated = false,
         truncationReason = null
     )
