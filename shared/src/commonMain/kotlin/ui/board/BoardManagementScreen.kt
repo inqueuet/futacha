@@ -42,7 +42,6 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -5179,81 +5178,29 @@ private fun ThreadMessageText(
         MaterialTheme.colorScheme.onSurface
     }
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-    SelectionContainer {
-        Text(
-            modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
-                awaitEachGesture {
-                    val layout = textLayoutResult ?: return@awaitEachGesture
-                    var downChange: PointerInputChange? = null
-                    // Listen in Initial pass to beat selection/long-press handlers
-                    while (downChange == null) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        downChange = event.changes.firstOrNull { it.changedToDownIgnoreConsumed() }
-                        if (event.changes.none { it.pressed }) return@awaitEachGesture
-                    }
-                    val downOffset = layout.getOffsetForPosition(downChange.position)
-                    val urlOnDown = annotated
-                        .getStringAnnotations(URL_ANNOTATION_TAG, downOffset, downOffset)
-                        .firstOrNull()
-                        ?.item
-                    val quoteIndexOnDown = annotated
-                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, downOffset, downOffset)
-                        .firstOrNull()
-                        ?.item
-                        ?.toIntOrNull()
-                    if (urlOnDown != null) {
-                        downChange.consume()
-                        var upChange: PointerInputChange? = null
-                        while (upChange == null) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            upChange = event.changes.firstOrNull { it.changedToUpIgnoreConsumed() }
-                            if (event.changes.none { it.pressed }) break
-                        }
-                        val upPosition = upChange?.position ?: downChange.position
-                        val upOffset = layout.getOffsetForPosition(upPosition)
-                        val urlOnUp = annotated
-                            .getStringAnnotations(URL_ANNOTATION_TAG, upOffset, upOffset)
-                            .firstOrNull()
-                            ?.item
-                        if (urlOnUp != null) {
-                            onUrlClick(urlOnUp)
-                            upChange?.consume()
-                        }
-                        return@awaitEachGesture
-                    }
-                    if (quoteIndexOnDown != null) {
-                        val reference = quoteReferences
-                            .getOrNull(quoteIndexOnDown)
-                            ?.takeIf { it.targetPostIds.isNotEmpty() }
-                        if (reference != null) {
-                            val touchSlop = viewConfiguration.touchSlop
-                            val holdSucceeded = withTimeoutOrNull(QUOTE_PREVIEW_HOLD_MS) {
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    val change = event.changes.firstOrNull { it.id == downChange.id } ?: continue
-                                    if (change.changedToUpIgnoreConsumed()) {
-                                        return@withTimeoutOrNull false
-                                    }
-                                    val distance = (change.position - downChange.position).getDistance()
-                                    if (distance > touchSlop) {
-                                        return@withTimeoutOrNull false
-                                    }
-                                }
-                            } != false
-                            if (holdSucceeded) {
-                                onQuoteClick(reference)
-                                downChange.consume()
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    val change = event.changes.firstOrNull { it.id == downChange.id }
-                                    if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
-                                        break
-                                    }
-                                }
-                            }
-                        }
-                        return@awaitEachGesture
-                    }
+    Text(
+        modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
+            awaitEachGesture {
+                val layout = textLayoutResult ?: return@awaitEachGesture
+                var downChange: PointerInputChange? = null
+                // Listen in Initial pass to beat selection/long-press handlers
+                while (downChange == null) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    downChange = event.changes.firstOrNull { it.changedToDownIgnoreConsumed() }
+                    if (event.changes.none { it.pressed }) return@awaitEachGesture
+                }
+                val downOffset = layout.getOffsetForPosition(downChange.position)
+                val urlOnDown = annotated
+                    .getStringAnnotations(URL_ANNOTATION_TAG, downOffset, downOffset)
+                    .firstOrNull()
+                    ?.item
+                val quoteIndexOnDown = annotated
+                    .getStringAnnotations(QUOTE_ANNOTATION_TAG, downOffset, downOffset)
+                    .firstOrNull()
+                    ?.item
+                    ?.toIntOrNull()
+                if (urlOnDown != null) {
+                    downChange.consume()
                     var upChange: PointerInputChange? = null
                     while (upChange == null) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -5261,25 +5208,75 @@ private fun ThreadMessageText(
                         if (event.changes.none { it.pressed }) break
                     }
                     val upPosition = upChange?.position ?: downChange.position
-                    val offset = layout.getOffsetForPosition(upPosition)
-                    annotated
-                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                    val upOffset = layout.getOffsetForPosition(upPosition)
+                    val urlOnUp = annotated
+                        .getStringAnnotations(URL_ANNOTATION_TAG, upOffset, upOffset)
                         .firstOrNull()
                         ?.item
-                        ?.toIntOrNull()
-                        ?.let { index ->
-                            quoteReferences
-                                .getOrNull(index)
-                                ?.takeIf { it.targetPostIds.isNotEmpty() }
-                                ?.let(onQuoteClick)
-                        }
+                    if (urlOnUp != null) {
+                        onUrlClick(urlOnUp)
+                        upChange?.consume()
+                    }
+                    return@awaitEachGesture
                 }
-            },
-            text = annotated,
-            style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
-            onTextLayout = { textLayoutResult = it }
-        )
-    }
+                if (quoteIndexOnDown != null) {
+                    val reference = quoteReferences
+                        .getOrNull(quoteIndexOnDown)
+                        ?.takeIf { it.targetPostIds.isNotEmpty() }
+                    if (reference != null) {
+                        val touchSlop = viewConfiguration.touchSlop
+                        val holdSucceeded = withTimeoutOrNull(QUOTE_PREVIEW_HOLD_MS) {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull { it.id == downChange.id } ?: continue
+                                if (change.changedToUpIgnoreConsumed()) {
+                                    return@withTimeoutOrNull false
+                                }
+                                val distance = (change.position - downChange.position).getDistance()
+                                if (distance > touchSlop) {
+                                    return@withTimeoutOrNull false
+                                }
+                            }
+                        } != false
+                        if (holdSucceeded) {
+                            onQuoteClick(reference)
+                            downChange.consume()
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull { it.id == downChange.id }
+                                if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
+                                    break
+                                }
+                            }
+                        }
+                    }
+                    return@awaitEachGesture
+                }
+                var upChange: PointerInputChange? = null
+                while (upChange == null) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    upChange = event.changes.firstOrNull { it.changedToUpIgnoreConsumed() }
+                    if (event.changes.none { it.pressed }) break
+                }
+                val upPosition = upChange?.position ?: downChange.position
+                val offset = layout.getOffsetForPosition(upPosition)
+                annotated
+                    .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                    .firstOrNull()
+                    ?.item
+                    ?.toIntOrNull()
+                    ?.let { index ->
+                        quoteReferences
+                            .getOrNull(index)
+                            ?.takeIf { it.targetPostIds.isNotEmpty() }
+                            ?.let(onQuoteClick)
+                    }
+            }
+        },
+        text = annotated,
+        style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
+        onTextLayout = { textLayoutResult = it }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
