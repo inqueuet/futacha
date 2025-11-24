@@ -15,6 +15,7 @@ expect fun PlatformVideoPlayer(
     videoUrl: String,
     modifier: Modifier = Modifier,
     onStateChanged: (VideoPlayerState) -> Unit = {},
+    onVideoSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },
     volume: Float = 1f,
     isMuted: Boolean = false
 )

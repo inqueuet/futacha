@@ -12,6 +12,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 
@@ -20,11 +21,13 @@ actual fun PlatformVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
+    onVideoSizeKnown: (width: Int, height: Int) -> Unit,
     volume: Float,
     isMuted: Boolean
 ) {
     val context = LocalContext.current
     val currentCallback by rememberUpdatedState(onStateChanged)
+    val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
@@ -72,6 +75,10 @@ actual fun PlatformVideoPlayer(
 
             override fun onPlayerError(error: PlaybackException) {
                 currentCallback(VideoPlayerState.Error)
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                currentSizeCallback(videoSize.width, videoSize.height)
             }
         }
         player.addListener(listener)

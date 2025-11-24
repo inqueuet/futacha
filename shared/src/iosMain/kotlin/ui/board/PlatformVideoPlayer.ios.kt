@@ -33,6 +33,7 @@ actual fun PlatformVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
+    onVideoSizeKnown: (width: Int, height: Int) -> Unit,
     volume: Float,
     isMuted: Boolean
 ) {
@@ -42,6 +43,7 @@ actual fun PlatformVideoPlayer(
             .lowercase()
     }
     val currentCallback by rememberUpdatedState(onStateChanged)
+    val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
     if (extension == "webm") {
         WebVideoPlayer(
             videoUrl = videoUrl,
@@ -55,6 +57,7 @@ actual fun PlatformVideoPlayer(
             videoUrl = videoUrl,
             modifier = modifier,
             onStateChanged = { currentCallback(it) },
+            onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
             volume = volume,
             isMuted = isMuted
         )
@@ -67,6 +70,7 @@ private fun AvKitVideoPlayer(
     videoUrl: String,
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
+    onVideoSizeKnown: (width: Int, height: Int) -> Unit,
     volume: Float,
     isMuted: Boolean
 ) {
@@ -89,6 +93,10 @@ private fun AvKitVideoPlayer(
         while (isActive) {
             when (item.status) {
                 AVPlayerItemStatusReadyToPlay -> {
+                    val size = item.presentationSize
+                    if (size.width > 0 && size.height > 0) {
+                        onVideoSizeKnown(size.width.toInt(), size.height.toInt())
+                    }
                     onStateChanged(VideoPlayerState.Ready)
                     player.play()
                     return@LaunchedEffect

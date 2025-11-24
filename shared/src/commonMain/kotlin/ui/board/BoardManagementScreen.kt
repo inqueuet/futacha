@@ -183,6 +183,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -6186,6 +6187,31 @@ private fun ImagePreviewDialog(
         imageLoader = imageLoader
     )
     val painterState = painter.state
+    val targetContentScale by remember(previewSize, painterState) {
+        derivedStateOf {
+            val imageSize = (painterState as? AsyncImagePainter.State.Success)?.painter?.intrinsicSize
+            val containerWidth = previewSize.width.toFloat()
+            val containerHeight = previewSize.height.toFloat()
+            if (
+                imageSize != null &&
+                imageSize.isSpecified &&
+                imageSize.width > 0f &&
+                imageSize.height > 0f &&
+                containerWidth > 0f &&
+                containerHeight > 0f
+            ) {
+                val imageAspect = imageSize.width / imageSize.height
+                val containerAspect = containerWidth / containerHeight
+                if (imageAspect < containerAspect) {
+                    ContentScale.FillHeight
+                } else {
+                    ContentScale.FillWidth
+                }
+            } else {
+                ContentScale.Fit
+            }
+        }
+    }
     @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
     val isLoadingState = painterState is AsyncImagePainter.State.Loading
     @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
@@ -6239,9 +6265,10 @@ private fun ImagePreviewDialog(
             Image(
                 painter = painter,
                 contentDescription = "プレビュー画像",
-                contentScale = ContentScale.Fit,
+                contentScale = targetContentScale,
                 modifier = Modifier
                     .align(Alignment.Center)
+                    .fillMaxSize()
                     .graphicsLayer {
                         scaleX = scale
                         scaleY = scale
@@ -6340,7 +6367,30 @@ private fun VideoPreviewDialog(
     var previewSize by remember { mutableStateOf(IntSize.Zero) }
     var isMuted by remember { mutableStateOf(false) }
     var volume by remember { mutableFloatStateOf(0.9f) }
+    var videoSize by remember { mutableStateOf<IntSize?>(null) }
     val urlLauncher = rememberUrlLauncher()
+    val videoContentModifier by remember(previewSize, videoSize) {
+        derivedStateOf {
+            val containerWidth = previewSize.width.toFloat()
+            val containerHeight = previewSize.height.toFloat()
+            val size = videoSize
+            if (containerWidth <= 0f || containerHeight <= 0f || size == null || size.width <= 0 || size.height <= 0) {
+                Modifier.fillMaxSize()
+            } else {
+                val videoAspect = size.width.toFloat() / size.height.toFloat()
+                val containerAspect = containerWidth / containerHeight
+                if (videoAspect < containerAspect) {
+                    Modifier
+                        .fillMaxHeight()
+                        .aspectRatio(videoAspect, matchHeightConstraintsFirst = true)
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(videoAspect)
+                }
+            }
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -6383,8 +6433,11 @@ private fun VideoPreviewDialog(
         ) {
             PlatformVideoPlayer(
                 videoUrl = entry.url,
-                modifier = Modifier.fillMaxSize(),
+                modifier = videoContentModifier,
                 onStateChanged = { playbackState = it },
+                onVideoSizeKnown = { width, height ->
+                    videoSize = if (width > 0 && height > 0) IntSize(width, height) else null
+                },
                 volume = volume,
                 isMuted = isMuted
             )
