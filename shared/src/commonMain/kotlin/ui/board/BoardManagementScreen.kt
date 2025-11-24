@@ -143,6 +143,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -271,6 +272,8 @@ fun BoardManagementScreen(
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
     appVersion: String,
+    isBackgroundRefreshEnabled: Boolean = false,
+    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
@@ -515,7 +518,9 @@ fun BoardManagementScreen(
     if (isGlobalSettingsVisible) {
         GlobalSettingsScreen(
             onBack = { isGlobalSettingsVisible = false },
-            appVersion = appVersion
+            appVersion = appVersion,
+            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+            onBackgroundRefreshChanged = onBackgroundRefreshChanged
         )
     }
 }
@@ -1149,6 +1154,8 @@ fun CatalogScreen(
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     autoSavedThreadRepository: SavedThreadRepository? = null,
     appVersion: String,
+    isBackgroundRefreshEnabled: Boolean = false,
+    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -1649,7 +1656,9 @@ fun CatalogScreen(
         if (isGlobalSettingsVisible) {
             GlobalSettingsScreen(
                 onBack = { isGlobalSettingsVisible = false },
-                appVersion = appVersion
+                appVersion = appVersion,
+                isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                onBackgroundRefreshChanged = onBackgroundRefreshChanged
             )
         }
 
@@ -3249,6 +3258,8 @@ fun ThreadScreen(
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     autoSavedThreadRepository: SavedThreadRepository? = null,
     appVersion: String,
+    isBackgroundRefreshEnabled: Boolean = false,
+    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -4442,7 +4453,9 @@ fun ThreadScreen(
     if (isGlobalSettingsVisible) {
         GlobalSettingsScreen(
             onBack = { isGlobalSettingsVisible = false },
-            appVersion = appVersion
+            appVersion = appVersion,
+            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+            onBackgroundRefreshChanged = onBackgroundRefreshChanged
         )
     }
 }
@@ -7291,7 +7304,9 @@ private enum class GlobalSettingsAction {
 @Composable
 private fun GlobalSettingsScreen(
     onBack: () -> Unit,
-    appVersion: String
+    appVersion: String,
+    isBackgroundRefreshEnabled: Boolean,
+    onBackgroundRefreshChanged: (Boolean) -> Unit
 ) {
     val urlLauncher = rememberUrlLauncher()
     PlatformBackHandler(onBack = onBack)
@@ -7317,6 +7332,28 @@ private fun GlobalSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(2.dp),
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
+            item {
+                ListItem(
+                    headlineContent = { Text("バックグラウンド更新 (15分)") },
+                    supportingContent = {
+                        Text(
+                            text = "アプリ起動中は15分ごとに履歴を更新します（通知あり）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = isBackgroundRefreshEnabled,
+                            onCheckedChange = { onBackgroundRefreshChanged(it) }
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
             items(globalSettingsEntries) { entry ->
                 ListItem(
                     leadingContent = { Icon(imageVector = entry.icon, contentDescription = null) },

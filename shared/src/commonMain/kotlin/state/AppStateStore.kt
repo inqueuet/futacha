@@ -58,6 +58,7 @@ class AppStateStore internal constructor(
     }
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
+    val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
 
     val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
         decodeCatalogDisplayStyle(raw)
@@ -97,6 +98,15 @@ class AppStateStore internal constructor(
                 Logger.e(TAG, "Failed to save history with ${history.size} entries", e)
                 // Log error but don't crash - data will be lost but app continues
             }
+        }
+    }
+
+    suspend fun setBackgroundRefreshEnabled(enabled: Boolean) {
+        try {
+            storage.updateBackgroundRefreshEnabled(enabled)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save background refresh state: $enabled", e)
+            // Log error but don't crash
         }
     }
 
@@ -498,6 +508,7 @@ internal interface PlatformStateStorage {
     val boardsJson: Flow<String?>
     val historyJson: Flow<String?>
     val privacyFilterEnabled: Flow<Boolean>
+    val backgroundRefreshEnabled: Flow<Boolean>
     val catalogDisplayStyle: Flow<String?>
     val ngHeadersJson: Flow<String?>
     val ngWordsJson: Flow<String?>
@@ -508,6 +519,7 @@ internal interface PlatformStateStorage {
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
+    suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
     suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun updateNgHeadersJson(value: String)
     suspend fun updateNgWordsJson(value: String)

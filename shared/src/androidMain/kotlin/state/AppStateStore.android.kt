@@ -25,6 +25,7 @@ private class AndroidPlatformStateStorage(
     private val boardsKey = stringPreferencesKey("boards_json")
     private val historyKey = stringPreferencesKey("history_json")
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
+    private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
@@ -46,6 +47,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[privacyFilterKey] ?: false }
+
+    override val backgroundRefreshEnabled: Flow<Boolean> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[backgroundRefreshKey] ?: false }
 
     override val catalogDisplayStyle: Flow<String?> =
         context.dataStore.data
@@ -94,6 +100,15 @@ private class AndroidPlatformStateStorage(
             println("AndroidPlatformStateStorage: Failed to update history: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to save history data", e)
+        }
+    }
+
+    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
+        try {
+            context.dataStore.edit { prefs -> prefs[backgroundRefreshKey] = enabled }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update background refresh: ${e.message}")
+            throw StorageException("Failed to save background refresh state", e)
         }
     }
 

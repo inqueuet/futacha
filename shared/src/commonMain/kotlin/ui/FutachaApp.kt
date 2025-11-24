@@ -20,6 +20,7 @@ import com.valoser.futacha.shared.repo.createRemoteBoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
@@ -30,13 +31,9 @@ import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.Logger
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.Dispatchers
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import version.VersionChecker
@@ -71,8 +68,16 @@ fun FutachaApp(
             }
 
             // Use remember with Unit key to ensure single instance per composition lifecycle
-            val remoteBoardRepository = remember(Unit) {
-                createRemoteBoardRepository()
+            val remoteBoardRepository = remember(httpClient) {
+                httpClient?.let { createRemoteBoardRepository(it) } ?: createRemoteBoardRepository()
+            }
+
+            val historyRefresher = remember(remoteBoardRepository) {
+                HistoryRefresher(
+                    stateStore = stateStore,
+                    repository = remoteBoardRepository,
+                    dispatcher = Dispatchers.IO
+                )
             }
 
             val autoSavedThreadRepository = remember(fileSystem) {
@@ -114,6 +119,7 @@ fun FutachaApp(
 
             val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
             val persistedHistory by stateStore.history.collectAsState(initial = history)
+            val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
             }
@@ -126,6 +132,11 @@ fun FutachaApp(
             var selectedThreadUrl by rememberSaveable { mutableStateOf<String?>(null) }
 
             val selectedBoard = persistedBoards.firstOrNull { it.id == selectedBoardId }
+            val onBackgroundRefreshChanged: (Boolean) -> Unit = { enabled ->
+                coroutineScope.launch {
+                    stateStore.setBackgroundRefreshEnabled(enabled)
+                }
+            }
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 val updatedHistory = persistedHistory.filterNot { it.threadId == entry.threadId }
                 coroutineScope.launch {
@@ -146,6 +157,7 @@ fun FutachaApp(
                 coroutineScope.launch {
                     stateStore.clearSelfPostIdentifiers()
                     stateStore.setHistory(emptyList())
+                    historyRefresher.clearSkippedThreads()
                     autoSavedThreadRepository?.deleteAllThreads()
                         ?.onFailure {
                             Logger.e(TAG, "Failed to clear auto saved threads", it)
@@ -153,69 +165,10 @@ fun FutachaApp(
                 }
             }
             val refreshHistoryEntries: suspend () -> Unit = refreshHistoryEntries@{
-                val snapshot = persistedHistory.toList()
-                if (snapshot.isEmpty()) return@refreshHistoryEntries
-
-                // Fetch thread data in parallel, but collect updates first
-                val errors = mutableListOf<Throwable>()
-                val errorsMutex = Mutex()
-                val updatedEntries = mutableMapOf<String, ThreadHistoryEntry>()
-                val updatesMutex = Mutex()
-
-                coroutineScope {
-                    snapshot.map { entry ->
-                        async {
-                            if (entry.boardUrl.isBlank() || entry.boardUrl.contains("example.com", ignoreCase = true)) {
-                                return@async
-                            }
-                            val boardBaseUrl = persistedBoards.firstOrNull { it.id == entry.boardId }?.url
-                                ?: runCatching {
-                                    if (entry.boardUrl.isNotBlank()) {
-                                        BoardUrlResolver.resolveBoardBaseUrl(entry.boardUrl)
-                                    } else {
-                                        null
-                                    }
-                                }.getOrNull()
-                            if (boardBaseUrl.isNullOrBlank()) {
-                                return@async
-                            }
-                            try {
-                                val page = remoteBoardRepository.getThread(boardBaseUrl, entry.threadId)
-                                val opPost = page.posts.firstOrNull()
-                                val updatedEntry = entry.copy(
-                                    title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
-                                    titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
-                                    boardName = page.boardTitle ?: entry.boardName,
-                                    replyCount = page.posts.size
-                                )
-                                // Collect updates instead of writing immediately
-                                updatesMutex.withLock {
-                                    updatedEntries[entry.threadId] = updatedEntry
-                                }
-                            } catch (e: Exception) {
-                                Logger.e(TAG, "Failed to refresh history entry ${entry.threadId}", e)
-                                errorsMutex.withLock {
-                                    errors.add(e)
-                                }
-                            }
-                        }
-                    }.awaitAll()
-                }
-
-                // FIX: Batch update with proper synchronization to prevent race conditions
-                // Use a single setHistory call inside a critical section
-                if (updatedEntries.isNotEmpty()) {
-                    // Re-read current state to ensure we have the latest data
-                    val currentHistory = stateStore.history.first()
-                    val mergedHistory = currentHistory.map { entry: ThreadHistoryEntry ->
-                        updatedEntries[entry.threadId] ?: entry
-                    }
-                    // Single atomic write operation
-                    stateStore.setHistory(mergedHistory)
-                }
-
-                // Throw the first error if any occurred
-                errors.firstOrNull()?.let { throw it }
+                historyRefresher.refresh(
+                    boardsSnapshot = persistedBoards,
+                    historySnapshot = persistedHistory
+                )
             }
             val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 val targetBoard = persistedBoards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
@@ -269,7 +222,9 @@ fun FutachaApp(
                                 stateStore.setBoards(reorderedBoards)
                             }
                         },
-                        appVersion = appVersion
+                        appVersion = appVersion,
+                        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                        onBackgroundRefreshChanged = onBackgroundRefreshChanged
                     )
                 }
 
@@ -300,7 +255,9 @@ fun FutachaApp(
                         onHistoryCleared = clearHistory,
                         repository = boardRepository,
                         stateStore = stateStore,
-                        appVersion = appVersion
+                        appVersion = appVersion,
+                        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                        onBackgroundRefreshChanged = onBackgroundRefreshChanged
                     )
                 }
 
@@ -390,7 +347,9 @@ fun FutachaApp(
                             fileSystem = fileSystem,
                             stateStore = stateStore,
                             autoSavedThreadRepository = autoSavedThreadRepository,
-                            appVersion = appVersion
+                            appVersion = appVersion,
+                            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                            onBackgroundRefreshChanged = onBackgroundRefreshChanged
                         )
                     }
                 }

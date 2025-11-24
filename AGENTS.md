@@ -6,14 +6,17 @@
 
 ## 0. Entry Points & Runtime
 
+- `app-android/src/main/java/com/valoser/futacha/FutachaApplication.kt`
+  - アプリスコープで `AppStateStore` / `HttpClient` / `DefaultBoardRepository` / `HistoryRefresher` を生成し、UI/サービスで共有。
 - `app-android/src/main/java/com/valoser/futacha/MainActivity.kt`
-  - `createAppStateStore(applicationContext)` / `createHttpClient()` / `createVersionChecker(context, httpClient)` / `createFileSystem(applicationContext)` を `remember`。
-  - `DisposableEffect` で HttpClient を close。`FutachaApp` に stateStore / httpClient / fileSystem / versionChecker を注入。
+  - Application のシングルトンを利用して `FutachaApp` を構築。`isBackgroundRefreshEnabled` を collect し、ON なら `HistoryRefreshService` を Foreground Service として起動。
+- `app-android/src/main/java/com/valoser/futacha/HistoryRefreshService.kt`
+  - 常時通知付きで 15 分間隔に `HistoryRefresher.refresh()` を実行。トグルが OFF になると停止し、404/410 はスキップリストへ入れて次回以降の更新対象外とするが履歴は削除しない。
 - `shared/src/iosMain/kotlin/MainViewController.kt`
-  - `stateStore` / `httpClient` / `versionChecker` / `fileSystem` を `remember` し、`DisposableEffect` で HttpClient を close。`ComposeUIViewController { FutachaApp(...) }` を返すシンプルなホストとして `fileSystem` まで渡され、Thread 保存やスナックバーの挙動も Android と同じように動作します。
+  - `stateStore` / `httpClient` / `versionChecker` / `fileSystem` を `remember`。`isBackgroundRefreshEnabled` を監視し、BGTask ベースのスケジュールを `BackgroundRefreshManager` へ委譲（実行タイミングは iOS 制御）。
 - `shared/src/commonMain/kotlin/ui/FutachaApp.kt`
   - `mockBoardSummaries` / `mockThreadHistory` で初回起動をシード。
-  - `createRemoteBoardRepository()` を `remember` し、`DisposableEffect` で `close()`。
+  - `createRemoteBoardRepository(httpClient)` を `remember` し、`DisposableEffect` で `close()`。`HistoryRefresher` を UI からの履歴更新・サービス/BGTask 共有で利用。
   - `setScrollDebounceScope()`、version チェック (`VersionChecker`)、`LocalFutachaImageLoader` のライフサイクル管理、履歴更新 (`refreshHistoryEntries`) を担当。
   - `selectedBoardId` / `selectedThreadId` で Board → Catalog → Thread を切り替え。`BoardSummary.isMockBoard()` によりモック/リモートを選択。
   - `fileSystem` から `AUTO_SAVE_DIRECTORY` を使った `SavedThreadRepository` を `remember` し、自動セーブ用インデックスを管理。履歴エントリ削除・クリア時には関連する auto-save ディレクトリを削除し、`ThreadScreen` にオフラインフォールバックを提供する。
@@ -73,6 +76,7 @@
   7. Settings → `ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示。〇は即動作し、NG管理は `NgManagementSheet` でヘッダー/ワードを編集、外部アプリは `res/{threadId}.htm` を開く、プライバシーは `AppStateStore` のフラグをトグル。△の読み上げは `TextSpeaker` で投稿本文を順次再生し、再タップで停止できる基本実装。記号凡例は Catalog と同じです。
 - `ThreadActionBar` は `.navigationBarsPadding()` を適用し、Androidのシステムナビゲーションバー（3点メニュー）の上に配置されるため、ボトムバーとシステムUIが重ならず正常に操作できます。
 - 自動セーブ / オフラインフォールバック: `autoSavedThreadRepository` に `AUTO_SAVE_DIRECTORY` を使って `ThreadSaveService(baseDirectory = AUTO_SAVE_DIRECTORY)` で 60 秒ごとにスレッドを保存。`loadThreadWithOfflineFallback` は保存済みメタデータを `SavedThreadMetadata.toThreadPage()` で `ThreadPage` に変換して表示し、ネットワーク不通時には snackbar でローカルコピーを通知 (`isShowingOfflineCopy` フラグ)。履歴を削除またはクリアすると `FutachaApp` が該当する auto-save ディレクトリを `SavedThreadRepository` 経由で削除するので、古いローカルコピーも掃除される。
+- 履歴更新の共通化: `HistoryRefresher`（commonMain）が履歴の一括更新を担当。404/410 はスキップリストに入れ、履歴からは削除しない。UI の「履歴更新」やバックグラウンド処理から共通で利用。
 - 投稿カード (`ThreadPostCard`):
   - ID ラベル: `buildPosterIdLabels()` が ID ごとの通番と total count を付与 (複数出現なら強調)。
   - 引用 (`QuoteReference`) をタップすると `QuotePreviewDialog` に target posts をまとめて表示。
@@ -91,7 +95,7 @@
 ### 1.5 GlobalSettingsScreen
 
 - `GlobalSettingsScreen` は Board のメニュー `SETTINGS`、Catalog の `CatalogMenuAction.Settings`、Thread の `ThreadMenuAction.Settings`、履歴ドロワーの設定ボタンから開く共通設定ダイアログ。
-- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。
+- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。バックグラウンド更新トグル（15分間隔、Androidは Foreground Service、iOSは BGTask 間欠実行）が追加され、`isBackgroundRefreshEnabled` を切り替える。
 - `FutachaApp` は `VersionChecker` からバージョン名 (`appVersion`) を `remember` し、全画面に注入しているので、最新リリース通知 (`UpdateNotificationDialog`) と合わせて UI 側でもバージョン参照が一貫している。
 
 ---
@@ -99,7 +103,7 @@
 ## 2. State & Persistence
 
 - `AppStateStore` (`shared/src/commonMain/kotlin/state/AppStateStore.kt`)
-  - `boards` / `history` / `isPrivacyFilterEnabled` に加えて `catalogDisplayStyle` と `ngHeaders` / `ngWords` / `catalogNgWords` / `watchWords` を Flow で expose。
+  - `boards` / `history` / `isPrivacyFilterEnabled` / `isBackgroundRefreshEnabled` に加えて `catalogDisplayStyle` と `ngHeaders` / `ngWords` / `catalogNgWords` / `watchWords` を Flow で expose。
   - 監視ワード (`watchWords`) は `WatchWordsSheet` から編集され、`AppStateStore.setWatchWords()` で DataStore / NSUserDefaults に即保存。カタログ更新時はこれらのワードに一致したスレッドを履歴へ自動追加します。
   - JSON シリアライゼーション (`ListSerializer`) + `Mutex` で書き込みを直列化。
   - `setScrollDebounceScope()` + `scrollPositionJobs` でスレスクロール保存のスパムを防止。500ms 待ってから `updateHistoryScrollPositionImmediate()` を実行。
@@ -132,6 +136,7 @@
   - `ensureCookiesInitialized()` を board ごとに 1 回だけ実行 (`Mutex` + `initializedBoards` set)。
   - `fetchOpImageUrl()` は `HttpBoardApi.fetchThreadHead()` で 65 行だけ取得し、`parser.extractOpImageUrl()` に渡す。並列数は `Semaphore(4)`、OP 画像 URL は TTL 15 分・最大 512 件の LRU キャッシュに入り、`clearOpImageCache(board?, threadId?)` で個別/全体のキャッシュを削除できる。
   - リモート操作 (`voteSaidane`, `requestDeletion`, `deleteByUser`, `replyToThread`, `createThread`) は cookie 初期化後に API を呼ぶだけの薄いラッパー。
+  - `createRemoteBoardRepository(httpClient)` で外部から渡された HttpClient を共有可能（UI と Foreground Service/BGTask で同一クライアントを再利用するための変更）。
 - パーサー (`shared/src/commonMain/kotlin/parser`)
   - `HtmlParser` expect/actual の実装は Android/iOS ともに `CatalogHtmlParserCore` / `ThreadHtmlParserCore` を呼ぶだけ (Jsoup 依存なし)。
   - `CatalogHtmlParserCore`: table body を chunk ごとに処理し、1000 アイテム・10MB を上限に安全性を確保。
@@ -165,11 +170,12 @@
   - `LaunchedEffect(Unit)` で一覧/サイズをロード。`AlertDialog` で削除確認。現状は未配線。
 - Expect/actual components
   - `ImagePickerButton` & `rememberImagePickerLauncher`: Android は ActivityResultContracts.GetContent、iOS は PHPicker + suspend 呼び出し。
-  - `PlatformVideoPlayer`: Android は Media3/ExoPlayer + `PlayerView` で WEBM/MP4 をサポートし、バッファリング/エラー状態を callback へ通知。iOS は MP4 を `AVPlayerViewController`、WEBM は `WKWebView` ベースの簡易プレーヤーで描画し、双方とも状態を Compose 側に返します。
-  - `UrlLauncher`: Android Intent / iOS UIApplication。
-  - `PermissionRequest`: Android ではストレージ権限 (API < 33) を要求、iOS はアプリの保存先 (Documents/futacha) を案内するダイアログを表示したうえで即 true。
-  - `PlatformBackHandler`: Android Compose BackHandler / iOS no-op。
+- `PlatformVideoPlayer`: Android は Media3/ExoPlayer + `PlayerView` で WEBM/MP4 をサポートし、バッファリング/エラー状態を callback へ通知。iOS は MP4 を `AVPlayerViewController`、WEBM は `WKWebView` ベースの簡易プレーヤーで描画し、双方とも状態を Compose 側に返します。
+- `UrlLauncher`: Android Intent / iOS UIApplication。
+- `PermissionRequest`: Android ではストレージ権限 (API < 33) を要求、iOS はアプリの保存先 (Documents/futacha) を案内するダイアログを表示したうえで即 true。
+- `PlatformBackHandler`: Android Compose BackHandler / iOS no-op。
 - `LocalFutachaImageLoader`: Coil3 ImageLoader を再利用し、`Dispatchers.IO.limitedParallelism(3)` でフェッチ/デコードを制限。32MB のメモリキャッシュと `futacha_image_cache`（最大 128MB、okio + DiskCache）を作ってカタログのサムネ描画を安定化させている。
+- `BackgroundRefreshManager` (iOS): BGAppRefresh/BGProcessing 用の簡易スケジューラ。タスク ID `com.valoser.futacha.refresh` を登録し、`isBackgroundRefreshEnabled` が ON のときのみスケジュール。実行タイミングは iOS 管理。
 
 ---
 
@@ -247,6 +253,19 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 ---
 
 ## 9. 最近のコード変更履歴
+
+### 2026-02-XX: バックグラウンド履歴更新の常時実行対応
+
+**追加**:
+- `isBackgroundRefreshEnabled` を AppStateStore/設定に追加し、GlobalSettings にトグルを設置。
+- `HistoryRefresher` を共通化し、404/410 はスキップリストに入れて以降の更新対象から外す（履歴自体は保持）。
+- Android: `FutachaApplication` で HttpClient/Repository/Refresher を共有し、`HistoryRefreshService` (Foreground Service) が 15 分間隔で実行。MainActivity でトグル監視して起動/停止。
+- iOS: `BackgroundRefreshManager` を導入し、トグル ON で BGAppRefresh/BGProcessing をスケジュール（実行タイミングは OS 制御）。Native 側の BGTask 許可設定が必要。
+- `createRemoteBoardRepository(httpClient)` で HttpClient 共有を可能にし、UI/サービス/BGTask 間で同一クライアントを使い回せるようにした。
+
+**影響**:
+- アプリ起動中は 15 分間隔で履歴を自動更新（Android は Foreground 通知付き、iOS は OS 任せの間欠実行）。
+- 404/410 になったスレッドは履歴表示を残したまま自動更新対象から除外。
 
 ### 2026-01-XX: 読み上げ時に URL を除外
 

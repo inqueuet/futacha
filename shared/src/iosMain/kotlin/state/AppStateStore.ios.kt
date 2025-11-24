@@ -8,6 +8,7 @@ private const val BOARDS_KEY = "boards_json"
 private const val HISTORY_KEY = "history_json"
 private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
+private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
 private const val CATALOG_NG_WORDS_KEY = "catalog_ng_words_json"
@@ -24,6 +25,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val historyState = MutableStateFlow(defaults.stringForKey(HISTORY_KEY))
     private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
+    private val backgroundRefreshState = MutableStateFlow(defaults.boolForKey(BACKGROUND_REFRESH_KEY))
     private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
     private val catalogNgWordsState = MutableStateFlow(defaults.stringForKey(CATALOG_NG_WORDS_KEY))
@@ -33,6 +35,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
+    override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val ngHeadersJson: Flow<String?> = ngHeadersState
     override val ngWordsJson: Flow<String?> = ngWordsState
@@ -56,6 +59,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaults.setBool(enabled, forKey = PRIVACY_FILTER_KEY)
         defaults.synchronize()
         privacyFilterState.value = enabled
+    }
+
+    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
+        defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
+        defaults.synchronize()
+        backgroundRefreshState.value = enabled
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
