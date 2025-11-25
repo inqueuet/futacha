@@ -17,6 +17,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
@@ -98,6 +99,8 @@ class HttpBoardApi(
             println("HttpBoardApi: Catalog setup cookies initialized for board: $board (cx=5, cy=60)")
         } catch (e: NetworkException) {
             throw e
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val errorMsg = "Failed to fetch catalog setup from $url: ${e.message}"
             println("HttpBoardApi: $errorMsg")
@@ -138,6 +141,8 @@ class HttpBoardApi(
 
             body
         } catch (e: NetworkException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             val errorMsg = "Failed to fetch catalog from $url: ${e.message}"
@@ -183,6 +188,8 @@ class HttpBoardApi(
             builder.toString()
         } catch (e: NetworkException) {
             throw e
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val errorMsg = "Failed to fetch thread head from $url: ${e.message}"
             println("HttpBoardApi: $errorMsg")
@@ -227,6 +234,8 @@ class HttpBoardApi(
             body
         } catch (e: NetworkException) {
             throw e
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val errorMsg = "Failed to fetch thread from $url: ${e.message}"
             println("HttpBoardApi: $errorMsg")
@@ -261,6 +270,8 @@ class HttpBoardApi(
             }
         } catch (e: NetworkException) {
             throw e
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw NetworkException("Failed to vote saidane: ${e.message}", cause = e)
         }
@@ -292,6 +303,8 @@ class HttpBoardApi(
                 headers[HttpHeaders.Pragma] = "no-cache"
                 headers[HttpHeaders.Referrer] = referer
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw NetworkException("Failed to send del request: ${e.message}", cause = e)
         }
@@ -340,6 +353,8 @@ class HttpBoardApi(
                 headers[HttpHeaders.Pragma] = "no-cache"
                 headers[HttpHeaders.Referrer] = referer
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw NetworkException("Failed to delete post: ${e.message}", cause = e)
         }
@@ -395,6 +410,8 @@ class HttpBoardApi(
                 headers[HttpHeaders.Pragma] = "no-cache"
                 headers[HttpHeaders.Referrer] = referer
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw NetworkException("Failed to create thread: ${e.message}", cause = e)
         }
@@ -464,6 +481,8 @@ class HttpBoardApi(
                 headers[HttpHeaders.Pragma] = "no-cache"
                 headers[HttpHeaders.Referrer] = referer
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw NetworkException("Failed to reply to thread: ${e.message}", cause = e)
         }
@@ -733,6 +752,8 @@ class HttpBoardApi(
                 encoding = determineEncoding(chrencValue),
                 chrencValue = chrencValue
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             PostingConfig(
                 encoding = PostEncoding.SHIFT_JIS,
