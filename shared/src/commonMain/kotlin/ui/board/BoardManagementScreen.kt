@@ -2488,30 +2488,33 @@ private fun rememberResolvedCatalogThumbnailUrl(
     item: CatalogItem,
     boardUrl: String?,
     repository: BoardRepository
-): String? {
+): Pair<String?, Boolean> {
     // サムネイル画像を保持（初期値）
     val thumbnailUrl = item.thumbnailUrl
 
-    // フルサイズ画像のURLを保持
+    // フルサイズ画像URLと取得状態を保持
     var fullsizeUrl by remember(item.id, boardUrl) {
         mutableStateOf<String?>(null)
     }
-    var opImageRequested by remember(item.id, boardUrl) {
-        mutableStateOf(false)
+    var isLoading by remember(item.id, boardUrl) {
+        mutableStateOf(true)
     }
 
     // フルサイズ画像を非同期で取得
     LaunchedEffect(item.id, boardUrl, repository) {
-        if (boardUrl.isNullOrBlank() || item.id.isBlank() || opImageRequested) return@LaunchedEffect
-        opImageRequested = true
-        val fetchedUrl = repository.fetchOpImageUrl(boardUrl, item.id)
-        if (!fetchedUrl.isNullOrBlank() && fetchedUrl != thumbnailUrl) {
-            fullsizeUrl = fetchedUrl
+        if (boardUrl.isNullOrBlank() || item.id.isBlank()) {
+            isLoading = false
+            return@LaunchedEffect
         }
+        isLoading = true
+        val fetchedUrl = repository.fetchOpImageUrl(boardUrl, item.id)
+        fullsizeUrl = fetchedUrl
+        isLoading = false
     }
 
-    // フルサイズ画像が取得できていればそれを使用、そうでなければサムネイルを使用
-    return fullsizeUrl ?: thumbnailUrl
+    // フルサイズURLが取得できていればそれを使用、そうでなければサムネイルを使用
+    val resolvedUrl = fullsizeUrl ?: thumbnailUrl
+    return Pair(resolvedUrl, isLoading)
 }
 
 @Composable
@@ -2524,7 +2527,7 @@ private fun CatalogCard(
 ) {
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
-    val resolvedThumbnailUrl = rememberResolvedCatalogThumbnailUrl(
+    val (resolvedThumbnailUrl, isLoadingFullsize) = rememberResolvedCatalogThumbnailUrl(
         item = item,
         boardUrl = boardUrl,
         repository = repository
@@ -2548,6 +2551,8 @@ private fun CatalogCard(
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
+            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
             .build()
     }
 
@@ -2558,6 +2563,8 @@ private fun CatalogCard(
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
+            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
             .build()
     }
 
@@ -2675,7 +2682,7 @@ private fun CatalogListItem(
 ) {
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
-    val resolvedThumbnailUrl = rememberResolvedCatalogThumbnailUrl(
+    val (resolvedThumbnailUrl, isLoadingFullsize) = rememberResolvedCatalogThumbnailUrl(
         item = item,
         boardUrl = boardUrl,
         repository = repository
@@ -2696,6 +2703,8 @@ private fun CatalogListItem(
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
+            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
             .build()
     }
 
@@ -2706,6 +2715,8 @@ private fun CatalogListItem(
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
+            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
             .build()
     }
 
