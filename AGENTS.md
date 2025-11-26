@@ -279,6 +279,49 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 **影響範囲**:
 - ThreadScreen の読み上げ機能がリンクを読み上げなくなり、音声出力が本文に集中する。
 
+### 2025-11-26: Cookie 管理と保存まわりの大幅更新
+
+**主な変更**:
+- `PersistentCookieStorage` と `CookieRepository` を追加し、Ktor HttpClient (Android/iOS) で永続 Cookie を共有するよう統合。BoardRepository にも Cookie 注入を追加。
+- `CookieManagementScreen` を実装し、BoardManagement から Cookie の一覧/削除/更新を操作可能にした。
+- `ThreadSaveService` を再設計し、保存処理の段階管理やメタデータ更新の仕様を見直し。保存フリーズの原因になっていた処理を整理し、HistoryRefreshService と BoardRepository まわりのバグを修正。
+- `AppStateStore`/`HistoryRefresher`/`MockBoardData`/各種 Parser を含む多数の細部を修正し、クラッシュやフリーズを低減。ImagePicker (Android) の結果処理も安定化。
+
+**影響**:
+- Cookie を含むセッション維持が安定し、UI から手動で管理できるようになった。
+- スレ保存や履歴更新の失敗が減り、停止・フリーズ系の不具合を解消。
+
+### 2025-11-25: キャッシュ・プレビュー・キャンセルハンドリングの改善
+
+- BoardManagement のキャッシュ機構を修正し、無効化されていたキャッシュを正常化。
+- HttpBoardApi で `Parent job is Completed` 状態を検知するハンドリングを追加。
+- Video プレビュー周りを調整し、Compose 側と Android/iOS 両方の PlatformVideoPlayer の挙動を修正。
+
+### 2025-11-24: バックグラウンド更新の初版実装
+
+- `HistoryRefreshService`（Android）と `BackgroundRefreshManager`（iOS）を追加し、履歴のバックグラウンド更新を導入。AppStateStore に設定フラグと永続化を追加。
+- FutachaApplication で HttpClient/BoardRepository/HistoryRefresher をアプリスコープにまとめ、Foreground Service の通知や BGTask スケジュールを構築。
+- Board/Catalog/Thread の共通 UI から履歴更新トリガーを共有するように整理。
+
+### 2025-11-23: 操作性とプライバシーの調整
+
+- プライバシーポリシーへの導線を BoardManagementScreen に追加。
+- スクロール中の誤タップ防止や、引用プレビュー表示中は操作メニューを隠すなど、誤操作を減らす UI 変更を複数投入。
+- オフライン時の引用再計算や選択挙動の不具合を修正。
+
+### 2025-11-22: パーサ・音声・ジェスチャーの修正
+
+- ThreadHtmlParserCore の計算バグ修正とテスト追加、URL 対応強化、音声操作/TTS 連携の調整。Warning 修正やスワイプ感度調整も実施。
+- VideoPlayer (Android/iOS) の音声操作やカウンタ処理を改善し、ImageLoader の挙動も微調整。
+
+### 2025-11-21: アイコン刷新
+
+- Android のアプリアイコンと Foreground 画像を差し替え、色定義を更新。
+
+### 2025-11-20: バージョン管理の一元化
+
+- 依存バージョンを `gradle/libs.versions.toml` に集約し、ルート/モジュールの Gradle 設定を整理。Git 管理対象も調整し、カタログ化されたバージョン管理へ移行。
+
 ### 2025-11-19: HTMLエンティティのデコード処理を改善
 
 **問題**: `(1523&ndash;1563)` が `(1523–1563)` と正しく表示されず、HTMLエンティティがそのまま表示される問題が発生。
