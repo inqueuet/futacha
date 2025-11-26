@@ -18,11 +18,14 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.core.readBytes
-import io.ktor.utils.io.readRemaining
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -46,6 +49,7 @@ class ThreadSaveService(
 ) {
     private val _saveProgress = MutableStateFlow<SaveProgress?>(null)
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
+    private val counterMutex = Mutex()
 
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
@@ -136,58 +140,77 @@ class ThreadSaveService(
                     }
                 }
 
-                mediaItems.forEach { mediaItem ->
-                processedMediaCount++
-
-                // FIX: 最大数を超えたらスキップ
-                if (processedMediaCount > MAX_MEDIA_ITEMS) {
-                    Logger.w("ThreadSaveService", "Skipping media item $processedMediaCount (exceeds MAX_MEDIA_ITEMS)")
-                    downloadFailureCount++
-                    return@forEach
-                }
-
-                updateProgress(
-                    SavePhase.DOWNLOADING,
-                    processedMediaCount,
-                    minOf(totalMediaCount, MAX_MEDIA_ITEMS),
-                    "メディアダウンロード中... ($processedMediaCount/${minOf(totalMediaCount, MAX_MEDIA_ITEMS)})"
-                )
-
-                val downloadResult = downloadAndSaveMedia(
-                    url = mediaItem.url,
-                    baseDir = baseDir,
-                    boardPath = boardPath,
-                    type = mediaItem.type,
-                    postId = mediaItem.post.id
-                )
-
-                downloadResult
-                    .onSuccess { fileInfo ->
-                        val fileSize = fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
-                        totalSize += fileSize
-                        // URL→ローカルパスマッピングに追加
-                        urlToPathMap[mediaItem.url] = fileInfo.relativePath
-                        trimMap(urlToPathMap)
-                        urlToFileInfoMap[mediaItem.url] = fileInfo
-                        trimMap(urlToFileInfoMap)
-
-                        when (fileInfo.fileType) {
-                            FileType.THUMBNAIL -> {
-                                if (thumbnailPath == null && mediaItem.post.id == "1") {
-                                    thumbnailPath = fileInfo.relativePath
+                // FIX: 並列ダウンロードで処理速度を改善（最大4並列）
+                mediaItems.chunked(4).forEach { itemBatch ->
+                    kotlinx.coroutines.coroutineScope {
+                        val deferredResults = itemBatch.map { mediaItem ->
+                            async(Dispatchers.Default) {
+                                // FIX: 最大数を超えたらスキップ
+                                if (processedMediaCount >= MAX_MEDIA_ITEMS) {
+                                    Logger.w("ThreadSaveService", "Skipping media item (exceeds MAX_MEDIA_ITEMS)")
+                                    return@async Pair<MediaItem?, Result<LocalFileInfo>?>(null, null)
                                 }
+
+                                val currentCount = counterMutex.withLock {
+                                    ++processedMediaCount
+                                    processedMediaCount
+                                }
+
+                                updateProgress(
+                                    SavePhase.DOWNLOADING,
+                                    currentCount,
+                                    minOf(totalMediaCount, MAX_MEDIA_ITEMS),
+                                    "メディアダウンロード中... ($currentCount/${minOf(totalMediaCount, MAX_MEDIA_ITEMS)})"
+                                )
+
+                                val downloadResult = downloadAndSaveMedia(
+                                    url = mediaItem.url,
+                                    baseDir = baseDir,
+                                    boardPath = boardPath,
+                                    type = mediaItem.type,
+                                    postId = mediaItem.post.id
+                                )
+
+                                Pair<MediaItem?, Result<LocalFileInfo>?>(mediaItem, downloadResult)
                             }
-                            FileType.FULL_IMAGE -> imageCount++
-                            FileType.VIDEO -> videoCount++
+                        }
+
+                        // すべての並列ダウンロードの完了を待つ
+                        deferredResults.forEach { deferred ->
+                            val (mediaItem, downloadResult) = deferred.await()
+                            if (mediaItem == null || downloadResult == null) {
+                                downloadFailureCount++
+                                return@forEach
+                            }
+
+                            downloadResult
+                                .onSuccess { fileInfo ->
+                                    val fileSize = fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
+                                    totalSize += fileSize
+                                    // URL→ローカルパスマッピングに追加
+                                    urlToPathMap[mediaItem.url] = fileInfo.relativePath
+                                    trimMap(urlToPathMap)
+                                    urlToFileInfoMap[mediaItem.url] = fileInfo
+                                    trimMap(urlToFileInfoMap)
+
+                                    when (fileInfo.fileType) {
+                                        FileType.THUMBNAIL -> {
+                                            if (thumbnailPath == null && mediaItem.post.id == "1") {
+                                                thumbnailPath = fileInfo.relativePath
+                                            }
+                                        }
+                                        FileType.FULL_IMAGE -> imageCount++
+                                        FileType.VIDEO -> videoCount++
+                                    }
+                                }
+                                .onFailure { error ->
+                                    // ダウンロード失敗はログに記録してスキップ
+                                    downloadFailureCount++
+                                    println("Failed to download ${mediaItem.url}: ${error.message}")
+                                }
                         }
                     }
-                    .onFailure { error ->
-                        // ダウンロード失敗はログに記録してスキップ
-                        downloadFailureCount++
-                        println("Failed to download ${mediaItem.url}: ${error.message}")
-                    }
-            }
-
+                }
             }
 
             // 元HTML保存（リンクを書き換え、外部JS/広告を除去）
@@ -332,12 +355,32 @@ class ThreadSaveService(
             val relativePath = "$subDir/$fileName"
             val fullPath = "$baseDir/$relativePath"
 
-            val bytes = response.bodyAsChannel().readRemaining().readBytes()
-            if (bytes.size > MAX_FILE_SIZE_BYTES) {
-                throw Exception("Actual file size exceeds limit: ${bytes.size / 1024}KB")
-            }
+            // FIX: メモリ効率のためストリーミングで保存
+            val channel = response.bodyAsChannel()
+            var totalBytesRead = 0L
+            val bufferSize = 8192 // 8KB chunks
 
-            fileSystem.writeBytes(fullPath, bytes).getOrThrow()
+            // 最初にファイルを作成
+            fileSystem.writeBytes(fullPath, ByteArray(0)).getOrThrow()
+
+            // チャンクごとに読み込んで追記
+            while (!channel.isClosedForRead) {
+                val buffer = ByteArray(bufferSize)
+                val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
+                if (bytesRead <= 0) break
+
+                val chunk = buffer.copyOf(bytesRead)
+                totalBytesRead += chunk.size
+
+                if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                    // サイズ超過時はファイルを削除
+                    fileSystem.delete(fullPath).getOrNull()
+                    throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+                }
+
+                // FIX: appendBytesを使用してメモリ効率的に追記
+                fileSystem.appendBytes(fullPath, chunk).getOrThrow()
+            }
 
             LocalFileInfo(
                 relativePath = relativePath,

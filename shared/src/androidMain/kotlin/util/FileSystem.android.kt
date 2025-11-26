@@ -20,7 +20,11 @@ class AndroidFileSystem(
         runCatching {
             val dir = File(resolveAbsolutePath(path))
             if (!dir.exists()) {
-                dir.mkdirs()
+                // FIX: mkdirs()の戻り値をチェック
+                val success = dir.mkdirs()
+                if (!success && !dir.exists()) {
+                    throw IllegalStateException("Failed to create directory: ${dir.absolutePath}")
+                }
             }
         }
     }
@@ -28,15 +32,47 @@ class AndroidFileSystem(
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(resolveAbsolutePath(path))
-            file.parentFile?.mkdirs()
+            // FIX: mkdirs()の戻り値をチェック
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    val success = parent.mkdirs()
+                    if (!success && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
             file.writeBytes(bytes)
+        }
+    }
+
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val file = File(resolveAbsolutePath(path))
+            // FIX: mkdirs()の戻り値をチェック
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    val success = parent.mkdirs()
+                    if (!success && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
+            file.appendBytes(bytes)
         }
     }
 
     override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(resolveAbsolutePath(path))
-            file.parentFile?.mkdirs()
+            // FIX: mkdirs()の戻り値をチェック
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    val success = parent.mkdirs()
+                    if (!success && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
             file.writeText(content, Charsets.UTF_8)
         }
     }
@@ -168,7 +204,10 @@ class AndroidFileSystem(
                     Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}, falling back to internal storage")
                     return File(context.filesDir, "futacha").apply {
                         if (!exists()) {
-                            mkdirs()
+                            val fallbackSuccess = mkdirs()
+                            if (!fallbackSuccess && !exists()) {
+                                throw IllegalStateException("Failed to create fallback directory")
+                            }
                         }
                     }.absolutePath
                 }
@@ -180,7 +219,10 @@ class AndroidFileSystem(
             // Fallback to internal storage
             return File(context.filesDir, "futacha").apply {
                 if (!exists()) {
-                    mkdirs()
+                    val fallbackSuccess = mkdirs()
+                    if (!fallbackSuccess && !exists()) {
+                        throw IllegalStateException("Failed to create fallback directory after SecurityException", e)
+                    }
                 }
             }.absolutePath
         } catch (e: Exception) {
@@ -188,7 +230,10 @@ class AndroidFileSystem(
             // Fallback to internal storage
             return File(context.filesDir, "futacha").apply {
                 if (!exists()) {
-                    mkdirs()
+                    val fallbackSuccess = mkdirs()
+                    if (!fallbackSuccess && !exists()) {
+                        throw IllegalStateException("Failed to create fallback directory after unexpected error", e)
+                    }
                 }
             }.absolutePath
         }
@@ -217,7 +262,10 @@ class AndroidFileSystem(
                     Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}, falling back to internal storage")
                     return File(context.filesDir, "futacha").apply {
                         if (!exists()) {
-                            mkdirs()
+                            val fallbackSuccess = mkdirs()
+                            if (!fallbackSuccess && !exists()) {
+                                throw IllegalStateException("Failed to create fallback directory")
+                            }
                         }
                     }.absolutePath
                 }
@@ -228,14 +276,20 @@ class AndroidFileSystem(
             Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
             return File(context.filesDir, "futacha").apply {
                 if (!exists()) {
-                    mkdirs()
+                    val fallbackSuccess = mkdirs()
+                    if (!fallbackSuccess && !exists()) {
+                        throw IllegalStateException("Failed to create fallback directory after SecurityException", e)
+                    }
                 }
             }.absolutePath
         } catch (e: Exception) {
             Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
             return File(context.filesDir, "futacha").apply {
                 if (!exists()) {
-                    mkdirs()
+                    val fallbackSuccess = mkdirs()
+                    if (!fallbackSuccess && !exists()) {
+                        throw IllegalStateException("Failed to create fallback directory after unexpected error", e)
+                    }
                 }
             }.absolutePath
         }
@@ -250,6 +304,7 @@ class AndroidFileSystem(
             val created = appDir.mkdirs()
             if (!created && !appDir.exists()) {
                 Logger.e("FileSystem.android", "Failed to create private app directory at ${appDir.absolutePath}")
+                throw IllegalStateException("Failed to create private app directory at ${appDir.absolutePath}")
             }
         }
         return appDir.absolutePath

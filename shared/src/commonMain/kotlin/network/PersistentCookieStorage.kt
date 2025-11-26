@@ -3,6 +3,7 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.http.Cookie
 import io.ktor.http.CookieEncoding
@@ -179,12 +180,31 @@ class PersistentCookieStorage(
         }
         val content = fileSystem.readString(storagePath).getOrNull().orEmpty()
         if (content.isNotBlank()) {
-            runCatching {
+            // FIX: エラーログを追加し、破損時はバックアップから復元を試みる
+            runCatching<Unit> {
                 val parsed = json.decodeFromString<StoredCookieFile>(content)
                 cookies.clear()
                 parsed.cookies.forEach { stored ->
                     val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
                     cookies[key] = stored
+                }
+            }.onFailure { error ->
+                Logger.e("PersistentCookieStorage", "Failed to parse cookie file: ${error.message}")
+                // バックアップから復元を試みる
+                val backupPath = "$storagePath.backup"
+                if (fileSystem.exists(backupPath)) {
+                    val backupContent = fileSystem.readString(backupPath).getOrNull().orEmpty()
+                    runCatching<Unit> {
+                        val parsed = json.decodeFromString<StoredCookieFile>(backupContent)
+                        cookies.clear()
+                        parsed.cookies.forEach { stored ->
+                            val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
+                            cookies[key] = stored
+                        }
+                        Logger.i("PersistentCookieStorage", "Successfully restored from backup")
+                    }.onFailure { backupError ->
+                        Logger.e("PersistentCookieStorage", "Backup restoration also failed: ${backupError.message}")
+                    }
                 }
             }
         }
@@ -199,7 +219,21 @@ class PersistentCookieStorage(
         if (parentDir.isNotEmpty()) {
             fileSystem.createDirectory(parentDir)
         }
+        // FIX: 保存前に現在のファイルをバックアップ
+        val backupPath = "$storagePath.backup"
+        if (fileSystem.exists(storagePath)) {
+            val currentContent = fileSystem.readString(storagePath).getOrNull()
+            if (currentContent != null && currentContent.isNotBlank()) {
+                fileSystem.writeString(backupPath, currentContent)
+                    .onFailure { error ->
+                        Logger.w("PersistentCookieStorage", "Failed to create backup: ${error.message}")
+                    }
+            }
+        }
         fileSystem.writeString(storagePath, content)
+            .onFailure { error ->
+                Logger.e("PersistentCookieStorage", "Failed to save cookie file: ${error.message}", error)
+            }
     }
 
     private suspend fun purgeExpiredLocked(now: Long) {

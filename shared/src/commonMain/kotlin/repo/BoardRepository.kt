@@ -82,7 +82,9 @@ class DefaultBoardRepository(
     private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES,
     private val cookieRepository: CookieRepository? = null
 ) : BoardRepository {
-    // Track which boards have been initialized with cookies
+    // FIX: Track which boards have been initialized with cookies
+    // Note: この Set は boardInitMutex で保護されており、スレッドセーフ
+    // 単独でのアクセスは禁止し、必ず boardInitMutex.withLock 内でアクセスすること
     private val initializedBoards = mutableSetOf<String>()
     // Fix: Use Mutex to prevent race condition when multiple coroutines
     // try to initialize the same board simultaneously
@@ -209,16 +211,18 @@ class DefaultBoardRepository(
         return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
-    // FIX: 同期的にクリーンアップを実行
+    // FIX: 同期的にクリーンアップを実行（メインスレッドからの呼び出しを想定しない）
     override fun close() {
         // Close the underlying API if it supports cleanup
         (api as? AutoCloseable)?.close()
 
-        // FIX: キャッシュをブロッキングでクリア
-        kotlinx.coroutines.runBlocking {
-            opImageCacheMutex.withLock {
-                opImageCache.clear()
-            }
+        // FIX: キャッシュをクリア
+        // Note: close()はアプリ終了時などに呼ばれることを想定
+        // 競合の可能性があるため、closeAsync()の使用を推奨
+        try {
+            opImageCache.clear()
+        } catch (e: Exception) {
+            Logger.w("DefaultBoardRepository", "Error clearing cache during close: ${e.message}")
         }
 
         // スコープをキャンセル（バックグラウンドタスクを停止）

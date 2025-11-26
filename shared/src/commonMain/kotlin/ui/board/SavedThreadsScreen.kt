@@ -7,7 +7,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material3.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -17,8 +32,10 @@ import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
+import kotlinx.coroutines.withTimeout
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
  * 保存済みスレッド一覧画面
@@ -34,16 +51,27 @@ fun SavedThreadsScreen(
     var threads by remember { mutableStateOf<List<SavedThread>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var totalSize by remember { mutableStateOf(0L) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var deleteConfirmTarget by remember { mutableStateOf<SavedThread?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    // データ読み込み
+    // FIX: データ読み込みにタイムアウトとエラーハンドリングを追加
     LaunchedEffect(Unit) {
         isLoading = true
-        threads = repository.getAllThreads()
-        totalSize = repository.getTotalSize()
-        isLoading = false
+        loadError = null
+        try {
+            withTimeout(15_000L) { // 15秒のタイムアウト
+                threads = repository.getAllThreads()
+                totalSize = repository.getTotalSize()
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            loadError = "読み込みがタイムアウトしました"
+        } catch (e: Exception) {
+            loadError = "読み込みエラー: ${e.message}"
+        } finally {
+            isLoading = false
+        }
     }
 
     val refreshList: () -> Unit = {
@@ -91,6 +119,39 @@ fun SavedThreadsScreen(
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
+                }
+                loadError != null -> {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = loadError!!,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Button(onClick = {
+                            coroutineScope.launch {
+                                isLoading = true
+                                loadError = null
+                                try {
+                                    withTimeout(15_000L) {
+                                        threads = repository.getAllThreads()
+                                        totalSize = repository.getTotalSize()
+                                    }
+                                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                                    loadError = "読み込みがタイムアウトしました"
+                                } catch (e: Exception) {
+                                    loadError = "読み込みエラー: ${e.message}"
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        }) {
+                            Text("再試行")
+                        }
+                    }
                 }
                 threads.isEmpty() -> {
                     Text(
@@ -295,7 +356,9 @@ private fun formatSize(bytes: Long): String {
 /**
  * 日時をフォーマット
  */
+@OptIn(kotlin.time.ExperimentalTime::class)
 private fun formatDate(epochMillis: Long): String {
-    val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
-    return sdf.format(Date(epochMillis))
+    val instant = Instant.fromEpochMilliseconds(epochMillis)
+    val dateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${dateTime.year}/${dateTime.monthNumber.toString().padStart(2, '0')}/${dateTime.dayOfMonth.toString().padStart(2, '0')} ${dateTime.hour.toString().padStart(2, '0')}:${dateTime.minute.toString().padStart(2, '0')}"
 }

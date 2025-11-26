@@ -23,5 +23,6 @@ data class ThreadHistoryEntry(
     val lastVisitedEpochMillis: Long,
     val replyCount: Int,
     val lastReadItemIndex: Int = 0,
-    val lastReadItemOffset: Int = 0
+    val lastReadItemOffset: Int = 0,
+    val hasAutoSave: Boolean = false  // FIX: 自動保存の有無を追跡
 )

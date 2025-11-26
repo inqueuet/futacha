@@ -34,6 +34,7 @@ class HistoryRefresher(
     private val stateStore: AppStateStore,
     private val repository: BoardRepository,
     private val dispatcher: CoroutineDispatcher,
+    private val autoSavedThreadRepository: com.valoser.futacha.shared.repository.SavedThreadRepository? = null,  // FIX: 自動保存チェック用
     private val maxConcurrency: Int = 4
     // Caller owns repository lifecycle
 ) {
@@ -100,7 +101,22 @@ class HistoryRefresher(
                         } catch (e: Throwable) {
                             if (isNotFound(e)) {
                                 markSkipped(entry.threadId)
-                                Logger.i(HISTORY_REFRESH_TAG, "Skip thread ${entry.threadId} (not found)")
+                                // FIX: 404/410の場合、自動保存があるかチェック
+                                val hasAutoSave = autoSavedThreadRepository?.let { repo ->
+                                    runCatching {
+                                        repo.loadThreadMetadata(entry.threadId).isSuccess
+                                    }.getOrDefault(false)
+                                } ?: false
+
+                                if (hasAutoSave && !entry.hasAutoSave) {
+                                    // 自動保存があることを履歴に反映
+                                    updatesMutex.withLock {
+                                        updates[entry.threadId] = entry.copy(hasAutoSave = true)
+                                    }
+                                    Logger.i(HISTORY_REFRESH_TAG, "Thread ${entry.threadId} not found but has auto-save")
+                                } else {
+                                    Logger.i(HISTORY_REFRESH_TAG, "Skip thread ${entry.threadId} (not found)")
+                                }
                             } else {
                                 Logger.e(HISTORY_REFRESH_TAG, "Failed to refresh ${entry.threadId}", e)
                                 updatesMutex.withLock {

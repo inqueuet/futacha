@@ -98,16 +98,17 @@ fun FutachaApp(
                 }
             }
 
-            val historyRefresher = remember(repositoryHolder.repository) {
+            val autoSavedThreadRepository = remember(fileSystem) {
+                fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
+            }
+
+            val historyRefresher = remember(repositoryHolder.repository, autoSavedThreadRepository) {
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
-                    dispatcher = Dispatchers.Default
+                    dispatcher = Dispatchers.Default,
+                    autoSavedThreadRepository = autoSavedThreadRepository  // FIX: 自動保存チェック用
                 )
-            }
-
-            val autoSavedThreadRepository = remember(fileSystem) {
-                fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
             }
 
             // FIX: すべてのリソースを確実に解放
@@ -327,14 +328,14 @@ fun FutachaApp(
                     // Use a key that only changes when navigating to a different thread
                     // Also use currentBoard.id to ensure we update when board context changes
                     LaunchedEffect(activeThreadId, currentBoard.id) {
-                        // Check if entry already exists and is recent (within 5 seconds) to avoid unnecessary writes
+                        // FIX: デバウンス時間を60秒に増やしてDataStore書き込みを削減
                         val existingEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
                         val currentTime = Clock.System.now().toEpochMilliseconds()
 
-                        // Skip update if entry exists and was updated very recently (< 5 seconds ago)
+                        // Skip update if entry exists and was updated very recently (< 60 seconds ago)
                         if (existingEntry != null &&
                             existingEntry.boardId == currentBoard.id &&
-                            (currentTime - existingEntry.lastVisitedEpochMillis) < 5000) {
+                            (currentTime - existingEntry.lastVisitedEpochMillis) < 60_000) {
                             return@LaunchedEffect
                         }
 

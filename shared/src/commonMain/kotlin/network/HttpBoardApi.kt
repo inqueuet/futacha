@@ -567,9 +567,13 @@ class HttpBoardApi(
         val attachImage = shouldAttachImage(imageFile, textOnly)
         if (attachImage) {
             val safeName = sanitizeFileName(imageFileName)
+            // FIX: 強制アンラップを避けてrequireで明示的にチェック
+            val fileData = requireNotNull(imageFile) {
+                "imageFile must not be null when attachImage is true"
+            }
             append(
                 "upfile",
-                imageFile!!,
+                fileData,
                 Headers.build {
                     append(
                         HttpHeaders.ContentDisposition,

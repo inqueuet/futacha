@@ -78,6 +78,7 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -876,6 +877,21 @@ private fun HistoryEntryCard(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.Center
             ) {
+                // FIX: 自動保存がある場合はアイコンを表示
+                if (entry.hasAutoSave) {
+                    Icon(
+                        imageVector = Icons.Rounded.Folder,
+                        contentDescription = "自動保存あり",
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "保存済",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 Text(
                     text = entry.replyCount.toString(),
                     style = MaterialTheme.typography.titleLarge,
@@ -4117,19 +4133,24 @@ fun ThreadScreen(
                         var totalDx = 0f
                         var totalDy = 0f
                         val pointerId = down.id
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == pointerId } ?: continue
-                            if (!change.pressed) break
-                            val delta = change.positionChange()
-                            totalDx = (totalDx + delta.x).coerceAtLeast(0f)
-                            totalDy += abs(delta.y)
-                            if (totalDx > backSwipeTriggerPx && totalDx > totalDy) {
-                                change.consume()
-                                onBack()
-                                return@awaitEachGesture
+                        // FIX: 無限ループ対策にタイムアウトを追加（10秒）
+                        val gestureResult = withTimeoutOrNull(10_000L) {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == pointerId } ?: continue
+                                if (!change.pressed) break
+                                val delta = change.positionChange()
+                                totalDx = (totalDx + delta.x).coerceAtLeast(0f)
+                                totalDy += abs(delta.y)
+                                if (totalDx > backSwipeTriggerPx && totalDx > totalDy) {
+                                    change.consume()
+                                    onBack()
+                                    return@withTimeoutOrNull true
+                                }
                             }
+                            false
                         }
+                        // タイムアウト時はキャンセル扱い
                     }
                 }
                 .background(MaterialTheme.colorScheme.background)
@@ -5329,11 +5350,14 @@ private fun ThreadMessageText(
                         if (holdSucceeded) {
                             onQuoteClick(reference)
                             downChange.consume()
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                val change = event.changes.firstOrNull { it.id == downChange.id }
-                                if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
-                                    break
+                            // FIX: 無限ループ対策にタイムアウトを追加（10秒）
+                            withTimeoutOrNull(10_000L) {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = event.changes.firstOrNull { it.id == downChange.id }
+                                    if (change == null || change.changedToUpIgnoreConsumed() || !change.pressed) {
+                                        break
+                                    }
                                 }
                             }
                         }

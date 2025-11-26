@@ -18,6 +18,13 @@ interface FileSystem {
     suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit>
 
     /**
+     * ファイルにバイト配列を追記
+     * @param path ファイルパス
+     * @param bytes 追記するデータ
+     */
+    suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit>
+
+    /**
      * ファイルに文字列を書き込み
      * @param path ファイルパス
      * @param content 書き込む文字列
