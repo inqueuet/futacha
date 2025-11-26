@@ -109,7 +109,7 @@ class AndroidFileSystem(
             return File(getPrivateAppDataDirectory(), cleanedPath).absolutePath
         }
 
-        // ユーザーが「Download」や「Documents」と入力した場合は futacha/ saved_threads を自動付与
+        // ユーザーが「Downloads」や「Documents」と入力した場合は futacha/saved_threads を自動付与
         val isDownload = lower == "download" || lower == "downloads"
         val isDownloadSubPath = lower.startsWith("download/") || lower.startsWith("downloads/")
         val isDocuments = lower == "documents"

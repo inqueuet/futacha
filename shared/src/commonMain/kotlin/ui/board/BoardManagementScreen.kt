@@ -7462,8 +7462,8 @@ private fun GlobalSettingsScreen(
 
         val lower = trimmed.lowercase()
         return when {
-            lower == "download" || lower == "downloads" -> "Download"
-            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Download/${trimmed.substringAfter('/')}"
+            lower == "download" || lower == "downloads" -> "Downloads"
+            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Downloads/${trimmed.substringAfter('/')}"
             lower == "documents" -> "Documents"
             lower.startsWith("documents/") -> "Documents/${trimmed.substringAfter('/')}"
             else -> trimmed
@@ -7475,8 +7475,8 @@ private fun GlobalSettingsScreen(
 
         val lower = normalized.lowercase()
         return when {
-            lower == "download" || lower == "downloads" -> "Download/futacha/$MANUAL_SAVE_DIRECTORY"
-            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Download/${normalized.substringAfter('/')}"
+            lower == "download" || lower == "downloads" -> "Downloads/futacha/$MANUAL_SAVE_DIRECTORY"
+            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Downloads/${normalized.substringAfter('/')}"
             lower == "documents" -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$MANUAL_SAVE_DIRECTORY"
             lower.startsWith("documents/") -> "$DEFAULT_MANUAL_SAVE_ROOT/${normalized.substringAfter('/')}"
             else -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$normalized"
@@ -7547,7 +7547,7 @@ private fun GlobalSettingsScreen(
                     supportingContent = {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = "デフォルトは Documents/futacha 配下です。「Documents」か「Download」と入力するだけで futacha/saved_threads まで自動で設定されます。絶対パスを指定することもできます。",
+                                text = "デフォルトは Documents/futacha 配下です。「Documents」か「Downloads」と入力するだけで futacha/saved_threads まで自動で設定されます。絶対パスを指定することもできます。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
