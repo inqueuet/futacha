@@ -1217,7 +1217,11 @@ fun CatalogScreen(
                 drawerState.targetValue == DrawerValue.Open
         }
     }
-    var catalogMode by rememberSaveable { mutableStateOf(CatalogMode.default) }
+    // ボードごとにモードを覚える。キーなしだと画面を離れるたびにデフォルト(多い順)へ戻ってしまう。
+    val catalogModeMapState = stateStore?.catalogModes?.collectAsState(initial = emptyMap())
+    var catalogMode by rememberSaveable(board?.id) {
+        mutableStateOf(catalogModeMapState?.value?.get(board?.id.orEmpty()) ?: CatalogMode.default)
+    }
     var isRefreshing by remember { mutableStateOf(false) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
     var isSearchActive by rememberSaveable(board?.id) { mutableStateOf(false) }
@@ -1240,7 +1244,22 @@ fun CatalogScreen(
     val showNgMessage: (String) -> Unit = { message ->
         coroutineScope.launch { snackbarHostState.showSnackbar(message) }
     }
+    LaunchedEffect(board?.id, catalogModeMapState?.value) {
+        val boardId = board?.id ?: return@LaunchedEffect
+        val persisted = catalogModeMapState?.value?.get(boardId) ?: return@LaunchedEffect
+        catalogMode = persisted
+    }
     var lastCatalogItems by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
+    val persistCatalogMode: (CatalogMode) -> Unit = { mode ->
+        catalogMode = mode
+        val boardId = board?.id
+        val store = stateStore
+        if (boardId != null && store != null) {
+            coroutineScope.launch {
+                store.setCatalogMode(boardId, mode)
+            }
+        }
+    }
     suspend fun handleWatchWordMatches(
         catalog: List<CatalogItem>,
         filters: List<String> = watchWords
@@ -1500,7 +1519,7 @@ fun CatalogScreen(
                         }
                     },
                     onNavigationClick = { coroutineScope.launch { drawerState.open() } },
-                    onModeSelected = { catalogMode = it },
+                    onModeSelected = { persistCatalogMode(it) },
                     onMenuAction = { action ->
                         if (action == CatalogMenuAction.Settings) {
                             isGlobalSettingsVisible = true
@@ -1585,7 +1604,7 @@ fun CatalogScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        catalogMode = mode
+                                        persistCatalogMode(mode)
                                         showModeDialog = false
                                     }
                                     .padding(vertical = 12.dp, horizontal = 16.dp),
@@ -1594,7 +1613,7 @@ fun CatalogScreen(
                                 RadioButton(
                                     selected = catalogMode == mode,
                                     onClick = {
-                                        catalogMode = mode
+                                        persistCatalogMode(mode)
                                         showModeDialog = false
                                     }
                                 )
@@ -3377,6 +3396,9 @@ fun ThreadScreen(
         }
     }
     val autoSaveRepository = autoSavedThreadRepository
+    val manualSaveRepository = remember(fileSystem, manualSaveDirectory) {
+        fileSystem?.let { fs -> SavedThreadRepository(fs, baseDirectory = manualSaveDirectory) }
+    }
     var autoSaveJob by remember { mutableStateOf<Job?>(null) }
     val lastAutoSaveTimestamp = rememberSaveable(threadId) { mutableStateOf(0L) }
     var isShowingOfflineCopy by rememberSaveable(threadId) { mutableStateOf(false) }
@@ -3523,10 +3545,23 @@ fun ThreadScreen(
     }
 
     suspend fun loadOfflineThread(): ThreadPage? {
-        val repository = autoSaveRepository ?: return null
         val localFileSystem = fileSystem ?: return null
-        val metadata = repository.loadThreadMetadata(threadId).getOrNull() ?: return null
-        return metadata.toThreadPage(localFileSystem, AUTO_SAVE_DIRECTORY)
+
+        autoSaveRepository
+            ?.loadThreadMetadata(threadId)
+            ?.getOrNull()
+            ?.let { metadata ->
+                return metadata.toThreadPage(localFileSystem, AUTO_SAVE_DIRECTORY)
+            }
+
+        manualSaveRepository
+            ?.loadThreadMetadata(threadId)
+            ?.getOrNull()
+            ?.let { metadata ->
+                return metadata.toThreadPage(localFileSystem, manualSaveDirectory)
+            }
+
+        return null
     }
 
     suspend fun loadThreadWithOfflineFallback(allowOfflineFallback: Boolean): Pair<ThreadPage, Boolean> {
@@ -3564,7 +3599,8 @@ fun ThreadScreen(
                     title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
                     expiresAtLabel = page.expiresAtLabel,
                     posts = page.posts,
-                    baseDirectory = AUTO_SAVE_DIRECTORY
+                    baseDirectory = AUTO_SAVE_DIRECTORY,
+                    writeMetadata = true
                 )
             }
             result.onSuccess { saveResult ->
@@ -4066,7 +4102,8 @@ fun ThreadScreen(
                                                     title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
                                                     expiresAtLabel = page.expiresAtLabel,
                                                     posts = page.posts,
-                                                    baseDirectory = manualSaveDirectory
+                                                    baseDirectory = manualSaveDirectory,
+                                                    writeMetadata = false
                                                 )
 
                                                 progressJob.cancel()

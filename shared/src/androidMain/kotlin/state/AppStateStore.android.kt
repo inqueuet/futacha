@@ -29,6 +29,7 @@ private class AndroidPlatformStateStorage(
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
+    private val catalogModeMapKey = stringPreferencesKey("catalog_mode_map_json")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
     private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
@@ -59,6 +60,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
+
+    override val catalogModeMapJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[catalogModeMapKey] }
 
     override val catalogDisplayStyle: Flow<String?> =
         context.dataStore.data
@@ -125,6 +131,15 @@ private class AndroidPlatformStateStorage(
         } catch (e: Exception) {
             println("AndroidPlatformStateStorage: Failed to update manual save directory: ${e.message}")
             throw StorageException("Failed to save manual save directory", e)
+        }
+    }
+
+    override suspend fun updateCatalogModeMapJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[catalogModeMapKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update catalog mode map: ${e.message}")
+            throw StorageException("Failed to save catalog mode map", e)
         }
     }
 
@@ -199,7 +214,8 @@ private class AndroidPlatformStateStorage(
         defaultNgWordsJson: String?,
         defaultCatalogNgWordsJson: String?,
         defaultWatchWordsJson: String?,
-        defaultSelfPostIdentifiersJson: String?
+        defaultSelfPostIdentifiersJson: String?,
+        defaultCatalogModeMapJson: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -226,6 +242,9 @@ private class AndroidPlatformStateStorage(
                 }
                 if (!prefs.contains(manualSaveDirectoryKey)) {
                     prefs[manualSaveDirectoryKey] = DEFAULT_MANUAL_SAVE_ROOT
+                }
+                if (defaultCatalogModeMapJson != null && !prefs.contains(catalogModeMapKey)) {
+                    prefs[catalogModeMapKey] = defaultCatalogModeMapJson
                 }
             }
         } catch (e: Exception) {

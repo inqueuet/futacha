@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
+import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
@@ -57,6 +58,7 @@ class AppStateStore internal constructor(
     private val selfPostIdentifiersMutex = Mutex()
     private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListSerializer = ListSerializer(String.serializer())
+    private val catalogModeMapSerializer = MapSerializer(String.serializer(), String.serializer())
 
     // FIX: スレッドセーフなJobマップに変更
     private val scrollPositionJobs = AtomicJobMap()
@@ -87,6 +89,9 @@ class AppStateStore internal constructor(
             sanitizeManualSaveDirectory(manualPath)
         }
 
+    val catalogModes: Flow<Map<String, CatalogMode>> = storage.catalogModeMapJson.map { raw ->
+        decodeCatalogModeMap(raw)
+    }
     val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
         decodeCatalogDisplayStyle(raw)
     }
@@ -161,6 +166,19 @@ class AppStateStore internal constructor(
             storage.updateCatalogDisplayStyle(style.name)
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save catalog display style: ${style.name}", e)
+        }
+    }
+
+    suspend fun setCatalogMode(boardId: String, mode: CatalogMode) {
+        try {
+            val currentRaw = storage.catalogModeMapJson.first()
+            val current = decodeCatalogModeMap(currentRaw)
+            val updated = current + (boardId to mode)
+            storage.updateCatalogModeMapJson(
+                json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
+            )
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save catalog mode for $boardId: ${mode.name}", e)
         }
     }
 
@@ -402,7 +420,8 @@ class AppStateStore internal constructor(
         defaultNgWords: List<String> = emptyList(),
         defaultCatalogNgWords: List<String> = emptyList(),
         defaultWatchWords: List<String> = emptyList(),
-        defaultSelfPostIdentifierMap: Map<String, List<String>> = emptyMap()
+        defaultSelfPostIdentifierMap: Map<String, List<String>> = emptyMap(),
+        defaultCatalogModeMap: Map<String, CatalogMode> = emptyMap()
     ) {
         try {
             storage.seedIfEmpty(
@@ -412,7 +431,8 @@ class AppStateStore internal constructor(
                 json.encodeToString(stringListSerializer, defaultNgWords),
                 json.encodeToString(stringListSerializer, defaultCatalogNgWords),
                 json.encodeToString(stringListSerializer, defaultWatchWords),
-                json.encodeToString(selfPostIdentifierMapSerializer, defaultSelfPostIdentifierMap)
+                json.encodeToString(selfPostIdentifierMapSerializer, defaultSelfPostIdentifierMap),
+                json.encodeToString(encodeCatalogModeMap(defaultCatalogModeMap))
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -466,6 +486,24 @@ class AppStateStore internal constructor(
         return raw?.let { value ->
             CatalogDisplayStyle.entries.firstOrNull { it.name == value }
         } ?: CatalogDisplayStyle.Grid
+    }
+
+    private fun decodeCatalogModeMap(raw: String?): Map<String, CatalogMode> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val decoded = json.decodeFromString(catalogModeMapSerializer, raw)
+            decoded.mapNotNull { (boardId, modeName) ->
+                val mode = CatalogMode.entries.firstOrNull { it.name == modeName }
+                mode?.let { boardId to it }
+            }.toMap()
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode catalog mode map", e)
+            emptyMap()
+        }
+    }
+
+    private fun encodeCatalogModeMap(map: Map<String, CatalogMode>): Map<String, String> {
+        return map.mapValues { it.value.name }
     }
 
     private fun decodeStringList(raw: String?): List<String> {
@@ -532,6 +570,7 @@ internal interface PlatformStateStorage {
     val privacyFilterEnabled: Flow<Boolean>
     val backgroundRefreshEnabled: Flow<Boolean>
     val manualSaveDirectory: Flow<String>
+    val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
     val ngHeadersJson: Flow<String?>
     val ngWordsJson: Flow<String?>
@@ -544,6 +583,7 @@ internal interface PlatformStateStorage {
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
     suspend fun updateManualSaveDirectory(directory: String)
+    suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun updateNgHeadersJson(value: String)
     suspend fun updateNgWordsJson(value: String)
@@ -558,7 +598,8 @@ internal interface PlatformStateStorage {
         defaultNgWordsJson: String?,
         defaultCatalogNgWordsJson: String?,
         defaultWatchWordsJson: String?,
-        defaultSelfPostIdentifiersJson: String?
+        defaultSelfPostIdentifiersJson: String?,
+        defaultCatalogModeMapJson: String?
     )
 }
 

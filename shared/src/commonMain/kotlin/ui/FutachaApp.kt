@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -77,6 +78,7 @@ fun FutachaApp(
         CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
             Surface(modifier = Modifier.fillMaxSize()) {
                 val coroutineScope = rememberCoroutineScope()
+                val saveableStateHolder = rememberSaveableStateHolder()
 
             // Set coroutine scope for debouncing scroll position updates
             LaunchedEffect(Unit) {
@@ -125,7 +127,12 @@ fun FutachaApp(
             }
 
             LaunchedEffect(stateStore, boardList, history) {
-                stateStore.seedIfEmpty(boardList, history, defaultSelfPostIdentifierMap = emptyMap())
+                stateStore.seedIfEmpty(
+                    boardList,
+                    history,
+                    defaultSelfPostIdentifierMap = emptyMap(),
+                    defaultCatalogModeMap = emptyMap()
+                )
             }
 
             // バージョンチェック
@@ -278,39 +285,41 @@ fun FutachaApp(
                 selectedThreadId == null -> {
                     // FIX: repositoryHolder.repositoryを使用
                     val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { repositoryHolder.repository }
-                    CatalogScreen(
-                        board = selectedBoard,
-                        history = persistedHistory,
-                        onBack = {
-                            selectedThreadId = null
-                            selectedThreadTitle = null
-                            selectedThreadReplies = null
-                            selectedThreadThumbnailUrl = null
-                            selectedThreadUrl = null
-                            selectedBoardId = null
-                        },
-                        onThreadSelected = { item ->
-                            selectedThreadId = item.id
-                            selectedThreadTitle = item.title
-                            selectedThreadReplies = item.replyCount
-                            selectedThreadThumbnailUrl = item.thumbnailUrl
-                            selectedThreadUrl = item.threadUrl
-                        },
-                        onHistoryEntrySelected = openHistoryEntry,
-                        onHistoryEntryDismissed = dismissHistoryEntry,
-                        onHistoryEntryUpdated = updateHistoryEntry,
-                        onHistoryRefresh = refreshHistoryEntries,
-                        onHistoryCleared = clearHistory,
-                        repository = boardRepository,
-                        stateStore = stateStore,
-                        appVersion = appVersion,
-                        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-                        cookieRepository = cookieRepository,
-                        manualSaveDirectory = manualSaveDirectory,
-                        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged
-                    )
+                    saveableStateHolder.SaveableStateProvider("catalog-${selectedBoard?.id.orEmpty()}") {
+                        CatalogScreen(
+                            board = selectedBoard,
+                            history = persistedHistory,
+                            onBack = {
+                                selectedThreadId = null
+                                selectedThreadTitle = null
+                                selectedThreadReplies = null
+                                selectedThreadThumbnailUrl = null
+                                selectedThreadUrl = null
+                                selectedBoardId = null
+                            },
+                            onThreadSelected = { item ->
+                                selectedThreadId = item.id
+                                selectedThreadTitle = item.title
+                                selectedThreadReplies = item.replyCount
+                                selectedThreadThumbnailUrl = item.thumbnailUrl
+                                selectedThreadUrl = item.threadUrl
+                            },
+                            onHistoryEntrySelected = openHistoryEntry,
+                            onHistoryEntryDismissed = dismissHistoryEntry,
+                            onHistoryEntryUpdated = updateHistoryEntry,
+                            onHistoryRefresh = refreshHistoryEntries,
+                            onHistoryCleared = clearHistory,
+                            repository = boardRepository,
+                            stateStore = stateStore,
+                            appVersion = appVersion,
+                            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                            cookieRepository = cookieRepository,
+                            manualSaveDirectory = manualSaveDirectory,
+                            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged
+                        )
+                    }
                 }
 
                 else -> {

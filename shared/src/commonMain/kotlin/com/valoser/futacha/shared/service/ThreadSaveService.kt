@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
@@ -30,6 +31,8 @@ import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.text.RegexOption
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 
 /**
  * 元HTML保存や外部リソース削除のオプション
@@ -50,6 +53,7 @@ class ThreadSaveService(
     private val _saveProgress = MutableStateFlow<SaveProgress?>(null)
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
     private val counterMutex = Mutex()
+    private val json = Json { prettyPrint = true }
 
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
@@ -83,6 +87,7 @@ class ThreadSaveService(
         expiresAtLabel: String?,
         posts: List<Post>,
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
+        writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(Dispatchers.Default) {
         runCatching {
@@ -114,6 +119,7 @@ class ThreadSaveService(
             var imageCount = 0
             var videoCount = 0
             var totalSize = 0L
+            var rawHtmlRelativePath: String? = null
 
             // FIX: Process posts in chunks to prevent memory accumulation
             // Instead of flatMap all at once, process in batches
@@ -227,6 +233,7 @@ class ThreadSaveService(
                         val fullPath = "$baseDir/$fileName"
                         fileSystem.writeString(fullPath, rewritten).getOrThrow()
                         totalSize += fileSystem.getFileSize(fullPath)
+                        rawHtmlRelativePath = fileName
                     }
                     .onFailure { error ->
                         Logger.w("ThreadSaveService", "Failed to save raw HTML: ${error.message}")
@@ -293,6 +300,35 @@ class ThreadSaveService(
                 else -> SaveStatus.FAILED
             }
 
+            // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
+            val metadataSize = if (writeMetadata) {
+                val metadataPath = "$baseDir/metadata.json"
+                val metadata = SavedThreadMetadata(
+                    threadId = threadId,
+                    boardId = boardId,
+                    boardName = boardName,
+                    boardUrl = boardUrl,
+                    title = title,
+                    savedAt = savedAtTimestamp,
+                    expiresAtLabel = expiresAtLabel,
+                    posts = savedPosts,
+                    totalSize = 0L, // 一旦0、書き込み後に更新
+                    rawHtmlPath = rawHtmlRelativePath,
+                    strippedExternalResources = rawHtmlOptions.stripExternalResources,
+                    version = 1
+                )
+                val metadataJson = json.encodeToString(metadata)
+                fileSystem.writeString(metadataPath, metadataJson).getOrThrow()
+                val size = fileSystem.getFileSize(metadataPath)
+                // 正しい合計サイズを含めて書き直す
+                val metadataWithSize = metadata.copy(totalSize = totalSize + size)
+                fileSystem.writeString(metadataPath, json.encodeToString(metadataWithSize)).getOrThrow()
+                size
+            } else {
+                0L
+            }
+            val finalTotalSize = totalSize + metadataSize
+
             SavedThread(
                 threadId = threadId,
                 boardId = boardId,
@@ -303,7 +339,7 @@ class ThreadSaveService(
                 postCount = posts.size,
                 imageCount = imageCount,
                 videoCount = videoCount,
-                totalSize = totalSize,
+                totalSize = finalTotalSize,
                 status = status
             )
         }

@@ -11,6 +11,7 @@ private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
+private const val CATALOG_MODE_MAP_KEY = "catalog_mode_map_json"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
 private const val CATALOG_NG_WORDS_KEY = "catalog_ng_words_json"
@@ -31,6 +32,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val manualSaveDirectoryState = MutableStateFlow(
         sanitizeManualSaveDirectoryValue(defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY))
     )
+    private val catalogModeMapState = MutableStateFlow(defaults.stringForKey(CATALOG_MODE_MAP_KEY))
     private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
     private val catalogNgWordsState = MutableStateFlow(defaults.stringForKey(CATALOG_NG_WORDS_KEY))
@@ -42,6 +44,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
+    override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val ngHeadersJson: Flow<String?> = ngHeadersState
     override val ngWordsJson: Flow<String?> = ngWordsState
@@ -77,6 +80,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
         defaults.synchronize()
         manualSaveDirectoryState.value = directory
+    }
+
+    override suspend fun updateCatalogModeMapJson(value: String) {
+        defaults.setObject(value, forKey = CATALOG_MODE_MAP_KEY)
+        defaults.synchronize()
+        catalogModeMapState.value = value
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
@@ -122,7 +131,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaultNgWordsJson: String?,
         defaultCatalogNgWordsJson: String?,
         defaultWatchWordsJson: String?,
-        defaultSelfPostIdentifiersJson: String?
+        defaultSelfPostIdentifiersJson: String?,
+        defaultCatalogModeMapJson: String?
     ) {
         var updated = false
         if (defaults.stringForKey(BOARDS_KEY) == null) {
@@ -163,6 +173,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaultSelfPostIdentifiersJson != null && defaults.stringForKey(SELF_POST_IDENTIFIERS_KEY) == null) {
             defaults.setObject(defaultSelfPostIdentifiersJson, forKey = SELF_POST_IDENTIFIERS_KEY)
             selfPostIdentifiersState.value = defaultSelfPostIdentifiersJson
+            updated = true
+        }
+        if (defaultCatalogModeMapJson != null && defaults.stringForKey(CATALOG_MODE_MAP_KEY) == null) {
+            defaults.setObject(defaultCatalogModeMapJson, forKey = CATALOG_MODE_MAP_KEY)
+            catalogModeMapState.value = defaultCatalogModeMapJson
             updated = true
         }
         if (updated) {
