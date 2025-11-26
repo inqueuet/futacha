@@ -45,6 +45,8 @@ data class SavedThreadMetadata(
     val expiresAtLabel: String?,
     val posts: List<SavedPost>,
     val totalSize: Long,
+    val rawHtmlPath: String? = null,   // 取得した元HTMLのローカルパス
+    val strippedExternalResources: Boolean = false, // 外部JS/広告を除去したかどうか
     val version: Int = 1              // メタデータバージョン（将来の互換性）
 )
 

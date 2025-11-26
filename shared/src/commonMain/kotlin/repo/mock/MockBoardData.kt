@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.parser.CatalogHtmlParserCore
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
+import kotlinx.coroutines.runBlocking
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -23,7 +24,9 @@ import kotlin.time.ExperimentalTime
 internal object MockBoardData {
     private val now = Clock.System.now()
 
-    val catalogItems: List<CatalogItem> = CatalogHtmlParserCore.parseCatalog(exampleCatalogHtml)
+    val catalogItems: List<CatalogItem> = runBlocking {
+        CatalogHtmlParserCore.parseCatalog(exampleCatalogHtml)
+    }
         .mapIndexed { index, item ->
             when (index) {
                 0 -> item.copy(expiresAtEpochMillis = (now + 10.minutes).toEpochMilliseconds())
@@ -32,7 +35,9 @@ internal object MockBoardData {
             }
         }
 
-    private val baseThreadPage: ThreadPage = ThreadHtmlParserCore.parseThread(exampleThreadHtml)
+    private val baseThreadPage: ThreadPage = runBlocking {
+        ThreadHtmlParserCore.parseThread(exampleThreadHtml)
+    }
     private val threadPages: MutableMap<String, ThreadPage> = mutableMapOf(
         baseThreadPage.threadId to baseThreadPage
     )

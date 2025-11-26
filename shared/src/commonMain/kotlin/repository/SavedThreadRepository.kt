@@ -99,12 +99,24 @@ class SavedThreadRepository(
      */
     suspend fun deleteThread(threadId: String): Result<Unit> = withIndexLock {
         runCatching {
-            val threadPath = "$baseDirectory/$threadId"
-            fileSystem.deleteRecursively(threadPath).getOrThrow()
-
             val currentIndex = readIndexUnlocked()
-            val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
 
+            // 削除対象が存在するか確認
+            val threadToDelete = currentIndex.threads.find { it.threadId == threadId }
+                ?: return@runCatching  // 存在しない場合は正常終了
+
+            // ファイル削除を試行
+            val threadPath = "$baseDirectory/$threadId"
+            val deleteResult = fileSystem.deleteRecursively(threadPath)
+
+            if (deleteResult.isFailure) {
+                // ファイル削除失敗時はインデックスを更新せずに例外をスロー
+                throw deleteResult.exceptionOrNull()
+                    ?: Exception("Failed to delete thread directory: $threadPath")
+            }
+
+            // 削除成功後のみインデックスを更新
+            val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
                 totalSize = updatedThreads.sumOf { it.totalSize },
@@ -121,16 +133,43 @@ class SavedThreadRepository(
     suspend fun deleteAllThreads(): Result<Unit> = withIndexLock {
         runCatching {
             val currentIndex = readIndexUnlocked()
+            val deletionErrors = mutableListOf<Pair<String, Throwable>>()
+            val successfullyDeletedIds = mutableSetOf<String>()
+
+            // 各スレッドを削除し、失敗を記録
             currentIndex.threads.forEach { thread ->
                 val threadPath = "$baseDirectory/${thread.threadId}"
-                fileSystem.deleteRecursively(threadPath).getOrThrow()
+                val result = fileSystem.deleteRecursively(threadPath)
+
+                if (result.isSuccess) {
+                    successfullyDeletedIds.add(thread.threadId)
+                } else {
+                    deletionErrors.add(
+                        thread.threadId to (result.exceptionOrNull()
+                            ?: Exception("Unknown error deleting $threadPath"))
+                    )
+                }
             }
+
+            // 成功したもののみインデックスから削除
+            val remainingThreads = currentIndex.threads.filterNot {
+                it.threadId in successfullyDeletedIds
+            }
+
             val updatedIndex = SavedThreadIndex(
-                threads = emptyList(),
-                totalSize = 0L,
+                threads = remainingThreads,
+                totalSize = remainingThreads.sumOf { it.totalSize },
                 lastUpdated = System.currentTimeMillis()
             )
             saveIndexUnlocked(updatedIndex)
+
+            // エラーがあった場合は例外をスロー
+            if (deletionErrors.isNotEmpty()) {
+                val errorMessage = deletionErrors.joinToString("\n") { (id, error) ->
+                    "Thread $id: ${error.message}"
+                }
+                throw Exception("Failed to delete ${deletionErrors.size} thread(s):\n$errorMessage")
+            }
         }
     }
 

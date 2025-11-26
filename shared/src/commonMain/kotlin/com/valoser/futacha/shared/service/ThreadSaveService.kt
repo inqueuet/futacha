@@ -1,22 +1,40 @@
 package com.valoser.futacha.shared.service
 
-import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.model.FileType
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SavePhase
+import com.valoser.futacha.shared.model.SaveProgress
+import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedPost
+import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.FileSystem
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
+import com.valoser.futacha.shared.util.Logger
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.isSuccess
+import io.ktor.utils.io.core.readBytes
+import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlin.time.ExperimentalTime
+import kotlin.text.RegexOption
+
+/**
+ * 元HTML保存や外部リソース削除のオプション
+ */
+data class RawHtmlSaveOptions(
+    val enable: Boolean = true,
+    val stripExternalResources: Boolean = true
+)
 
 /**
  * スレッド保存サービス
@@ -26,11 +44,6 @@ class ThreadSaveService(
     private val httpClient: HttpClient,
     private val fileSystem: FileSystem
 ) {
-    private val json = Json {
-        prettyPrint = true
-        ignoreUnknownKeys = true
-    }
-
     private val _saveProgress = MutableStateFlow<SaveProgress?>(null)
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
 
@@ -41,11 +54,22 @@ class ThreadSaveService(
         // サポートされる拡張子
         private val SUPPORTED_IMAGE_EXTENSIONS = setOf("gif", "jpg", "jpeg", "png", "webp")
         private val SUPPORTED_VIDEO_EXTENSIONS = setOf("webm", "mp4")
+
+        // FIX: 最大メディア数を制限
+        private const val MAX_MEDIA_ITEMS = 10000
+    }
+
+    private fun <K, V> trimMap(map: LinkedHashMap<K, V>) {
+        while (map.size > MAX_MEDIA_ITEMS) {
+            val firstKey = map.keys.firstOrNull() ?: break
+            map.remove(firstKey)
+        }
     }
 
     /**
      * スレッドを保存
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun saveThread(
         threadId: String,
         boardId: String,
@@ -54,21 +78,31 @@ class ThreadSaveService(
         title: String,
         expiresAtLabel: String?,
         posts: List<Post>,
-        baseDirectory: String = MANUAL_SAVE_DIRECTORY
+        baseDirectory: String = MANUAL_SAVE_DIRECTORY,
+        rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(Dispatchers.Default) {
         runCatching {
+            val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
             // 準備フェーズ
             updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
             val baseDir = "$baseDirectory/$threadId"
             fileSystem.createDirectory(baseDirectory).getOrThrow()
             fileSystem.createDirectory(baseDir).getOrThrow()
-            fileSystem.createDirectory("$baseDir/images").getOrThrow()
-            fileSystem.createDirectory("$baseDir/videos").getOrThrow()
+            val boardPath = extractBoardPath(boardUrl, boardId)
+            val boardMediaRoot = listOf(baseDir, boardPath)
+                .filter { it.isNotBlank() }
+                .joinToString("/")
+            val srcDir = "$boardMediaRoot/src"
+            val thumbDir = "$boardMediaRoot/thumb"
+            fileSystem.createDirectory(boardMediaRoot).getOrThrow()
+            fileSystem.createDirectory(srcDir).getOrThrow()
+            fileSystem.createDirectory(thumbDir).getOrThrow()
 
-            // URL→ローカルパスのマッピング
-            val urlToPathMap = mutableMapOf<String, String>()
-            val urlToFileInfoMap = mutableMapOf<String, LocalFileInfo>()
+            // FIX: マップのサイズ制限とメモリ効率化
+            // accessOrder 付きコンストラクタはKMPに無いため、標準のLinkedHashMapを使い都度トリム
+            val urlToPathMap = LinkedHashMap<String, String>()
+            val urlToFileInfoMap = LinkedHashMap<String, LocalFileInfo>()
 
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
@@ -86,6 +120,12 @@ class ThreadSaveService(
             val totalMediaCount = posts.sumOf {
                 (if (it.thumbnailUrl != null) 1 else 0) + (if (it.imageUrl != null) 1 else 0)
             }
+
+            // FIX: メディア数が異常に多い場合は警告
+            if (totalMediaCount > MAX_MEDIA_ITEMS) {
+                Logger.w("ThreadSaveService", "Thread has $totalMediaCount media items (max: $MAX_MEDIA_ITEMS), some may be skipped")
+            }
+
             var processedMediaCount = 0
 
             posts.chunked(chunkSize).forEach { postChunk ->
@@ -98,17 +138,25 @@ class ThreadSaveService(
 
                 mediaItems.forEach { mediaItem ->
                 processedMediaCount++
+
+                // FIX: 最大数を超えたらスキップ
+                if (processedMediaCount > MAX_MEDIA_ITEMS) {
+                    Logger.w("ThreadSaveService", "Skipping media item $processedMediaCount (exceeds MAX_MEDIA_ITEMS)")
+                    downloadFailureCount++
+                    return@forEach
+                }
+
                 updateProgress(
                     SavePhase.DOWNLOADING,
                     processedMediaCount,
-                    totalMediaCount,
-                    "メディアダウンロード中... ($processedMediaCount/$totalMediaCount)"
+                    minOf(totalMediaCount, MAX_MEDIA_ITEMS),
+                    "メディアダウンロード中... ($processedMediaCount/${minOf(totalMediaCount, MAX_MEDIA_ITEMS)})"
                 )
 
                 val downloadResult = downloadAndSaveMedia(
                     url = mediaItem.url,
-                    threadId = threadId,
                     baseDir = baseDir,
+                    boardPath = boardPath,
                     type = mediaItem.type,
                     postId = mediaItem.post.id
                 )
@@ -119,7 +167,9 @@ class ThreadSaveService(
                         totalSize += fileSize
                         // URL→ローカルパスマッピングに追加
                         urlToPathMap[mediaItem.url] = fileInfo.relativePath
+                        trimMap(urlToPathMap)
                         urlToFileInfoMap[mediaItem.url] = fileInfo
+                        trimMap(urlToFileInfoMap)
 
                         when (fileInfo.fileType) {
                             FileType.THUMBNAIL -> {
@@ -138,6 +188,26 @@ class ThreadSaveService(
                     }
             }
 
+            }
+
+            // 元HTML保存（リンクを書き換え、外部JS/広告を除去）
+            if (rawHtmlOptions.enable) {
+                fetchThreadHtml(boardUrl, threadId)
+                    .onSuccess { originalHtml ->
+                        val rewritten = rewriteOriginalHtml(
+                            html = originalHtml,
+                            boardPath = boardPath,
+                            urlToPathMap = urlToPathMap,
+                            stripExternalResources = rawHtmlOptions.stripExternalResources
+                        )
+                        val fileName = "$threadId.htm"
+                        val fullPath = "$baseDir/$fileName"
+                        fileSystem.writeString(fullPath, rewritten).getOrThrow()
+                        totalSize += fileSystem.getFileSize(fullPath)
+                    }
+                    .onFailure { error ->
+                        Logger.w("ThreadSaveService", "Failed to save raw HTML: ${error.message}")
+                    }
             }
 
             // 変換フェーズ
@@ -189,27 +259,7 @@ class ThreadSaveService(
             }
 
             // 完了フェーズ
-            updateProgress(SavePhase.FINALIZING, 0, 1, "メタデータ保存中...")
-
-            // メタデータ保存
-            val metadata = SavedThreadMetadata(
-                threadId = threadId,
-                boardId = boardId,
-                boardName = boardName,
-                boardUrl = boardUrl,
-                title = title,
-                savedAt = Clock.System.now().toEpochMilliseconds(),
-                expiresAtLabel = expiresAtLabel,
-                posts = savedPosts,
-                totalSize = totalSize,
-                version = 1
-            )
-
-            val metadataJson = json.encodeToString(metadata)
-            fileSystem.writeString("$baseDir/metadata.json", metadataJson).getOrThrow()
-
-            // HTML生成（ストリーミング方式でメモリ効率的に）
-            generateHtmlToFile(metadata, "$baseDir/thread.html")
+            updateProgress(SavePhase.FINALIZING, 0, 1, "完了処理中...")
 
             updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
 
@@ -226,7 +276,7 @@ class ThreadSaveService(
                 boardName = boardName,
                 title = title,
                 thumbnailPath = thumbnailPath,
-                savedAt = metadata.savedAt,
+                savedAt = savedAtTimestamp,
                 postCount = posts.size,
                 imageCount = imageCount,
                 videoCount = videoCount,
@@ -241,8 +291,8 @@ class ThreadSaveService(
      */
     private suspend fun downloadAndSaveMedia(
         url: String,
-        threadId: String,
         baseDir: String,
+        boardPath: String,
         type: MediaType,
         postId: String
     ): Result<LocalFileInfo> = withContext(Dispatchers.Default) {
@@ -256,12 +306,12 @@ class ThreadSaveService(
                 throw Exception("Download failed: ${response.status}")
             }
 
-            val contentLength = response.contentLength() ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
+            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
             if (contentLength > MAX_FILE_SIZE_BYTES) {
                 throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
             }
 
-            val extension = (getExtensionFromUrl(url) ?: getExtensionFromContentType(response.contentType()))
+            val extension = (getExtensionFromUrl(url) ?: getExtensionFromContentType(response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }))
                 .lowercase()
             val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
             if (!isSupported) {
@@ -273,16 +323,16 @@ class ThreadSaveService(
                 extension in SUPPORTED_VIDEO_EXTENSIONS -> FileType.VIDEO
                 else -> FileType.FULL_IMAGE
             }
-            val (subDir, prefix) = when (fileType) {
-                FileType.THUMBNAIL -> "images" to "thumb_"
-                FileType.FULL_IMAGE -> "images" to "img_"
-                FileType.VIDEO -> "videos" to "video_"
+            val fileName = extractFileName(url, extension, postId)
+            val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
+            val subDir = when (fileType) {
+                FileType.THUMBNAIL -> "${boardPrefix}thumb"
+                FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
             }
-            val fileName = "${prefix}${postId}_${Clock.System.now().toEpochMilliseconds()}.$extension"
             val relativePath = "$subDir/$fileName"
             val fullPath = "$baseDir/$relativePath"
 
-            val bytes = response.readRawBytes()
+            val bytes = response.bodyAsChannel().readRemaining().readBytes()
             if (bytes.size > MAX_FILE_SIZE_BYTES) {
                 throw Exception("Actual file size exceeds limit: ${bytes.size / 1024}KB")
             }
@@ -353,112 +403,131 @@ class ThreadSaveService(
         return converted
     }
 
-    @OptIn(ExperimentalTime::class)
-    @Suppress("DEPRECATION")
-    private fun formatTimestamp(epochMillis: Long): String {
-        val instant = Instant.fromEpochMilliseconds(epochMillis)
-        val localDateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-        val date = localDateTime.date
-        val time = localDateTime.time
-
-        fun Int.pad2() = toString().padStart(2, '0')
-        fun Int.pad4() = toString().padStart(4, '0')
-
-        return buildString {
-            append(date.year.pad4())
-            append('/')
-            append(date.monthNumber.pad2())
-            append('/')
-            append(date.dayOfMonth.pad2())
-            append(' ')
-            append(time.hour.pad2())
-            append(':')
-            append(time.minute.pad2())
-            append(':')
-            append(time.second.pad2())
+    /**
+     * 元HTMLをローカルファイル向けに調整
+     */
+    private fun rewriteOriginalHtml(
+        html: String,
+        boardPath: String,
+        urlToPathMap: Map<String, String>,
+        stripExternalResources: Boolean
+    ): String {
+        var updated = html
+        if (stripExternalResources) {
+            updated = stripExternalScriptsAndIframes(updated)
         }
+        updated = replaceMediaPaths(updated, boardPath, urlToPathMap)
+        updated = forceUtf8Charset(updated)
+        return updated
+    }
+
+    private fun stripExternalScriptsAndIframes(html: String): String {
+        val scriptRegex = Regex("(?si)<script[^>]+src=\"([^\"]+)\"[^>]*>.*?</script>")
+        val iframeRegex = Regex("(?si)<iframe[^>]+src=\"([^\"]+)\"[^>]*>.*?</iframe>")
+        fun shouldStrip(url: String): Boolean {
+            val normalized = url.lowercase()
+            return normalized.contains("/bin/") || normalized.contains("dec.2chan.net")
+        }
+        var updated = scriptRegex.replace(html) { matchResult ->
+            val src = matchResult.groupValues.getOrNull(1).orEmpty()
+            if (shouldStrip(src)) "" else matchResult.value
+        }
+        updated = iframeRegex.replace(updated) { matchResult ->
+            val src = matchResult.groupValues.getOrNull(1).orEmpty()
+            if (shouldStrip(src)) "" else matchResult.value
+        }
+        return updated
     }
 
     /**
-     * HTMLをファイルに直接書き込み（メモリ効率的なストリーミング方式）
-     * FIX: Write directly to file instead of building huge string in memory
+     * 書き出しはUTF-8固定なので charset をUTF-8に置き換える
      */
-    private suspend fun generateHtmlToFile(metadata: SavedThreadMetadata, filePath: String) {
-        // FIX: Use StringBuilder with capacity estimate to reduce reallocations
-        val estimatedSize = metadata.posts.size * 500 // Rough estimate: 500 chars per post
-        val htmlBuilder = StringBuilder(estimatedSize)
+    private fun forceUtf8Charset(html: String): String {
+        val charsetRegex = Regex(
+            pattern = "<meta[^>]+charset\\s*=\\s*\"?([^\"\\s>]+)\"?[^>]*>",
+            options = setOf(RegexOption.IGNORE_CASE)
+        )
+        val contentTypeRegex = Regex(
+            pattern = "<meta[^>]+http-equiv\\s*=\\s*\"?Content-Type\"?[^>]*content\\s*=\\s*\"[^\"]*charset=([^\";>\\s]+)[^\"]*\"[^>]*>",
+            options = setOf(RegexOption.IGNORE_CASE)
+        )
+        var updated = charsetRegex.replace(html) { matchResult ->
+            matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
+        }
+        updated = contentTypeRegex.replace(updated) { matchResult ->
+            matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
+        }
+        return updated
+    }
 
-        // ヘッダー部分
-        htmlBuilder.apply {
-            appendLine("<!DOCTYPE html>")
-            appendLine("<html lang=\"ja\">")
-            appendLine("<head>")
-            appendLine("    <meta charset=\"UTF-8\">")
-            appendLine("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">")
-            appendLine("    <title>${metadata.title}</title>")
-            appendLine("    <style>")
-            appendLine("        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }")
-            appendLine("        .post { border: 1px solid #ddd; margin: 10px 0; padding: 10px; }")
-            appendLine("        .post-header { font-weight: bold; color: #007bff; }")
-            appendLine("        .post-body { margin-top: 10px; }")
-            appendLine("        .post-image { max-width: 100%; height: auto; }")
-            appendLine("        .post-video-container { margin-top: 10px; }")
-            appendLine("        .post-video-container video { max-width: 100%; height: auto; border-radius: 4px; }")
-            appendLine("        .metadata { background: #f5f5f5; padding: 10px; margin-bottom: 20px; }")
-            appendLine("    </style>")
-            appendLine("</head>")
-            appendLine("<body>")
-            appendLine("    <div class=\"metadata\">")
-            appendLine("        <h1>${metadata.title}</h1>")
-            appendLine("        <p>板: ${metadata.boardName}</p>")
-            appendLine("        <p>保存日時: ${formatTimestamp(metadata.savedAt)}</p>")
-            appendLine("        <p>投稿数: ${metadata.posts.size}</p>")
-            if (metadata.expiresAtLabel != null) {
-                appendLine("        <p>有効期限: ${metadata.expiresAtLabel}</p>")
-            }
-            appendLine("    </div>")
+    /**
+     * Futabaの src/thumb をローカルパスに差し替える
+     */
+    private fun replaceMediaPaths(
+        html: String,
+        boardPath: String,
+        urlToPathMap: Map<String, String>
+    ): String {
+        var updated = html
+        // まずはダウンロード時に記録したURLを優先して置き換え
+        urlToPathMap.forEach { (original, relative) ->
+            updated = updated.replace(original, relative)
         }
 
-        // FIX: Write posts directly to StringBuilder instead of creating intermediate chunks
-        metadata.posts.forEach { post ->
-            htmlBuilder.apply {
-                appendLine("    <div class=\"post\" id=\"post-${post.id}\">")
-                appendLine("        <div class=\"post-header\">")
-                append("            ${post.order ?: ""}. ")
-                if (post.author != null) append("${post.author} ")
-                if (post.subject != null) append("<strong>${post.subject}</strong> ")
-                appendLine(post.timestamp)
-                appendLine("        </div>")
+        val normalizedBoard = boardPath.trim('/').takeIf { it.isNotEmpty() } ?: return updated
+        val escapedBoard = Regex.escape(normalizedBoard)
 
-                post.localVideoPath?.let { videoPath ->
-                    val posterAttr = post.localThumbnailPath?.let { " poster=\"$it\"" } ?: ""
-                    appendLine("        <div class=\"post-video-container\">")
-                    appendLine("            <video controls preload=\"metadata\" class=\"post-video\" src=\"$videoPath\"$posterAttr></video>")
-                    appendLine("        </div>")
-                }
+        val srcPatterns = listOf(
+            Regex("https?://[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+            Regex("//[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+            Regex("/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
+        )
+        val thumbPatterns = listOf(
+            Regex("https?://[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+            Regex("//[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
+            Regex("/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
+        )
 
-                if (post.localThumbnailPath != null || post.localImagePath != null) {
-                    val imagePath = post.localImagePath ?: post.localThumbnailPath
-                    appendLine("        <div class=\"post-image-container\">")
-                    appendLine("            <img src=\"$imagePath\" class=\"post-image\" />")
-                    appendLine("        </div>")
-                }
-
-                appendLine("        <div class=\"post-body\">")
-                appendLine("            ${post.messageHtml}")
-                appendLine("        </div>")
-                appendLine("    </div>")
+        srcPatterns.forEach { regex ->
+            updated = regex.replace(updated) { matchResult ->
+                "$normalizedBoard/src/${matchResult.groupValues[1]}"
             }
         }
-
-        // フッター部分
-        htmlBuilder.apply {
-            appendLine("</body>")
-            appendLine("</html>")
+        thumbPatterns.forEach { regex ->
+            updated = regex.replace(updated) { matchResult ->
+                "$normalizedBoard/thumb/${matchResult.groupValues[1]}"
+            }
         }
+        return updated
+    }
 
-        // FIX: Single write operation - no joinToString needed
-        fileSystem.writeString(filePath, htmlBuilder.toString()).getOrThrow()
+    /**
+     * 板URLから板パス部分を抽出（例: https://may.2chan.net/b -> b）
+     */
+    private fun extractBoardPath(boardUrl: String, boardIdFallback: String): String {
+        val fallback = boardIdFallback.trim('/').ifEmpty { "b" }
+        return runCatching {
+            val base = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
+            val afterHost = base.substringAfter("://", base)
+            val path = afterHost.substringAfter('/', "").trim('/')
+            path.ifEmpty { fallback }
+        }.getOrElse { fallback }
+    }
+
+    /**
+     * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
+     */
+    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(Dispatchers.Default) {
+        runCatching {
+            val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
+            val response: HttpResponse = httpClient.get(threadUrl) {
+                headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
+            }
+            if (!response.status.isSuccess()) {
+                throw Exception("Fetch thread HTML failed: ${response.status}")
+            }
+            response.bodyAsText()
+        }
     }
 
     /**
@@ -497,6 +566,20 @@ class ThreadSaveService(
         THUMBNAIL,
         FULL_IMAGE
     }
+
+    private fun extractFileName(url: String, extension: String, postId: String): String {
+        val candidate = url
+            .substringBefore('#')
+            .substringBefore('?')
+            .substringAfterLast('/')
+            .takeIf { it.isNotBlank() }
+        return candidate ?: "${postId}_${Clock.System.now().toEpochMilliseconds()}.$extension"
+    }
+
+    private data class LocalFileInfo(
+        val relativePath: String,
+        val fileType: FileType
+    )
 
     /**
      * メディアアイテム

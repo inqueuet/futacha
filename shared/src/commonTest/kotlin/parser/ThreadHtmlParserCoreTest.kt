@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.parser
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -8,7 +9,7 @@ import kotlin.test.assertTrue
 class ThreadHtmlParserCoreTest {
     @Test
     fun parseThread_extractsThreadAndPosts() {
-        val page = ThreadHtmlParserCore.parseThread(sampleThreadHtml)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(sampleThreadHtml) }
 
         assertEquals("354621", page.threadId)
         assertEquals("料理＠ふたば", page.boardTitle)
@@ -90,7 +91,7 @@ class ThreadHtmlParserCoreTest {
     @Test
     fun parseThread_handlesLegacyCntdClassSpan() {
         val legacyHtml = sampleThreadHtml.replace("id=\"contdisp\"", "class=\"cntd\"")
-        val page = ThreadHtmlParserCore.parseThread(legacyHtml)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(legacyHtml) }
 
         assertEquals("1月18日頃消えます", page.expiresAtLabel)
     }
@@ -125,7 +126,7 @@ class ThreadHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val page = ThreadHtmlParserCore.parseThread(html)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
 
         val op = page.posts[0]
         val firstReply = page.posts[1]
@@ -173,7 +174,7 @@ class ThreadHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val page = ThreadHtmlParserCore.parseThread(html)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
 
         assertEquals(4, page.posts.size)
         val op = page.posts[0]
@@ -215,7 +216,7 @@ class ThreadHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val page = ThreadHtmlParserCore.parseThread(html)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
         assertEquals(2, page.posts.size)
         val op = page.posts[0]
         val reply = page.posts[1]
@@ -255,7 +256,7 @@ class ThreadHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val page = ThreadHtmlParserCore.parseThread(html)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
         assertEquals(2, page.posts.size)
         val op = page.posts[0]
         val reply = page.posts[1]
@@ -300,7 +301,7 @@ class ThreadHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val page = ThreadHtmlParserCore.parseThread(html)
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
         assertEquals(3, page.posts.size)
         val firstReply = page.posts[1]
         val secondReply = page.posts[2]

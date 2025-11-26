@@ -15,16 +15,29 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.TimeUnit
 
 class HistoryRefreshService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
+
+    companion object {
+        private const val TAG = "HistoryRefreshService"
+        private const val NOTIFICATION_ID = 1001
+
+        // FIX: サービスの実行状態を静的に保持
+        @Volatile
+        private var isRunning = false
+
+        fun isServiceRunning(): Boolean = isRunning
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -34,15 +47,21 @@ class HistoryRefreshService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (loopJob?.isActive != true) {
-            loopJob = serviceScope.launch {
-                runRefreshLoop()
-            }
+        // FIX: 既に実行中の場合は何もしない
+        if (loopJob?.isActive == true) {
+            Logger.d(TAG, "Service already running, ignoring duplicate start")
+            return START_STICKY
+        }
+
+        isRunning = true
+        loopJob = serviceScope.launch {
+            runRefreshLoop()
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        isRunning = false
         loopJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
@@ -54,6 +73,7 @@ class HistoryRefreshService : Service() {
             return
         }
         val refreshIntervalMillis = TimeUnit.MINUTES.toMillis(15)
+        val refreshTimeoutMillis = TimeUnit.MINUTES.toMillis(5)
 
         while (serviceScope.isActive) {
             val enabled = runCatching { app.appStateStore.isBackgroundRefreshEnabled.first() }.getOrDefault(false)
@@ -62,7 +82,11 @@ class HistoryRefreshService : Service() {
                 break
             }
             try {
-                app.historyRefresher.refresh()
+                withTimeout(refreshTimeoutMillis) {
+                    app.historyRefresher.refresh()
+                }
+            } catch (e: TimeoutCancellationException) {
+                Logger.w(TAG, "Background refresh timed out after ${refreshTimeoutMillis}ms")
             } catch (t: Throwable) {
                 Logger.e(TAG, "Background history refresh failed", t)
             }
@@ -101,8 +125,4 @@ class HistoryRefreshService : Service() {
         return channelId
     }
 
-    companion object {
-        private const val TAG = "HistoryRefreshService"
-        private const val NOTIFICATION_ID = 1001
-    }
 }

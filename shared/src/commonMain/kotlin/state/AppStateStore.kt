@@ -19,6 +19,27 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
+// FIX: KMP対応のスレッドセーフJobマップクラス
+private class AtomicJobMap {
+    private val mutex = Mutex()
+    private val map = mutableMapOf<String, Job>()
+
+    suspend fun putAndCancelOld(key: String, newJob: Job): Job? {
+        return mutex.withLock {
+            val oldJob = map.put(key, newJob)
+            oldJob
+        }
+    }
+
+    suspend fun removeIfSame(key: String, job: Job?) {
+        mutex.withLock {
+            if (map[key] == job) {
+                map.remove(key)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalTime::class)
 class AppStateStore internal constructor(
     private val storage: PlatformStateStorage,
@@ -30,18 +51,18 @@ class AppStateStore internal constructor(
     private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
     private val boardsMutex = Mutex()
     private val historyMutex = Mutex()
+    private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex
     private val selfPostIdentifiersMutex = Mutex()
     private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListSerializer = ListSerializer(String.serializer())
 
-    // Debouncing for scroll position updates
-    private val scrollPositionJobs = mutableMapOf<String, Job>()
-    private val scrollPositionMutex = Mutex()
+    // FIX: スレッドセーフなJobマップに変更
+    private val scrollPositionJobs = AtomicJobMap()
     private var scrollDebounceScope: CoroutineScope? = null
 
     companion object {
         private const val TAG = "AppStateStore"
-        private const val SCROLL_DEBOUNCE_DELAY_MS = 500L // Debounce scroll updates by 500ms
+        private const val SCROLL_DEBOUNCE_DELAY_MS = 500L
         private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
     }
 
@@ -247,57 +268,34 @@ class AppStateStore internal constructor(
     ) {
         val scope = scrollDebounceScope
         if (scope == null) {
-            // Fallback to immediate update if scope not set
             updateHistoryScrollPositionImmediate(threadId, index, offset, boardId, title, titleImageUrl, boardName, boardUrl, replyCount)
             return
         }
 
-        // FIX: Create job OUTSIDE of mutex to prevent deadlock
-        // Cancel and clean up inside mutex, but launch outside
-        val previousJob = scrollPositionMutex.withLock {
-            val oldJob = scrollPositionJobs[threadId]
-
-            // Clean up completed or cancelled jobs to prevent memory leak
-            // Use iterator to safely remove during iteration
-            val iterator = scrollPositionJobs.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (!entry.value.isActive) {
-                    iterator.remove()
-                }
-            }
-
-            oldJob
-        }
-
-        // Cancel previous job OUTSIDE of mutex
-        previousJob?.cancel()
-
-        // Launch new job OUTSIDE of mutex to prevent nested lock
+        // FIX: アトミックなJobマップ操作でデッドロックを回避
         val newJob = scope.launch {
+            delay(SCROLL_DEBOUNCE_DELAY_MS)
+
             try {
-                delay(SCROLL_DEBOUNCE_DELAY_MS)
-                updateHistoryScrollPositionImmediate(threadId, index, offset, boardId, title, titleImageUrl, boardName, boardUrl, replyCount)
+                updateHistoryScrollPositionImmediate(
+                    threadId, index, offset, boardId, title,
+                    titleImageUrl, boardName, boardUrl, replyCount
+                )
             } finally {
-                // Clean up after completion - no nested mutex here
-                scrollPositionMutex.withLock {
-                    // Only remove if this job is still the current one
-                    if (scrollPositionJobs[threadId] == coroutineContext[Job]) {
-                        scrollPositionJobs.remove(threadId)
-                    }
-                }
+                // 完了後に自動的にマップから削除
+                scrollPositionJobs.removeIfSame(threadId, this.coroutineContext[Job])
             }
         }
 
-        // Store new job in map
-        scrollPositionMutex.withLock {
-            scrollPositionJobs[threadId] = newJob
-        }
+        // 古いジョブをキャンセルして新しいジョブを登録
+        val oldJob = scrollPositionJobs.putAndCancelOld(threadId, newJob)
+        oldJob?.cancel()
     }
 
     /**
      * Immediate update of scroll position without debouncing.
      * Internal method used by the debounced public method.
+     * FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
      */
     private suspend fun updateHistoryScrollPositionImmediate(
         threadId: String,
@@ -310,11 +308,16 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
-        historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: run {
+        // FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
+        scrollPositionMutex.withLock {
+            // FIX: history読み取りは最小限のロックで実行
+            val currentHistory = historyMutex.withLock {
+                readHistorySnapshotLocked()
+            } ?: run {
                 Logger.w(TAG, "Skipping scroll position update due to missing snapshot")
                 return
             }
+
             val existingEntry = currentHistory.firstOrNull { it.threadId == threadId }
 
             // Skip update if scroll position hasn't changed to reduce unnecessary writes
@@ -364,8 +367,11 @@ class AppStateStore internal constructor(
                 }
             }
 
+            // FIX: 書き込みのみhistoryMutexでロック
             try {
-                persistHistory(updatedHistory)
+                historyMutex.withLock {
+                    persistHistory(updatedHistory)
+                }
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to update scroll position for thread $threadId", e)
                 // Log error but don't crash

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.parser
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -19,7 +20,7 @@ class CatalogHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val items = CatalogHtmlParserCore.parseCatalog(html)
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
 
         assertEquals(2, items.size)
         assertEquals("354621", items[0].id)
@@ -49,7 +50,7 @@ class CatalogHtmlParserCoreTest {
             </html>
         """.trimIndent()
 
-        val items = CatalogHtmlParserCore.parseCatalog(html)
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
 
         assertEquals(1, items.size)
         assertEquals(expected, items[0].title)

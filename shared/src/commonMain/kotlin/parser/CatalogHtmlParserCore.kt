@@ -1,6 +1,10 @@
 package com.valoser.futacha.shared.parser
 
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /**
  * Lightweight catalog parser that can run on any KMP target without Jsoup.
@@ -65,18 +69,19 @@ internal object CatalogHtmlParserCore {
         "1364612020" to "チュートリアル",
     )
 
-    fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> {
+    // FIX: サスペンド関数に変更してバックグラウンドで実行
+    suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> = withContext(Dispatchers.Default) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
 
-        return try {
+        try {
             val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
             val normalized = html.replace("\r\n", "\n")
 
             // Find table start and end without greedy quantifiers
-            val tableStart = tableRegex.find(normalized) ?: return emptyList()
-            val tableEndMatch = tableEndRegex.find(normalized, tableStart.range.last) ?: return emptyList()
+            val tableStart = tableRegex.find(normalized) ?: return@withContext emptyList()
+            val tableEndMatch = tableEndRegex.find(normalized, tableStart.range.last) ?: return@withContext emptyList()
             val tableBody = normalized.substring(tableStart.range.last + 1, tableEndMatch.range.first)
 
             if (tableBody.length > MAX_CHUNK_SIZE) {
@@ -91,8 +96,32 @@ internal object CatalogHtmlParserCore {
             var searchStart = 0
             var index = 0
             val maxCatalogItems = 1000 // Prevent excessive parsing
+            // FIX: 無限ループ防止
+            var previousSearchStart = -1
+            var loopIterations = 0
+            val maxIterations = 10000
 
             while (searchStart < tableBody.length && items.size < maxCatalogItems) {
+                loopIterations++
+
+                // FIX: 定期的にキャンセルチェックを追加
+                if (loopIterations % 100 == 0) {
+                    ensureActive()  // コルーチンがキャンセルされたら例外をスロー
+                }
+
+                // FIX: 最大ループ回数チェック
+                if (loopIterations > maxIterations) {
+                    Logger.e("CatalogHtmlParserCore", "Maximum loop iterations exceeded")
+                    break
+                }
+
+                // FIX: 位置が進んでいないことを検出
+                if (searchStart == previousSearchStart) {
+                    Logger.e("CatalogHtmlParserCore", "Search position not advancing (stuck at $searchStart)")
+                    break
+                }
+                previousSearchStart = searchStart
+
                 val cellStart = cellRegex.find(tableBody, searchStart) ?: break
                 val cellEnd = cellEndRegex.find(tableBody, cellStart.range.last) ?: break
 
@@ -141,20 +170,27 @@ internal object CatalogHtmlParserCore {
                     index++
                 }
 
-                searchStart = cellEnd.range.last + 1
-
-                // Safety check to prevent infinite loop
-                if (searchStart <= cellEnd.range.last) {
-                    println("CatalogHtmlParserCore: Search position not advancing")
+                // FIX: 次の検索位置を設定（必ず前進することを保証）
+                val nextSearchStart = cellEnd.range.last + 1
+                if (nextSearchStart <= searchStart) {
+                    Logger.e("CatalogHtmlParserCore", "Invalid next position: $nextSearchStart <= $searchStart")
                     break
                 }
+                searchStart = nextSearchStart
             }
 
             if (items.size >= maxCatalogItems) {
                 println("CatalogHtmlParserCore: Reached maximum catalog items limit ($maxCatalogItems)")
             }
 
+            if (loopIterations >= maxIterations) {
+                Logger.w("CatalogHtmlParserCore", "Parsing terminated due to max iterations")
+            }
+
             items
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // FIX: キャンセル例外は再スロー
+            throw e
         } catch (e: Exception) {
             println("CatalogHtmlParserCore: Failed to parse catalog HTML: ${e.message}")
             throw ParserException("Failed to parse catalog HTML", e)

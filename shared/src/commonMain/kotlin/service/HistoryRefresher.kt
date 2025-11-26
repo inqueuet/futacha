@@ -11,6 +11,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -19,6 +21,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.ExperimentalTime
+import kotlin.time.Clock
 
 private const val HISTORY_REFRESH_TAG = "HistoryRefresher"
 
@@ -37,6 +40,22 @@ class HistoryRefresher(
     private val skipThreadIds = MutableStateFlow<Set<String>>(emptySet())
     private val updatesMutex = Mutex()
 
+    // FIX: エラー状態を公開
+    private val _lastRefreshError = MutableStateFlow<RefreshError?>(null)
+    val lastRefreshError: StateFlow<RefreshError?> = _lastRefreshError.asStateFlow()
+
+    data class RefreshError(
+        val errorCount: Int,
+        val totalThreads: Int,
+        val timestamp: Long,
+        val errors: List<ErrorDetail>
+    )
+
+    data class ErrorDetail(
+        val threadId: String,
+        val message: String
+    )
+
     @OptIn(ExperimentalTime::class)
     suspend fun refresh(
         boardsSnapshot: List<BoardSummary>? = null,
@@ -48,7 +67,7 @@ class HistoryRefresher(
 
         val semaphore = Semaphore(maxConcurrency)
         val updates = mutableMapOf<String, ThreadHistoryEntry>()
-        val errors = mutableListOf<Throwable>()
+        val errors = mutableListOf<ErrorDetail>()
         val skipped = skipThreadIds.value
 
         coroutineScope {
@@ -84,7 +103,12 @@ class HistoryRefresher(
                                 Logger.i(HISTORY_REFRESH_TAG, "Skip thread ${entry.threadId} (not found)")
                             } else {
                                 Logger.e(HISTORY_REFRESH_TAG, "Failed to refresh ${entry.threadId}", e)
-                                updatesMutex.withLock { errors.add(e) }
+                                updatesMutex.withLock {
+                                    errors.add(ErrorDetail(
+                                        threadId = entry.threadId,
+                                        message = e.message ?: "Unknown error"
+                                    ))
+                                }
                             }
                         }
                     }
@@ -100,11 +124,34 @@ class HistoryRefresher(
             stateStore.setHistory(merged)
         }
 
-        errors.firstOrNull()?.let { throw it }
+        // FIX: エラー情報をより詳細に記録
+        if (errors.isNotEmpty()) {
+            val errorRate = (errors.size.toFloat() / history.size * 100).toInt()
+            _lastRefreshError.value = RefreshError(
+                errorCount = errors.size,
+                totalThreads = history.size,
+                timestamp = Clock.System.now().toEpochMilliseconds(),
+                errors = errors.take(10) // FIX: 最初の10件のエラーのみ保存してメモリ節約
+            )
+
+            // FIX: エラー率が高い場合は警告レベルを上げる
+            if (errorRate > 50) {
+                Logger.e(HISTORY_REFRESH_TAG, "History refresh completed with HIGH error rate: ${errors.size}/${history.size} ($errorRate%)")
+            } else {
+                Logger.w(HISTORY_REFRESH_TAG, "History refresh completed with ${errors.size}/${history.size} errors ($errorRate%)")
+            }
+        } else {
+            _lastRefreshError.value = null
+            Logger.i(HISTORY_REFRESH_TAG, "History refresh completed successfully for ${history.size} threads")
+        }
     }
 
     fun clearSkippedThreads() {
         skipThreadIds.value = emptySet()
+    }
+
+    fun clearLastError() {
+        _lastRefreshError.value = null
     }
 
     private fun markSkipped(threadId: String) {

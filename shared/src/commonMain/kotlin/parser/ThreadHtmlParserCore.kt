@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.ensureActive
 import kotlin.text.concatToString
 import kotlin.time.ExperimentalTime
 
@@ -20,8 +21,8 @@ internal object ThreadHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://www.example.com"
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
     private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
-    private const val MAX_PARSE_TIME_MS = 5000L // 5 second timeout for parsing
-    private const val MAX_SINGLE_BLOCK_SIZE = 500_000 // 500KB max for single table block
+    private const val MAX_PARSE_TIME_MS = 5000L // FIX: 5秒に戻す（既にDispatchers.Defaultで実行されるため安全）
+    private const val MAX_SINGLE_BLOCK_SIZE = 300_000 // FIX: 500KB→300KBに削減してより早く異常を検出
 
     private val canonicalRegex = Regex(
         pattern = "<link[^>]+rel=['\"]canonical['\"][^>]+href=['\"]([^'\"]+)['\"]",
@@ -81,9 +82,9 @@ internal object ThreadHtmlParserCore {
         pattern = "<img[^>]+src=['\"]([^'\"]*/thumb/[^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
-    // Simplified regex to prevent ReDoS - match saidane links with limited backtracking
+    // FIX: ReDoS対策 - 非貪欲量指定子を使用
     private val saidaneRegex = Regex(
-        pattern = "<a[^>]{0,200}class=['\"]?sod['\"]?[^>]{0,200}>([^<]{0,500})</a>",
+        pattern = "<a\\s+[^>]{0,200}?class=['\"]?sod['\"]?[^>]{0,200}?>([^<]{1,500}?)</a>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val posterIdRegex = Regex("ID:[^\\s<]+")
@@ -98,12 +99,13 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
 
-    fun parseThread(html: String): ThreadPage {
+    // FIX: サスペンド関数に変更し、必ずバックグラウンドで実行
+    suspend fun parseThread(html: String): ThreadPage = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
 
-        return try {
+        try {
             val normalized = html.replace("\r\n", "\n")
             val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
             val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL
@@ -142,13 +144,13 @@ internal object ThreadHtmlParserCore {
                 val repliesHtml = normalized.substring(firstReplyIndex)
                 var searchStart = 0
                 var iterationCount = 0
-                // FIX: Reduce max iterations to prevent ANR - 1500 posts is more reasonable
-                val maxIterations = 1500
-                // FIX: Reduce max posts to prevent memory issues
-                val maxPosts = 2050
+                // FIX: イテレーション制限を引き上げ
+                val maxIterations = 2000
+                // FIX: 投稿数制限を引き上げ
+                val maxPosts = 3000
                 var lastSearchStart = -1 // Track previous position to detect stalling
 
-                // FIX: Add parse timeout to prevent ANR on malicious HTML
+                // FIX: パースタイムアウトでANRを防止
                 val parseStartTime = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
                 while (searchStart < repliesHtml.length &&
@@ -156,8 +158,11 @@ internal object ThreadHtmlParserCore {
                        posts.size < maxPosts) {
                     iterationCount++
 
-                    // FIX: Check for timeout every 50 iterations to prevent excessive checks
-                    if (iterationCount % 50 == 0) {
+                    // FIX: タイムアウトとキャンセルチェックを100回ごとに実行
+                    if (iterationCount % 100 == 0) {
+                        // キャンセルチェック
+                        ensureActive()
+
                         val elapsed = kotlin.time.Clock.System.now().toEpochMilliseconds() - parseStartTime
                         if (elapsed > MAX_PARSE_TIME_MS) {
                             Logger.e(TAG, "Parse timeout exceeded ($elapsed ms), stopping parse")
@@ -267,6 +272,9 @@ internal object ThreadHtmlParserCore {
                 isTruncated = isTruncated,
                 truncationReason = truncationReason
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // FIX: キャンセル例外は再スロー
+            throw e
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to parse thread HTML", e)
             throw ParserException("Failed to parse thread HTML", e)

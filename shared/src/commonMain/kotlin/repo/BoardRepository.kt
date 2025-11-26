@@ -7,6 +7,12 @@ import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -60,6 +66,11 @@ interface BoardRepository {
      */
     fun close()
 
+    /**
+     * Close the repository asynchronously and return a Job to wait for completion if needed
+     */
+    fun closeAsync(): Job
+
     suspend fun clearOpImageCache(board: String? = null, threadId: String? = null)
 }
 
@@ -77,6 +88,9 @@ class DefaultBoardRepository(
 
     private val opImageCacheMutex = Mutex()
     private val opImageCache = createOpImageCache()
+
+    // FIX: close用のCoroutineScopeを追加
+    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
         private const val TAG = "DefaultBoardRepository"
@@ -187,14 +201,33 @@ class DefaultBoardRepository(
         return api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
     }
 
+    // FIX: 同期的にクリーンアップを実行
     override fun close() {
         // Close the underlying API if it supports cleanup
         (api as? AutoCloseable)?.close()
-        if (opImageCacheMutex.tryLock()) {
-            try {
+
+        // FIX: キャッシュをブロッキングでクリア
+        kotlinx.coroutines.runBlocking {
+            opImageCacheMutex.withLock {
                 opImageCache.clear()
-            } finally {
-                opImageCacheMutex.unlock()
+            }
+        }
+
+        // スコープをキャンセル（バックグラウンドタスクを停止）
+        closeScope.cancel()
+    }
+
+    // FIX: 非同期版closeAsync（必要に応じて使用）
+    override fun closeAsync(): Job {
+        (api as? AutoCloseable)?.close()
+
+        return closeScope.launch {
+            opImageCacheMutex.withLock {
+                opImageCache.clear()
+            }
+        }.also {
+            it.invokeOnCompletion {
+                closeScope.cancel()
             }
         }
     }

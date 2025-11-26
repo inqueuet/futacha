@@ -25,6 +25,36 @@ import kotlin.text.RegexOption
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
+// FIX: スレッドセーフなLRUキャッシュクラス
+// NOTE: KMPではConcurrentHashMapが使えないため、Mutexで保護する必要がある
+// LinkedHashMapはスレッドセーフではないため、すべての操作をMutexで保護
+private class ThreadSafeLruCache<K, V>(private val maxSize: Int) {
+    private val mutex = Mutex()
+    private val cache = LinkedHashMap<K, V>(maxSize, 0.75f, true)
+
+    // FIX: 読み取り操作も必ずMutexで保護（LinkedHashMapは読み取りもスレッドセーフではない）
+    suspend fun get(key: K): V? = mutex.withLock {
+        cache[key]
+    }
+
+    // FIX: 書き込み操作はMutexで保護し、サイズ制限を適用
+    suspend fun put(key: K, value: V): V? = mutex.withLock {
+        if (cache.size >= maxSize && !cache.containsKey(key)) {
+            val eldest = cache.entries.firstOrNull()
+            eldest?.let { cache.remove(it.key) }
+        }
+        cache.put(key, value)
+    }
+
+    suspend fun clear() = mutex.withLock {
+        cache.clear()
+    }
+
+    suspend fun size(): Int = mutex.withLock {
+        cache.size
+    }
+}
+
 class HttpBoardApi(
     private val client: HttpClient
 ) : BoardApi, AutoCloseable {
@@ -57,10 +87,11 @@ class HttpBoardApi(
             Regex("""<input[^>]*name\s*=\s*["']chrenc["'][^>]*>""", RegexOption.IGNORE_CASE)
         private val VALUE_ATTR_REGEX =
             Regex("""value\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+        private const val MAX_CACHE_SIZE = 100
     }
 
-    private val postingConfigCache = mutableMapOf<String, PostingConfig>()
-    private val postingConfigMutex = Mutex()
+    // FIX: スレッドセーフなLRUキャッシュに変更
+    private val postingConfigCache = ThreadSafeLruCache<String, PostingConfig>(MAX_CACHE_SIZE)
 
     override suspend fun fetchCatalogSetup(board: String) {
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
@@ -724,13 +755,12 @@ class HttpBoardApi(
         Clock.System.now().toEpochMilliseconds().toString()
 
     private suspend fun getPostingConfig(board: String): PostingConfig {
-        postingConfigMutex.withLock {
-            postingConfigCache[board]?.let { return it }
-        }
+        // FIX: キャッシュ自体がスレッドセーフなのでMutexは不要
+        postingConfigCache.get(board)?.let { return it }
+
         val fetched = fetchPostingConfig(board)
-        return postingConfigMutex.withLock {
-            postingConfigCache.getOrPut(board) { fetched }
-        }
+        postingConfigCache.put(board, fetched)
+        return fetched
     }
 
     private suspend fun fetchPostingConfig(board: String): PostingConfig {

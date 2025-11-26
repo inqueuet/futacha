@@ -12,23 +12,34 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.ui.FutachaApp
 import version.createVersionChecker
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private var isServiceRunning = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as FutachaApplication
         enableEdgeToEdge()
+        // FIX: サービス起動状態をトラッキングして重複起動を防止
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                app.appStateStore.isBackgroundRefreshEnabled.collect { enabled ->
-                    val intent = Intent(this@MainActivity, HistoryRefreshService::class.java)
-                    if (enabled) {
-                        ContextCompat.startForegroundService(this@MainActivity, intent)
-                    } else {
-                        stopService(intent)
+                app.appStateStore.isBackgroundRefreshEnabled
+                    .distinctUntilChanged()
+                    .collect { enabled ->
+                        val intent = Intent(this@MainActivity, HistoryRefreshService::class.java)
+
+                        // 状態が変わった時だけアクションを実行
+                        if (enabled && !isServiceRunning) {
+                            ContextCompat.startForegroundService(this@MainActivity, intent)
+                            isServiceRunning = true
+                        } else if (!enabled && isServiceRunning) {
+                            stopService(intent)
+                            isServiceRunning = false
+                        }
                     }
-                }
             }
         }
         setContent {
@@ -43,5 +54,14 @@ class MainActivity : ComponentActivity() {
                 fileSystem = fileSystem
             )
         }
+    }
+
+    // FIX: onDestroyでサービスを確実に停止
+    override fun onDestroy() {
+        if (isServiceRunning) {
+            stopService(Intent(this, HistoryRefreshService::class.java))
+            isServiceRunning = false
+        }
+        super.onDestroy()
     }
 }

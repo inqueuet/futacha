@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.createRemoteBoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.repository.SavedThreadRepository
@@ -42,6 +43,13 @@ import version.UpdateInfo
 private const val TAG = "FutachaApp"
 
 @OptIn(ExperimentalTime::class)
+// FIX: リソース所有権を明確にするデータクラス
+private data class RepositoryHolder(
+    val repository: BoardRepository,
+    val ownsRepository: Boolean
+)
+
+@OptIn(ExperimentalTime::class)
 @Composable
 fun FutachaApp(
     stateStore: AppStateStore,
@@ -55,7 +63,11 @@ fun FutachaApp(
         val imageLoader = rememberFutachaImageLoader()
         DisposableEffect(imageLoader) {
             onDispose {
-                imageLoader.shutdown()
+                runCatching {
+                    imageLoader.shutdown()
+                }.onFailure { e ->
+                    Logger.e("FutachaApp", "Failed to shutdown ImageLoader", e)
+                }
             }
         }
         CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
@@ -67,15 +79,25 @@ fun FutachaApp(
                 stateStore.setScrollDebounceScope(coroutineScope)
             }
 
-            // Use remember with Unit key to ensure single instance per composition lifecycle
-            val remoteBoardRepository = remember(httpClient) {
-                httpClient?.let { createRemoteBoardRepository(it) } ?: createRemoteBoardRepository()
+            // FIX: より明確なリソース所有権管理
+            val repositoryHolder = remember(httpClient) {
+                if (httpClient != null) {
+                    RepositoryHolder(
+                        repository = createRemoteBoardRepository(httpClient),
+                        ownsRepository = false
+                    )
+                } else {
+                    RepositoryHolder(
+                        repository = createRemoteBoardRepository(),
+                        ownsRepository = true
+                    )
+                }
             }
 
-            val historyRefresher = remember(remoteBoardRepository) {
+            val historyRefresher = remember(repositoryHolder.repository) {
                 HistoryRefresher(
                     stateStore = stateStore,
-                    repository = remoteBoardRepository,
+                    repository = repositoryHolder.repository,
                     dispatcher = Dispatchers.IO
                 )
             }
@@ -84,11 +106,16 @@ fun FutachaApp(
                 fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
             }
 
-            // Clean up repository when composable leaves composition
-            // Add Unit key to ensure DisposableEffect runs only once per composition
-            DisposableEffect(Unit) {
+            // FIX: すべてのリソースを確実に解放
+            DisposableEffect(repositoryHolder) {
                 onDispose {
-                    remoteBoardRepository.close()
+                    if (repositoryHolder.ownsRepository) {
+                        runCatching {
+                            repositoryHolder.repository.close()
+                        }.onFailure { e ->
+                            Logger.e("FutachaApp", "Failed to close repository", e)
+                        }
+                    }
                 }
             }
 
@@ -229,7 +256,8 @@ fun FutachaApp(
                 }
 
                 selectedThreadId == null -> {
-                    val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
+                    // FIX: repositoryHolder.repositoryを使用
+                    val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { repositoryHolder.repository }
                     CatalogScreen(
                         board = selectedBoard,
                         history = persistedHistory,
@@ -323,8 +351,9 @@ fun FutachaApp(
                         }
                     }
 
-                    val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { remoteBoardRepository }
-                        ThreadScreen(
+                    // FIX: repositoryHolder.repositoryを使用
+                    val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { repositoryHolder.repository }
+                    ThreadScreen(
                             board = currentBoard,
                             history = persistedHistory,
                             threadId = activeThreadId,

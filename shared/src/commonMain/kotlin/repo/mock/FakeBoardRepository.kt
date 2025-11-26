@@ -5,6 +5,9 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.numericId
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
+import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * Lightweight mock that surfaces deterministic catalog / thread data derived from `/example`.
@@ -96,5 +99,11 @@ class FakeBoardRepository(
 
     override fun close() {
         // No resources to clean up for fake repository
+    }
+
+    override fun closeAsync(): Job {
+        val job: CompletableJob = SupervisorJob()
+        job.complete()
+        return job
     }
 }
