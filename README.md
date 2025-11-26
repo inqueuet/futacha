@@ -54,12 +54,19 @@
 ## Development Process
 - UI/ロジックは `shared/` に集約（Compose + Ktor + StateFlow）。`AppStateStore` が Boards/History/Privacy/NG/Watch Words を管理。  
 - Platform 層で `HttpClient`, `FileSystem`, `VersionChecker`, `PermissionRequest`, `ImagePicker` などを expect/actual で注入。  
-- キャッシュ・保存・メディア再生（Coil + Media3/AVPlayer/WKWebView）も `shared` 側で Compose UI に集約しています。詳細は `AGENTS.md` の 0〜5 セクションを参照。
+- キャッシュ・保存・メディア再生（Coil + Media3/AVPlayer/WKWebView）も `shared` 側で Compose UI に集約しています。詳細は `AGENTS.md` の 0〜5 セクションを参照。  
+
+## Recent Changes (81379fcdf8 以降)
+- 履歴のバックグラウンド更新を導入（Android Foreground Service / iOS BGTask、設定トグル付き）。  
+- Cookie 永続化と管理 UI を追加し、BoardRepository でセッションを共有。  
+- Thread 保存処理を再設計してフリーズ/保存失敗を解消、HistoryRefresher や Parser のバグも併せて修正。  
+- スクロール中の誤タップ防止、引用プレビュー中のメニュー抑止、プライバシーポリシー導線など UI/操作性を調整。  
+- アプリアイコン刷新と Gradle バージョン管理の一元化（version catalog）。  
 
 ## Support & Issues
 - 問題点や改善案は GitHub Issues で共有してください（リポジトリの Issue テンプレートを活用）。  
 - 使い方で困った場合、`AGENTS.md` に記載された UI フロー・保存・設定の詳細を先に確認すると多くは解決します。  
-- バグ報告には再現手順、ログ、端末情報を添えてください。
+- バグ報告には再現手順、ログ、端末情報を添えてください。  
 
 ## Additional Resources
 - `AGENTS.md`: エントリポイント、UI フロー、状態管理、ネットワーク、保存処理、プラットフォーム実装、VersionChecker など詳細なドキュメント。  
