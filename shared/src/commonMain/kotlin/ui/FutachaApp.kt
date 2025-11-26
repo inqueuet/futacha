@@ -22,6 +22,8 @@ import com.valoser.futacha.shared.repo.createRemoteBoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
@@ -100,7 +102,7 @@ fun FutachaApp(
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
-                    dispatcher = Dispatchers.IO
+                    dispatcher = Dispatchers.Default
                 )
             }
 
@@ -149,8 +151,13 @@ fun FutachaApp(
             val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
             val persistedHistory by stateStore.history.collectAsState(initial = history)
             val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
+            val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
+            }
+            val resolvedManualSaveDirectory = remember(manualSaveDirectory, fileSystem) {
+                runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
+                    .getOrNull()
             }
 
             var selectedBoardId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -164,6 +171,11 @@ fun FutachaApp(
             val onBackgroundRefreshChanged: (Boolean) -> Unit = { enabled ->
                 coroutineScope.launch {
                     stateStore.setBackgroundRefreshEnabled(enabled)
+                }
+            }
+            val onManualSaveDirectoryChanged: (String) -> Unit = { directory ->
+                coroutineScope.launch {
+                    stateStore.setManualSaveDirectory(directory)
                 }
             }
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -254,7 +266,11 @@ fun FutachaApp(
                         },
                         appVersion = appVersion,
                         isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                        onBackgroundRefreshChanged = onBackgroundRefreshChanged
+                        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                        manualSaveDirectory = manualSaveDirectory,
+                        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+                        fileSystem = fileSystem
                     )
                 }
 
@@ -289,7 +305,10 @@ fun FutachaApp(
                         appVersion = appVersion,
                         isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                         onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-                        cookieRepository = cookieRepository
+                        cookieRepository = cookieRepository,
+                        manualSaveDirectory = manualSaveDirectory,
+                        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged
                     )
                 }
 
@@ -383,7 +402,10 @@ fun FutachaApp(
                             autoSavedThreadRepository = autoSavedThreadRepository,
                             appVersion = appVersion,
                             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                            onBackgroundRefreshChanged = onBackgroundRefreshChanged
+                            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                            manualSaveDirectory = manualSaveDirectory,
+                            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged
                         )
                     }
                 }

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -27,6 +28,7 @@ private class AndroidPlatformStateStorage(
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
+    private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
     private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
@@ -52,6 +54,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[backgroundRefreshKey] ?: false }
+
+    override val manualSaveDirectory: Flow<String> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
 
     override val catalogDisplayStyle: Flow<String?> =
         context.dataStore.data
@@ -109,6 +116,15 @@ private class AndroidPlatformStateStorage(
         } catch (e: Exception) {
             println("AndroidPlatformStateStorage: Failed to update background refresh: ${e.message}")
             throw StorageException("Failed to save background refresh state", e)
+        }
+    }
+
+    override suspend fun updateManualSaveDirectory(directory: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[manualSaveDirectoryKey] = directory }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update manual save directory: ${e.message}")
+            throw StorageException("Failed to save manual save directory", e)
         }
     }
 
@@ -208,12 +224,22 @@ private class AndroidPlatformStateStorage(
                 if (defaultSelfPostIdentifiersJson != null && !prefs.contains(selfPostIdentifiersKey)) {
                     prefs[selfPostIdentifiersKey] = defaultSelfPostIdentifiersJson
                 }
+                if (!prefs.contains(manualSaveDirectoryKey)) {
+                    prefs[manualSaveDirectoryKey] = DEFAULT_MANUAL_SAVE_ROOT
+                }
             }
         } catch (e: Exception) {
             println("AndroidPlatformStateStorage: Failed to seed data: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to initialize default data", e)
         }
+    }
+
+    private fun sanitizeManualSaveDirectoryValue(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
+        if (trimmed == com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
+        return trimmed
     }
 }
 

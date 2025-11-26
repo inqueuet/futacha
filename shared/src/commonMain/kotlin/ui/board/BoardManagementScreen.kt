@@ -231,6 +231,8 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
@@ -277,6 +279,9 @@ fun BoardManagementScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    resolvedManualSaveDirectory: String? = null,
+    onManualSaveDirectoryChanged: (String) -> Unit = {},
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
@@ -525,6 +530,9 @@ fun BoardManagementScreen(
             appVersion = appVersion,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            manualSaveDirectory = manualSaveDirectory,
+            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
             onOpenCookieManager = cookieRepository?.let {
                 {
                     isGlobalSettingsVisible = false
@@ -1174,6 +1182,9 @@ fun CatalogScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    resolvedManualSaveDirectory: String? = null,
+    onManualSaveDirectoryChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -1678,6 +1689,9 @@ fun CatalogScreen(
                 appVersion = appVersion,
                 isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                 onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                manualSaveDirectory = manualSaveDirectory,
+                resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
                 onOpenCookieManager = cookieRepository?.let {
                     {
                         isGlobalSettingsVisible = false
@@ -3304,6 +3318,9 @@ fun ThreadScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    resolvedManualSaveDirectory: String? = null,
+    onManualSaveDirectoryChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -4032,14 +4049,18 @@ fun ThreadScreen(
                                                     boardUrl = board.url,
                                                     title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
                                                     expiresAtLabel = page.expiresAtLabel,
-                                                    posts = page.posts
+                                                    posts = page.posts,
+                                                    baseDirectory = manualSaveDirectory
                                                 )
 
                                                 progressJob.cancel()
 
                                                 result.onSuccess { savedThread ->
                                                     // SavedThreadRepositoryに追加
-                                                    val repository = com.valoser.futacha.shared.repository.SavedThreadRepository(fileSystem)
+                                                    val repository = com.valoser.futacha.shared.repository.SavedThreadRepository(
+                                                        fileSystem,
+                                                        baseDirectory = manualSaveDirectory
+                                                    )
                                                     repository.addThreadToIndex(savedThread)
 
                                                     saveProgress = null
@@ -4501,6 +4522,9 @@ fun ThreadScreen(
             appVersion = appVersion,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            manualSaveDirectory = manualSaveDirectory,
+            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
             onOpenCookieManager = cookieRepository?.let {
                 {
                     isGlobalSettingsVisible = false
@@ -7425,9 +7449,45 @@ private fun GlobalSettingsScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean,
     onBackgroundRefreshChanged: (Boolean) -> Unit,
+    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    resolvedManualSaveDirectory: String? = null,
+    onManualSaveDirectoryChanged: (String) -> Unit = {},
     onOpenCookieManager: (() -> Unit)? = null
 ) {
     val urlLauncher = rememberUrlLauncher()
+    fun normalizeManualSaveInput(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return MANUAL_SAVE_DIRECTORY
+        if (trimmed.startsWith("/")) return trimmed
+
+        val lower = trimmed.lowercase()
+        return when {
+            lower == "download" || lower == "downloads" -> "Download"
+            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Download/${trimmed.substringAfter('/')}"
+            lower == "documents" -> "Documents"
+            lower.startsWith("documents/") -> "Documents/${trimmed.substringAfter('/')}"
+            else -> trimmed
+        }
+    }
+    fun fallbackResolvedPath(manualSaveDir: String): String {
+        val normalized = normalizeManualSaveInput(manualSaveDir)
+        if (normalized.startsWith("/")) return normalized
+
+        val lower = normalized.lowercase()
+        return when {
+            lower == "download" || lower == "downloads" -> "Download/futacha/$MANUAL_SAVE_DIRECTORY"
+            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Download/${normalized.substringAfter('/')}"
+            lower == "documents" -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$MANUAL_SAVE_DIRECTORY"
+            lower.startsWith("documents/") -> "$DEFAULT_MANUAL_SAVE_ROOT/${normalized.substringAfter('/')}"
+            else -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$normalized"
+        }
+    }
+    var manualSaveInput by rememberSaveable(manualSaveDirectory) {
+        mutableStateOf(manualSaveDirectory)
+    }
+    val resolvedManualPath = remember(manualSaveDirectory, resolvedManualSaveDirectory) {
+        resolvedManualSaveDirectory ?: fallbackResolvedPath(manualSaveDirectory)
+    }
     val settingsEntries = remember(onOpenCookieManager) {
         buildList {
             if (onOpenCookieManager != null) {
@@ -7474,6 +7534,54 @@ private fun GlobalSettingsScreen(
                             checked = isBackgroundRefreshEnabled,
                             onCheckedChange = { onBackgroundRefreshChanged(it) }
                         )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("スレ保存先") },
+                    supportingContent = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "デフォルトは Documents/futacha 配下です。「Documents」か「Download」と入力するだけで futacha/saved_threads まで自動で設定されます。絶対パスを指定することもできます。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = manualSaveInput,
+                                onValueChange = { manualSaveInput = it },
+                                singleLine = true,
+                                placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("フォルダ名またはパス") }
+                            )
+                            Text(
+                                text = "保存先: $resolvedManualPath",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                TextButton(onClick = {
+                                    manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
+                                    onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                }) {
+                                    Text("デフォルトに戻す")
+                                }
+                                Button(onClick = {
+                                    val normalized = normalizeManualSaveInput(manualSaveInput)
+                                    manualSaveInput = normalized
+                                    onManualSaveDirectoryChanged(normalized)
+                                }) {
+                                    Text("保存先を更新")
+                                }
+                            }
+                        }
                     },
                     modifier = Modifier
                         .fillMaxWidth()

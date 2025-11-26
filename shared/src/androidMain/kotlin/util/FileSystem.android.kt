@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -96,15 +97,47 @@ class AndroidFileSystem(
     }
 
     override fun resolveAbsolutePath(relativePath: String): String {
-        return if (relativePath.startsWith("/")) {
-            relativePath
-        } else {
-            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY)) {
-                getPrivateAppDataDirectory()
-            } else {
-                getAppDataDirectory()
+        if (relativePath.startsWith("/")) {
+            return relativePath
+        }
+
+        val cleanedPath = relativePath.removePrefix("./")
+        val lower = cleanedPath.lowercase()
+
+        // AUTO_SAVE_DIRECTORY はアプリ専用の非公開領域に保存
+        if (cleanedPath.startsWith(AUTO_SAVE_DIRECTORY)) {
+            return File(getPrivateAppDataDirectory(), cleanedPath).absolutePath
+        }
+
+        // ユーザーが「Download」や「Documents」と入力した場合は futacha/ saved_threads を自動付与
+        val isDownload = lower == "download" || lower == "downloads"
+        val isDownloadSubPath = lower.startsWith("download/") || lower.startsWith("downloads/")
+        val isDocuments = lower == "documents"
+        val isDocumentsSubPath = lower.startsWith("documents/")
+
+        return when {
+            isDownload -> {
+                File(getPublicDownloadsDirectory(), MANUAL_SAVE_DIRECTORY).absolutePath
             }
-            File(baseDir, relativePath).absolutePath
+
+            isDownloadSubPath -> {
+                val remainder = cleanedPath.substringAfter('/').removePrefix("futacha/").ifBlank { MANUAL_SAVE_DIRECTORY }
+                File(getPublicDownloadsDirectory(), remainder).absolutePath
+            }
+
+            isDocuments -> {
+                File(getPublicDocumentsDirectory(), MANUAL_SAVE_DIRECTORY).absolutePath
+            }
+
+            isDocumentsSubPath -> {
+                val remainder = cleanedPath.substringAfter('/').removePrefix("futacha/").ifBlank { MANUAL_SAVE_DIRECTORY }
+                File(getPublicDocumentsDirectory(), remainder).absolutePath
+            }
+
+            else -> {
+                val baseDir = getAppDataDirectory()
+                File(baseDir, cleanedPath).absolutePath
+            }
         }
     }
 
@@ -153,6 +186,53 @@ class AndroidFileSystem(
         } catch (e: Exception) {
             Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
             // Fallback to internal storage
+            return File(context.filesDir, "futacha").apply {
+                if (!exists()) {
+                    mkdirs()
+                }
+            }.absolutePath
+        }
+    }
+
+    /**
+     * 共有Downloadフォルダのパスを取得
+     */
+    private fun getPublicDownloadsDirectory(): String {
+        try {
+            val downloadsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            } else {
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            }
+
+            if (downloadsDir == null) {
+                Logger.e("FileSystem.android", "External storage downloads directory is null, falling back to internal storage")
+                return context.filesDir.absolutePath
+            }
+
+            val appDir = File(downloadsDir, "futacha")
+            if (!appDir.exists()) {
+                val success = appDir.mkdirs()
+                if (!success && !appDir.exists()) {
+                    Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}, falling back to internal storage")
+                    return File(context.filesDir, "futacha").apply {
+                        if (!exists()) {
+                            mkdirs()
+                        }
+                    }.absolutePath
+                }
+            }
+
+            return appDir.absolutePath
+        } catch (e: SecurityException) {
+            Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
+            return File(context.filesDir, "futacha").apply {
+                if (!exists()) {
+                    mkdirs()
+                }
+            }.absolutePath
+        } catch (e: Exception) {
+            Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
             return File(context.filesDir, "futacha").apply {
                 if (!exists()) {
                     mkdirs()

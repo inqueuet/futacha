@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -80,6 +82,10 @@ class AppStateStore internal constructor(
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
+    val manualSaveDirectory: Flow<String> = storage.manualSaveDirectory
+        .map { manualPath ->
+            sanitizeManualSaveDirectory(manualPath)
+        }
 
     val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
         decodeCatalogDisplayStyle(raw)
@@ -127,6 +133,16 @@ class AppStateStore internal constructor(
             storage.updateBackgroundRefreshEnabled(enabled)
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save background refresh state: $enabled", e)
+            // Log error but don't crash
+        }
+    }
+
+    suspend fun setManualSaveDirectory(directory: String) {
+        val sanitized = sanitizeManualSaveDirectory(directory)
+        try {
+            storage.updateManualSaveDirectory(sanitized)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save manual save directory: $sanitized", e)
             // Log error but don't crash
         }
     }
@@ -515,6 +531,7 @@ internal interface PlatformStateStorage {
     val historyJson: Flow<String?>
     val privacyFilterEnabled: Flow<Boolean>
     val backgroundRefreshEnabled: Flow<Boolean>
+    val manualSaveDirectory: Flow<String>
     val catalogDisplayStyle: Flow<String?>
     val ngHeadersJson: Flow<String?>
     val ngWordsJson: Flow<String?>
@@ -526,6 +543,7 @@ internal interface PlatformStateStorage {
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
+    suspend fun updateManualSaveDirectory(directory: String)
     suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun updateNgHeadersJson(value: String)
     suspend fun updateNgWordsJson(value: String)
@@ -545,3 +563,15 @@ internal interface PlatformStateStorage {
 }
 
 internal expect fun createPlatformStateStorage(platformContext: Any? = null): PlatformStateStorage
+
+private fun sanitizeManualSaveDirectory(input: String?): String {
+    val trimmed = input?.trim().orEmpty()
+    if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
+    if (trimmed == MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
+    val withoutCurrentDirPrefix = if (trimmed.startsWith("./")) {
+        trimmed.removePrefix("./")
+    } else {
+        trimmed
+    }
+    return withoutCurrentDirPrefix.ifBlank { DEFAULT_MANUAL_SAVE_ROOT }
+}

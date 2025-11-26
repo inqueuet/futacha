@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.state
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import platform.Foundation.NSUserDefaults
 
 private const val BOARDS_KEY = "boards_json"
@@ -9,6 +10,7 @@ private const val HISTORY_KEY = "history_json"
 private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
+private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
 private const val CATALOG_NG_WORDS_KEY = "catalog_ng_words_json"
@@ -26,6 +28,9 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
     private val backgroundRefreshState = MutableStateFlow(defaults.boolForKey(BACKGROUND_REFRESH_KEY))
+    private val manualSaveDirectoryState = MutableStateFlow(
+        sanitizeManualSaveDirectoryValue(defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY))
+    )
     private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
     private val catalogNgWordsState = MutableStateFlow(defaults.stringForKey(CATALOG_NG_WORDS_KEY))
@@ -36,6 +41,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val historyJson: Flow<String?> = historyState
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
+    override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val ngHeadersJson: Flow<String?> = ngHeadersState
     override val ngWordsJson: Flow<String?> = ngWordsState
@@ -65,6 +71,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
         defaults.synchronize()
         backgroundRefreshState.value = enabled
+    }
+
+    override suspend fun updateManualSaveDirectory(directory: String) {
+        defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
+        defaults.synchronize()
+        manualSaveDirectoryState.value = directory
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
@@ -123,6 +135,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             historyState.value = defaultHistoryJson
             updated = true
         }
+        if (defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY) == null) {
+            defaults.setObject(DEFAULT_MANUAL_SAVE_ROOT, forKey = MANUAL_SAVE_DIRECTORY_KEY)
+            manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
+            updated = true
+        }
         if (defaultNgHeadersJson != null && defaults.stringForKey(NG_HEADERS_KEY) == null) {
             defaults.setObject(defaultNgHeadersJson, forKey = NG_HEADERS_KEY)
             ngHeadersState.value = defaultNgHeadersJson
@@ -151,5 +168,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (updated) {
             defaults.synchronize()
         }
+    }
+
+    private fun sanitizeManualSaveDirectoryValue(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
+        if (trimmed == com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
+        return trimmed
     }
 }
