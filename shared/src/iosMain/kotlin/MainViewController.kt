@@ -5,8 +5,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.window.ComposeUIViewController
 import com.valoser.futacha.shared.background.BackgroundRefreshManager
+import com.valoser.futacha.shared.network.PersistentCookieStorage
 import com.valoser.futacha.shared.network.createHttpClient
 import com.valoser.futacha.shared.parser.createHtmlParser
+import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repo.DefaultBoardRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.createAppStateStore
@@ -19,8 +21,11 @@ import version.createVersionChecker
 fun MainViewController(): UIViewController {
     return ComposeUIViewController {
         val stateStore = remember { createAppStateStore() }
-        val httpClient = remember { createHttpClient() }
-        DisposableEffect(httpClient) {
+        val fileSystem = remember { createFileSystem() }
+        val cookieStorage = remember(fileSystem) { PersistentCookieStorage(fileSystem) }
+        val cookieRepository = remember(cookieStorage) { CookieRepository(cookieStorage) }
+        val httpClient = remember(cookieStorage) { createHttpClient(cookieStorage = cookieStorage) }
+        DisposableEffect(httpClient, cookieStorage) {
             onDispose {
                 httpClient.close()
             }
@@ -37,13 +42,13 @@ fun MainViewController(): UIViewController {
         val versionChecker = remember(httpClient) {
             createVersionChecker(httpClient)
         }
-        val fileSystem = remember { createFileSystem() }
 
         FutachaApp(
             stateStore = stateStore,
             versionChecker = versionChecker,
             httpClient = httpClient,
-            fileSystem = fileSystem
+            fileSystem = fileSystem,
+            cookieRepository = cookieRepository
         )
     }
 }

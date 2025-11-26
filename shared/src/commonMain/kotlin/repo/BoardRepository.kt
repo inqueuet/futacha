@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
+import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,7 +79,8 @@ class DefaultBoardRepository(
     private val api: BoardApi,
     private val parser: HtmlParser,
     private val opImageCacheTtlMillis: Long = DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS,
-    private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES
+    private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES,
+    private val cookieRepository: CookieRepository? = null
 ) : BoardRepository {
     // Track which boards have been initialized with cookies
     private val initializedBoards = mutableSetOf<String>()
@@ -183,7 +185,10 @@ class DefaultBoardRepository(
         textOnly: Boolean
     ): String? {
         ensureCookiesInitialized(board)
-        return api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        val exec: suspend () -> String? = {
+            api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        }
+        return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
     override suspend fun createThread(
@@ -198,7 +203,10 @@ class DefaultBoardRepository(
         textOnly: Boolean
     ): String {
         ensureCookiesInitialized(board)
-        return api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        val exec: suspend () -> String = {
+            api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        }
+        return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
     // FIX: 同期的にクリーンアップを実行

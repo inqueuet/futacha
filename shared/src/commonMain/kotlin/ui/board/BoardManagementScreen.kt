@@ -256,12 +256,14 @@ import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
+import com.valoser.futacha.shared.repository.CookieRepository
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
 fun BoardManagementScreen(
     boards: List<BoardSummary>,
     history: List<ThreadHistoryEntry>,
+    cookieRepository: CookieRepository? = null,
     onBoardSelected: (BoardSummary) -> Unit,
     onAddBoard: (String, String) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
@@ -286,6 +288,7 @@ fun BoardManagementScreen(
     var isReorderMode by rememberSaveable { mutableStateOf(false) }
     var boardToDelete by remember { mutableStateOf<BoardSummary?>(null) }
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
+    var isCookieManagementVisible by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
@@ -521,7 +524,20 @@ fun BoardManagementScreen(
             onBack = { isGlobalSettingsVisible = false },
             appVersion = appVersion,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged
+            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            onOpenCookieManager = cookieRepository?.let {
+                {
+                    isGlobalSettingsVisible = false
+                    isCookieManagementVisible = true
+                }
+            }
+        )
+    }
+
+    if (isCookieManagementVisible && cookieRepository != null) {
+        CookieManagementScreen(
+            onBack = { isCookieManagementVisible = false },
+            repository = cookieRepository
         )
     }
 }
@@ -1154,6 +1170,7 @@ fun CatalogScreen(
     repository: BoardRepository? = null,
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     autoSavedThreadRepository: SavedThreadRepository? = null,
+    cookieRepository: CookieRepository? = null,
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
@@ -1183,6 +1200,7 @@ fun CatalogScreen(
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
+    var isCookieManagementVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var isWatchWordsVisible by remember { mutableStateOf(false) }
     var catalogNgFilteringEnabled by rememberSaveable(board?.id) { mutableStateOf(true) }
@@ -1659,7 +1677,20 @@ fun CatalogScreen(
                 onBack = { isGlobalSettingsVisible = false },
                 appVersion = appVersion,
                 isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                onBackgroundRefreshChanged = onBackgroundRefreshChanged
+                onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                onOpenCookieManager = cookieRepository?.let {
+                    {
+                        isGlobalSettingsVisible = false
+                        isCookieManagementVisible = true
+                    }
+                }
+            )
+        }
+
+        if (isCookieManagementVisible && cookieRepository != null) {
+            CookieManagementScreen(
+                onBack = { isCookieManagementVisible = false },
+                repository = cookieRepository
             )
         }
 
@@ -3267,6 +3298,7 @@ fun ThreadScreen(
     repository: BoardRepository? = null,
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    cookieRepository: CookieRepository? = null,
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
     autoSavedThreadRepository: SavedThreadRepository? = null,
     appVersion: String,
@@ -3345,6 +3377,7 @@ fun ThreadScreen(
     val persistedSelfPostIdentifiersState = stateStore?.selfPostIdentifiers?.collectAsState(initial = emptyList())
     val persistedSelfPostIdentifiers = persistedSelfPostIdentifiersState?.value ?: emptyList()
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
+    var isCookieManagementVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var ngHeaderPrefill by remember(board.id, threadId) { mutableStateOf<String?>(null) }
     var ngFilteringEnabled by rememberSaveable(board.id, threadId) { mutableStateOf(true) }
@@ -4467,7 +4500,20 @@ fun ThreadScreen(
             onBack = { isGlobalSettingsVisible = false },
             appVersion = appVersion,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged
+            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            onOpenCookieManager = cookieRepository?.let {
+                {
+                    isGlobalSettingsVisible = false
+                    isCookieManagementVisible = true
+                }
+            }
+        )
+    }
+
+    if (isCookieManagementVisible && cookieRepository != null) {
+        CookieManagementScreen(
+            onBack = { isCookieManagementVisible = false },
+            repository = cookieRepository
         )
     }
 }
@@ -7330,6 +7376,13 @@ private data class GlobalSettingsEntry(
     val action: GlobalSettingsAction
 )
 
+private val cookieSettingsEntry = GlobalSettingsEntry(
+    label = "Cookie",
+    description = "送信する Cookie を確認・削除",
+    icon = Icons.Rounded.History,
+    action = GlobalSettingsAction.Cookies
+)
+
 private val globalSettingsEntries = listOf(
     GlobalSettingsEntry(
         label = "作者",
@@ -7358,6 +7411,7 @@ private val globalSettingsEntries = listOf(
 )
 
 private enum class GlobalSettingsAction {
+    Cookies,
     Email,
     X,
     Developer,
@@ -7370,9 +7424,18 @@ private fun GlobalSettingsScreen(
     onBack: () -> Unit,
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean,
-    onBackgroundRefreshChanged: (Boolean) -> Unit
+    onBackgroundRefreshChanged: (Boolean) -> Unit,
+    onOpenCookieManager: (() -> Unit)? = null
 ) {
     val urlLauncher = rememberUrlLauncher()
+    val settingsEntries = remember(onOpenCookieManager) {
+        buildList {
+            if (onOpenCookieManager != null) {
+                add(cookieSettingsEntry)
+            }
+            addAll(globalSettingsEntries)
+        }
+    }
     PlatformBackHandler(onBack = onBack)
     Scaffold(
         topBar = {
@@ -7418,7 +7481,7 @@ private fun GlobalSettingsScreen(
                 )
                 HorizontalDivider()
             }
-            items(globalSettingsEntries) { entry ->
+            items(settingsEntries) { entry ->
                 ListItem(
                     leadingContent = { Icon(imageVector = entry.icon, contentDescription = null) },
                     headlineContent = { Text(entry.label) },
@@ -7434,6 +7497,9 @@ private fun GlobalSettingsScreen(
                         .clip(MaterialTheme.shapes.small)
                         .clickable {
                             when (entry.action) {
+                                GlobalSettingsAction.Cookies -> {
+                                    onOpenCookieManager?.invoke()
+                                }
                                 GlobalSettingsAction.Email -> {
                                     urlLauncher("mailto:admin@valoser.com?subject=お問い合わせ")
                                 }

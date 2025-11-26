@@ -5,6 +5,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.CookiesStorage
 import okhttp3.ConnectionPool
 import java.util.concurrent.TimeUnit
 
@@ -12,7 +13,10 @@ import java.util.concurrent.TimeUnit
  * Creates a properly configured HttpClient with lifecycle management.
  * Note: Callers should manage the lifecycle and call close() when done.
  */
-actual fun createHttpClient(): HttpClient {
+actual fun createHttpClient(
+    platformContext: Any?,
+    cookieStorage: CookiesStorage?
+): HttpClient {
     return HttpClient(OkHttp) {
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000
@@ -21,7 +25,7 @@ actual fun createHttpClient(): HttpClient {
         }
 
         install(HttpCookies) {
-            storage = AcceptAllCookiesStorage()
+            storage = cookieStorage ?: AcceptAllCookiesStorage()
         }
 
         engine {

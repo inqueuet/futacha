@@ -45,13 +45,15 @@ class MainActivity : ComponentActivity() {
         setContent {
             val stateStore = app.appStateStore
             val httpClient = app.httpClient
+            val cookieRepository = remember { app.cookieRepository }
             val versionChecker = remember { createVersionChecker(applicationContext, httpClient) }
-            val fileSystem = remember { com.valoser.futacha.shared.util.createFileSystem(applicationContext) }
+            val fileSystem = remember { app.fileSystem }
             FutachaApp(
                 stateStore = stateStore,
                 versionChecker = versionChecker,
                 httpClient = httpClient,
-                fileSystem = fileSystem
+                fileSystem = fileSystem,
+                cookieRepository = cookieRepository
             )
         }
     }

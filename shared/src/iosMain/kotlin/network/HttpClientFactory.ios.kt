@@ -5,13 +5,17 @@ import io.ktor.client.engine.darwin.Darwin
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.CookiesStorage
 
 /**
  * Creates a properly configured HttpClient with lifecycle management.
  * Note: Callers should manage the lifecycle and call close() when done.
  * This is not a singleton to prevent memory leaks.
  */
-actual fun createHttpClient(): HttpClient {
+actual fun createHttpClient(
+    platformContext: Any?,
+    cookieStorage: CookiesStorage?
+): HttpClient {
     return HttpClient(Darwin) {
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000
@@ -20,7 +24,7 @@ actual fun createHttpClient(): HttpClient {
         }
 
         install(HttpCookies) {
-            storage = AcceptAllCookiesStorage()
+            storage = cookieStorage ?: AcceptAllCookiesStorage()
         }
 
         engine {

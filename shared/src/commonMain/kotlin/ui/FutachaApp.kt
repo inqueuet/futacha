@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.createRemoteBoardRepository
 import com.valoser.futacha.shared.state.AppStateStore
@@ -57,7 +58,8 @@ fun FutachaApp(
     history: List<ThreadHistoryEntry> = mockThreadHistory,
     versionChecker: VersionChecker? = null,
     httpClient: io.ktor.client.HttpClient? = null,
-    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    cookieRepository: CookieRepository? = null
 ) {
     FutachaTheme {
         val imageLoader = rememberFutachaImageLoader()
@@ -83,7 +85,7 @@ fun FutachaApp(
             val repositoryHolder = remember(httpClient) {
                 if (httpClient != null) {
                     RepositoryHolder(
-                        repository = createRemoteBoardRepository(httpClient),
+                        repository = createRemoteBoardRepository(httpClient, cookieRepository = cookieRepository),
                         ownsRepository = false
                     )
                 } else {
@@ -220,6 +222,7 @@ fun FutachaApp(
                     BoardManagementScreen(
                         boards = persistedBoards,
                         history = persistedHistory,
+                        cookieRepository = cookieRepository,
                         onBoardSelected = { board -> selectedBoardId = board.id },
                         onAddBoard = { name, url ->
                             val normalizedUrl = normalizeBoardUrl(url)
@@ -285,7 +288,8 @@ fun FutachaApp(
                         stateStore = stateStore,
                         appVersion = appVersion,
                         isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                        onBackgroundRefreshChanged = onBackgroundRefreshChanged
+                        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                        cookieRepository = cookieRepository
                     )
                 }
 
@@ -374,6 +378,7 @@ fun FutachaApp(
                             repository = boardRepository,
                             httpClient = httpClient,
                             fileSystem = fileSystem,
+                            cookieRepository = cookieRepository,
                             stateStore = stateStore,
                             autoSavedThreadRepository = autoSavedThreadRepository,
                             appVersion = appVersion,
