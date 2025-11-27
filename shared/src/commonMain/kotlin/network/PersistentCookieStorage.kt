@@ -47,7 +47,7 @@ private data class StoredCookieFile(
  */
 class PersistentCookieStorage(
     private val fileSystem: FileSystem,
-    private val storagePath: String = "cookies/cookies.json"
+    private val storagePath: String = "private/cookies/cookies.json"
 ) : CookiesStorage {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val mutex = Mutex()

@@ -39,7 +39,7 @@
    - `SavedThreadsScreen` は存在するが遷移経路が未実装。手動保存はスレ保存ダイアログから `SavedThreadRepository` に記録されます。  
 5. **Global Settings & Version**  
    - Board/Catalog/Thread のどこからでも `GlobalSettingsScreen` を開け、Email/X/GitHub へのリンクと `VersionChecker` 由来の `appVersion` を確認。  
-   - バックグラウンド更新トグルに加えて、「スレ保存先」を Documents/Download の簡易指定や絶対パスで変更可能（手動保存用の `manualSaveDirectory` を更新）。  
+   - バックグラウンド更新トグル（Android は WorkManager の 15 分最小間隔定期実行、iOS は BGTask）に加えて、「スレ保存先」を Documents/Download の簡易指定や絶対パスで変更可能（手動保存用の `manualSaveDirectory` を更新）。  
 
 詳しいアーキテクチャや機能の振る舞いについては `AGENTS.md` を参照してください（モック vs リモート、データストア、HTTP API、保存処理、画面遷移などを網羅しています）。
 
@@ -58,6 +58,7 @@
 - キャッシュ・保存・メディア再生（Coil + Media3/AVPlayer/WKWebView）も `shared` 側で Compose UI に集約しています。詳細は `AGENTS.md` の 0〜5 セクションを参照。  
 
 ## Recent Changes (5f977c478d5f 以降)
+- Android のバックグラウンド履歴更新を Foreground Service から WorkManager 定期実行 (15 分最小、ネット必須、即時ワンショット付き) に置き換え、FOREGROUND_SERVICE 系パーミッションを削除。  
 - 手動保存先を設定画面から変更可能にし、Documents/Download/絶対パスの入力に対応。`manualSaveDirectory` を DataStore/NSUserDefaults へ永続化。  
 - バックグラウンド更新でも本文・画像・動画を `AUTO_SAVE_DIRECTORY` に自動保存し、履歴のレス数とメタデータを最新化。  
 - カタログモードと表示スタイルの永続化・適用周りを整備（モードの保存・復元）。  

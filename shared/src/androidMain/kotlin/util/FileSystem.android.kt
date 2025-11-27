@@ -140,6 +140,12 @@ class AndroidFileSystem(
         val cleanedPath = relativePath.removePrefix("./")
         val lower = cleanedPath.lowercase()
 
+        // 明示的にプライベート領域を使いたい場合のプレフィックス
+        if (cleanedPath.startsWith("private/")) {
+            val remainder = cleanedPath.removePrefix("private/").ifBlank { "" }
+            return File(getPrivateAppDataDirectory(), remainder).absolutePath
+        }
+
         // AUTO_SAVE_DIRECTORY はアプリ専用の非公開領域に保存
         if (cleanedPath.startsWith(AUTO_SAVE_DIRECTORY)) {
             return File(getPrivateAppDataDirectory(), cleanedPath).absolutePath

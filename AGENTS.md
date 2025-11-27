@@ -9,9 +9,9 @@
 - `app-android/src/main/java/com/valoser/futacha/FutachaApplication.kt`
   - アプリスコープで `AppStateStore` / `HttpClient` / `DefaultBoardRepository` / `SavedThreadRepository(AUTO_SAVE_DIRECTORY)` / `HistoryRefresher` を生成し、UI/サービスで共有。HistoryRefresher には HttpClient と FileSystem も渡し、バックグラウンド更新中に本文・メディアを自動保存できる。
 - `app-android/src/main/java/com/valoser/futacha/MainActivity.kt`
-  - Application のシングルトンを利用して `FutachaApp` を構築。`isBackgroundRefreshEnabled` を collect し、ON なら `HistoryRefreshService` を Foreground Service として起動。
-- `app-android/src/main/java/com/valoser/futacha/HistoryRefreshService.kt`
-  - 常時通知付きで 15 分間隔に `HistoryRefresher.refresh()` を実行。トグルが OFF になると停止し、404/410 はスキップリストへ入れて次回以降の更新対象外とするが履歴は削除しない。
+  - Application のシングルトンを利用して `FutachaApp` を構築。`isBackgroundRefreshEnabled` を collect し、ON なら `HistoryRefreshWorker.enqueuePeriodic()` を呼び出し即時の OneTimeWork もキック、OFF ならキャンセル。
+- `app-android/src/main/java/com/valoser/futacha/HistoryRefreshWorker.kt`
+  - WorkManager の `CoroutineWorker` で 15 分間隔 (最小値) の定期実行。ネットワーク接続必須、5 分タイムアウトで `HistoryRefresher.refresh()` を呼ぶ。失敗はリトライ、トグル OFF 時や iOS 側には影響なし。
 - `shared/src/iosMain/kotlin/MainViewController.kt`
   - `stateStore` / `httpClient` / `versionChecker` / `fileSystem` を `remember`。`isBackgroundRefreshEnabled` を監視し、BGTask ベースのスケジュールを `BackgroundRefreshManager` へ委譲（実行タイミングは iOS 制御）。バックグラウンド更新でも `SavedThreadRepository(AUTO_SAVE_DIRECTORY)` を注入し、本文とメディアを保存できる。
 - `shared/src/commonMain/kotlin/ui/FutachaApp.kt`
@@ -95,7 +95,7 @@
 ### 1.5 GlobalSettingsScreen
 
 - `GlobalSettingsScreen` は Board のメニュー `SETTINGS`、Catalog の `CatalogMenuAction.Settings`、Thread の `ThreadMenuAction.Settings`、履歴ドロワーの設定ボタンから開く共通設定ダイアログ。
-- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。バックグラウンド更新トグル（15分間隔、Androidは Foreground Service、iOSは BGTask 間欠実行）が追加され、`isBackgroundRefreshEnabled` を切り替える。加えて「スレ保存先」の入力欄があり、Documents/Download などの簡易指定や絶対パスで `manualSaveDirectory` を更新できる。
+- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。バックグラウンド更新トグル（15分間隔、Androidは WorkManager 定期実行、iOSは BGTask 間欠実行）が追加され、`isBackgroundRefreshEnabled` を切り替える。加えて「スレ保存先」の入力欄があり、Documents/Download などの簡易指定や絶対パスで `manualSaveDirectory` を更新できる。
 - `FutachaApp` は `VersionChecker` からバージョン名 (`appVersion`) を `remember` し、全画面に注入しているので、最新リリース通知 (`UpdateNotificationDialog`) と合わせて UI 側でもバージョン参照が一貫している。
 
 ---
@@ -254,17 +254,17 @@ Compose Preview / 手動動作では `FakeBoardRepository` と `example/` のフ
 
 ## 9. 最近のコード変更履歴
 
-### 2026-02-XX: バックグラウンド履歴更新の常時実行対応
+### 2026-02-XX: バックグラウンド履歴更新の WorkManager 化
 
-**追加**:
+**追加/変更**:
 - `isBackgroundRefreshEnabled` を AppStateStore/設定に追加し、GlobalSettings にトグルを設置。
 - `HistoryRefresher` を共通化し、404/410 はスキップリストに入れて以降の更新対象から外す（履歴自体は保持）。
-- Android: `FutachaApplication` で HttpClient/Repository/Refresher を共有し、`HistoryRefreshService` (Foreground Service) が 15 分間隔で実行。MainActivity でトグル監視して起動/停止。
+- Android: Foreground Service を廃止し、WorkManager (`HistoryRefreshWorker`) で 15 分間隔の定期実行 + 即時 OneTimeWork に置き換え。ネット接続必須・5 分タイムアウト・リトライ付き。トグル監視は MainActivity から WorkManager へ登録/キャンセルを行う形に変更。
 - iOS: `BackgroundRefreshManager` を導入し、トグル ON で BGAppRefresh/BGProcessing をスケジュール（実行タイミングは OS 制御）。Native 側の BGTask 許可設定が必要。
-- `createRemoteBoardRepository(httpClient)` で HttpClient 共有を可能にし、UI/サービス/BGTask 間で同一クライアントを使い回せるようにした。
+- `createRemoteBoardRepository(httpClient)` で HttpClient 共有を可能にし、UI/WorkManager/BGTask 間で同一クライアントを使い回せるようにした。
 
 **影響**:
-- アプリ起動中は 15 分間隔で履歴を自動更新（Android は Foreground 通知付き、iOS は OS 任せの間欠実行）。
+- Android は通知や FOREGROUND_SERVICE 権限なしでベストエフォートの 15 分最小間隔実行へ移行（Doze 等で前後する）。iOS は従来通り OS 管理の BGTask。
 - 404/410 になったスレッドは履歴表示を残したまま自動更新対象から除外。
 
 ### 2026-01-XX: 読み上げ時に URL を除外

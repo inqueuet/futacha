@@ -217,12 +217,17 @@ class IosFileSystem : FileSystem {
         return if (relativePath.startsWith("/")) {
             relativePath
         } else {
-            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY)) {
+            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY) || relativePath.startsWith("private/")) {
                 getPrivateAppDataDirectory()
             } else {
                 getAppDataDirectory()
             }
-            "$baseDir/$relativePath"
+            val cleaned = if (relativePath.startsWith("private/")) {
+                relativePath.removePrefix("private/").ifBlank { "" }
+            } else {
+                relativePath
+            }
+            "$baseDir/$cleaned"
         }
     }
 
