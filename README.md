@@ -37,9 +37,10 @@
 4. **History & Saved Threads**  
    - History Drawer から閲覧履歴をスワイプ削除。履歴リストは `ThreadHistoryEntry` のスクロール位置も保持。  
    - `SavedThreadsScreen` は存在するが遷移経路が未実装。手動保存はスレ保存ダイアログから `SavedThreadRepository` に記録されます。  
-5. **Global Settings & Version**  
-   - Board/Catalog/Thread のどこからでも `GlobalSettingsScreen` を開け、Email/X/GitHub へのリンクと `VersionChecker` 由来の `appVersion` を確認。  
-   - バックグラウンド更新トグル（Android は WorkManager の 15 分最小間隔定期実行、iOS は BGTask）に加えて、「スレ保存先」を Documents/Download の簡易指定や絶対パスで変更可能（手動保存用の `manualSaveDirectory` を更新）。  
+5. **Global Settings & Version**
+   - Board/Catalog/Thread のどこからでも `GlobalSettingsScreen` を開け、Email/X/GitHub へのリンクと `VersionChecker` 由来の `appVersion` を確認。
+   - バックグラウンド更新トグル（Android は WorkManager の 15 分最小間隔定期実行、iOS は BGTask）に加えて、「スレ保存先」を Documents/Download の簡易指定や絶対パスで変更可能（手動保存用の `manualSaveDirectory` を更新）。
+   - **優先ファイラー設定**（Android のみ）: デバイスにインストールされているファイラーアプリから優先的に使用するアプリを選択可能。ディレクトリ選択時に選択したファイラーが直接起動され、Files by Google、Solid Explorer などのサードパーティ製ファイラーも利用できます。  
 
 詳しいアーキテクチャや機能の振る舞いについては `AGENTS.md` を参照してください（モック vs リモート、データストア、HTTP API、保存処理、画面遷移などを網羅しています）。
 
