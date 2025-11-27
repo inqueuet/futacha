@@ -242,6 +242,7 @@ import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -3669,12 +3670,13 @@ fun ThreadScreen(
         autoSaveJob = coroutineScope.launch {
             val result = runCatching {
                 val saveService = ThreadSaveService(client, localFileSystem)
+                val resolvedTitle = resolveThreadTitle(page.posts.firstOrNull(), threadTitle)
                 saveService.saveThread(
                     threadId = threadId,
                     boardId = board.id,
                     boardName = board.name,
                     boardUrl = board.url,
-                    title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
+                    title = resolvedTitle,
                     expiresAtLabel = page.expiresAtLabel,
                     posts = page.posts,
                     baseDirectory = AUTO_SAVE_DIRECTORY,
@@ -4172,12 +4174,16 @@ fun ThreadScreen(
 
                                                 // スレッドを保存
                                                 val page = currentStateValue.page
+                                                val resolvedTitle = resolveThreadTitle(
+                                                    page.posts.firstOrNull(),
+                                                    threadTitle
+                                                )
                                                 val result = saveService.saveThread(
                                                     threadId = threadId,
                                                     boardId = board.id,
                                                     boardName = board.name,
                                                     boardUrl = board.url,
-                                                    title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
+                                                    title = resolvedTitle,
                                                     expiresAtLabel = page.expiresAtLabel,
                                                     posts = page.posts,
                                                     baseSaveLocation = manualSaveLocation,
@@ -7809,6 +7815,11 @@ private fun GlobalSettingsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Text(
+                                        text = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Text(
                                         text = "保存先: $resolvedManualPath",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -7909,19 +7920,7 @@ private fun buildHistoryEntryFromPage(
 ): ThreadHistoryEntry {
     val existingEntry = history.firstOrNull { it.threadId == threadId }
     val firstPost = page.posts.firstOrNull()
-    val firstLineFromBody = firstPost
-        ?.let { post ->
-            messageHtmlToLines(post.messageHtml)
-                .firstOrNull { it.isNotBlank() }
-                ?.trim()
-        }
-        .orEmpty()
-        .ifBlank { null }
-    val candidateTitle = firstLineFromBody
-        ?: firstPost?.subject?.takeIf { it.isNotBlank() }
-        ?: threadTitle?.takeIf { it.isNotBlank() }
-        ?: existingEntry?.title
-        ?: "無題"
+    val candidateTitle = resolveThreadTitle(firstPost, threadTitle, existingEntry?.title)
     val resolvedImageUrl = existingEntry?.titleImageUrl?.takeIf { it.isNotBlank() }
         ?: page.posts.firstOrNull()?.thumbnailUrl.orEmpty()
     val timestamp = Clock.System.now().toEpochMilliseconds()

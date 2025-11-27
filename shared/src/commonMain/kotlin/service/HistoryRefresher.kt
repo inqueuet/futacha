@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
@@ -96,20 +97,19 @@ class HistoryRefresher(
                         try {
                             val page = repository.getThread(baseUrl, entry.threadId)
                             val opPost = page.posts.firstOrNull()
+                            val resolvedTitle = resolveThreadTitle(opPost, entry.title)
                             var hasAutoSave = entry.hasAutoSave
 
                             // 背景更新でも本文・メディアを自動保存
                             if (httpClient != null && fileSystem != null && autoSavedThreadRepository != null) {
                                 val saver = ThreadSaveService(httpClient, fileSystem)
-                                val title = opPost?.subject?.takeIf { it.isNotBlank() }
-                                    ?: entry.title
                                 runCatching {
                                     saver.saveThread(
                                         threadId = entry.threadId,
                                         boardId = entry.boardId.ifBlank { board?.id ?: "" },
                                         boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
                                         boardUrl = baseUrl,
-                                        title = title,
+                                        title = resolvedTitle,
                                         expiresAtLabel = page.expiresAtLabel,
                                         posts = page.posts,
                                         baseDirectory = AUTO_SAVE_DIRECTORY,
@@ -125,7 +125,7 @@ class HistoryRefresher(
                             }
 
                             val updatedEntry = entry.copy(
-                                title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
+                                title = resolvedTitle,
                                 titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
                                 boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
                                 replyCount = page.posts.size,

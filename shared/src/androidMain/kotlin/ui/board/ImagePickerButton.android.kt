@@ -221,17 +221,37 @@ actual fun rememberDirectoryPickerLauncher(
 
     return {
         if (preferredFileManagerPackage != null) {
-            try {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            // 端末によっては OPEN_DOCUMENT_TREE を持たず、OPEN_DOCUMENT でディレクトリを返すファイラーもあるため二段階で試す
+            val intents = listOf(
+                Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    addCategory(Intent.CATEGORY_DEFAULT)
                     setPackage(preferredFileManagerPackage)
-                    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                    addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                },
+                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    setPackage(preferredFileManagerPackage)
+                    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 }
-                customLauncher.launch(intent)
-            } catch (e: Exception) {
-                Logger.e("DirectoryPicker", "Failed to launch preferred file manager: $preferredFileManagerPackage", e)
+            )
+            var launched = false
+            intents.forEach { intent ->
+                if (launched) return@forEach
+                try {
+                    customLauncher.launch(intent)
+                    launched = true
+                } catch (e: Exception) {
+                    Logger.e("DirectoryPicker", "Failed to launch preferred file manager: $preferredFileManagerPackage with ${intent.action}", e)
+                }
+            }
+            if (!launched) {
                 // Fallback to default launcher
                 defaultLauncher.launch(null)
             }
