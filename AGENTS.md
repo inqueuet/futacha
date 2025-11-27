@@ -7,19 +7,19 @@
 ## 0. Entry Points & Runtime
 
 - `app-android/src/main/java/com/valoser/futacha/FutachaApplication.kt`
-  - アプリスコープで `AppStateStore` / `HttpClient` / `DefaultBoardRepository` / `HistoryRefresher` を生成し、UI/サービスで共有。
+  - アプリスコープで `AppStateStore` / `HttpClient` / `DefaultBoardRepository` / `SavedThreadRepository(AUTO_SAVE_DIRECTORY)` / `HistoryRefresher` を生成し、UI/サービスで共有。HistoryRefresher には HttpClient と FileSystem も渡し、バックグラウンド更新中に本文・メディアを自動保存できる。
 - `app-android/src/main/java/com/valoser/futacha/MainActivity.kt`
   - Application のシングルトンを利用して `FutachaApp` を構築。`isBackgroundRefreshEnabled` を collect し、ON なら `HistoryRefreshService` を Foreground Service として起動。
 - `app-android/src/main/java/com/valoser/futacha/HistoryRefreshService.kt`
   - 常時通知付きで 15 分間隔に `HistoryRefresher.refresh()` を実行。トグルが OFF になると停止し、404/410 はスキップリストへ入れて次回以降の更新対象外とするが履歴は削除しない。
 - `shared/src/iosMain/kotlin/MainViewController.kt`
-  - `stateStore` / `httpClient` / `versionChecker` / `fileSystem` を `remember`。`isBackgroundRefreshEnabled` を監視し、BGTask ベースのスケジュールを `BackgroundRefreshManager` へ委譲（実行タイミングは iOS 制御）。
+  - `stateStore` / `httpClient` / `versionChecker` / `fileSystem` を `remember`。`isBackgroundRefreshEnabled` を監視し、BGTask ベースのスケジュールを `BackgroundRefreshManager` へ委譲（実行タイミングは iOS 制御）。バックグラウンド更新でも `SavedThreadRepository(AUTO_SAVE_DIRECTORY)` を注入し、本文とメディアを保存できる。
 - `shared/src/commonMain/kotlin/ui/FutachaApp.kt`
   - `mockBoardSummaries` / `mockThreadHistory` で初回起動をシード。
-  - `createRemoteBoardRepository(httpClient)` を `remember` し、`DisposableEffect` で `close()`。`HistoryRefresher` を UI からの履歴更新・サービス/BGTask 共有で利用。
+  - `createRemoteBoardRepository(httpClient)` を `remember` し、`DisposableEffect` で `close()`。`HistoryRefresher` を UI からの履歴更新・サービス/BGTask 共有で利用（本文・メディアを `AUTO_SAVE_DIRECTORY` へ自動保存）。
   - `setScrollDebounceScope()`、version チェック (`VersionChecker`)、`LocalFutachaImageLoader` のライフサイクル管理、履歴更新 (`refreshHistoryEntries`) を担当。
   - `selectedBoardId` / `selectedThreadId` で Board → Catalog → Thread を切り替え。`BoardSummary.isMockBoard()` によりモック/リモートを選択。
-  - `fileSystem` から `AUTO_SAVE_DIRECTORY` を使った `SavedThreadRepository` を `remember` し、自動セーブ用インデックスを管理。履歴エントリ削除・クリア時には関連する auto-save ディレクトリを削除し、`ThreadScreen` にオフラインフォールバックを提供する。
+  - `fileSystem` から `AUTO_SAVE_DIRECTORY` を使った `SavedThreadRepository` を `remember` し、自動セーブ用インデックスを管理。履歴エントリ削除・クリア時には関連する auto-save ディレクトリを削除し、`ThreadScreen` にオフラインフォールバックを提供する。手動保存先は `manualSaveDirectory` として設定画面から変更可能。
   - `VersionChecker` から取得した `appVersion` を `remember` し、それを global settings と各画面に渡すことでバージョン情報の表示や `GlobalSettingsScreen` の動作に利用。
 
 ---
@@ -76,7 +76,7 @@
   7. Settings → `ThreadSettingsSheet` で NG管理(〇) / 外部アプリ(〇) / 読み上げ(△) / プライバシー(〇) を表示。〇は即動作し、NG管理は `NgManagementSheet` でヘッダー/ワードを編集、外部アプリは `res/{threadId}.htm` を開く、プライバシーは `AppStateStore` のフラグをトグル。△の読み上げは `TextSpeaker` で投稿本文を順次再生し、再タップで停止できる基本実装。記号凡例は Catalog と同じです。
 - `ThreadActionBar` は `.navigationBarsPadding()` を適用し、Androidのシステムナビゲーションバー（3点メニュー）の上に配置されるため、ボトムバーとシステムUIが重ならず正常に操作できます。
 - 自動セーブ / オフラインフォールバック: `autoSavedThreadRepository` に `AUTO_SAVE_DIRECTORY` を使って `ThreadSaveService(baseDirectory = AUTO_SAVE_DIRECTORY)` で 60 秒ごとにスレッドを保存。`loadThreadWithOfflineFallback` は保存済みメタデータを `SavedThreadMetadata.toThreadPage()` で `ThreadPage` に変換して表示し、ネットワーク不通時には snackbar でローカルコピーを通知 (`isShowingOfflineCopy` フラグ)。履歴を削除またはクリアすると `FutachaApp` が該当する auto-save ディレクトリを `SavedThreadRepository` 経由で削除するので、古いローカルコピーも掃除される。
-- 履歴更新の共通化: `HistoryRefresher`（commonMain）が履歴の一括更新を担当。404/410 はスキップリストに入れ、履歴からは削除しない。UI の「履歴更新」やバックグラウンド処理から共通で利用。
+- 履歴更新の共通化: `HistoryRefresher`（commonMain）が履歴の一括更新を担当。404/410 はスキップリストに入れ、履歴からは削除しない。UI の「履歴更新」やバックグラウンド処理から共通で利用し、更新時に本文・メディアも `AUTO_SAVE_DIRECTORY` へ保存する。
 - 投稿カード (`ThreadPostCard`):
   - ID ラベル: `buildPosterIdLabels()` が ID ごとの通番と total count を付与 (複数出現なら強調)。
   - 引用 (`QuoteReference`) をタップすると `QuotePreviewDialog` に target posts をまとめて表示。
@@ -95,7 +95,7 @@
 ### 1.5 GlobalSettingsScreen
 
 - `GlobalSettingsScreen` は Board のメニュー `SETTINGS`、Catalog の `CatalogMenuAction.Settings`、Thread の `ThreadMenuAction.Settings`、履歴ドロワーの設定ボタンから開く共通設定ダイアログ。
-- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。バックグラウンド更新トグル（15分間隔、Androidは Foreground Service、iOSは BGTask 間欠実行）が追加され、`isBackgroundRefreshEnabled` を切り替える。
+- `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。バックグラウンド更新トグル（15分間隔、Androidは Foreground Service、iOSは BGTask 間欠実行）が追加され、`isBackgroundRefreshEnabled` を切り替える。加えて「スレ保存先」の入力欄があり、Documents/Download などの簡易指定や絶対パスで `manualSaveDirectory` を更新できる。
 - `FutachaApp` は `VersionChecker` からバージョン名 (`appVersion`) を `remember` し、全画面に注入しているので、最新リリース通知 (`UpdateNotificationDialog`) と合わせて UI 側でもバージョン参照が一貫している。
 
 ---
@@ -103,7 +103,7 @@
 ## 2. State & Persistence
 
 - `AppStateStore` (`shared/src/commonMain/kotlin/state/AppStateStore.kt`)
-  - `boards` / `history` / `isPrivacyFilterEnabled` / `isBackgroundRefreshEnabled` に加えて `catalogDisplayStyle` と `ngHeaders` / `ngWords` / `catalogNgWords` / `watchWords` を Flow で expose。
+  - `boards` / `history` / `isPrivacyFilterEnabled` / `isBackgroundRefreshEnabled` / `manualSaveDirectory` に加えて `catalogDisplayStyle` と `ngHeaders` / `ngWords` / `catalogNgWords` / `watchWords` / board ごとの `catalogMode` を Flow で expose。
   - 監視ワード (`watchWords`) は `WatchWordsSheet` から編集され、`AppStateStore.setWatchWords()` で DataStore / NSUserDefaults に即保存。カタログ更新時はこれらのワードに一致したスレッドを履歴へ自動追加します。
   - JSON シリアライゼーション (`ListSerializer`) + `Mutex` で書き込みを直列化。
   - `setScrollDebounceScope()` + `scrollPositionJobs` でスレスクロール保存のスパムを防止。500ms 待ってから `updateHistoryScrollPositionImmediate()` を実行。
@@ -115,7 +115,7 @@
 - `ThreadHistoryEntry`:
   - `lastVisitedEpochMillis`, `lastReadItemIndex`, `lastReadItemOffset` を保持し、Thread 画面遷移時に scroll state を復元。
   - `BoardHistoryDrawer` のカードは ID/タイトル/板名/サムネ/レス数/lastVisited を表示。
-- `autoSavedThreadRepository` は `SavedThreadRepository(baseDirectory = AUTO_SAVE_DIRECTORY)` で `FutachaApp` により `remember` され、履歴エントリを削除/クリアする際に関連する auto-save ディレクトリも `deleteThread`/`deleteAllThreads` で掃除される。`SavedThreadMetadata.toThreadPage()` はオフラインフォールバックと `ThreadScreen` での復元に使われる。
+- `autoSavedThreadRepository` は `SavedThreadRepository(baseDirectory = AUTO_SAVE_DIRECTORY)` で `FutachaApp` により `remember` され、履歴エントリを削除/クリアする際に関連する auto-save ディレクトリも `deleteThread`/`deleteAllThreads` で掃除される。`SavedThreadMetadata.toThreadPage()` はオフラインフォールバックと `ThreadScreen` での復元に使われる。手動保存用 `manualSaveDirectory` はユーザー設定で変更でき、Documents/Download のショートカット指定にも対応する。
 
 ---
 

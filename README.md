@@ -31,7 +31,7 @@
    - Bottom navigation からスレ立て（CreateThread）、更新、表示モード、設定（監視ワード・NG管理・外部アプリ・表示切替・トップ移動・プライバシー）を切り替え。  
    - 検索モードも搭載し、バック操作で検索解除 → ドロワー → 前画面の順に戻ります。  
 3. **Thread**  
-   - Save / Reply / Gallery / Refresh / Scroll に対応したアクションバー。自動保存は 60 秒ごとに `AUTO_SAVE_DIRECTORY` にレコードを残し、ネットワーク不通時はオフラインコピーを通知。  
+   - Save / Reply / Gallery / Refresh / Scroll に対応したアクションバー。自動保存は 60 秒ごとに `AUTO_SAVE_DIRECTORY` にレコードを残し、ネットワーク不通時はオフラインコピーを通知。バックグラウンド更新時も本文・メディアを自動保存します。  
    - 引用プレビュー、ID ハイライト、検索（前/次）や長押しの操作シートなど、Compose で細かい動作を実装。  
    - `GlobalSettingsScreen` や `ThreadSettingsSheet` から NG 管理、外部アプリ、プライバシーフィルタ、読み上げ（基本実装）が利用可能。  
 4. **History & Saved Threads**  
@@ -39,6 +39,7 @@
    - `SavedThreadsScreen` は存在するが遷移経路が未実装。手動保存はスレ保存ダイアログから `SavedThreadRepository` に記録されます。  
 5. **Global Settings & Version**  
    - Board/Catalog/Thread のどこからでも `GlobalSettingsScreen` を開け、Email/X/GitHub へのリンクと `VersionChecker` 由来の `appVersion` を確認。  
+   - バックグラウンド更新トグルに加えて、「スレ保存先」を Documents/Download の簡易指定や絶対パスで変更可能（手動保存用の `manualSaveDirectory` を更新）。  
 
 詳しいアーキテクチャや機能の振る舞いについては `AGENTS.md` を参照してください（モック vs リモート、データストア、HTTP API、保存処理、画面遷移などを網羅しています）。
 
@@ -56,12 +57,11 @@
 - Platform 層で `HttpClient`, `FileSystem`, `VersionChecker`, `PermissionRequest`, `ImagePicker` などを expect/actual で注入。  
 - キャッシュ・保存・メディア再生（Coil + Media3/AVPlayer/WKWebView）も `shared` 側で Compose UI に集約しています。詳細は `AGENTS.md` の 0〜5 セクションを参照。  
 
-## Recent Changes (81379fcdf8 以降)
-- 履歴のバックグラウンド更新を導入（Android Foreground Service / iOS BGTask、設定トグル付き）。  
-- Cookie 永続化と管理 UI を追加し、BoardRepository でセッションを共有。  
-- Thread 保存処理を再設計してフリーズ/保存失敗を解消、HistoryRefresher や Parser のバグも併せて修正。  
-- スクロール中の誤タップ防止、引用プレビュー中のメニュー抑止、プライバシーポリシー導線など UI/操作性を調整。  
-- アプリアイコン刷新と Gradle バージョン管理の一元化（version catalog）。  
+## Recent Changes (5f977c478d5f 以降)
+- 手動保存先を設定画面から変更可能にし、Documents/Download/絶対パスの入力に対応。`manualSaveDirectory` を DataStore/NSUserDefaults へ永続化。  
+- バックグラウンド更新でも本文・画像・動画を `AUTO_SAVE_DIRECTORY` に自動保存し、履歴のレス数とメタデータを最新化。  
+- カタログモードと表示スタイルの永続化・適用周りを整備（モードの保存・復元）。  
+- Thread 保存処理や FileSystem のバグを修正し、保存先解決とエラーハンドリングを改善。  
 
 ## Support & Issues
 - 問題点や改善案は GitHub Issues で共有してください（リポジトリの Issue テンプレートを活用）。  
