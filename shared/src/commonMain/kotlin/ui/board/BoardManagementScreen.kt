@@ -294,6 +294,7 @@ fun BoardManagementScreen(
     onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    preferredFileManagerPackage: String? = null,
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null
@@ -1227,6 +1228,7 @@ fun CatalogScreen(
     onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
     onOpenSaveDirectoryPicker: (() -> Unit)? = null,
+    preferredFileManagerPackage: String? = null,
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null,
@@ -1678,6 +1680,7 @@ fun CatalogScreen(
             CreateThreadDialog(
                 boardName = board?.name,
                 attachmentPickerPreference = attachmentPickerPreference,
+                preferredFileManagerPackage = preferredFileManagerPackage,
                 onDismiss = { showCreateThreadDialog = false },
                 onSubmit = { name, email, title, comment, password, imageData ->
                     showCreateThreadDialog = false
@@ -1808,6 +1811,7 @@ fun CatalogScreen(
 private fun CreateThreadDialog(
     boardName: String?,
     attachmentPickerPreference: AttachmentPickerPreference,
+    preferredFileManagerPackage: String?,
     onDismiss: () -> Unit,
     onSubmit: (name: String, email: String, title: String, comment: String, password: String, imageData: com.valoser.futacha.shared.util.ImageData?) -> Unit
 ) {
@@ -1823,6 +1827,7 @@ private fun CreateThreadDialog(
         title = "スレ立て",
         subtitle = boardName?.takeIf { it.isNotBlank() },
         attachmentPickerPreference = attachmentPickerPreference,
+        preferredFileManagerPackage = preferredFileManagerPackage,
         emailPresets = emailPresets,
         comment = comment,
         onCommentChange = { comment = it },
@@ -1861,6 +1866,7 @@ private fun ThreadReplyDialog(
     boardName: String,
     threadTitle: String,
     attachmentPickerPreference: AttachmentPickerPreference,
+    preferredFileManagerPackage: String?,
     name: String,
     onNameChange: (String) -> Unit,
     email: String,
@@ -1881,6 +1887,7 @@ private fun ThreadReplyDialog(
         title = threadTitle.ifBlank { "返信" },
         subtitle = boardName,
         attachmentPickerPreference = attachmentPickerPreference,
+        preferredFileManagerPackage = preferredFileManagerPackage,
         emailPresets = listOf("ID表示", "IP表示", "sage"),
         comment = comment,
         onCommentChange = onCommentChange,
@@ -1910,6 +1917,7 @@ private fun ThreadFormDialog(
     title: String,
     subtitle: String?,
     attachmentPickerPreference: AttachmentPickerPreference,
+    preferredFileManagerPackage: String?,
     emailPresets: List<String>,
     comment: String,
     onCommentChange: (String) -> Unit,
@@ -1945,6 +1953,7 @@ private fun ThreadFormDialog(
     )
     val imagePickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
+        preferredFileManagerPackage = preferredFileManagerPackage,
         onImageSelected = { image ->
             onImageSelected(image)
         }
@@ -1952,6 +1961,7 @@ private fun ThreadFormDialog(
     val videoPickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
         mimeType = "video/*",
+        preferredFileManagerPackage = preferredFileManagerPackage,
         onImageSelected = { image ->
             onImageSelected(image)
         }
@@ -2229,14 +2239,16 @@ private fun ThreadFormDialog(
 @Composable
 expect fun ImagePickerButton(
     onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit,
-    preference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA
+    preference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+    preferredFileManagerPackage: String? = null
 )
 
 @Composable
 expect fun rememberAttachmentPickerLauncher(
     preference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
     mimeType: String = "image/*",
-    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit,
+    preferredFileManagerPackage: String? = null
 ): () -> Unit
 
 @Composable
@@ -3420,6 +3432,7 @@ fun ThreadScreen(
     onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
     onOpenSaveDirectoryPicker: (() -> Unit)? = null,
+    preferredFileManagerPackage: String? = null,
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null,
@@ -4421,6 +4434,7 @@ fun ThreadScreen(
             boardName = board.name,
             threadTitle = resolvedThreadTitle,
             attachmentPickerPreference = attachmentPickerPreference,
+            preferredFileManagerPackage = preferredFileManagerPackage,
             name = replyName,
             onNameChange = { replyName = it },
             email = replyEmail,

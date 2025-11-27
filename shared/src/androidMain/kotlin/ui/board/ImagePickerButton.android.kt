@@ -31,7 +31,8 @@ import java.io.FileOutputStream
 actual fun rememberAttachmentPickerLauncher(
     preference: AttachmentPickerPreference,
     mimeType: String,
-    onImageSelected: (ImageData) -> Unit
+    onImageSelected: (ImageData) -> Unit,
+    preferredFileManagerPackage: String?
 ): () -> Unit {
     val context = LocalContext.current
     val getContentLauncher = rememberLauncherForActivityResult(
@@ -57,11 +58,52 @@ actual fun rememberAttachmentPickerLauncher(
         val imageData = readImageDataFromUri(context, uri)
         imageData?.let(onImageSelected)
     }
+    val packageAwareLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data ?: return@rememberLauncherForActivityResult
+        val imageData = readImageDataFromUri(context, uri)
+        imageData?.let(onImageSelected)
+    }
 
     return {
         when (preference) {
-            AttachmentPickerPreference.MEDIA -> getContentLauncher.launch(mimeType)
-            AttachmentPickerPreference.DOCUMENT -> openDocumentLauncher.launch(arrayOf(mimeType))
+            AttachmentPickerPreference.MEDIA -> {
+                val preferredPackage = preferredFileManagerPackage
+                if (preferredPackage != null) {
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = mimeType
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        setPackage(preferredPackage)
+                    }
+                    try {
+                        packageAwareLauncher.launch(intent)
+                    } catch (e: Exception) {
+                        Logger.e("ImagePicker", "Failed to launch preferred file manager for GET_CONTENT", e)
+                        getContentLauncher.launch(mimeType)
+                    }
+                } else {
+                    getContentLauncher.launch(mimeType)
+                }
+            }
+            AttachmentPickerPreference.DOCUMENT -> {
+                val preferredPackage = preferredFileManagerPackage
+                if (preferredPackage != null) {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = mimeType
+                        setPackage(preferredPackage)
+                    }
+                    try {
+                        packageAwareLauncher.launch(intent)
+                    } catch (e: Exception) {
+                        Logger.e("ImagePicker", "Failed to launch preferred file manager for OPEN_DOCUMENT", e)
+                        openDocumentLauncher.launch(arrayOf(mimeType))
+                    }
+                } else {
+                    openDocumentLauncher.launch(arrayOf(mimeType))
+                }
+            }
             AttachmentPickerPreference.ALWAYS_ASK -> {
                 val getContentIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
                     type = mimeType
@@ -71,10 +113,26 @@ actual fun rememberAttachmentPickerLauncher(
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = mimeType
                 }
-                val chooser = Intent.createChooser(getContentIntent, null).apply {
-                    putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(openDocumentIntent))
+                val preferredIntent = preferredFileManagerPackage?.let { pkg ->
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = mimeType
+                        setPackage(pkg)
+                    }
                 }
-                chooserLauncher.launch(chooser)
+                val initialIntents = buildList {
+                    preferredIntent?.let { add(it) }
+                    add(openDocumentIntent)
+                }.toTypedArray()
+                val chooser = Intent.createChooser(getContentIntent, null).apply {
+                    putExtra(Intent.EXTRA_INITIAL_INTENTS, initialIntents)
+                }
+                try {
+                    chooserLauncher.launch(chooser)
+                } catch (e: Exception) {
+                    Logger.e("ImagePicker", "Failed to launch chooser with preferred file manager", e)
+                    getContentLauncher.launch(mimeType)
+                }
             }
         }
     }
@@ -83,11 +141,13 @@ actual fun rememberAttachmentPickerLauncher(
 @Composable
 actual fun ImagePickerButton(
     onImageSelected: (ImageData) -> Unit,
-    preference: AttachmentPickerPreference
+    preference: AttachmentPickerPreference,
+    preferredFileManagerPackage: String?
 ) {
     val launchPicker = rememberAttachmentPickerLauncher(
         preference = preference,
-        onImageSelected = onImageSelected
+        onImageSelected = onImageSelected,
+        preferredFileManagerPackage = preferredFileManagerPackage
     )
 
     Button(

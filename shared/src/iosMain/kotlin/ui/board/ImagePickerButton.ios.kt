@@ -24,7 +24,8 @@ import kotlinx.coroutines.launch
 actual fun rememberAttachmentPickerLauncher(
     preference: AttachmentPickerPreference,
     mimeType: String,
-    onImageSelected: (ImageData) -> Unit
+    onImageSelected: (ImageData) -> Unit,
+    preferredFileManagerPackage: String?
 ): () -> Unit {
     val scope = rememberCoroutineScope()
 
@@ -47,11 +48,13 @@ actual fun rememberAttachmentPickerLauncher(
 @Composable
 actual fun ImagePickerButton(
     onImageSelected: (ImageData) -> Unit,
-    preference: AttachmentPickerPreference
+    preference: AttachmentPickerPreference,
+    preferredFileManagerPackage: String?
 ) {
     val launchPicker = rememberAttachmentPickerLauncher(
         preference = preference,
-        onImageSelected = onImageSelected
+        onImageSelected = onImageSelected,
+        preferredFileManagerPackage = preferredFileManagerPackage
     )
 
     Button(

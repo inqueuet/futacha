@@ -318,6 +318,7 @@ fun FutachaApp(
                             directoryPickerLauncher()
                         },
                         fileSystem = fileSystem,
+                        preferredFileManagerPackage = preferredFileManager?.packageName,
                         preferredFileManagerLabel = preferredFileManager?.label,
                         onFileManagerSelected = { packageName, label ->
                             coroutineScope.launch {
@@ -373,7 +374,19 @@ fun FutachaApp(
                             saveDirectorySelection = saveDirectorySelection,
                             onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
                             onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-                            onOpenSaveDirectoryPicker = { directoryPickerLauncher() }
+                            onOpenSaveDirectoryPicker = { directoryPickerLauncher() },
+                            preferredFileManagerPackage = preferredFileManager?.packageName,
+                            preferredFileManagerLabel = preferredFileManager?.label,
+                            onFileManagerSelected = { packageName, label ->
+                                coroutineScope.launch {
+                                    stateStore.setPreferredFileManager(packageName, label)
+                                }
+                            },
+                            onClearPreferredFileManager = {
+                                coroutineScope.launch {
+                                    stateStore.setPreferredFileManager(null, null)
+                                }
+                            }
                         )
                     }
                 }
@@ -477,6 +490,7 @@ fun FutachaApp(
                             onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
                             onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
                             onOpenSaveDirectoryPicker = { directoryPickerLauncher() },
+                            preferredFileManagerPackage = preferredFileManager?.packageName,
                             preferredFileManagerLabel = preferredFileManager?.label,
                             onFileManagerSelected = { packageName, label ->
                                 coroutineScope.launch {

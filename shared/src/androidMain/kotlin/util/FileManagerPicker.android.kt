@@ -23,10 +23,20 @@ data class FileManagerApp(
  * @return ファイラーアプリのリスト
  */
 fun getAvailableFileManagers(packageManager: PackageManager): List<FileManagerApp> {
-    // ベンダーや 3rd パーティによって DEFAULT カテゴリの有無が異なるため、両方のインテントで探索する
+    // 端末やファイラーによって対応するインテントが異なるため、複数パターンで探索する
     val intents = listOf(
         Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply { addCategory(Intent.CATEGORY_DEFAULT) },
-        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),
+        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_DEFAULT)
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        },
+        Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        },
+        Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_FILES) } // 一般的なファイラー向けカテゴリ
     )
 
     val resolveInfos: List<ResolveInfo> = intents
@@ -41,7 +51,6 @@ fun getAvailableFileManagers(packageManager: PackageManager): List<FileManagerAp
                 packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
             }
         }
-        // システム標準 (com.android.documentsui) も含め、重複を排除
         .distinctBy { it.activityInfo?.packageName to it.activityInfo?.name }
 
     return resolveInfos.mapNotNull { resolveInfo ->
