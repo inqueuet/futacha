@@ -19,8 +19,10 @@ object BackgroundRefreshManager {
     private const val TASK_ID = "com.valoser.futacha.refresh"
     private var registered = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    @Volatile private var isEnabled = false
 
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
+        isEnabled = enabled
         if (!isSupported()) {
             NSLog("BGTask not supported on this OS")
             return
@@ -47,10 +49,19 @@ object BackgroundRefreshManager {
     }
 
     private fun handleTask(task: BGTask, onExecute: suspend () -> Unit) {
-        scope.launch {
+        if (!isEnabled) {
+            task.setTaskCompletedWithSuccess(false)
+            cancel()
+            return
+        }
+        val job = scope.launch {
             try {
-                onExecute()
-                task.setTaskCompletedWithSuccess(true)
+                if (isEnabled) {
+                    onExecute()
+                    task.setTaskCompletedWithSuccess(true)
+                } else {
+                    task.setTaskCompletedWithSuccess(false)
+                }
             } catch (t: Throwable) {
                 NSLog("BGTask execution failed: ${t.message}")
                 task.setTaskCompletedWithSuccess(false)
@@ -59,11 +70,13 @@ object BackgroundRefreshManager {
         }
         // Expiration handler: cancel work if iOS cuts us off
         task.expirationHandler = {
+            job.cancel()
             runBlocking { task.setTaskCompletedWithSuccess(false) }
         }
     }
 
     private fun scheduleRefresh() {
+        if (!isEnabled) return
         val request = BGAppRefreshTaskRequest(TASK_ID)
         runCatching {
             BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
@@ -73,6 +86,7 @@ object BackgroundRefreshManager {
     }
 
     fun cancel() {
+        isEnabled = false
         if (!isSupported()) return
         BGTaskScheduler.sharedScheduler().cancel(taskRequestWithIdentifier = TASK_ID)
     }

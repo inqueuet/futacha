@@ -3569,6 +3569,8 @@ fun ThreadScreen(
             isShowingOfflineCopy = false
             val page = activeRepository.getThread(board.url, threadId)
             return page to false
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (!allowOfflineFallback) throw e
             val offlinePage = loadOfflineThread()

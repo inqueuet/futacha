@@ -4,8 +4,13 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
+import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.async
@@ -14,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -34,7 +40,9 @@ class HistoryRefresher(
     private val stateStore: AppStateStore,
     private val repository: BoardRepository,
     private val dispatcher: CoroutineDispatcher,
-    private val autoSavedThreadRepository: com.valoser.futacha.shared.repository.SavedThreadRepository? = null,  // FIX: 自動保存チェック用
+    private val autoSavedThreadRepository: SavedThreadRepository? = null,  // FIX: 自動保存チェック用
+    private val httpClient: HttpClient? = null,
+    private val fileSystem: FileSystem? = null,
     private val maxConcurrency: Int = 4
     // Caller owns repository lifecycle
 ) {
@@ -74,7 +82,8 @@ class HistoryRefresher(
         coroutineScope {
             history.forEach { entry ->
                 if (entry.threadId in skipped) return@forEach
-                val baseUrl = boards.firstOrNull { it.id == entry.boardId }?.url
+                val board = boards.firstOrNull { it.id == entry.boardId }
+                val baseUrl = board?.url
                     ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
                         runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
                     }
@@ -87,11 +96,40 @@ class HistoryRefresher(
                         try {
                             val page = repository.getThread(baseUrl, entry.threadId)
                             val opPost = page.posts.firstOrNull()
+                            var hasAutoSave = entry.hasAutoSave
+
+                            // 背景更新でも本文・メディアを自動保存
+                            if (httpClient != null && fileSystem != null && autoSavedThreadRepository != null) {
+                                val saver = ThreadSaveService(httpClient, fileSystem)
+                                val title = opPost?.subject?.takeIf { it.isNotBlank() }
+                                    ?: entry.title
+                                runCatching {
+                                    saver.saveThread(
+                                        threadId = entry.threadId,
+                                        boardId = entry.boardId.ifBlank { board?.id ?: "" },
+                                        boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                        boardUrl = baseUrl,
+                                        title = title,
+                                        expiresAtLabel = page.expiresAtLabel,
+                                        posts = page.posts,
+                                        baseDirectory = AUTO_SAVE_DIRECTORY,
+                                        writeMetadata = true
+                                    ).getOrThrow()
+                                }.onSuccess { saved ->
+                                    autoSavedThreadRepository.addThreadToIndex(saved)
+                                        .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
+                                    hasAutoSave = true
+                                }.onFailure { error ->
+                                    Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
+                                }
+                            }
+
                             val updatedEntry = entry.copy(
                                 title = opPost?.subject?.takeIf { it.isNotBlank() } ?: entry.title,
                                 titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
-                                boardName = page.boardTitle ?: entry.boardName,
-                                replyCount = page.posts.size
+                                boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                replyCount = page.posts.size,
+                                hasAutoSave = hasAutoSave
                             )
                             updatesMutex.withLock {
                                 updates[entry.threadId] = updatedEntry
@@ -171,7 +209,7 @@ class HistoryRefresher(
     }
 
     private fun markSkipped(threadId: String) {
-        skipThreadIds.value = skipThreadIds.value + threadId
+        skipThreadIds.update { it + threadId }
     }
 
     private fun isNotFound(t: Throwable): Boolean {

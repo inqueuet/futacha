@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +44,17 @@ class HistoryRefreshService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        if (!hasNotificationPermission()) {
+            Logger.w(TAG, "Notification permission missing; stopping foreground service to avoid crash")
+            stopSelf()
+            return
+        }
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (se: SecurityException) {
+            Logger.e(TAG, "startForeground failed due to missing notification permission", se)
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -125,4 +136,8 @@ class HistoryRefreshService : Service() {
         return channelId
     }
 
+    private fun hasNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return NotificationManagerCompat.from(this).areNotificationsEnabled()
+    }
 }

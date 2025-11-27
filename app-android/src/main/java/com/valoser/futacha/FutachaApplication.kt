@@ -6,6 +6,8 @@ import com.valoser.futacha.shared.network.createHttpClient
 import com.valoser.futacha.shared.parser.createHtmlParser
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.DefaultBoardRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.createAppStateStore
@@ -26,6 +28,8 @@ class FutachaApplication : Application() {
         private set
     lateinit var historyRefresher: HistoryRefresher
         private set
+    lateinit var autoSavedThreadRepository: SavedThreadRepository
+        private set
     lateinit var fileSystem: FileSystem
         private set
     lateinit var cookieStorage: PersistentCookieStorage
@@ -39,6 +43,7 @@ class FutachaApplication : Application() {
         super.onCreate()
         appStateStore = createAppStateStore(applicationContext)
         fileSystem = createFileSystem(applicationContext)
+        autoSavedThreadRepository = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
         cookieStorage = PersistentCookieStorage(fileSystem)
         cookieRepository = CookieRepository(cookieStorage)
         httpClient = createHttpClient(applicationContext, cookieStorage)
@@ -50,7 +55,10 @@ class FutachaApplication : Application() {
         historyRefresher = HistoryRefresher(
             stateStore = appStateStore,
             repository = boardRepository,
-            dispatcher = Dispatchers.IO
+            dispatcher = Dispatchers.IO,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            httpClient = httpClient,
+            fileSystem = fileSystem
         )
     }
 

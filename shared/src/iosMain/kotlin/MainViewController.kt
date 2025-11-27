@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.network.PersistentCookieStorage
 import com.valoser.futacha.shared.network.createHttpClient
 import com.valoser.futacha.shared.parser.createHtmlParser
 import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.repo.DefaultBoardRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.createAppStateStore
@@ -30,12 +31,13 @@ fun MainViewController(): UIViewController {
                 httpClient.close()
             }
         }
-        LaunchedEffect(stateStore, httpClient) {
+        LaunchedEffect(stateStore, httpClient, fileSystem) {
             stateStore.isBackgroundRefreshEnabled.collect { enabled ->
                 configureIosBackgroundRefresh(
                     enabled = enabled,
                     stateStore = stateStore,
-                    httpClient = httpClient
+                    httpClient = httpClient,
+                    fileSystem = fileSystem
                 )
             }
         }
@@ -56,8 +58,10 @@ fun MainViewController(): UIViewController {
 private fun configureIosBackgroundRefresh(
     enabled: Boolean,
     stateStore: com.valoser.futacha.shared.state.AppStateStore,
-    httpClient: io.ktor.client.HttpClient
+    httpClient: io.ktor.client.HttpClient,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem?
 ) {
+    val autoSaveRepo = fileSystem?.let { SavedThreadRepository(it, baseDirectory = com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY) }
     BackgroundRefreshManager.configure(enabled) {
         val repo = DefaultBoardRepository(
             api = com.valoser.futacha.shared.network.HttpBoardApi(httpClient),
@@ -67,13 +71,14 @@ private fun configureIosBackgroundRefresh(
             val refresher = HistoryRefresher(
                 stateStore = stateStore,
                 repository = repo,
-                dispatcher = kotlinx.coroutines.Dispatchers.Default
+                dispatcher = kotlinx.coroutines.Dispatchers.Default,
+                autoSavedThreadRepository = autoSaveRepo,
+                httpClient = httpClient,
+                fileSystem = fileSystem
             )
             refresher.refresh()
         } catch (t: Throwable) {
             Logger.e("BackgroundRefresh", "Background history refresh failed", t)
-        } finally {
-            repo.close()
         }
     }
 }

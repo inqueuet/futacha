@@ -58,6 +58,8 @@ class ThreadSaveService(
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
         private const val MAX_FILE_SIZE_BYTES = 8_192_000L
+        private const val MAX_TOTAL_SIZE_BYTES = 8L * 1024 * 1024 * 1024 // 約8GBまで
+        private const val MAX_SAVE_DURATION_MS = 5 * 60 * 1000L // 5分上限
 
         // サポートされる拡張子
         private val SUPPORTED_IMAGE_EXTENSIONS = setOf("gif", "jpg", "jpeg", "png", "webp")
@@ -92,6 +94,7 @@ class ThreadSaveService(
     ): Result<SavedThread> = withContext(Dispatchers.Default) {
         runCatching {
             val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
+            val startedAtMillis = savedAtTimestamp
             // 準備フェーズ
             updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
@@ -139,6 +142,7 @@ class ThreadSaveService(
             var processedMediaCount = 0
 
             posts.chunked(chunkSize).forEach { postChunk ->
+                enforceBudget(totalSize, startedAtMillis)
                 val mediaItems = postChunk.flatMap { post ->
                     buildList {
                         post.thumbnailUrl?.let { add(MediaItem(it, MediaType.THUMBNAIL, post)) }
@@ -174,7 +178,8 @@ class ThreadSaveService(
                                     baseDir = baseDir,
                                     boardPath = boardPath,
                                     type = mediaItem.type,
-                                    postId = mediaItem.post.id
+                                    postId = mediaItem.post.id,
+                                    startedAtMillis = startedAtMillis
                                 )
 
                                 Pair<MediaItem?, Result<LocalFileInfo>?>(mediaItem, downloadResult)
@@ -193,6 +198,7 @@ class ThreadSaveService(
                                 .onSuccess { fileInfo ->
                                     val fileSize = fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
                                     totalSize += fileSize
+                                    enforceBudget(totalSize, startedAtMillis)
                                     // URL→ローカルパスマッピングに追加
                                     urlToPathMap[mediaItem.url] = fileInfo.relativePath
                                     trimMap(urlToPathMap)
@@ -328,6 +334,7 @@ class ThreadSaveService(
                 0L
             }
             val finalTotalSize = totalSize + metadataSize
+            enforceBudget(finalTotalSize, startedAtMillis)
 
             SavedThread(
                 threadId = threadId,
@@ -353,7 +360,8 @@ class ThreadSaveService(
         baseDir: String,
         boardPath: String,
         type: MediaType,
-        postId: String
+        postId: String,
+        startedAtMillis: Long
     ): Result<LocalFileInfo> = withContext(Dispatchers.Default) {
         runCatching {
             // Download media directly and inspect headers from GET response
@@ -401,6 +409,10 @@ class ThreadSaveService(
 
             // チャンクごとに読み込んで追記
             while (!channel.isClosedForRead) {
+                if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
+                    fileSystem.delete(fullPath).getOrNull()
+                    throw IllegalStateException("Save aborted: exceeded time limit during download")
+                }
                 val buffer = ByteArray(bufferSize)
                 val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
                 if (bytesRead <= 0) break
@@ -659,6 +671,19 @@ class ThreadSaveService(
         val relativePath: String,
         val fileType: FileType
     )
+
+    /**
+     * 保存処理の総容量/時間を監視し、上限を超えたら例外で中断する
+     */
+    private fun enforceBudget(totalSizeBytes: Long, startedAtMillis: Long) {
+        val elapsed = Clock.System.now().toEpochMilliseconds() - startedAtMillis
+        if (totalSizeBytes > MAX_TOTAL_SIZE_BYTES) {
+            throw IllegalStateException("Save aborted: total size exceeds limit (${totalSizeBytes / (1024 * 1024)}MB > ${MAX_TOTAL_SIZE_BYTES / (1024 * 1024)}MB)")
+        }
+        if (elapsed > MAX_SAVE_DURATION_MS) {
+            throw IllegalStateException("Save aborted: exceeded time limit (${elapsed / 1000}s > ${MAX_SAVE_DURATION_MS / 1000}s)")
+        }
+    }
 
     /**
      * メディアアイテム

@@ -22,7 +22,7 @@ class FakeBoardRepository(
         mode: CatalogMode
     ): List<CatalogItem> {
         onAccess()
-        val base = MockBoardData.catalogItems
+        val base = MockBoardData.catalogItems()
         return when (mode) {
             CatalogMode.New -> base.sortedByDescending { it.numericId() }
             CatalogMode.Old -> base.sortedBy { it.numericId() }

@@ -104,12 +104,14 @@ fun FutachaApp(
                 fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
             }
 
-            val historyRefresher = remember(repositoryHolder.repository, autoSavedThreadRepository) {
+            val historyRefresher = remember(repositoryHolder.repository, autoSavedThreadRepository, httpClient, fileSystem) {
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
                     dispatcher = Dispatchers.Default,
-                    autoSavedThreadRepository = autoSavedThreadRepository  // FIX: 自動保存チェック用
+                    autoSavedThreadRepository = autoSavedThreadRepository,  // FIX: 自動保存チェック用
+                    httpClient = httpClient,
+                    fileSystem = fileSystem
                 )
             }
 
