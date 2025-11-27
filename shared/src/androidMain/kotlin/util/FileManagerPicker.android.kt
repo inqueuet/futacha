@@ -23,17 +23,26 @@ data class FileManagerApp(
  * @return ファイラーアプリのリスト
  */
 fun getAvailableFileManagers(packageManager: PackageManager): List<FileManagerApp> {
-    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+    // ベンダーや 3rd パーティによって DEFAULT カテゴリの有無が異なるため、両方のインテントで探索する
+    val intents = listOf(
+        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply { addCategory(Intent.CATEGORY_DEFAULT) },
+        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+    )
 
-    val resolveInfos: List<ResolveInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        packageManager.queryIntentActivities(
-            intent,
-            PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
-        )
-    } else {
-        @Suppress("DEPRECATION")
-        packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-    }
+    val resolveInfos: List<ResolveInfo> = intents
+        .flatMap { intent ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.queryIntentActivities(
+                    intent,
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+            }
+        }
+        // システム標準 (com.android.documentsui) も含め、重複を排除
+        .distinctBy { it.activityInfo?.packageName to it.activityInfo?.name }
 
     return resolveInfos.mapNotNull { resolveInfo ->
         val activityInfo = resolveInfo.activityInfo ?: return@mapNotNull null
