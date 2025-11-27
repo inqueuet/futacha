@@ -127,6 +127,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -238,7 +239,9 @@ import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -281,10 +284,19 @@ fun BoardManagementScreen(
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
     resolvedManualSaveDirectory: String? = null,
     onManualSaveDirectoryChanged: (String) -> Unit = {},
+    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
+    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
+    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     httpClient: io.ktor.client.HttpClient? = null,
-    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    preferredFileManagerLabel: String? = null,
+    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
+    onClearPreferredFileManager: (() -> Unit)? = null
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -534,12 +546,20 @@ fun BoardManagementScreen(
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+            attachmentPickerPreference = attachmentPickerPreference,
+            saveDirectorySelection = saveDirectorySelection,
+            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
+            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
             onOpenCookieManager = cookieRepository?.let {
                 {
                     isGlobalSettingsVisible = false
                     isCookieManagementVisible = true
                 }
-            }
+            },
+            preferredFileManagerLabel = preferredFileManagerLabel,
+            onFileManagerSelected = onFileManagerSelected,
+            onClearPreferredFileManager = onClearPreferredFileManager
         )
     }
 
@@ -1199,8 +1219,17 @@ fun CatalogScreen(
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
     resolvedManualSaveDirectory: String? = null,
     onManualSaveDirectoryChanged: (String) -> Unit = {},
+    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
+    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
+    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
+    preferredFileManagerLabel: String? = null,
+    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
+    onClearPreferredFileManager: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -1648,6 +1677,7 @@ fun CatalogScreen(
         if (showCreateThreadDialog) {
             CreateThreadDialog(
                 boardName = board?.name,
+                attachmentPickerPreference = attachmentPickerPreference,
                 onDismiss = { showCreateThreadDialog = false },
                 onSubmit = { name, email, title, comment, password, imageData ->
                     showCreateThreadDialog = false
@@ -1727,6 +1757,11 @@ fun CatalogScreen(
                 manualSaveDirectory = manualSaveDirectory,
                 resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                 onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+                attachmentPickerPreference = attachmentPickerPreference,
+                saveDirectorySelection = saveDirectorySelection,
+                onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
+                onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+                onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
                 onOpenCookieManager = cookieRepository?.let {
                     {
                         isGlobalSettingsVisible = false
@@ -1772,6 +1807,7 @@ fun CatalogScreen(
 @Composable
 private fun CreateThreadDialog(
     boardName: String?,
+    attachmentPickerPreference: AttachmentPickerPreference,
     onDismiss: () -> Unit,
     onSubmit: (name: String, email: String, title: String, comment: String, password: String, imageData: com.valoser.futacha.shared.util.ImageData?) -> Unit
 ) {
@@ -1786,6 +1822,7 @@ private fun CreateThreadDialog(
     ThreadFormDialog(
         title = "スレ立て",
         subtitle = boardName?.takeIf { it.isNotBlank() },
+        attachmentPickerPreference = attachmentPickerPreference,
         emailPresets = emailPresets,
         comment = comment,
         onCommentChange = { comment = it },
@@ -1823,6 +1860,7 @@ private fun CreateThreadDialog(
 private fun ThreadReplyDialog(
     boardName: String,
     threadTitle: String,
+    attachmentPickerPreference: AttachmentPickerPreference,
     name: String,
     onNameChange: (String) -> Unit,
     email: String,
@@ -1842,6 +1880,7 @@ private fun ThreadReplyDialog(
     ThreadFormDialog(
         title = threadTitle.ifBlank { "返信" },
         subtitle = boardName,
+        attachmentPickerPreference = attachmentPickerPreference,
         emailPresets = listOf("ID表示", "IP表示", "sage"),
         comment = comment,
         onCommentChange = onCommentChange,
@@ -1870,6 +1909,7 @@ private fun ThreadReplyDialog(
 private fun ThreadFormDialog(
     title: String,
     subtitle: String?,
+    attachmentPickerPreference: AttachmentPickerPreference,
     emailPresets: List<String>,
     comment: String,
     onCommentChange: (String) -> Unit,
@@ -1903,10 +1943,14 @@ private fun ThreadFormDialog(
         focusedIndicatorColor = MaterialTheme.colorScheme.primary,
         unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
     )
-    val imagePickerLauncher = rememberImagePickerLauncher(onImageSelected = { image ->
-        onImageSelected(image)
-    })
-    val videoPickerLauncher = rememberImagePickerLauncher(
+    val imagePickerLauncher = rememberAttachmentPickerLauncher(
+        preference = attachmentPickerPreference,
+        onImageSelected = { image ->
+            onImageSelected(image)
+        }
+    )
+    val videoPickerLauncher = rememberAttachmentPickerLauncher(
+        preference = attachmentPickerPreference,
         mimeType = "video/*",
         onImageSelected = { image ->
             onImageSelected(image)
@@ -2184,14 +2228,28 @@ private fun ThreadFormDialog(
 
 @Composable
 expect fun ImagePickerButton(
-    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit,
+    preference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA
 )
 
 @Composable
-expect fun rememberImagePickerLauncher(
+expect fun rememberAttachmentPickerLauncher(
+    preference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
     mimeType: String = "image/*",
     onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit
 ): () -> Unit
+
+@Composable
+expect fun rememberDirectoryPickerLauncher(
+    onDirectorySelected: (com.valoser.futacha.shared.model.SaveLocation) -> Unit,
+    preferredFileManagerPackage: String? = null
+): () -> Unit
+
+@Composable
+expect fun FileManagerPickerDialog(
+    onDismiss: () -> Unit,
+    onFileManagerSelected: (packageName: String, label: String) -> Unit
+)
 
 @Composable
 private fun LoadingCatalog(modifier: Modifier = Modifier) {
@@ -3354,8 +3412,17 @@ fun ThreadScreen(
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
+    manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
     resolvedManualSaveDirectory: String? = null,
     onManualSaveDirectoryChanged: (String) -> Unit = {},
+    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
+    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
+    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
+    preferredFileManagerLabel: String? = null,
+    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
+    onClearPreferredFileManager: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -4104,6 +4171,7 @@ fun ThreadScreen(
                                                     title = page.posts.firstOrNull()?.subject ?: threadTitle ?: "無題",
                                                     expiresAtLabel = page.expiresAtLabel,
                                                     posts = page.posts,
+                                                    baseSaveLocation = manualSaveLocation,
                                                     baseDirectory = manualSaveDirectory,
                                                     writeMetadata = false
                                                 )
@@ -4352,6 +4420,7 @@ fun ThreadScreen(
         ThreadReplyDialog(
             boardName = board.name,
             threadTitle = resolvedThreadTitle,
+            attachmentPickerPreference = attachmentPickerPreference,
             name = replyName,
             onNameChange = { replyName = it },
             email = replyEmail,
@@ -4585,12 +4654,20 @@ fun ThreadScreen(
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+            attachmentPickerPreference = attachmentPickerPreference,
+            saveDirectorySelection = saveDirectorySelection,
+            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
+            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
             onOpenCookieManager = cookieRepository?.let {
                 {
                     isGlobalSettingsVisible = false
                     isCookieManagementVisible = true
                 }
-            }
+            },
+            preferredFileManagerLabel = preferredFileManagerLabel,
+            onFileManagerSelected = onFileManagerSelected,
+            onClearPreferredFileManager = onClearPreferredFileManager
         )
     }
 
@@ -7515,9 +7592,19 @@ private fun GlobalSettingsScreen(
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     resolvedManualSaveDirectory: String? = null,
     onManualSaveDirectoryChanged: (String) -> Unit = {},
-    onOpenCookieManager: (() -> Unit)? = null
+    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
+    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
+    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
+    onOpenCookieManager: (() -> Unit)? = null,
+    preferredFileManagerLabel: String? = null,
+    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
+    onClearPreferredFileManager: (() -> Unit)? = null
 ) {
     val urlLauncher = rememberUrlLauncher()
+    var isFileManagerPickerVisible by rememberSaveable { mutableStateOf(false) }
+
     fun normalizeManualSaveInput(raw: String): String {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return MANUAL_SAVE_DIRECTORY
@@ -7606,6 +7693,86 @@ private fun GlobalSettingsScreen(
             }
             item {
                 ListItem(
+                    headlineContent = { Text("添付ピッカー") },
+                    supportingContent = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "画像・動画を添付するときに使うピッカーを選べます。ファイラー優先にするとサードパーティ製のファイラーも選択可能です。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AttachmentPickerPreference.entries.forEach { pref ->
+                                    FilterChip(
+                                        selected = attachmentPickerPreference == pref,
+                                        onClick = { onAttachmentPickerPreferenceChanged(pref) },
+                                        label = {
+                                            Text(
+                                                when (pref) {
+                                                    AttachmentPickerPreference.MEDIA -> "ギャラリー優先"
+                                                    AttachmentPickerPreference.DOCUMENT -> "ファイラー優先"
+                                                    AttachmentPickerPreference.ALWAYS_ASK -> "毎回選択"
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("優先ファイラー") },
+                    supportingContent = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "ディレクトリ選択で使用する優先ファイラーアプリを設定できます。設定すると次回から直接そのアプリが起動します。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (preferredFileManagerLabel != null) {
+                                Text(
+                                    text = "現在の設定: $preferredFileManagerLabel",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Text(
+                                    text = "未設定（システムのデフォルト）",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { isFileManagerPickerVisible = true }
+                                ) {
+                                    Text("ファイラーを選択")
+                                }
+                                if (preferredFileManagerLabel != null) {
+                                    OutlinedButton(
+                                        onClick = { onClearPreferredFileManager?.invoke() }
+                                    ) {
+                                        Text("クリア")
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
                     headlineContent = { Text("スレ保存先") },
                     supportingContent = {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -7614,34 +7781,82 @@ private fun GlobalSettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            OutlinedTextField(
-                                value = manualSaveInput,
-                                onValueChange = { manualSaveInput = it },
-                                singleLine = true,
-                                placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("フォルダ名またはパス") }
-                            )
-                            Text(
-                                text = "保存先: $resolvedManualPath",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                TextButton(onClick = {
-                                    manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
-                                    onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
-                                }) {
-                                    Text("デフォルトに戻す")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                SaveDirectorySelection.entries.forEach { selection ->
+                                    FilterChip(
+                                        selected = saveDirectorySelection == selection,
+                                        onClick = { onSaveDirectorySelectionChanged(selection) },
+                                        label = {
+                                            Text(
+                                                when (selection) {
+                                                    SaveDirectorySelection.MANUAL_INPUT -> "手入力"
+                                                    SaveDirectorySelection.PICKER -> "ファイラーで選ぶ"
+                                                }
+                                            )
+                                        }
+                                    )
                                 }
-                                Button(onClick = {
-                                    val normalized = normalizeManualSaveInput(manualSaveInput)
-                                    manualSaveInput = normalized
-                                    onManualSaveDirectoryChanged(normalized)
-                                }) {
-                                    Text("保存先を更新")
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            when (saveDirectorySelection) {
+                                SaveDirectorySelection.MANUAL_INPUT -> {
+                                    OutlinedTextField(
+                                        value = manualSaveInput,
+                                        onValueChange = { manualSaveInput = it },
+                                        singleLine = true,
+                                        placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text("フォルダ名またはパス") }
+                                    )
+                                    Text(
+                                        text = "保存先: $resolvedManualPath",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        TextButton(onClick = {
+                                            manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
+                                            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                        }) {
+                                            Text("デフォルトに戻す")
+                                        }
+                                        Button(onClick = {
+                                            val normalized = normalizeManualSaveInput(manualSaveInput)
+                                            manualSaveInput = normalized
+                                            onManualSaveDirectoryChanged(normalized)
+                                        }) {
+                                            Text("保存先を更新")
+                                        }
+                                    }
+                                }
+                                SaveDirectorySelection.PICKER -> {
+                                    Text(
+                                        text = "ファイラーで選択したディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "保存先: $resolvedManualPath",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Button(
+                                            onClick = { onOpenSaveDirectoryPicker?.invoke() },
+                                            enabled = onOpenSaveDirectoryPicker != null
+                                        ) {
+                                            Text("フォルダを選択")
+                                        }
+                                        OutlinedButton(onClick = {
+                                            manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
+                                            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                            onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                                        }) {
+                                            Text("手入力に戻す")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -7700,6 +7915,16 @@ private fun GlobalSettingsScreen(
                 )
             }
         }
+    }
+
+    if (isFileManagerPickerVisible) {
+        FileManagerPickerDialog(
+            onDismiss = { isFileManagerPickerVisible = false },
+            onFileManagerSelected = { packageName, label ->
+                isFileManagerPickerVisible = false
+                onFileManagerSelected?.invoke(packageName, label)
+            }
+        )
     }
 }
 

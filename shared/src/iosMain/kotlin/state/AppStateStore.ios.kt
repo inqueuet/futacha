@@ -11,12 +11,16 @@ private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
+private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
+private const val SAVE_DIRECTORY_SELECTION_KEY = "save_directory_selection"
 private const val CATALOG_MODE_MAP_KEY = "catalog_mode_map_json"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
 private const val CATALOG_NG_WORDS_KEY = "catalog_ng_words_json"
 private const val WATCH_WORDS_KEY = "watch_words_json"
 private const val SELF_POST_IDENTIFIERS_KEY = "self_post_identifiers_json"
+private const val PREFERRED_FILE_MANAGER_PACKAGE_KEY = "preferred_file_manager_package"
+private const val PREFERRED_FILE_MANAGER_LABEL_KEY = "preferred_file_manager_label"
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
     return IosPlatformStateStorage()
@@ -32,18 +36,24 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val manualSaveDirectoryState = MutableStateFlow(
         sanitizeManualSaveDirectoryValue(defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY))
     )
+    private val attachmentPickerPreferenceState = MutableStateFlow(defaults.stringForKey(ATTACHMENT_PICKER_PREF_KEY))
+    private val saveDirectorySelectionState = MutableStateFlow(defaults.stringForKey(SAVE_DIRECTORY_SELECTION_KEY))
     private val catalogModeMapState = MutableStateFlow(defaults.stringForKey(CATALOG_MODE_MAP_KEY))
     private val ngHeadersState = MutableStateFlow(defaults.stringForKey(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(defaults.stringForKey(NG_WORDS_KEY))
     private val catalogNgWordsState = MutableStateFlow(defaults.stringForKey(CATALOG_NG_WORDS_KEY))
     private val watchWordsState = MutableStateFlow(defaults.stringForKey(WATCH_WORDS_KEY))
     private val selfPostIdentifiersState = MutableStateFlow(defaults.stringForKey(SELF_POST_IDENTIFIERS_KEY))
+    private val preferredFileManagerPackageState = MutableStateFlow(defaults.stringForKey(PREFERRED_FILE_MANAGER_PACKAGE_KEY) ?: "")
+    private val preferredFileManagerLabelState = MutableStateFlow(defaults.stringForKey(PREFERRED_FILE_MANAGER_LABEL_KEY) ?: "")
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
+    override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
+    override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val ngHeadersJson: Flow<String?> = ngHeadersState
@@ -51,6 +61,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val catalogNgWordsJson: Flow<String?> = catalogNgWordsState
     override val watchWordsJson: Flow<String?> = watchWordsState
     override val selfPostIdentifiersJson: Flow<String?> = selfPostIdentifiersState
+    override val preferredFileManagerPackage: Flow<String> = preferredFileManagerPackageState
+    override val preferredFileManagerLabel: Flow<String> = preferredFileManagerLabelState
 
     override suspend fun updateBoardsJson(value: String) {
         defaults.setObject(value, forKey = BOARDS_KEY)
@@ -80,6 +92,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
         defaults.synchronize()
         manualSaveDirectoryState.value = directory
+    }
+
+    override suspend fun updateAttachmentPickerPreference(preference: String) {
+        defaults.setObject(preference, forKey = ATTACHMENT_PICKER_PREF_KEY)
+        defaults.synchronize()
+        attachmentPickerPreferenceState.value = preference
+    }
+
+    override suspend fun updateSaveDirectorySelection(selection: String) {
+        defaults.setObject(selection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
+        defaults.synchronize()
+        saveDirectorySelectionState.value = selection
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {
@@ -124,6 +148,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         selfPostIdentifiersState.value = value
     }
 
+    override suspend fun updatePreferredFileManagerPackage(packageName: String) {
+        defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
+        defaults.synchronize()
+        preferredFileManagerPackageState.value = packageName
+    }
+
+    override suspend fun updatePreferredFileManagerLabel(label: String) {
+        defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
+        defaults.synchronize()
+        preferredFileManagerLabelState.value = label
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
@@ -132,7 +168,9 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaultCatalogNgWordsJson: String?,
         defaultWatchWordsJson: String?,
         defaultSelfPostIdentifiersJson: String?,
-        defaultCatalogModeMapJson: String?
+        defaultCatalogModeMapJson: String?,
+        defaultAttachmentPickerPreference: String?,
+        defaultSaveDirectorySelection: String?
     ) {
         var updated = false
         if (defaults.stringForKey(BOARDS_KEY) == null) {
@@ -173,6 +211,16 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaultSelfPostIdentifiersJson != null && defaults.stringForKey(SELF_POST_IDENTIFIERS_KEY) == null) {
             defaults.setObject(defaultSelfPostIdentifiersJson, forKey = SELF_POST_IDENTIFIERS_KEY)
             selfPostIdentifiersState.value = defaultSelfPostIdentifiersJson
+            updated = true
+        }
+        if (defaultAttachmentPickerPreference != null && defaults.stringForKey(ATTACHMENT_PICKER_PREF_KEY) == null) {
+            defaults.setObject(defaultAttachmentPickerPreference, forKey = ATTACHMENT_PICKER_PREF_KEY)
+            attachmentPickerPreferenceState.value = defaultAttachmentPickerPreference
+            updated = true
+        }
+        if (defaultSaveDirectorySelection != null && defaults.stringForKey(SAVE_DIRECTORY_SELECTION_KEY) == null) {
+            defaults.setObject(defaultSaveDirectorySelection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
+            saveDirectorySelectionState.value = defaultSaveDirectorySelection
             updated = true
         }
         if (defaultCatalogModeMapJson != null && defaults.stringForKey(CATALOG_MODE_MAP_KEY) == null) {

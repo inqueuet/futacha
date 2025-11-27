@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.util
 
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
@@ -259,6 +260,231 @@ class IosFileSystem : FileSystem {
         }
 
         return appDir
+    }
+
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.Default) {
+        runCatching {
+            val absolutePath = resolveAbsolutePath(path)
+            val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
+
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
+            }
+
+            val existingData = if (fileManager.fileExistsAtPath(absolutePath)) {
+                NSData.dataWithContentsOfFile(absolutePath) ?: NSData()
+            } else {
+                NSData()
+            }
+
+            val combinedData = NSMutableData.dataWithData(existingData)
+            bytes.usePinned { pinned ->
+                val newData = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+                combinedData.appendData(newData)
+            }
+
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val writeSuccess = combinedData.writeToFile(absolutePath, options = NSDataWritingAtomic, error = error.ptr)
+                if (!writeSuccess) {
+                    throw Exception("Failed to append to file: ${error.value?.localizedDescription ?: "Unknown error"}")
+                }
+            }
+            Unit
+        }
+    }
+
+    // ========================================
+    // SaveLocation-based implementations
+    // ========================================
+
+    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.Default) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
+                createDirectory(fullPath)
+            }
+            is SaveLocation.Bookmark -> {
+                runCatching {
+                    val url = resolveBookmarkUrl(base.bookmarkData)
+                    val startedAccess = url.startAccessingSecurityScopedResource()
+                    try {
+                        val fullPath = if (relativePath.isEmpty()) {
+                            url.path!!
+                        } else {
+                            "${url.path!!}/$relativePath"
+                        }
+                        createDirectory(fullPath).getOrThrow()
+                    } finally {
+                        if (startedAccess) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                }
+            }
+            is SaveLocation.TreeUri -> {
+                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+            }
+        }
+    }
+
+    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.Default) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = "${base.path}/$relativePath"
+                writeBytes(fullPath, bytes)
+            }
+            is SaveLocation.Bookmark -> {
+                runCatching {
+                    val url = resolveBookmarkUrl(base.bookmarkData)
+                    val startedAccess = url.startAccessingSecurityScopedResource()
+                    try {
+                        val fullPath = "${url.path!!}/$relativePath"
+                        writeBytes(fullPath, bytes).getOrThrow()
+                    } finally {
+                        if (startedAccess) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                }
+            }
+            is SaveLocation.TreeUri -> {
+                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+            }
+        }
+    }
+
+    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.Default) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = "${base.path}/$relativePath"
+                appendBytes(fullPath, bytes)
+            }
+            is SaveLocation.Bookmark -> {
+                runCatching {
+                    val url = resolveBookmarkUrl(base.bookmarkData)
+                    val startedAccess = url.startAccessingSecurityScopedResource()
+                    try {
+                        val fullPath = "${url.path!!}/$relativePath"
+                        appendBytes(fullPath, bytes).getOrThrow()
+                    } finally {
+                        if (startedAccess) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                }
+            }
+            is SaveLocation.TreeUri -> {
+                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+            }
+        }
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
+    }
+
+    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.Default) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = "${base.path}/$relativePath"
+                readString(fullPath)
+            }
+            is SaveLocation.Bookmark -> {
+                runCatching {
+                    val url = resolveBookmarkUrl(base.bookmarkData)
+                    val startedAccess = url.startAccessingSecurityScopedResource()
+                    try {
+                        val fullPath = "${url.path!!}/$relativePath"
+                        readString(fullPath).getOrThrow()
+                    } finally {
+                        if (startedAccess) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                }
+            }
+            is SaveLocation.TreeUri -> {
+                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+            }
+        }
+    }
+
+    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(Dispatchers.Default) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
+                exists(fullPath)
+            }
+            is SaveLocation.Bookmark -> {
+                try {
+                    val url = resolveBookmarkUrl(base.bookmarkData)
+                    val startedAccess = url.startAccessingSecurityScopedResource()
+                    try {
+                        val fullPath = if (relativePath.isEmpty()) {
+                            url.path!!
+                        } else {
+                            "${url.path!!}/$relativePath"
+                        }
+                        exists(fullPath)
+                    } finally {
+                        if (startedAccess) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.e("IosFileSystem", "Error checking existence for Bookmark, path: $relativePath", e)
+                    false
+                }
+            }
+            is SaveLocation.TreeUri -> {
+                false
+            }
+        }
+    }
+
+    // ========================================
+    // Helper methods for secure bookmark
+    // ========================================
+
+    private fun resolveBookmarkUrl(bookmarkData: String): NSURL {
+        val data = bookmarkData.decodeBase64ToNSData()
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val isStale = alloc<ObjCObjectVar<Boolean>>()
+            val url = NSURL.URLByResolvingBookmarkData(
+                data,
+                options = 0u,
+                relativeToURL = null,
+                bookmarkDataIsStale = isStale.ptr,
+                error = error.ptr
+            )
+            if (url == null) {
+                throw Exception("Failed to resolve bookmark: ${error.value?.localizedDescription ?: "Unknown error"}. Please re-select the directory.")
+            }
+            if (isStale.value) {
+                Logger.w("IosFileSystem", "Bookmark data is stale. The bookmark may not work after app restart. Consider re-selecting the directory.")
+                // Note: Stale bookmarks can still work in current session, but may fail after restart.
+                // To refresh, user should re-select via directory picker.
+            }
+            return url
+        }
+    }
+
+    private fun String.decodeBase64ToNSData(): NSData {
+        val base64String = this as NSString
+        val data = NSData.create(base64EncodedString = base64String, options = 0u)
+            ?: throw IllegalArgumentException("Invalid base64 bookmark data")
+        return data
     }
 }
 

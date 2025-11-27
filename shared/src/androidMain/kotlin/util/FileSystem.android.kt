@@ -1,8 +1,11 @@
 package com.valoser.futacha.shared.util
 
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import androidx.documentfile.provider.DocumentFile
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import kotlinx.coroutines.Dispatchers
@@ -321,6 +324,239 @@ class AndroidFileSystem(
      */
     private fun isExternalStorageWritable(): Boolean {
         return Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED
+    }
+
+    // ========================================
+    // SaveLocation-based implementations
+    // ========================================
+
+    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
+                createDirectory(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runCatching {
+                    val treeUri = Uri.parse(base.uri)
+                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}. Permission may have been revoked.")
+
+                    // Verify we still have permission
+                    if (!baseDir.canWrite()) {
+                        throw SecurityException("No write permission for tree URI: ${base.uri}")
+                    }
+
+                    if (relativePath.isEmpty()) {
+                        // Base directory already exists if we can resolve it
+                        return@runCatching Unit
+                    }
+
+                    val segments = relativePath.split('/').filter { it.isNotBlank() }
+                    var current = baseDir
+                    for (segment in segments) {
+                        val existing = current.findFile(segment)
+                        current = if (existing != null && existing.isDirectory) {
+                            existing
+                        } else if (existing == null) {
+                            current.createDirectory(segment)
+                                ?: throw IllegalStateException("Failed to create directory: $segment in ${current.uri}")
+                        } else {
+                            throw IllegalStateException("Path segment exists but is not a directory: $segment")
+                        }
+                    }
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = File(base.path, relativePath).absolutePath
+                writeBytes(fullPath, bytes)
+            }
+            is SaveLocation.TreeUri -> {
+                runCatching {
+                    val treeUri = Uri.parse(base.uri)
+                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+
+                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
+                    val parentDir = if (parentPath.isEmpty()) {
+                        baseDir
+                    } else {
+                        createOrNavigateToDirectory(baseDir, parentPath)
+                    }
+
+                    val file = parentDir.findFile(fileName)?.takeIf { !it.isDirectory }
+                        ?: parentDir.createFile("application/octet-stream", fileName)
+                        ?: throw IllegalStateException("Failed to create file: $fileName")
+
+                    context.contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
+                        output.write(bytes)
+                    } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = File(base.path, relativePath).absolutePath
+                appendBytes(fullPath, bytes)
+            }
+            is SaveLocation.TreeUri -> {
+                runCatching {
+                    val treeUri = Uri.parse(base.uri)
+                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+
+                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
+                    val parentDir = if (parentPath.isEmpty()) {
+                        baseDir
+                    } else {
+                        createOrNavigateToDirectory(baseDir, parentPath)
+                    }
+
+                    val file = parentDir.findFile(fileName)?.takeIf { !it.isDirectory }
+                        ?: parentDir.createFile("application/octet-stream", fileName)
+                        ?: throw IllegalStateException("Failed to create file: $fileName")
+
+                    context.contentResolver.openOutputStream(file.uri, "wa")?.use { output ->
+                        output.write(bytes)
+                    } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
+    }
+
+    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = File(base.path, relativePath).absolutePath
+                readString(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runCatching {
+                    val treeUri = Uri.parse(base.uri)
+                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+
+                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
+                    val parentDir = if (parentPath.isEmpty()) {
+                        baseDir
+                    } else {
+                        navigateToDirectory(baseDir, parentPath)
+                            ?: throw IllegalStateException("Directory not found: $parentPath")
+                    }
+
+                    val file = parentDir.findFile(fileName)
+                        ?: throw IllegalStateException("File not found: $fileName")
+
+                    context.contentResolver.openInputStream(file.uri)?.use { input ->
+                        input.readBytes().toString(Charsets.UTF_8)
+                    } ?: throw IllegalStateException("Failed to open input stream for ${file.uri}")
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
+                exists(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val treeUri = Uri.parse(base.uri)
+                    val baseDir = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext false
+
+                    if (relativePath.isEmpty()) {
+                        return@withContext baseDir.exists()
+                    }
+
+                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
+                    val parentDir = if (parentPath.isEmpty()) {
+                        baseDir
+                    } else {
+                        navigateToDirectory(baseDir, parentPath) ?: return@withContext false
+                    }
+
+                    parentDir.findFile(fileName)?.exists() ?: false
+                } catch (e: Exception) {
+                    Logger.e("AndroidFileSystem", "Error checking existence for TreeUri: ${base.uri}, path: $relativePath", e)
+                    false
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                false
+            }
+        }
+    }
+
+    // ========================================
+    // Helper methods for DocumentFile navigation
+    // ========================================
+
+    private fun splitParentAndFileName(relativePath: String): Pair<String, String> {
+        val normalized = relativePath.trim().trim('/')
+        val lastSlash = normalized.lastIndexOf('/')
+        return if (lastSlash < 0) {
+            "" to normalized
+        } else {
+            normalized.substring(0, lastSlash) to normalized.substring(lastSlash + 1)
+        }
+    }
+
+    private fun navigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile? {
+        if (relativePath.isEmpty()) return base
+        val segments = relativePath.split('/').filter { it.isNotBlank() }
+        var current = base
+        for (segment in segments) {
+            val next = current.findFile(segment)
+            if (next == null || !next.isDirectory) {
+                return null
+            }
+            current = next
+        }
+        return current
+    }
+
+    private fun createOrNavigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile {
+        if (relativePath.isEmpty()) return base
+        val segments = relativePath.split('/').filter { it.isNotBlank() }
+        var current = base
+        for (segment in segments) {
+            val existing = current.findFile(segment)
+            current = if (existing != null && existing.isDirectory) {
+                existing
+            } else if (existing == null) {
+                current.createDirectory(segment)
+                    ?: throw IllegalStateException("Failed to create directory: $segment")
+            } else {
+                throw IllegalStateException("Path segment exists but is not a directory: $segment")
+            }
+        }
+        return current
     }
 }
 

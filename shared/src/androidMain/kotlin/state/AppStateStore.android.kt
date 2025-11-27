@@ -29,12 +29,16 @@ private class AndroidPlatformStateStorage(
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
+    private val attachmentPickerPreferenceKey = stringPreferencesKey("attachment_picker_preference")
+    private val saveDirectorySelectionKey = stringPreferencesKey("save_directory_selection")
     private val catalogModeMapKey = stringPreferencesKey("catalog_mode_map_json")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
     private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
     private val watchWordsKey = stringPreferencesKey("watch_words_json")
     private val selfPostIdentifiersKey = stringPreferencesKey("self_post_identifiers_json")
+    private val preferredFileManagerPackageKey = stringPreferencesKey("preferred_file_manager_package")
+    private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -60,6 +64,16 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
+
+    override val attachmentPickerPreference: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[attachmentPickerPreferenceKey] }
+
+    override val saveDirectorySelection: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[saveDirectorySelectionKey] }
 
     override val catalogModeMapJson: Flow<String?> =
         context.dataStore.data
@@ -96,6 +110,16 @@ private class AndroidPlatformStateStorage(
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[selfPostIdentifiersKey] }
 
+    override val preferredFileManagerPackage: Flow<String> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[preferredFileManagerPackageKey] ?: "" }
+
+    override val preferredFileManagerLabel: Flow<String> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[preferredFileManagerLabelKey] ?: "" }
+
     override suspend fun updateBoardsJson(value: String) {
         try {
             context.dataStore.edit { prefs -> prefs[boardsKey] = value }
@@ -131,6 +155,24 @@ private class AndroidPlatformStateStorage(
         } catch (e: Exception) {
             println("AndroidPlatformStateStorage: Failed to update manual save directory: ${e.message}")
             throw StorageException("Failed to save manual save directory", e)
+        }
+    }
+
+    override suspend fun updateAttachmentPickerPreference(preference: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[attachmentPickerPreferenceKey] = preference }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update attachment picker preference: ${e.message}")
+            throw StorageException("Failed to save attachment picker preference", e)
+        }
+    }
+
+    override suspend fun updateSaveDirectorySelection(selection: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[saveDirectorySelectionKey] = selection }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update save directory selection: ${e.message}")
+            throw StorageException("Failed to save save directory selection", e)
         }
     }
 
@@ -207,6 +249,24 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updatePreferredFileManagerPackage(packageName: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[preferredFileManagerPackageKey] = packageName }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update preferred file manager package: ${e.message}")
+            throw StorageException("Failed to save preferred file manager package", e)
+        }
+    }
+
+    override suspend fun updatePreferredFileManagerLabel(label: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[preferredFileManagerLabelKey] = label }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update preferred file manager label: ${e.message}")
+            throw StorageException("Failed to save preferred file manager label", e)
+        }
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
@@ -215,7 +275,9 @@ private class AndroidPlatformStateStorage(
         defaultCatalogNgWordsJson: String?,
         defaultWatchWordsJson: String?,
         defaultSelfPostIdentifiersJson: String?,
-        defaultCatalogModeMapJson: String?
+        defaultCatalogModeMapJson: String?,
+        defaultAttachmentPickerPreference: String?,
+        defaultSaveDirectorySelection: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -245,6 +307,12 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultCatalogModeMapJson != null && !prefs.contains(catalogModeMapKey)) {
                     prefs[catalogModeMapKey] = defaultCatalogModeMapJson
+                }
+                if (defaultAttachmentPickerPreference != null && !prefs.contains(attachmentPickerPreferenceKey)) {
+                    prefs[attachmentPickerPreferenceKey] = defaultAttachmentPickerPreference
+                }
+                if (defaultSaveDirectorySelection != null && !prefs.contains(saveDirectorySelectionKey)) {
+                    prefs[saveDirectorySelectionKey] = defaultSaveDirectorySelection
                 }
             }
         } catch (e: Exception) {

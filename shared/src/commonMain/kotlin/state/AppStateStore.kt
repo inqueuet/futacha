@@ -3,10 +3,15 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.PreferredFileManager
+import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -84,10 +89,29 @@ class AppStateStore internal constructor(
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
+
+    /**
+     * Manual save directory as string (legacy support).
+     */
     val manualSaveDirectory: Flow<String> = storage.manualSaveDirectory
         .map { manualPath ->
             sanitizeManualSaveDirectory(manualPath)
         }
+
+    /**
+     * Manual save location as SaveLocation (supports paths, content URIs, and bookmarks).
+     * Legacy string paths are automatically converted via SaveLocation.fromString().
+     */
+    val manualSaveLocation: Flow<SaveLocation> = storage.manualSaveDirectory
+        .map { raw ->
+            val sanitized = sanitizeManualSaveDirectory(raw)
+            SaveLocation.fromString(sanitized)
+        }
+
+    val attachmentPickerPreference: Flow<AttachmentPickerPreference> = storage.attachmentPickerPreference
+        .map { raw -> decodeAttachmentPickerPreference(raw) }
+    val saveDirectorySelection: Flow<SaveDirectorySelection> = storage.saveDirectorySelection
+        .map { raw -> decodeSaveDirectorySelection(raw) }
 
     val catalogModes: Flow<Map<String, CatalogMode>> = storage.catalogModeMapJson.map { raw ->
         decodeCatalogModeMap(raw)
@@ -149,6 +173,53 @@ class AppStateStore internal constructor(
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save manual save directory: $sanitized", e)
             // Log error but don't crash
+        }
+    }
+
+    /**
+     * Set manual save location using SaveLocation (path, URI, or bookmark).
+     * Persists the raw string representation internally.
+     */
+    suspend fun setManualSaveLocation(location: SaveLocation) {
+        val rawString = location.toRawString()
+        try {
+            storage.updateManualSaveDirectory(rawString)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save manual save location: $rawString", e)
+        }
+    }
+
+    suspend fun setAttachmentPickerPreference(preference: AttachmentPickerPreference) {
+        try {
+            storage.updateAttachmentPickerPreference(preference.name)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save attachment picker preference: $preference", e)
+        }
+    }
+
+    suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) {
+        try {
+            storage.updateSaveDirectorySelection(selection.name)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save save directory selection: $selection", e)
+        }
+    }
+
+    suspend fun setPreferredFileManager(packageName: String?, label: String?) {
+        try {
+            storage.updatePreferredFileManagerPackage(packageName ?: "")
+            storage.updatePreferredFileManagerLabel(label ?: "")
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save preferred file manager: $packageName", e)
+        }
+    }
+
+    fun getPreferredFileManager(): Flow<PreferredFileManager?> = storage.preferredFileManagerPackage.map { pkg ->
+        if (pkg.isBlank()) {
+            null
+        } else {
+            val label = storage.preferredFileManagerLabel.first()
+            PreferredFileManager(pkg, label)
         }
     }
 
@@ -432,7 +503,9 @@ class AppStateStore internal constructor(
                 json.encodeToString(stringListSerializer, defaultCatalogNgWords),
                 json.encodeToString(stringListSerializer, defaultWatchWords),
                 json.encodeToString(selfPostIdentifierMapSerializer, defaultSelfPostIdentifierMap),
-                json.encodeToString(encodeCatalogModeMap(defaultCatalogModeMap))
+                json.encodeToString(encodeCatalogModeMap(defaultCatalogModeMap)),
+                AttachmentPickerPreference.MEDIA.name,
+                SaveDirectorySelection.MANUAL_INPUT.name
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -570,6 +643,8 @@ internal interface PlatformStateStorage {
     val privacyFilterEnabled: Flow<Boolean>
     val backgroundRefreshEnabled: Flow<Boolean>
     val manualSaveDirectory: Flow<String>
+    val attachmentPickerPreference: Flow<String?>
+    val saveDirectorySelection: Flow<String?>
     val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
     val ngHeadersJson: Flow<String?>
@@ -577,12 +652,16 @@ internal interface PlatformStateStorage {
     val catalogNgWordsJson: Flow<String?>
     val watchWordsJson: Flow<String?>
     val selfPostIdentifiersJson: Flow<String?>
+    val preferredFileManagerPackage: Flow<String>
+    val preferredFileManagerLabel: Flow<String>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
     suspend fun updateManualSaveDirectory(directory: String)
+    suspend fun updateAttachmentPickerPreference(preference: String)
+    suspend fun updateSaveDirectorySelection(selection: String)
     suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun updateNgHeadersJson(value: String)
@@ -590,6 +669,8 @@ internal interface PlatformStateStorage {
     suspend fun updateCatalogNgWordsJson(value: String)
     suspend fun updateWatchWordsJson(value: String)
     suspend fun updateSelfPostIdentifiersJson(value: String)
+    suspend fun updatePreferredFileManagerPackage(packageName: String)
+    suspend fun updatePreferredFileManagerLabel(label: String)
 
     suspend fun seedIfEmpty(
         defaultBoardsJson: String,
@@ -599,7 +680,9 @@ internal interface PlatformStateStorage {
         defaultCatalogNgWordsJson: String?,
         defaultWatchWordsJson: String?,
         defaultSelfPostIdentifiersJson: String?,
-        defaultCatalogModeMapJson: String?
+        defaultCatalogModeMapJson: String?,
+        defaultAttachmentPickerPreference: String?,
+        defaultSaveDirectorySelection: String?
     )
 }
 
@@ -615,4 +698,16 @@ private fun sanitizeManualSaveDirectory(input: String?): String {
         trimmed
     }
     return withoutCurrentDirPrefix.ifBlank { DEFAULT_MANUAL_SAVE_ROOT }
+}
+
+private fun decodeAttachmentPickerPreference(raw: String?): AttachmentPickerPreference {
+    return runCatching {
+        raw?.let { AttachmentPickerPreference.valueOf(it) }
+    }.getOrNull() ?: AttachmentPickerPreference.MEDIA
+}
+
+private fun decodeSaveDirectorySelection(raw: String?): SaveDirectorySelection {
+    return runCatching {
+        raw?.let { SaveDirectorySelection.valueOf(it) }
+    }.getOrNull() ?: SaveDirectorySelection.MANUAL_INPUT
 }

@@ -29,13 +29,16 @@ import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
+import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -162,6 +165,10 @@ fun FutachaApp(
             val persistedHistory by stateStore.history.collectAsState(initial = history)
             val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
             val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
+            val manualSaveLocation by stateStore.manualSaveLocation.collectAsState(initial = com.valoser.futacha.shared.model.SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT))
+            val attachmentPickerPreference by stateStore.attachmentPickerPreference.collectAsState(initial = AttachmentPickerPreference.MEDIA)
+            val saveDirectorySelection by stateStore.saveDirectorySelection.collectAsState(initial = SaveDirectorySelection.MANUAL_INPUT)
+            val preferredFileManager by stateStore.getPreferredFileManager().collectAsState(initial = null)
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
             }
@@ -186,6 +193,21 @@ fun FutachaApp(
             val onManualSaveDirectoryChanged: (String) -> Unit = { directory ->
                 coroutineScope.launch {
                     stateStore.setManualSaveDirectory(directory)
+                }
+            }
+            val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = { pref ->
+                coroutineScope.launch {
+                    stateStore.setAttachmentPickerPreference(pref)
+                }
+            }
+            val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = { selection ->
+                coroutineScope.launch {
+                    stateStore.setSaveDirectorySelection(selection)
+                }
+            }
+            val onManualSaveLocationChanged: (com.valoser.futacha.shared.model.SaveLocation) -> Unit = { location ->
+                coroutineScope.launch {
+                    stateStore.setManualSaveLocation(location)
                 }
             }
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -215,6 +237,13 @@ fun FutachaApp(
                         }
                 }
             }
+            val directoryPickerLauncher = rememberDirectoryPickerLauncher(
+                onDirectorySelected = { pickedLocation ->
+                    onManualSaveLocationChanged(pickedLocation)
+                    onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
+                },
+                preferredFileManagerPackage = preferredFileManager?.packageName
+            )
             val refreshHistoryEntries: suspend () -> Unit = refreshHistoryEntries@{
                 historyRefresher.refresh(
                     boardsSnapshot = persistedBoards,
@@ -245,6 +274,9 @@ fun FutachaApp(
                         boards = persistedBoards,
                         history = persistedHistory,
                         cookieRepository = cookieRepository,
+                        attachmentPickerPreference = attachmentPickerPreference,
+                        saveDirectorySelection = saveDirectorySelection,
+                        manualSaveLocation = manualSaveLocation,
                         onBoardSelected = { board -> selectedBoardId = board.id },
                         onAddBoard = { name, url ->
                             val normalizedUrl = normalizeBoardUrl(url)
@@ -280,7 +312,23 @@ fun FutachaApp(
                         manualSaveDirectory = manualSaveDirectory,
                         resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                         onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-                        fileSystem = fileSystem
+                        onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
+                        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+                        onOpenSaveDirectoryPicker = {
+                            directoryPickerLauncher()
+                        },
+                        fileSystem = fileSystem,
+                        preferredFileManagerLabel = preferredFileManager?.label,
+                        onFileManagerSelected = { packageName, label ->
+                            coroutineScope.launch {
+                                stateStore.setPreferredFileManager(packageName, label)
+                            }
+                        },
+                        onClearPreferredFileManager = {
+                            coroutineScope.launch {
+                                stateStore.setPreferredFileManager(null, null)
+                            }
+                        }
                     )
                 }
 
@@ -318,8 +366,14 @@ fun FutachaApp(
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
                             cookieRepository = cookieRepository,
                             manualSaveDirectory = manualSaveDirectory,
+                            manualSaveLocation = manualSaveLocation,
                             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged
+                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+                            attachmentPickerPreference = attachmentPickerPreference,
+                            saveDirectorySelection = saveDirectorySelection,
+                            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
+                            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+                            onOpenSaveDirectoryPicker = { directoryPickerLauncher() }
                         )
                     }
                 }
@@ -417,7 +471,23 @@ fun FutachaApp(
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
                             manualSaveDirectory = manualSaveDirectory,
                             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged
+                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+                            attachmentPickerPreference = attachmentPickerPreference,
+                            saveDirectorySelection = saveDirectorySelection,
+                            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
+                            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+                            onOpenSaveDirectoryPicker = { directoryPickerLauncher() },
+                            preferredFileManagerLabel = preferredFileManager?.label,
+                            onFileManagerSelected = { packageName, label ->
+                                coroutineScope.launch {
+                                    stateStore.setPreferredFileManager(packageName, label)
+                                }
+                            },
+                            onClearPreferredFileManager = {
+                                coroutineScope.launch {
+                                    stateStore.setPreferredFileManager(null, null)
+                                }
+                            }
                         )
                     }
                 }

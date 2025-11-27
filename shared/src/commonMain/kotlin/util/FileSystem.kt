@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.util
 
+import com.valoser.futacha.shared.model.SaveLocation
+
 /**
  * プラットフォーム非依存のファイルシステムインターフェース
  */
@@ -83,6 +85,55 @@ interface FileSystem {
      * @param relativePath 相対パス
      */
     fun resolveAbsolutePath(relativePath: String): String
+
+    // ========================================
+    // SaveLocation-based APIs
+    // ========================================
+
+    /**
+     * ディレクトリを作成 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (空文字列の場合はベースディレクトリを作成)
+     */
+    suspend fun createDirectory(base: SaveLocation, relativePath: String = ""): Result<Unit>
+
+    /**
+     * ファイルにバイト配列を書き込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param bytes 書き込むデータ
+     */
+    suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルにバイト配列を追記 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param bytes 追記するデータ
+     */
+    suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルに文字列を書き込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param content 書き込む文字列
+     */
+    suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit>
+
+    /**
+     * ファイルから文字列を読み込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     */
+    suspend fun readString(base: SaveLocation, relativePath: String): Result<String>
+
+    /**
+     * ファイルまたはディレクトリが存在するか確認 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を確認)
+     */
+    suspend fun exists(base: SaveLocation, relativePath: String = ""): Boolean
 }
 
 /**

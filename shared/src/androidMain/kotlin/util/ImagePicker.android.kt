@@ -77,18 +77,28 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
             is SecurityException -> {
                 Logger.e("ImagePicker", "Permission denied to access URI: $uri", e)
             }
-            is OutOfMemoryError -> {
-                Logger.e("ImagePicker", "Out of memory reading image from URI: $uri", e)
-            }
             else -> {
                 Logger.e("ImagePicker", "Failed to read image data from URI: $uri", e)
             }
         }
         null
+    } catch (e: OutOfMemoryError) {
+        Logger.e("ImagePicker", "Out of memory reading image from URI: $uri", e)
+        null
     }
 }
 
 actual suspend fun pickImage(): ImageData? {
+    // Not used on Android - handled via Compose ActivityResultContracts
+    return null
+}
+
+actual suspend fun pickDirectoryPath(): String? {
+    // Not used on Android - handled via Compose ActivityResultContracts
+    return null
+}
+
+actual suspend fun pickDirectorySaveLocation(): com.valoser.futacha.shared.model.SaveLocation? {
     // Not used on Android - handled via Compose ActivityResultContracts
     return null
 }

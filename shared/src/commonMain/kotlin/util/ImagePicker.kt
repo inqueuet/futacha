@@ -1,5 +1,26 @@
 package com.valoser.futacha.shared.util
 
+enum class AttachmentPickerPreference {
+    MEDIA,
+    DOCUMENT,
+    ALWAYS_ASK
+}
+
+enum class SaveDirectorySelection {
+    MANUAL_INPUT,
+    PICKER
+}
+
+/**
+ * 優先するファイラーアプリの情報
+ * @property packageName ファイラーアプリのパッケージ名
+ * @property label ファイラーアプリの表示名
+ */
+data class PreferredFileManager(
+    val packageName: String,
+    val label: String
+)
+
 data class ImageData(
     val bytes: ByteArray,
     val fileName: String
@@ -24,3 +45,5 @@ data class ImageData(
 }
 
 expect suspend fun pickImage(): ImageData?
+expect suspend fun pickDirectoryPath(): String?
+expect suspend fun pickDirectorySaveLocation(): com.valoser.futacha.shared.model.SaveLocation?

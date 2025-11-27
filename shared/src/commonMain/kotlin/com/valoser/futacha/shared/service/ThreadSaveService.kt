@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.SaveStatus
@@ -78,6 +79,8 @@ class ThreadSaveService(
 
     /**
      * スレッドを保存
+     * @param baseSaveLocation 保存先 (Path/TreeUri/Bookmark)。nullの場合は従来の文字列パスとしてMANUAL_SAVE_DIRECTORYを使用
+     * @param baseDirectory 後方互換用の文字列パス (baseSaveLocationがnullの場合のみ使用)
      */
     @Suppress("UNUSED_PARAMETER")
     suspend fun saveThread(
@@ -88,6 +91,7 @@ class ThreadSaveService(
         title: String,
         expiresAtLabel: String?,
         posts: List<Post>,
+        baseSaveLocation: SaveLocation? = null,
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
@@ -98,18 +102,29 @@ class ThreadSaveService(
             // 準備フェーズ
             updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
+            // SaveLocation対応: nullの場合は従来のパスベース、非nullの場合は新API使用
+            val useSaveLocation = baseSaveLocation != null
             val baseDir = "$baseDirectory/$threadId"
-            fileSystem.createDirectory(baseDirectory).getOrThrow()
-            fileSystem.createDirectory(baseDir).getOrThrow()
             val boardPath = extractBoardPath(boardUrl, boardId)
-            val boardMediaRoot = listOf(baseDir, boardPath)
-                .filter { it.isNotBlank() }
-                .joinToString("/")
-            val srcDir = "$boardMediaRoot/src"
-            val thumbDir = "$boardMediaRoot/thumb"
-            fileSystem.createDirectory(boardMediaRoot).getOrThrow()
-            fileSystem.createDirectory(srcDir).getOrThrow()
-            fileSystem.createDirectory(thumbDir).getOrThrow()
+
+            if (useSaveLocation) {
+                val location = baseSaveLocation!!
+                fileSystem.createDirectory(location, threadId).getOrThrow()
+                val boardMediaPath = if (boardPath.isNotBlank()) "$threadId/$boardPath" else threadId
+                fileSystem.createDirectory(location, "$boardMediaPath/src").getOrThrow()
+                fileSystem.createDirectory(location, "$boardMediaPath/thumb").getOrThrow()
+            } else {
+                fileSystem.createDirectory(baseDirectory).getOrThrow()
+                fileSystem.createDirectory(baseDir).getOrThrow()
+                val boardMediaRoot = listOf(baseDir, boardPath)
+                    .filter { it.isNotBlank() }
+                    .joinToString("/")
+                val srcDir = "$boardMediaRoot/src"
+                val thumbDir = "$boardMediaRoot/thumb"
+                fileSystem.createDirectory(boardMediaRoot).getOrThrow()
+                fileSystem.createDirectory(srcDir).getOrThrow()
+                fileSystem.createDirectory(thumbDir).getOrThrow()
+            }
 
             // FIX: マップのサイズ制限とメモリ効率化
             // accessOrder 付きコンストラクタはKMPに無いため、標準のLinkedHashMapを使い都度トリム
@@ -175,8 +190,10 @@ class ThreadSaveService(
 
                                 val downloadResult = downloadAndSaveMedia(
                                     url = mediaItem.url,
+                                    saveLocation = baseSaveLocation,
                                     baseDir = baseDir,
                                     boardPath = boardPath,
+                                    threadId = threadId,
                                     type = mediaItem.type,
                                     postId = mediaItem.post.id,
                                     startedAtMillis = startedAtMillis
@@ -236,9 +253,15 @@ class ThreadSaveService(
                             stripExternalResources = rawHtmlOptions.stripExternalResources
                         )
                         val fileName = "$threadId.htm"
-                        val fullPath = "$baseDir/$fileName"
-                        fileSystem.writeString(fullPath, rewritten).getOrThrow()
-                        totalSize += fileSystem.getFileSize(fullPath)
+                        if (baseSaveLocation != null) {
+                            fileSystem.writeString(baseSaveLocation, "$threadId/$fileName", rewritten).getOrThrow()
+                            // SaveLocation版ではファイルサイズ取得は省略（getFileSize未実装のため）
+                            totalSize += rewritten.toByteArray(Charsets.UTF_8).size
+                        } else {
+                            val fullPath = "$baseDir/$fileName"
+                            fileSystem.writeString(fullPath, rewritten).getOrThrow()
+                            totalSize += fileSystem.getFileSize(fullPath)
+                        }
                         rawHtmlRelativePath = fileName
                     }
                     .onFailure { error ->
@@ -308,7 +331,6 @@ class ThreadSaveService(
 
             // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
             val metadataSize = if (writeMetadata) {
-                val metadataPath = "$baseDir/metadata.json"
                 val metadata = SavedThreadMetadata(
                     threadId = threadId,
                     boardId = boardId,
@@ -324,12 +346,22 @@ class ThreadSaveService(
                     version = 1
                 )
                 val metadataJson = json.encodeToString(metadata)
-                fileSystem.writeString(metadataPath, metadataJson).getOrThrow()
-                val size = fileSystem.getFileSize(metadataPath)
-                // 正しい合計サイズを含めて書き直す
-                val metadataWithSize = metadata.copy(totalSize = totalSize + size)
-                fileSystem.writeString(metadataPath, json.encodeToString(metadataWithSize)).getOrThrow()
-                size
+
+                if (baseSaveLocation != null) {
+                    val metadataRelativePath = "$threadId/metadata.json"
+                    fileSystem.writeString(baseSaveLocation, metadataRelativePath, metadataJson).getOrThrow()
+                    val size = metadataJson.toByteArray(Charsets.UTF_8).size.toLong()
+                    val metadataWithSize = metadata.copy(totalSize = totalSize + size)
+                    fileSystem.writeString(baseSaveLocation, metadataRelativePath, json.encodeToString(metadataWithSize)).getOrThrow()
+                    size
+                } else {
+                    val metadataPath = "$baseDir/metadata.json"
+                    fileSystem.writeString(metadataPath, metadataJson).getOrThrow()
+                    val size = fileSystem.getFileSize(metadataPath)
+                    val metadataWithSize = metadata.copy(totalSize = totalSize + size)
+                    fileSystem.writeString(metadataPath, json.encodeToString(metadataWithSize)).getOrThrow()
+                    size
+                }
             } else {
                 0L
             }
@@ -354,11 +386,14 @@ class ThreadSaveService(
 
     /**
      * メディアをダウンロードして即座にファイルに保存（メモリ効率的）
+     * @param saveLocation 保存先 (Path/TreeUri/Bookmark)。nullの場合は従来の文字列パス使用
      */
     private suspend fun downloadAndSaveMedia(
         url: String,
+        saveLocation: SaveLocation?,
         baseDir: String,
         boardPath: String,
+        threadId: String,
         type: MediaType,
         postId: String,
         startedAtMillis: Long
@@ -397,37 +432,63 @@ class ThreadSaveService(
                 FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
             }
             val relativePath = "$subDir/$fileName"
-            val fullPath = "$baseDir/$relativePath"
 
             // FIX: メモリ効率のためストリーミングで保存
             val channel = response.bodyAsChannel()
             var totalBytesRead = 0L
             val bufferSize = 8192 // 8KB chunks
 
-            // 最初にファイルを作成
-            fileSystem.writeBytes(fullPath, ByteArray(0)).getOrThrow()
+            // SaveLocation対応: nullの場合は従来の fullPath 使用、非nullの場合は新API使用
+            if (saveLocation != null) {
+                val fileRelativePath = "$threadId/$relativePath"
+                // 最初にファイルを作成
+                fileSystem.writeBytes(saveLocation, fileRelativePath, ByteArray(0)).getOrThrow()
 
-            // チャンクごとに読み込んで追記
-            while (!channel.isClosedForRead) {
-                if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
-                    fileSystem.delete(fullPath).getOrNull()
-                    throw IllegalStateException("Save aborted: exceeded time limit during download")
+                // チャンクごとに読み込んで追記
+                while (!channel.isClosedForRead) {
+                    if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
+                        throw IllegalStateException("Save aborted: exceeded time limit during download")
+                    }
+                    val buffer = ByteArray(bufferSize)
+                    val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
+                    if (bytesRead <= 0) break
+
+                    val chunk = buffer.copyOf(bytesRead)
+                    totalBytesRead += chunk.size
+
+                    if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                        throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+                    }
+
+                    fileSystem.appendBytes(saveLocation, fileRelativePath, chunk).getOrThrow()
                 }
-                val buffer = ByteArray(bufferSize)
-                val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
-                if (bytesRead <= 0) break
+            } else {
+                val fullPath = "$baseDir/$relativePath"
+                // 最初にファイルを作成
+                fileSystem.writeBytes(fullPath, ByteArray(0)).getOrThrow()
 
-                val chunk = buffer.copyOf(bytesRead)
-                totalBytesRead += chunk.size
+                // チャンクごとに読み込んで追記
+                while (!channel.isClosedForRead) {
+                    if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
+                        fileSystem.delete(fullPath).getOrNull()
+                        throw IllegalStateException("Save aborted: exceeded time limit during download")
+                    }
+                    val buffer = ByteArray(bufferSize)
+                    val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
+                    if (bytesRead <= 0) break
 
-                if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
-                    // サイズ超過時はファイルを削除
-                    fileSystem.delete(fullPath).getOrNull()
-                    throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+                    val chunk = buffer.copyOf(bytesRead)
+                    totalBytesRead += chunk.size
+
+                    if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                        // サイズ超過時はファイルを削除
+                        fileSystem.delete(fullPath).getOrNull()
+                        throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+                    }
+
+                    // FIX: appendBytesを使用してメモリ効率的に追記
+                    fileSystem.appendBytes(fullPath, chunk).getOrThrow()
                 }
-
-                // FIX: appendBytesを使用してメモリ効率的に追記
-                fileSystem.appendBytes(fullPath, chunk).getOrThrow()
             }
 
             LocalFileInfo(

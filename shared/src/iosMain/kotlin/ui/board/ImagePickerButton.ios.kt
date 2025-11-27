@@ -12,20 +12,33 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.pickImage
+import com.valoser.futacha.shared.util.pickDirectoryPath
+import com.valoser.futacha.shared.util.pickDirectorySaveLocation
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import kotlinx.coroutines.launch
 
 @Composable
-actual fun rememberImagePickerLauncher(
-    mimeType: String = "image/*",
+actual fun rememberAttachmentPickerLauncher(
+    preference: AttachmentPickerPreference,
+    mimeType: String,
     onImageSelected: (ImageData) -> Unit
 ): () -> Unit {
     val scope = rememberCoroutineScope()
 
     return {
         scope.launch {
-            val imageData = pickImage()
+            val imageData = when (preference) {
+                AttachmentPickerPreference.MEDIA -> pickImage()
+                AttachmentPickerPreference.DOCUMENT -> pickImageFromDocuments()
+                AttachmentPickerPreference.ALWAYS_ASK -> {
+                    // For ALWAYS_ASK, we use PHPicker as the primary choice
+                    // In a full implementation, could show an action sheet here
+                    pickImage()
+                }
+            }
             imageData?.let(onImageSelected)
         }
     }
@@ -33,9 +46,13 @@ actual fun rememberImagePickerLauncher(
 
 @Composable
 actual fun ImagePickerButton(
-    onImageSelected: (ImageData) -> Unit
+    onImageSelected: (ImageData) -> Unit,
+    preference: AttachmentPickerPreference
 ) {
-    val launchPicker = rememberImagePickerLauncher(onImageSelected = onImageSelected)
+    val launchPicker = rememberAttachmentPickerLauncher(
+        preference = preference,
+        onImageSelected = onImageSelected
+    )
 
     Button(
         onClick = { launchPicker() }
@@ -47,5 +64,20 @@ actual fun ImagePickerButton(
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text("画像を選択")
+    }
+}
+
+@Composable
+actual fun rememberDirectoryPickerLauncher(
+    onDirectorySelected: (SaveLocation) -> Unit,
+    preferredFileManagerPackage: String?
+): () -> Unit {
+    val scope = rememberCoroutineScope()
+    // iOS does not support preferred file manager package
+    return {
+        scope.launch {
+            val picked = pickDirectorySaveLocation()
+            picked?.let(onDirectorySelected)
+        }
     }
 }

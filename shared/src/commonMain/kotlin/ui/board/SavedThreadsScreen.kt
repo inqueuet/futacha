@@ -33,7 +33,7 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import kotlinx.datetime.Instant
+import kotlinx.datetime.Instant as KotlinxInstant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
@@ -358,7 +358,7 @@ private fun formatSize(bytes: Long): String {
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
 private fun formatDate(epochMillis: Long): String {
-    val instant = Instant.fromEpochMilliseconds(epochMillis)
+    val instant = KotlinxInstant.fromEpochMilliseconds(epochMillis)
     val dateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
     return "${dateTime.year}/${dateTime.monthNumber.toString().padStart(2, '0')}/${dateTime.dayOfMonth.toString().padStart(2, '0')} ${dateTime.hour.toString().padStart(2, '0')}:${dateTime.minute.toString().padStart(2, '0')}"
 }

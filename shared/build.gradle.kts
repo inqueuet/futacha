@@ -55,6 +55,7 @@ kotlin {
                 implementation(libs.jetbrains.compose.ui.tooling)
                 implementation(libs.androidx.media3.exoplayer)
                 implementation(libs.androidx.media3.ui)
+                implementation(libs.androidx.documentfile)
             }
         }
         val androidUnitTest by getting

@@ -96,6 +96,13 @@
 
 - `GlobalSettingsScreen` は Board のメニュー `SETTINGS`、Catalog の `CatalogMenuAction.Settings`、Thread の `ThreadMenuAction.Settings`、履歴ドロワーの設定ボタンから開く共通設定ダイアログ。
 - `GlobalSettingsEntry` は Email/X/GitHub へのリンクを提供し、それぞれ `rememberUrlLauncher` で外部アプリを起動する。`GlobalSettingsScreen` は `appVersion` 引数も受け取り、一覧の最後に現在のバージョンを表示する。バックグラウンド更新トグル（15分間隔、Androidは WorkManager 定期実行、iOSは BGTask 間欠実行）が追加され、`isBackgroundRefreshEnabled` を切り替える。加えて「スレ保存先」の入力欄があり、Documents/Download などの簡易指定や絶対パスで `manualSaveDirectory` を更新できる。
+- **優先ファイラー設定**（Android のみ）:
+  - `getAvailableFileManagers()` で `ACTION_OPEN_DOCUMENT_TREE` に対応するファイラーアプリを検出
+  - `FileManagerPickerDialog` でアイコン付き一覧を表示し、ユーザーが選択
+  - 選択したファイラーのパッケージ名とラベルを `AppStateStore` (DataStore/NSUserDefaults) に永続化
+  - ディレクトリ選択時 (`rememberDirectoryPickerLauncher`) に `Intent.setPackage()` で優先ファイラーを直接起動
+  - 起動失敗時は自動的にシステムデフォルトのピッカーにフォールバック
+  - Files by Google、Solid Explorer、MiXplorer などのサードパーティ製ファイラーに対応
 - `FutachaApp` は `VersionChecker` からバージョン名 (`appVersion`) を `remember` し、全画面に注入しているので、最新リリース通知 (`UpdateNotificationDialog`) と合わせて UI 側でもバージョン参照が一貫している。
 
 ---
@@ -104,6 +111,7 @@
 
 - `AppStateStore` (`shared/src/commonMain/kotlin/state/AppStateStore.kt`)
   - `boards` / `history` / `isPrivacyFilterEnabled` / `isBackgroundRefreshEnabled` / `manualSaveDirectory` に加えて `catalogDisplayStyle` と `ngHeaders` / `ngWords` / `catalogNgWords` / `watchWords` / board ごとの `catalogMode` を Flow で expose。
+  - **優先ファイラー情報** (`preferredFileManagerPackage`, `preferredFileManagerLabel`): Android のみで使用。`setPreferredFileManager()` で DataStore に保存、`getPreferredFileManager()` で `PreferredFileManager?` を Flow として取得。
   - 監視ワード (`watchWords`) は `WatchWordsSheet` から編集され、`AppStateStore.setWatchWords()` で DataStore / NSUserDefaults に即保存。カタログ更新時はこれらのワードに一致したスレッドを履歴へ自動追加します。
   - JSON シリアライゼーション (`ListSerializer`) + `Mutex` で書き込みを直列化。
   - `setScrollDebounceScope()` + `scrollPositionJobs` でスレスクロール保存のスパムを防止。500ms 待ってから `updateHistoryScrollPositionImmediate()` を実行。
