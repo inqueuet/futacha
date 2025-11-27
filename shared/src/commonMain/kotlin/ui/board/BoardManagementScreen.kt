@@ -547,9 +547,7 @@ fun BoardManagementScreen(
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            attachmentPickerPreference = attachmentPickerPreference,
             saveDirectorySelection = saveDirectorySelection,
-            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
             onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
             onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
             onOpenCookieManager = cookieRepository?.let {
@@ -1760,9 +1758,7 @@ fun CatalogScreen(
                 manualSaveDirectory = manualSaveDirectory,
                 resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                 onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-                attachmentPickerPreference = attachmentPickerPreference,
                 saveDirectorySelection = saveDirectorySelection,
-                onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
                 onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
                 onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
                 onOpenCookieManager = cookieRepository?.let {
@@ -4668,9 +4664,7 @@ fun ThreadScreen(
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            attachmentPickerPreference = attachmentPickerPreference,
             saveDirectorySelection = saveDirectorySelection,
-            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
             onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
             onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
             onOpenCookieManager = cookieRepository?.let {
@@ -7606,9 +7600,7 @@ private fun GlobalSettingsScreen(
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     resolvedManualSaveDirectory: String? = null,
     onManualSaveDirectoryChanged: (String) -> Unit = {},
-    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
     saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
     onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     onOpenCookieManager: (() -> Unit)? = null,
@@ -7698,41 +7690,6 @@ private fun GlobalSettingsScreen(
                             checked = isBackgroundRefreshEnabled,
                             onCheckedChange = { onBackgroundRefreshChanged(it) }
                         )
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("添付ピッカー") },
-                    supportingContent = {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                text = "画像・動画を添付するときに使うピッカーを選べます。ファイラー優先にするとサードパーティ製のファイラーも選択可能です。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                AttachmentPickerPreference.entries.forEach { pref ->
-                                    FilterChip(
-                                        selected = attachmentPickerPreference == pref,
-                                        onClick = { onAttachmentPickerPreferenceChanged(pref) },
-                                        label = {
-                                            Text(
-                                                when (pref) {
-                                                    AttachmentPickerPreference.MEDIA -> "ギャラリー優先"
-                                                    AttachmentPickerPreference.DOCUMENT -> "ファイラー優先"
-                                                    AttachmentPickerPreference.ALWAYS_ASK -> "毎回選択"
-                                                }
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                        }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
