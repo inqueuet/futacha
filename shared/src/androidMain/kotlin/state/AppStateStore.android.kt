@@ -27,6 +27,7 @@ private class AndroidPlatformStateStorage(
     private val historyKey = stringPreferencesKey("history_json")
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
+    private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
     private val attachmentPickerPreferenceKey = stringPreferencesKey("attachment_picker_preference")
@@ -59,6 +60,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[backgroundRefreshKey] ?: false }
+
+    override val lightweightModeEnabled: Flow<Boolean> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[lightweightModeKey] ?: false }
 
     override val manualSaveDirectory: Flow<String> =
         context.dataStore.data
@@ -146,6 +152,15 @@ private class AndroidPlatformStateStorage(
         } catch (e: Exception) {
             println("AndroidPlatformStateStorage: Failed to update background refresh: ${e.message}")
             throw StorageException("Failed to save background refresh state", e)
+        }
+    }
+
+    override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
+        try {
+            context.dataStore.edit { prefs -> prefs[lightweightModeKey] = enabled }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update lightweight mode: ${e.message}")
+            throw StorageException("Failed to save lightweight mode state", e)
         }
     }
 

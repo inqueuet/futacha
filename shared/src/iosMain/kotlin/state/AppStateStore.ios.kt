@@ -10,6 +10,7 @@ private const val HISTORY_KEY = "history_json"
 private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
+private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
 private const val SAVE_DIRECTORY_SELECTION_KEY = "save_directory_selection"
@@ -33,6 +34,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
     private val backgroundRefreshState = MutableStateFlow(defaults.boolForKey(BACKGROUND_REFRESH_KEY))
+    private val lightweightModeState = MutableStateFlow(defaults.boolForKey(LIGHTWEIGHT_MODE_KEY))
     private val manualSaveDirectoryState = MutableStateFlow(
         sanitizeManualSaveDirectoryValue(defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY))
     )
@@ -51,6 +53,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val historyJson: Flow<String?> = historyState
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
+    override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
@@ -86,6 +89,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
         defaults.synchronize()
         backgroundRefreshState.value = enabled
+    }
+
+    override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
+        defaults.setBool(enabled, forKey = LIGHTWEIGHT_MODE_KEY)
+        defaults.synchronize()
+        lightweightModeState.value = enabled
     }
 
     override suspend fun updateManualSaveDirectory(directory: String) {

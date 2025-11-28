@@ -89,6 +89,7 @@ class AppStateStore internal constructor(
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
+    val isLightweightModeEnabled: Flow<Boolean> = storage.lightweightModeEnabled
 
     /**
      * Manual save directory as string (legacy support).
@@ -163,6 +164,14 @@ class AppStateStore internal constructor(
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save background refresh state: $enabled", e)
             // Log error but don't crash
+        }
+    }
+
+    suspend fun setLightweightModeEnabled(enabled: Boolean) {
+        try {
+            storage.updateLightweightModeEnabled(enabled)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save lightweight mode state: $enabled", e)
         }
     }
 
@@ -642,6 +651,7 @@ internal interface PlatformStateStorage {
     val historyJson: Flow<String?>
     val privacyFilterEnabled: Flow<Boolean>
     val backgroundRefreshEnabled: Flow<Boolean>
+    val lightweightModeEnabled: Flow<Boolean>
     val manualSaveDirectory: Flow<String>
     val attachmentPickerPreference: Flow<String?>
     val saveDirectorySelection: Flow<String?>
@@ -659,6 +669,7 @@ internal interface PlatformStateStorage {
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
+    suspend fun updateLightweightModeEnabled(enabled: Boolean)
     suspend fun updateManualSaveDirectory(directory: String)
     suspend fun updateAttachmentPickerPreference(preference: String)
     suspend fun updateSaveDirectorySelection(selection: String)

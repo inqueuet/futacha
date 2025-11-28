@@ -39,6 +39,7 @@ import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +69,14 @@ fun FutachaApp(
     cookieRepository: CookieRepository? = null
 ) {
     FutachaTheme {
-        val imageLoader = rememberFutachaImageLoader()
+        val devicePerformanceProfile = remember {
+            detectDevicePerformanceProfile(null)
+        }
+        val isLightweightModeEnabled by stateStore.isLightweightModeEnabled.collectAsState(
+            initial = devicePerformanceProfile.isLowSpec
+        )
+        val shouldUseLightweightMode = isLightweightModeEnabled || devicePerformanceProfile.isLowSpec
+        val imageLoader = rememberFutachaImageLoader(lightweightMode = shouldUseLightweightMode)
         DisposableEffect(imageLoader) {
             onDispose {
                 runCatching {
@@ -107,14 +115,15 @@ fun FutachaApp(
                 fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
             }
 
-            val historyRefresher = remember(repositoryHolder.repository, autoSavedThreadRepository, httpClient, fileSystem) {
+            val historyRefresher = remember(repositoryHolder.repository, autoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
                     dispatcher = Dispatchers.Default,
                     autoSavedThreadRepository = autoSavedThreadRepository,  // FIX: 自動保存チェック用
                     httpClient = httpClient,
-                    fileSystem = fileSystem
+                    fileSystem = fileSystem,
+                    maxConcurrency = if (shouldUseLightweightMode) 2 else 4
                 )
             }
 
@@ -309,6 +318,12 @@ fun FutachaApp(
                         appVersion = appVersion,
                         isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                         onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                        isLightweightModeEnabled = shouldUseLightweightMode,
+                        onLightweightModeChanged = { enabled ->
+                            coroutineScope.launch {
+                                stateStore.setLightweightModeEnabled(enabled)
+                            }
+                        },
                         manualSaveDirectory = manualSaveDirectory,
                         resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                         onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
@@ -365,6 +380,12 @@ fun FutachaApp(
                             appVersion = appVersion,
                             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                            isLightweightModeEnabled = shouldUseLightweightMode,
+                            onLightweightModeChanged = { enabled ->
+                                coroutineScope.launch {
+                                    stateStore.setLightweightModeEnabled(enabled)
+                                }
+                            },
                             cookieRepository = cookieRepository,
                             manualSaveDirectory = manualSaveDirectory,
                             manualSaveLocation = manualSaveLocation,
@@ -482,6 +503,12 @@ fun FutachaApp(
                             appVersion = appVersion,
                             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                            isLightweightModeEnabled = shouldUseLightweightMode,
+                            onLightweightModeChanged = { enabled ->
+                                coroutineScope.launch {
+                                    stateStore.setLightweightModeEnabled(enabled)
+                                }
+                            },
                             manualSaveDirectory = manualSaveDirectory,
                             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,

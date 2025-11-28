@@ -236,6 +236,7 @@ import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
+import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
@@ -245,6 +246,7 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -257,6 +259,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.min
+import kotlin.math.round
 import kotlin.text.RegexOption
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -284,6 +287,8 @@ fun BoardManagementScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    isLightweightModeEnabled: Boolean = false,
+    onLightweightModeChanged: (Boolean) -> Unit = {},
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
     resolvedManualSaveDirectory: String? = null,
@@ -545,6 +550,8 @@ fun BoardManagementScreen(
             appVersion = appVersion,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            isLightweightModeEnabled = isLightweightModeEnabled,
+            onLightweightModeChanged = onLightweightModeChanged,
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
@@ -559,7 +566,9 @@ fun BoardManagementScreen(
             },
             preferredFileManagerLabel = preferredFileManagerLabel,
             onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager
+            onClearPreferredFileManager = onClearPreferredFileManager,
+            historyEntries = history,
+            fileSystem = fileSystem
         )
     }
 
@@ -1218,6 +1227,9 @@ fun CatalogScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    isLightweightModeEnabled: Boolean = false,
+    onLightweightModeChanged: (Boolean) -> Unit = {},
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
     resolvedManualSaveDirectory: String? = null,
@@ -1756,6 +1768,8 @@ fun CatalogScreen(
                 appVersion = appVersion,
                 isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                 onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+                isLightweightModeEnabled = isLightweightModeEnabled,
+                onLightweightModeChanged = onLightweightModeChanged,
                 manualSaveDirectory = manualSaveDirectory,
                 resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                 onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
@@ -1767,7 +1781,9 @@ fun CatalogScreen(
                         isGlobalSettingsVisible = false
                         isCookieManagementVisible = true
                     }
-                }
+                },
+                historyEntries = history,
+                fileSystem = fileSystem
             )
         }
 
@@ -3420,6 +3436,8 @@ fun ThreadScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean = false,
     onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    isLightweightModeEnabled: Boolean = false,
+    onLightweightModeChanged: (Boolean) -> Unit = {},
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
     resolvedManualSaveDirectory: String? = null,
@@ -4667,6 +4685,8 @@ fun ThreadScreen(
             appVersion = appVersion,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            isLightweightModeEnabled = isLightweightModeEnabled,
+            onLightweightModeChanged = onLightweightModeChanged,
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
@@ -4681,7 +4701,9 @@ fun ThreadScreen(
             },
             preferredFileManagerLabel = preferredFileManagerLabel,
             onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager
+            onClearPreferredFileManager = onClearPreferredFileManager,
+            historyEntries = history,
+            fileSystem = fileSystem
         )
     }
 
@@ -7603,6 +7625,8 @@ private fun GlobalSettingsScreen(
     appVersion: String,
     isBackgroundRefreshEnabled: Boolean,
     onBackgroundRefreshChanged: (Boolean) -> Unit,
+    isLightweightModeEnabled: Boolean,
+    onLightweightModeChanged: (Boolean) -> Unit,
     manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     resolvedManualSaveDirectory: String? = null,
     onManualSaveDirectoryChanged: (String) -> Unit = {},
@@ -7612,10 +7636,29 @@ private fun GlobalSettingsScreen(
     onOpenCookieManager: (() -> Unit)? = null,
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
-    onClearPreferredFileManager: (() -> Unit)? = null
+    onClearPreferredFileManager: (() -> Unit)? = null,
+    historyEntries: List<ThreadHistoryEntry>,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
 ) {
     val urlLauncher = rememberUrlLauncher()
     var isFileManagerPickerVisible by rememberSaveable { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val imageLoader = LocalFutachaImageLoader.current
+    val historyCount = historyEntries.size
+    var autoSavedCount by remember { mutableStateOf<Int?>(null) }
+    var autoSavedSize by remember { mutableStateOf<Long?>(null) }
+
+    LaunchedEffect(fileSystem, historyEntries.size) {
+        if (fileSystem == null) {
+            autoSavedCount = null
+            autoSavedSize = null
+            return@LaunchedEffect
+        }
+        val repo = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        autoSavedCount = runCatching { repo.getThreadCount() }.getOrNull()
+        autoSavedSize = runCatching { repo.getTotalSize() }.getOrNull()
+    }
 
     fun normalizeManualSaveInput(raw: String): String {
         val trimmed = raw.trim()
@@ -7643,6 +7686,12 @@ private fun GlobalSettingsScreen(
             lower.startsWith("documents/") -> "$DEFAULT_MANUAL_SAVE_ROOT/${normalized.substringAfter('/')}"
             else -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$normalized"
         }
+    }
+    fun formatSizeMb(bytes: Long?): String {
+        if (bytes == null) return "不明"
+        val mbTimesTen = (bytes / (1024.0 * 1024.0)) * 10
+        val rounded = kotlin.math.round(mbTimesTen) / 10.0
+        return "${rounded} MB"
     }
     var manualSaveInput by rememberSaveable(manualSaveDirectory) {
         mutableStateOf(manualSaveDirectory)
@@ -7672,7 +7721,8 @@ private fun GlobalSettingsScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
@@ -7695,6 +7745,28 @@ private fun GlobalSettingsScreen(
                         Switch(
                             checked = isBackgroundRefreshEnabled,
                             onCheckedChange = { onBackgroundRefreshChanged(it) }
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("軽量モード") },
+                    supportingContent = {
+                        Text(
+                            text = "画像キャッシュを小さくし、並列ダウンロードや履歴更新の同時実行数を抑えます。低スペック端末では自動でONになります。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = isLightweightModeEnabled,
+                            onCheckedChange = { onLightweightModeChanged(it) }
                         )
                     },
                     modifier = Modifier
@@ -7739,6 +7811,123 @@ private fun GlobalSettingsScreen(
                                         Text("クリア")
                                     }
                                 }
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("画像キャッシュ") },
+                    supportingContent = {
+                        Text(
+                            text = "サムネイル・画像のキャッシュを削除します。保存済みスレッドや履歴データは保持されます。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("画像キャッシュを削除中...")
+                                    val result = runCatching {
+                                        withContext(Dispatchers.Default) {
+                                            imageLoader.diskCache?.clear()
+                                            imageLoader.memoryCache?.clear()
+                                            Unit
+                                        }
+                                    }
+                                    if (result.isSuccess) {
+                                        snackbarHostState.showSnackbar("画像キャッシュを削除しました")
+                                    } else {
+                                        val reason = result.exceptionOrNull()?.message ?: "不明なエラー"
+                                        snackbarHostState.showSnackbar("削除に失敗しました: $reason")
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("削除")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("一時キャッシュを掃除") },
+                    supportingContent = {
+                        Text(
+                            text = "一時フォルダに溜まった画像キャッシュをOS任せにせず強制削除します。保存済みスレッドは削除されません。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("一時キャッシュを削除中...")
+                                    val result = runCatching {
+                                        withContext(Dispatchers.Default) {
+                                            val fs = fileSystem
+                                            if (fs != null) {
+                                                resolveImageCacheDirectory()
+                                                    ?.toString()
+                                                    ?.let { pathString ->
+                                                        fs.deleteRecursively(pathString)
+                                                    }
+                                            }
+                                            Unit
+                                        }
+                                    }
+                                    if (result.isSuccess) {
+                                        snackbarHostState.showSnackbar("一時キャッシュを削除しました")
+                                    } else {
+                                        val reason = result.exceptionOrNull()?.message ?: "不明なエラー"
+                                        snackbarHostState.showSnackbar("削除に失敗しました: $reason")
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("掃除する")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                )
+                HorizontalDivider()
+            }
+            item {
+                val isWarning = historyCount >= 50
+                ListItem(
+                    headlineContent = { Text("履歴とオフライン保存のサイズ") },
+                    supportingContent = {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "履歴: ${historyCount}件",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isWarning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "自動保存: ${autoSavedCount ?: 0}件 / ${formatSizeMb(autoSavedSize)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (isWarning) {
+                                Text(
+                                    text = "※件数が多いと更新に時間がかかることがあります。不要な履歴は既存の削除・クリア操作をご利用ください。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
                             }
                         }
                     },
