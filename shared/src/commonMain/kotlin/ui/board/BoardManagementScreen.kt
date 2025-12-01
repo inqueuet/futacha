@@ -23,6 +23,7 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -58,6 +60,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.outlined.Delete
@@ -100,6 +103,7 @@ import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material.icons.rounded.WatchLater
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -225,6 +229,11 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
@@ -245,6 +254,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.rememberUrlLauncher
+import com.valoser.futacha.shared.ui.normalizeBoardUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.FlowPreview
@@ -303,7 +313,9 @@ fun BoardManagementScreen(
     preferredFileManagerPackage: String? = null,
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
-    onClearPreferredFileManager: (() -> Unit)? = null
+    onClearPreferredFileManager: (() -> Unit)? = null,
+    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -568,7 +580,9 @@ fun BoardManagementScreen(
             onFileManagerSelected = onFileManagerSelected,
             onClearPreferredFileManager = onClearPreferredFileManager,
             historyEntries = history,
-            fileSystem = fileSystem
+            fileSystem = fileSystem,
+            threadMenuEntries = threadMenuEntries,
+            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
         )
     }
 
@@ -594,6 +608,12 @@ private fun AddBoardDialog(
     val hasUrl = trimmedUrl.isNotEmpty()
     val urlHasScheme = trimmedUrl.startsWith("http://", ignoreCase = true) ||
         trimmedUrl.startsWith("https://", ignoreCase = true)
+    val normalizedInputUrl = remember(trimmedUrl) {
+        runCatching { normalizeBoardUrl(trimmedUrl) }.getOrDefault(trimmedUrl)
+    }
+    val normalizedExistingUrls = remember(existingBoards) {
+        existingBoards.map { runCatching { normalizeBoardUrl(it.url) }.getOrDefault(it.url) }
+    }
 
     // Enhanced URL validation
     val isValidUrl = hasUrl && urlHasScheme && run {
@@ -611,7 +631,8 @@ private fun AddBoardDialog(
              hostPart.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$"))) // Allow IP addresses
     }
 
-    val isDuplicateUrl = existingBoards.any { it.url.equals(trimmedUrl, ignoreCase = true) }
+    val isDuplicateUrl = hasUrl && isValidUrl &&
+        normalizedExistingUrls.any { it.equals(normalizedInputUrl, ignoreCase = true) }
     val canSubmit = hasName && isValidUrl && !isDuplicateUrl
 
     AlertDialog(
@@ -654,7 +675,7 @@ private fun AddBoardDialog(
             TextButton(
                 enabled = canSubmit,
                 onClick = {
-                    onSubmit(trimmedName, trimmedUrl)
+                    onSubmit(trimmedName, normalizedInputUrl)
                     name = ""
                     url = ""
                 }
@@ -1243,7 +1264,9 @@ fun CatalogScreen(
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {}
 ) {
     val activeRepository = remember(repository) {
         repository ?: FakeBoardRepository()
@@ -1783,7 +1806,9 @@ fun CatalogScreen(
                     }
                 },
                 historyEntries = history,
-                fileSystem = fileSystem
+                fileSystem = fileSystem,
+                threadMenuEntries = threadMenuEntries,
+                onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
             )
         }
 
@@ -2062,7 +2087,7 @@ private fun ThreadFormDialog(
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("コメント") },
                             minLines = 2,
-                            maxLines = 2,
+                            maxLines = 5,
                             textStyle = MaterialTheme.typography.bodyLarge,
                             colors = textFieldColors,
                             trailingIcon = {
@@ -3451,6 +3476,8 @@ fun ThreadScreen(
     preferredFileManagerLabel: String? = null,
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null,
+    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -3623,6 +3650,145 @@ fun ThreadScreen(
     var saveProgress by remember { mutableStateOf<com.valoser.futacha.shared.model.SaveProgress?>(null) }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
+    val currentState = uiState.value
+    val initialHistoryEntry = remember(threadId) {
+        history.firstOrNull { it.threadId == threadId }
+    }
+    val lazyListState = remember(threadId, initialHistoryEntry) {
+        LazyListState(
+            initialHistoryEntry?.lastReadItemIndex ?: 0,
+            initialHistoryEntry?.lastReadItemOffset ?: 0
+        )
+    }
+    val handleMenuEntry: (ThreadMenuEntryId) -> Unit = { entryId ->
+        when (entryId) {
+            ThreadMenuEntryId.Reply -> {
+                if (replyPassword.isBlank()) {
+                    replyPassword = lastUsedDeleteKey
+                }
+                isReplyDialogVisible = true
+            }
+            ThreadMenuEntryId.ScrollToTop -> {
+                coroutineScope.launch { lazyListState.animateScrollToItem(0) }
+            }
+            ThreadMenuEntryId.ScrollToBottom -> {
+                coroutineScope.launch {
+                    val currentState = uiState.value
+                    if (currentState is ThreadUiState.Success) {
+                        val lastIndex = currentState.page.posts.size - 1
+                        if (lastIndex >= 0) {
+                            lazyListState.animateScrollToItem(lastIndex)
+                        }
+                    }
+                }
+            }
+            ThreadMenuEntryId.Refresh -> {
+                val savedIndex = lazyListState.firstVisibleItemIndex
+                val savedOffset = lazyListState.firstVisibleItemScrollOffset
+                coroutineScope.launch {
+                    try {
+                        val page = activeRepository.getThread(board.url, threadId)
+                        if (isActive) {
+                            uiState.value = ThreadUiState.Success(page)
+                            snackbarHostState.showSnackbar("スレッドを更新しました")
+                            lazyListState.scrollToItem(savedIndex, savedOffset)
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        snackbarHostState.showSnackbar("更新に失敗しました: ${e.message ?: "不明なエラー"}")
+                    }
+                }
+            }
+            ThreadMenuEntryId.Gallery -> {
+                isGalleryVisible = true
+            }
+            ThreadMenuEntryId.Save -> {
+                val currentStateValue = currentState
+                if (currentStateValue is ThreadUiState.Success) {
+                    if (httpClient != null && fileSystem != null) {
+                        coroutineScope.launch {
+                            try {
+                                val saveService = com.valoser.futacha.shared.service.ThreadSaveService(
+                                    httpClient = httpClient,
+                                    fileSystem = fileSystem
+                                )
+                                val progressJob = launch {
+                                    saveService.saveProgress.collect { progress ->
+                                        saveProgress = progress
+                                    }
+                                }
+                                val page = currentStateValue.page
+                                val resolvedTitle = resolveThreadTitle(
+                                    page.posts.firstOrNull(),
+                                    threadTitle
+                                )
+                                val result = saveService.saveThread(
+                                    threadId = threadId,
+                                    boardId = board.id,
+                                    boardName = board.name,
+                                    boardUrl = board.url,
+                                    title = resolvedTitle,
+                                    expiresAtLabel = page.expiresAtLabel,
+                                    posts = page.posts,
+                                    baseSaveLocation = manualSaveLocation,
+                                    baseDirectory = manualSaveDirectory,
+                                    writeMetadata = false
+                                )
+                                progressJob.cancel()
+                                result.onSuccess { savedThread ->
+                                    val repository = com.valoser.futacha.shared.repository.SavedThreadRepository(
+                                        fileSystem,
+                                        baseDirectory = manualSaveDirectory
+                                    )
+                                    repository.addThreadToIndex(savedThread)
+                                    saveProgress = null
+                                    snackbarHostState.showSnackbar("スレッドを保存しました")
+                                }.onFailure { error ->
+                                    saveProgress = null
+                                    snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                                }
+                            } catch (e: Exception) {
+                                saveProgress = null
+                                snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                            }
+                        }
+                    } else {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("保存機能が利用できません")
+                        }
+                    }
+                } else {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("スレッドの読み込みが完了していません")
+                    }
+                }
+            }
+            ThreadMenuEntryId.Filter -> {
+                isThreadFilterSheetVisible = true
+            }
+            ThreadMenuEntryId.Settings -> {
+                isThreadSettingsSheetVisible = true
+            }
+            ThreadMenuEntryId.NgManagement -> {
+                ngHeaderPrefill = null
+                isNgManagementVisible = true
+            }
+            ThreadMenuEntryId.ExternalApp -> {
+                val baseUrl = board.url.trimEnd('/').removeSuffix("/futaba.php")
+                val threadUrl = "$baseUrl/res/${threadId}.htm"
+                urlLauncher(threadUrl)
+            }
+            ThreadMenuEntryId.ReadAloud -> {
+                isReadAloudControlsVisible = true
+            }
+            ThreadMenuEntryId.Privacy -> {
+                coroutineScope.launch {
+                    stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
+                }
+            }
+        }
+    }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
         coroutineScope.launch {
@@ -3769,7 +3935,6 @@ fun ThreadScreen(
         refreshThread()
     }
 
-    val currentState = uiState.value
     val currentSuccessState = currentState as? ThreadUiState.Success
     val mediaPreviewEntries = remember(currentSuccessState?.page?.posts) {
         buildMediaPreviewEntries(currentSuccessState?.page?.posts ?: emptyList())
@@ -3828,14 +3993,12 @@ fun ThreadScreen(
     val density = LocalDensity.current
     val backSwipeEdgePx = remember(density) { with(density) { 48.dp.toPx() } }
     val backSwipeTriggerPx = remember(density) { with(density) { 96.dp.toPx() } }
-    val initialHistoryEntry = remember(threadId) {
-        history.firstOrNull { it.threadId == threadId }
-    }
-    val lazyListState = remember(threadId, initialHistoryEntry) {
-        LazyListState(
-            initialHistoryEntry?.lastReadItemIndex ?: 0,
-            initialHistoryEntry?.lastReadItemOffset ?: 0
-        )
+    val firstVisibleSegmentIndex by remember(readAloudSegments, lazyListState) {
+        derivedStateOf {
+            val firstVisibleItem = lazyListState.firstVisibleItemIndex
+            if (readAloudSegments.isEmpty()) return@derivedStateOf -1
+            readAloudSegments.indexOfFirst { it.postIndex >= firstVisibleItem }.takeIf { it >= 0 } ?: -1
+        }
     }
 
     val startReadAloud: () -> Unit = startReadAloud@{
@@ -3878,6 +4041,24 @@ fun ThreadScreen(
                 }
                 readAloudJob = null
             }
+        }
+    }
+    val seekReadAloudToIndex: (Int, Boolean) -> Unit = seek@{ targetIndex, shouldScroll ->
+        if (readAloudSegments.isEmpty()) return@seek
+        val wasPlaying = readAloudStatus is ReadAloudStatus.Speaking || readAloudStatus is ReadAloudStatus.Paused
+        val clampedIndex = targetIndex.coerceIn(0, readAloudSegments.lastIndex.coerceAtLeast(0))
+        cancelActiveReadAloud()
+        readAloudJob = null
+        readAloudStatus = ReadAloudStatus.Idle
+        currentReadAloudIndex = clampedIndex
+        val targetSegment = readAloudSegments.getOrNull(clampedIndex)
+        if (shouldScroll && targetSegment != null) {
+            coroutineScope.launch {
+                lazyListState.animateScrollToItem(targetSegment.postIndex)
+            }
+        }
+        if (wasPlaying) {
+            startReadAloud()
         }
     }
 
@@ -4126,129 +4307,8 @@ fun ThreadScreen(
             },
             bottomBar = {
                 ThreadActionBar(
-                    onAction = { action ->
-                        when (action) {
-                            ThreadActionBarItem.Reply -> {
-                                if (replyPassword.isBlank()) {
-                                    replyPassword = lastUsedDeleteKey
-                                }
-                                isReplyDialogVisible = true
-                            }
-                            ThreadActionBarItem.ScrollToTop -> {
-                                coroutineScope.launch {
-                                    lazyListState.animateScrollToItem(0)
-                                }
-                            }
-                            ThreadActionBarItem.ScrollToBottom -> {
-                                coroutineScope.launch {
-                                    val currentState = uiState.value
-                                    if (currentState is ThreadUiState.Success) {
-                                        val lastIndex = currentState.page.posts.size - 1
-                                        if (lastIndex >= 0) {
-                                            lazyListState.animateScrollToItem(lastIndex)
-                                        }
-                                    }
-                                }
-                            }
-                            ThreadActionBarItem.Refresh -> {
-                                val savedIndex = lazyListState.firstVisibleItemIndex
-                                val savedOffset = lazyListState.firstVisibleItemScrollOffset
-                                coroutineScope.launch {
-                                    try {
-                                        val page = activeRepository.getThread(board.url, threadId)
-                                        if (isActive) {
-                                            uiState.value = ThreadUiState.Success(page)
-                                            snackbarHostState.showSnackbar("スレッドを更新しました")
-                                            lazyListState.scrollToItem(savedIndex, savedOffset)
-                                        }
-                                    } catch (e: kotlinx.coroutines.CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        snackbarHostState.showSnackbar("更新に失敗しました: ${e.message ?: "不明なエラー"}")
-                                    }
-                                }
-                            }
-                            ThreadActionBarItem.Gallery -> {
-                                isGalleryVisible = true
-                            }
-                            ThreadActionBarItem.Save -> {
-                                val currentStateValue = currentState
-                                if (currentStateValue is ThreadUiState.Success) {
-                                    if (httpClient != null && fileSystem != null) {
-                                        coroutineScope.launch {
-                                            try {
-                                                // ThreadSaveServiceを作成
-                                                val saveService = com.valoser.futacha.shared.service.ThreadSaveService(
-                                                    httpClient = httpClient,
-                                                    fileSystem = fileSystem
-                                                )
-
-                                                // 進捗を監視
-                                                val progressJob = launch {
-                                                    saveService.saveProgress.collect { progress ->
-                                                        saveProgress = progress
-                                                    }
-                                                }
-
-                                                // スレッドを保存
-                                                val page = currentStateValue.page
-                                                val resolvedTitle = resolveThreadTitle(
-                                                    page.posts.firstOrNull(),
-                                                    threadTitle
-                                                )
-                                                val result = saveService.saveThread(
-                                                    threadId = threadId,
-                                                    boardId = board.id,
-                                                    boardName = board.name,
-                                                    boardUrl = board.url,
-                                                    title = resolvedTitle,
-                                                    expiresAtLabel = page.expiresAtLabel,
-                                                    posts = page.posts,
-                                                    baseSaveLocation = manualSaveLocation,
-                                                    baseDirectory = manualSaveDirectory,
-                                                    writeMetadata = false
-                                                )
-
-                                                progressJob.cancel()
-
-                                                result.onSuccess { savedThread ->
-                                                    // SavedThreadRepositoryに追加
-                                                    val repository = com.valoser.futacha.shared.repository.SavedThreadRepository(
-                                                        fileSystem,
-                                                        baseDirectory = manualSaveDirectory
-                                                    )
-                                                    repository.addThreadToIndex(savedThread)
-
-                                                    saveProgress = null
-                                                    snackbarHostState.showSnackbar("スレッドを保存しました")
-                                                }.onFailure { error ->
-                                                    saveProgress = null
-                                                    snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
-                                                }
-                                            } catch (e: Exception) {
-                                                saveProgress = null
-                                                snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
-                                            }
-                                        }
-                                    } else {
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar("保存機能が利用できません")
-                                        }
-                                    }
-                                } else {
-                                    coroutineScope.launch {
-                                        snackbarHostState.showSnackbar("スレッドの読み込みが完了していません")
-                                    }
-                                }
-                            }
-                            ThreadActionBarItem.Filter -> {
-                                isThreadFilterSheetVisible = true
-                            }
-                            ThreadActionBarItem.Settings -> {
-                                isThreadSettingsSheetVisible = true
-                            }
-                        }
-                    }
+                    menuEntries = threadMenuEntries,
+                    onAction = handleMenuEntry
                 )
             }
         ) { innerPadding ->
@@ -4578,28 +4638,33 @@ fun ThreadScreen(
     if (isThreadSettingsSheetVisible) {
         ThreadSettingsSheet(
             onDismiss = { isThreadSettingsSheetVisible = false },
-            onAction = { menuItem ->
+            menuEntries = threadMenuEntries,
+            onAction = { menuEntryId ->
                 isThreadSettingsSheetVisible = false
-                when (menuItem) {
-                    ThreadSettingsMenuItem.NgManagement -> {
+                when (menuEntryId) {
+                    ThreadMenuEntryId.NgManagement -> {
                         ngHeaderPrefill = null
                         isNgManagementVisible = true
                     }
-                    ThreadSettingsMenuItem.ExternalApp -> {
+                    ThreadMenuEntryId.ExternalApp -> {
                         // 外部アプリで開く
                         // board.urlからfutaba.phpを削除してからres/xxx.htmを追加
                         val baseUrl = board.url.trimEnd('/').removeSuffix("/futaba.php")
                         val threadUrl = "$baseUrl/res/${threadId}.htm"
                         urlLauncher(threadUrl)
                     }
-                    ThreadSettingsMenuItem.Privacy -> {
+                    ThreadMenuEntryId.Privacy -> {
                         coroutineScope.launch {
                             stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
                         }
                     }
-                    ThreadSettingsMenuItem.ReadAloud -> {
+                    ThreadMenuEntryId.ReadAloud -> {
                         isReadAloudControlsVisible = true
                     }
+                    ThreadMenuEntryId.Settings -> {
+                        isThreadSettingsSheetVisible = true
+                    }
+                    else -> handleMenuEntry(menuEntryId)
                 }
             }
         )
@@ -4627,7 +4692,16 @@ fun ThreadScreen(
         ReadAloudControlSheet(
             segments = readAloudSegments,
             currentIndex = currentReadAloudIndex,
+            visibleSegmentIndex = firstVisibleSegmentIndex,
             status = readAloudStatus,
+            onSeek = { index ->
+                seekReadAloudToIndex(index, true)
+            },
+            onSeekToVisible = {
+                if (firstVisibleSegmentIndex >= 0) {
+                    seekReadAloudToIndex(firstVisibleSegmentIndex, true)
+                }
+            },
             onPlay = {
                 startReadAloud()
             },
@@ -4703,7 +4777,9 @@ fun ThreadScreen(
             onFileManagerSelected = onFileManagerSelected,
             onClearPreferredFileManager = onClearPreferredFileManager,
             historyEntries = history,
-            fileSystem = fileSystem
+            fileSystem = fileSystem,
+            threadMenuEntries = threadMenuEntries,
+            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
         )
     }
 
@@ -4878,7 +4954,7 @@ private fun ThreadTopBar(
                     onDismissRequest = { isMenuExpanded = false }
                 ) {
                     DropdownMenuItem(
-                        text = { Text(ThreadMenuAction.Settings.label) },
+                        text = { Text("設定") },
                         onClick = {
                             isMenuExpanded = false
                             onMenuSettings()
@@ -6966,9 +7042,13 @@ private fun SaidaneLink(
 
 @Composable
 private fun ThreadActionBar(
-    onAction: (ThreadActionBarItem) -> Unit,
+    menuEntries: List<ThreadMenuEntryConfig>,
+    onAction: (ThreadMenuEntryId) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val visibleActions = remember(menuEntries) {
+        resolveThreadActionBarEntries(menuEntries)
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.primary
@@ -6981,11 +7061,12 @@ private fun ThreadActionBar(
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ThreadActionBarItem.entries.forEach { action ->
-                IconButton(onClick = { onAction(action) }) {
+            visibleActions.forEach { action ->
+                val meta = action.id.toMeta()
+                IconButton(onClick = { onAction(action.id) }) {
                     Icon(
-                        imageVector = action.icon,
-                        contentDescription = action.label,
+                        imageVector = meta.icon,
+                        contentDescription = meta.label,
                         tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
@@ -6994,13 +7075,54 @@ private fun ThreadActionBar(
     }
 }
 
+private fun resolveThreadActionBarEntries(menuEntries: List<ThreadMenuEntryConfig>): List<ThreadMenuEntryConfig> {
+    val normalized = normalizeThreadMenuEntries(menuEntries)
+    return normalized
+        .filter { it.placement == ThreadMenuEntryPlacement.BAR }
+        .sortedWith(compareBy<ThreadMenuEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
+}
+
+private fun resolveThreadSettingsMenuEntries(menuEntries: List<ThreadMenuEntryConfig>): List<ThreadMenuEntryConfig> {
+    return normalizeThreadMenuEntries(menuEntries)
+        .filter { it.placement == ThreadMenuEntryPlacement.SHEET }
+        .sortedWith(compareBy<ThreadMenuEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
+}
+
+private data class ThreadMenuEntryMeta(
+    val label: String,
+    val icon: ImageVector
+)
+
+private fun ThreadMenuEntryId.toMeta(): ThreadMenuEntryMeta {
+    return when (this) {
+        ThreadMenuEntryId.Reply -> ThreadMenuEntryMeta("返信", Icons.Rounded.Edit)
+        ThreadMenuEntryId.ScrollToTop -> ThreadMenuEntryMeta("最上部", Icons.Filled.ArrowUpward)
+        ThreadMenuEntryId.ScrollToBottom -> ThreadMenuEntryMeta("最下部", Icons.Filled.ArrowDownward)
+        ThreadMenuEntryId.Refresh -> ThreadMenuEntryMeta("更新", Icons.Rounded.Refresh)
+        ThreadMenuEntryId.Gallery -> ThreadMenuEntryMeta("画像", Icons.Outlined.Image)
+        ThreadMenuEntryId.Save -> ThreadMenuEntryMeta("保存", Icons.Rounded.Archive)
+        ThreadMenuEntryId.Filter -> ThreadMenuEntryMeta("レスフィルター", Icons.Rounded.FilterList)
+        ThreadMenuEntryId.Settings -> ThreadMenuEntryMeta("設定", Icons.Rounded.Settings)
+        ThreadMenuEntryId.NgManagement -> ThreadMenuEntryMeta("NG管理", Icons.Rounded.Block)
+        ThreadMenuEntryId.ExternalApp -> ThreadMenuEntryMeta("外部アプリ", Icons.AutoMirrored.Rounded.OpenInNew)
+        ThreadMenuEntryId.ReadAloud -> ThreadMenuEntryMeta("読み上げ", Icons.AutoMirrored.Rounded.VolumeUp)
+        ThreadMenuEntryId.Privacy -> ThreadMenuEntryMeta("プライバシー", Icons.Rounded.Lock)
+    }
+}
+
+private fun ThreadMenuEntryConfig.toMeta(): ThreadMenuEntryMeta = id.toMeta()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadSettingsSheet(
     onDismiss: () -> Unit,
-    onAction: (ThreadSettingsMenuItem) -> Unit
+    menuEntries: List<ThreadMenuEntryConfig>,
+    onAction: (ThreadMenuEntryId) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val visibleItems = remember(menuEntries) {
+        resolveThreadSettingsMenuEntries(menuEntries)
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -7016,14 +7138,15 @@ private fun ThreadSettingsSheet(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
-            ThreadSettingsMenuItem.entries.forEach { menuItem ->
+            visibleItems.forEach { menuItem ->
+                val meta = menuItem.id.toMeta()
                 ListItem(
-                    leadingContent = { Icon(imageVector = menuItem.icon, contentDescription = null) },
-                    headlineContent = { Text(menuItem.label) },
+                    leadingContent = { Icon(imageVector = meta.icon, contentDescription = null) },
+                    headlineContent = { Text(meta.label) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.small)
-                        .clickable { onAction(menuItem) }
+                        .clickable { onAction(menuItem.id) }
                 )
             }
         }
@@ -7202,7 +7325,10 @@ private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?:
 private fun ReadAloudControlSheet(
     segments: List<ReadAloudSegment>,
     currentIndex: Int,
+    visibleSegmentIndex: Int,
     status: ReadAloudStatus,
+    onSeek: (Int) -> Unit,
+    onSeekToVisible: () -> Unit,
     onPlay: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
@@ -7216,6 +7342,11 @@ private fun ReadAloudControlSheet(
         status is ReadAloudStatus.Paused -> status.segment
         segments.isNotEmpty() -> segments.getOrNull(currentIndex.coerceIn(0, segments.lastIndex))
         else -> null
+    }
+    val canSeek = segments.isNotEmpty()
+    var sliderValue by remember { mutableFloatStateOf(currentIndex.toFloat()) }
+    LaunchedEffect(currentIndex, segments.size) {
+        sliderValue = currentIndex.coerceIn(0, (segments.lastIndex).coerceAtLeast(0)).toFloat()
     }
     val isPlaying = status is ReadAloudStatus.Speaking
     val isPaused = status is ReadAloudStatus.Paused
@@ -7244,6 +7375,36 @@ private fun ReadAloudControlSheet(
                     progress = { completedSegments / totalSegments.toFloat() },
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (canSeek) {
+                    val maxIndex = (totalSegments - 1).coerceAtLeast(0)
+                    Slider(
+                        value = sliderValue.coerceIn(0f, maxIndex.toFloat()),
+                        onValueChange = { sliderValue = it },
+                        onValueChangeFinished = {
+                            onSeek(sliderValue.roundToInt())
+                        },
+                        valueRange = 0f..maxIndex.toFloat(),
+                        steps = (maxIndex - 1).coerceAtLeast(0),
+                        colors = SliderDefaults.colors(
+                            activeTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "No.${segments.getOrNull(sliderValue.roundToInt())?.postId ?: "-"} から",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        val visibleLabel = segments.getOrNull(visibleSegmentIndex)?.postId
+                        if (visibleSegmentIndex in segments.indices && visibleLabel != null) {
+                            TextButton(onClick = onSeekToVisible) {
+                                Text("表示位置 (No.$visibleLabel) へ移動")
+                            }
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 currentSegment?.let {
                     Text(
@@ -7312,34 +7473,6 @@ private fun containsDeletionNotice(lines: List<String>): Boolean {
             line.contains(phrase)
         }
     }
-}
-
-private enum class ThreadActionBarItem(
-    val label: String,
-    val icon: ImageVector
-) {
-    Reply("返信", Icons.Rounded.Edit),
-    ScrollToTop("最上部", Icons.Filled.ArrowUpward),
-    ScrollToBottom("最下部", Icons.Filled.ArrowDownward),
-    Refresh("更新", Icons.Rounded.Refresh),
-    Gallery("画像", Icons.Outlined.Image),
-    Save("保存", Icons.Rounded.Archive),
-    Filter("レスフィルター", Icons.Rounded.FilterList),
-    Settings("設定", Icons.Rounded.Settings)
-}
-
-private enum class ThreadMenuAction(val label: String) {
-    Settings("設定")
-}
-
-private enum class ThreadSettingsMenuItem(
-    val label: String,
-    val icon: ImageVector
-) {
-    NgManagement("NG管理", Icons.Rounded.Block),
-    ExternalApp("外部アプリ", Icons.AutoMirrored.Rounded.OpenInNew),
-    ReadAloud("読み上げ", Icons.AutoMirrored.Rounded.VolumeUp),
-    Privacy("プライバシー", Icons.Rounded.Lock)
 }
 
 private enum class ThreadFilterSortOption(val displayLabel: String) {
@@ -7638,7 +7771,9 @@ private fun GlobalSettingsScreen(
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null,
     historyEntries: List<ThreadHistoryEntry>,
-    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {}
 ) {
     val urlLauncher = rememberUrlLauncher()
     var isFileManagerPickerVisible by rememberSaveable { mutableStateOf(false) }
@@ -7648,6 +7783,9 @@ private fun GlobalSettingsScreen(
     val historyCount = historyEntries.size
     var autoSavedCount by remember { mutableStateOf<Int?>(null) }
     var autoSavedSize by remember { mutableStateOf<Long?>(null) }
+    var localThreadMenuEntries by remember(threadMenuEntries) {
+        mutableStateOf(normalizeThreadMenuEntries(threadMenuEntries))
+    }
 
     LaunchedEffect(fileSystem, historyEntries.size) {
         if (fileSystem == null) {
@@ -7707,6 +7845,49 @@ private fun GlobalSettingsScreen(
             addAll(globalSettingsEntries)
         }
     }
+
+    @Composable
+    fun SettingsSection(
+        title: String,
+        icon: ImageVector,
+        description: String? = null,
+        content: @Composable ColumnScope.() -> Unit
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large,
+            tonalElevation = 2.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                if (description != null) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                content()
+            }
+        }
+    }
     PlatformBackHandler(onBack = onBack)
     Scaffold(
         topBar = {
@@ -7728,362 +7909,585 @@ private fun GlobalSettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            contentPadding = PaddingValues(vertical = 12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
         ) {
             item {
-                ListItem(
-                    headlineContent = { Text("バックグラウンド更新 (15分)") },
-                    supportingContent = {
-                        Text(
-                            text = "アプリ起動中は15分ごとに履歴を更新します（通知あり）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = isBackgroundRefreshEnabled,
-                            onCheckedChange = { onBackgroundRefreshChanged(it) }
-                        )
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("軽量モード") },
-                    supportingContent = {
-                        Text(
-                            text = "画像キャッシュを小さくし、並列ダウンロードや履歴更新の同時実行数を抑えます。低スペック端末では自動でONになります。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = isLightweightModeEnabled,
-                            onCheckedChange = { onLightweightModeChanged(it) }
-                        )
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("優先ファイラー") },
-                    supportingContent = {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsSection(
+                    title = "動作",
+                    icon = Icons.Rounded.WatchLater,
+                    description = "履歴更新と軽量化の挙動をまとめています。"
+                ) {
+                    ListItem(
+                        headlineContent = { Text("バックグラウンド更新 (15分)") },
+                        supportingContent = {
                             Text(
-                                text = "ディレクトリ選択で使用する優先ファイラーアプリを設定できます。設定すると次回から直接そのアプリが起動します。",
+                                text = "アプリ起動中は15分ごとに履歴を更新します（通知あり）",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (preferredFileManagerLabel != null) {
-                                Text(
-                                    text = "現在の設定: $preferredFileManagerLabel",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = isBackgroundRefreshEnabled,
+                                onCheckedChange = { onBackgroundRefreshChanged(it) }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("軽量モード") },
+                        supportingContent = {
+                            Text(
+                                text = "画像キャッシュを小さくし、並列ダウンロードや履歴更新の同時実行数を抑えます。低スペック端末では自動でONになります。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = isLightweightModeEnabled,
+                                onCheckedChange = { onLightweightModeChanged(it) }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            item {
+                val barEntries = remember(localThreadMenuEntries) {
+                    localThreadMenuEntries.filter { it.placement == ThreadMenuEntryPlacement.BAR }.sortedBy { it.order }
+                }
+                val sheetEntries = remember(localThreadMenuEntries) {
+                    localThreadMenuEntries.filter { it.placement == ThreadMenuEntryPlacement.SHEET }.sortedBy { it.order }
+                }
+                val hiddenEntries = remember(localThreadMenuEntries) {
+                    localThreadMenuEntries.filter { it.placement == ThreadMenuEntryPlacement.HIDDEN }
+                }
+                fun updateMenuEntries(newConfig: List<ThreadMenuEntryConfig>) {
+                    val normalized = normalizeThreadMenuEntries(newConfig)
+                    localThreadMenuEntries = normalized
+                    onThreadMenuEntriesChanged(normalized)
+                }
+                fun resetMenuEntries() {
+                    updateMenuEntries(defaultThreadMenuEntries())
+                }
+                fun moveWithinPlacement(id: ThreadMenuEntryId, delta: Int, placement: ThreadMenuEntryPlacement) {
+                    val sorted = localThreadMenuEntries
+                        .filter { it.placement == placement }
+                        .sortedBy { it.order }
+                        .toMutableList()
+                    val index = sorted.indexOfFirst { it.id == id }
+                    if (index == -1) return
+                    val target = (index + delta).coerceIn(0, sorted.lastIndex)
+                    if (target == index) return
+                    val item = sorted.removeAt(index)
+                    sorted.add(target, item)
+                    val merged = localThreadMenuEntries.toMutableList()
+                    sorted.forEachIndexed { idx, config ->
+                        val originIndex = merged.indexOfFirst { it.id == config.id }
+                        if (originIndex >= 0) {
+                            merged[originIndex] = config.copy(order = idx)
+                        }
+                    }
+                    updateMenuEntries(merged)
+                }
+                fun setPlacement(id: ThreadMenuEntryId, placement: ThreadMenuEntryPlacement) {
+                    val updated = localThreadMenuEntries.map {
+                        if (it.id == id) it.copy(placement = placement) else it
+                    }
+                    val normalized = normalizeThreadMenuEntries(updated)
+                    localThreadMenuEntries = normalized
+                    onThreadMenuEntriesChanged(normalized)
+                }
+                SettingsSection(
+                    title = "スレッドメニュー構成",
+                    icon = Icons.Rounded.ViewList,
+                    description = "下部バーと設定シートの並びを見やすく配置できます。"
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "アクションの表示位置を編集できます。バーにもシートにも最低1つは置いてください。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { resetMenuEntries() }) {
+                            Text("リセット")
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("バー:")
+                        if (barEntries.isEmpty()) {
+                            Text("なし", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        } else {
+                            barEntries.forEach { entry ->
+                                val meta = entry.toMeta()
+                                Icon(imageVector = meta.icon, contentDescription = meta.label, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("設定:")
+                        if (sheetEntries.isEmpty()) {
+                            Text("なし", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        } else {
+                            sheetEntries.forEach { entry ->
+                                val meta = entry.toMeta()
+                                Icon(imageVector = meta.icon, contentDescription = meta.label, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                    val allEntries = remember(localThreadMenuEntries) {
+                        localThreadMenuEntries.sortedBy { it.id.name }
+                    }
+                    allEntries.forEach { item ->
+                        val meta = item.toMeta()
+                        val placement = item.placement
+                        val barIndex = barEntries.indexOfFirst { it.id == item.id }
+                        val sheetIndex = sheetEntries.indexOfFirst { it.id == item.id }
+                        val canMoveLeft = placement == ThreadMenuEntryPlacement.BAR && barIndex > 0 ||
+                            placement == ThreadMenuEntryPlacement.SHEET && sheetIndex > 0
+                        val canMoveRight = placement == ThreadMenuEntryPlacement.BAR && barIndex in 0 until (barEntries.lastIndex) ||
+                            placement == ThreadMenuEntryPlacement.SHEET && sheetIndex in 0 until (sheetEntries.lastIndex)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(imageVector = meta.icon, contentDescription = meta.label)
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(meta.label, style = MaterialTheme.typography.bodyLarge)
+                                    Text(
+                                        text = when (placement) {
+                                            ThreadMenuEntryPlacement.BAR -> "下部バーに表示"
+                                            ThreadMenuEntryPlacement.SHEET -> "設定シートに表示"
+                                            ThreadMenuEntryPlacement.HIDDEN -> "非表示"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        when (placement) {
+                                            ThreadMenuEntryPlacement.BAR -> moveWithinPlacement(item.id, -1, ThreadMenuEntryPlacement.BAR)
+                                            ThreadMenuEntryPlacement.SHEET -> moveWithinPlacement(item.id, -1, ThreadMenuEntryPlacement.SHEET)
+                                            else -> {}
+                                        }
+                                    },
+                                    enabled = canMoveLeft
+                                ) {
+                                    Icon(imageVector = Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "左へ移動")
+                                }
+                                IconButton(
+                                    onClick = {
+                                        when (placement) {
+                                            ThreadMenuEntryPlacement.BAR -> moveWithinPlacement(item.id, 1, ThreadMenuEntryPlacement.BAR)
+                                            ThreadMenuEntryPlacement.SHEET -> moveWithinPlacement(item.id, 1, ThreadMenuEntryPlacement.SHEET)
+                                            else -> {}
+                                        }
+                                    },
+                                    enabled = canMoveRight
+                                ) {
+                                    Icon(imageVector = Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "右へ移動")
+                                }
+                                AssistChip(
+                                    onClick = { setPlacement(item.id, ThreadMenuEntryPlacement.BAR) },
+                                    label = { Text("バー") },
+                                    leadingIcon = if (placement == ThreadMenuEntryPlacement.BAR) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = if (placement == ThreadMenuEntryPlacement.BAR) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    )
                                 )
-                            } else {
+                                AssistChip(
+                                    onClick = { setPlacement(item.id, ThreadMenuEntryPlacement.SHEET) },
+                                    label = { Text("設定") },
+                                    leadingIcon = if (placement == ThreadMenuEntryPlacement.SHEET) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = if (placement == ThreadMenuEntryPlacement.SHEET) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                )
+                                AssistChip(
+                                    onClick = { setPlacement(item.id, ThreadMenuEntryPlacement.HIDDEN) },
+                                    label = { Text("非表示") },
+                                    leadingIcon = if (placement == ThreadMenuEntryPlacement.HIDDEN) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = if (placement == ThreadMenuEntryPlacement.HIDDEN) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                    if (hiddenEntries.isNotEmpty()) {
+                        Text(
+                            text = "非表示: ${hiddenEntries.size} 件",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            item {
+                SettingsSection(
+                    title = "保存とファイラー",
+                    icon = Icons.Rounded.Folder,
+                    description = "保存先とディレクトリ選択まわりをまとめました。"
+                ) {
+                    ListItem(
+                        headlineContent = { Text("優先ファイラー") },
+                        supportingContent = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(
-                                    text = "未設定（システムのデフォルト）",
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    text = "ディレクトリ選択で使うファイラーアプリを指定できます。設定すると次回からそのアプリを直接起動します。",
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = { isFileManagerPickerVisible = true }
-                                ) {
-                                    Text("ファイラーを選択")
-                                }
                                 if (preferredFileManagerLabel != null) {
-                                    OutlinedButton(
-                                        onClick = { onClearPreferredFileManager?.invoke() }
+                                    Text(
+                                        text = "現在の設定: $preferredFileManagerLabel",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Text(
+                                        text = "未設定（システムのデフォルト）",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = { isFileManagerPickerVisible = true }
                                     ) {
-                                        Text("クリア")
+                                        Text("ファイラーを選択")
                                     }
-                                }
-                            }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("画像キャッシュ") },
-                    supportingContent = {
-                        Text(
-                            text = "サムネイル・画像のキャッシュを削除します。保存済みスレッドや履歴データは保持されます。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    trailingContent = {
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("画像キャッシュを削除中...")
-                                    val result = runCatching {
-                                        withContext(Dispatchers.Default) {
-                                            imageLoader.diskCache?.clear()
-                                            imageLoader.memoryCache?.clear()
-                                            Unit
+                                    if (preferredFileManagerLabel != null) {
+                                        OutlinedButton(
+                                            onClick = { onClearPreferredFileManager?.invoke() }
+                                        ) {
+                                            Text("クリア")
                                         }
                                     }
-                                    if (result.isSuccess) {
-                                        snackbarHostState.showSnackbar("画像キャッシュを削除しました")
-                                    } else {
-                                        val reason = result.exceptionOrNull()?.message ?: "不明なエラー"
-                                        snackbarHostState.showSnackbar("削除に失敗しました: $reason")
-                                    }
                                 }
                             }
-                        ) {
-                            Text("削除")
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("一時キャッシュを掃除") },
-                    supportingContent = {
-                        Text(
-                            text = "一時フォルダに溜まった画像キャッシュをOS任せにせず強制削除します。保存済みスレッドは削除されません。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    trailingContent = {
-                        OutlinedButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("一時キャッシュを削除中...")
-                                    val result = runCatching {
-                                        withContext(Dispatchers.Default) {
-                                            val fs = fileSystem
-                                            if (fs != null) {
-                                                resolveImageCacheDirectory()
-                                                    ?.toString()
-                                                    ?.let { pathString ->
-                                                        fs.deleteRecursively(pathString)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("スレ保存先") },
+                        supportingContent = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Documents/futacha 配下がデフォルトです。「Documents」か「Download」と入力すると futacha/saved_threads まで自動指定します。絶対パス指定もできます。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    SaveDirectorySelection.entries.forEach { selection ->
+                                        FilterChip(
+                                            selected = saveDirectorySelection == selection,
+                                            onClick = { onSaveDirectorySelectionChanged(selection) },
+                                            label = {
+                                                Text(
+                                                    when (selection) {
+                                                        SaveDirectorySelection.MANUAL_INPUT -> "手入力"
+                                                        SaveDirectorySelection.PICKER -> "ファイラーで選ぶ"
                                                     }
+                                                )
                                             }
-                                            Unit
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                when (saveDirectorySelection) {
+                                    SaveDirectorySelection.MANUAL_INPUT -> {
+                                        OutlinedTextField(
+                                            value = manualSaveInput,
+                                            onValueChange = { manualSaveInput = it },
+                                            singleLine = true,
+                                            placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            label = { Text("フォルダ名またはパス") }
+                                        )
+                                        Text(
+                                            text = "保存先: $resolvedManualPath",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            TextButton(onClick = {
+                                                manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
+                                                onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                            }) {
+                                                Text("デフォルトに戻す")
+                                            }
+                                            Button(onClick = {
+                                                val normalized = normalizeManualSaveInput(manualSaveInput)
+                                                manualSaveInput = normalized
+                                                onManualSaveDirectoryChanged(normalized)
+                                            }) {
+                                                Text("保存先を更新")
+                                            }
                                         }
                                     }
-                                    if (result.isSuccess) {
-                                        snackbarHostState.showSnackbar("一時キャッシュを削除しました")
-                                    } else {
-                                        val reason = result.exceptionOrNull()?.message ?: "不明なエラー"
-                                        snackbarHostState.showSnackbar("削除に失敗しました: $reason")
+                                    SaveDirectorySelection.PICKER -> {
+                                        Text(
+                                            text = "ファイラーで選んだディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        Text(
+                                            text = "保存先: $resolvedManualPath",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            Button(
+                                                onClick = { onOpenSaveDirectoryPicker?.invoke() },
+                                                enabled = onOpenSaveDirectoryPicker != null
+                                            ) {
+                                                Text("フォルダを選択")
+                                            }
+                                            OutlinedButton(onClick = {
+                                                manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
+                                                onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                                onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                                            }) {
+                                                Text("手入力に戻す")
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        ) {
-                            Text("掃除する")
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            item {
+                SettingsSection(
+                    title = "キャッシュ管理",
+                    icon = Icons.Rounded.DeleteSweep,
+                    description = "表示用キャッシュを一括で掃除します。保存データは消えません。"
+                ) {
+                    ListItem(
+                        headlineContent = { Text("画像キャッシュ") },
+                        supportingContent = {
+                            Text(
+                                text = "サムネイル・画像のキャッシュを削除します。保存済みスレッドや履歴データは保持されます。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingContent = {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar("画像キャッシュを削除中...")
+                                        val result = runCatching {
+                                            withContext(Dispatchers.Default) {
+                                                imageLoader.diskCache?.clear()
+                                                imageLoader.memoryCache?.clear()
+                                                Unit
+                                            }
+                                        }
+                                        if (result.isSuccess) {
+                                            snackbarHostState.showSnackbar("画像キャッシュを削除しました")
+                                        } else {
+                                            val reason = result.exceptionOrNull()?.message ?: "不明なエラー"
+                                            snackbarHostState.showSnackbar("削除に失敗しました: $reason")
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("削除")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("一時キャッシュを掃除") },
+                        supportingContent = {
+                            Text(
+                                text = "一時フォルダに溜まった画像キャッシュをOS任せにせず強制削除します。保存済みスレッドは削除されません。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingContent = {
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar("一時キャッシュを削除中...")
+                                        val result = runCatching {
+                                            withContext(Dispatchers.Default) {
+                                                val fs = fileSystem
+                                                if (fs != null) {
+                                                    resolveImageCacheDirectory()
+                                                        ?.toString()
+                                                        ?.let { pathString ->
+                                                            fs.deleteRecursively(pathString)
+                                                        }
+                                                }
+                                                Unit
+                                            }
+                                        }
+                                        if (result.isSuccess) {
+                                            snackbarHostState.showSnackbar("一時キャッシュを削除しました")
+                                        } else {
+                                            val reason = result.exceptionOrNull()?.message ?: "不明なエラー"
+                                            snackbarHostState.showSnackbar("削除に失敗しました: $reason")
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("掃除する")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             item {
                 val isWarning = historyCount >= 50
-                ListItem(
-                    headlineContent = { Text("履歴とオフライン保存のサイズ") },
-                    supportingContent = {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "履歴: ${historyCount}件",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isWarning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "自動保存: ${autoSavedCount ?: 0}件 / ${formatSizeMb(autoSavedSize)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (isWarning) {
+                SettingsSection(
+                    title = "履歴とオフライン保存",
+                    icon = Icons.Rounded.History,
+                    description = "保存量の目安を確認できます。"
+                ) {
+                    ListItem(
+                        headlineContent = { Text("サイズの目安") },
+                        supportingContent = {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
-                                    text = "※件数が多いと更新に時間がかかることがあります。不要な履歴は既存の削除・クリア操作をご利用ください。",
+                                    text = "履歴: ${historyCount}件",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
+                                    color = if (isWarning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("スレ保存先") },
-                    supportingContent = {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                text = "デフォルトは Documents/futacha 配下です。「Documents」か「Download」と入力するだけで futacha/saved_threads まで自動で設定されます。絶対パスを指定することもできます。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SaveDirectorySelection.entries.forEach { selection ->
-                                    FilterChip(
-                                        selected = saveDirectorySelection == selection,
-                                        onClick = { onSaveDirectorySelectionChanged(selection) },
-                                        label = {
-                                            Text(
-                                                when (selection) {
-                                                    SaveDirectorySelection.MANUAL_INPUT -> "手入力"
-                                                    SaveDirectorySelection.PICKER -> "ファイラーで選ぶ"
-                                                }
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            when (saveDirectorySelection) {
-                                SaveDirectorySelection.MANUAL_INPUT -> {
-                                    OutlinedTextField(
-                                        value = manualSaveInput,
-                                        onValueChange = { manualSaveInput = it },
-                                        singleLine = true,
-                                        placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        label = { Text("フォルダ名またはパス") }
-                                    )
+                                Text(
+                                    text = "自動保存: ${autoSavedCount ?: 0}件 / ${formatSizeMb(autoSavedSize)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (isWarning) {
                                     Text(
-                                        text = "保存先: $resolvedManualPath",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        TextButton(onClick = {
-                                            manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
-                                            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
-                                        }) {
-                                            Text("デフォルトに戻す")
-                                        }
-                                        Button(onClick = {
-                                            val normalized = normalizeManualSaveInput(manualSaveInput)
-                                            manualSaveInput = normalized
-                                            onManualSaveDirectoryChanged(normalized)
-                                        }) {
-                                            Text("保存先を更新")
-                                        }
-                                    }
-                                }
-                                SaveDirectorySelection.PICKER -> {
-                                    Text(
-                                        text = "ファイラーで選択したディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
+                                        text = "※件数が多いと更新に時間がかかることがあります。不要な履歴は既存の削除・クリア操作をご利用ください。",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error
                                     )
-                                    Text(
-                                        text = "保存先: $resolvedManualPath",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        Button(
-                                            onClick = { onOpenSaveDirectoryPicker?.invoke() },
-                                            enabled = onOpenSaveDirectoryPicker != null
-                                        ) {
-                                            Text("フォルダを選択")
-                                        }
-                                        OutlinedButton(onClick = {
-                                            manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
-                                            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
-                                            onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
-                                        }) {
-                                            Text("手入力に戻す")
-                                        }
-                                    }
                                 }
                             }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
-                HorizontalDivider()
-            }
-            items(settingsEntries) { entry ->
-                ListItem(
-                    leadingContent = { Icon(imageVector = entry.icon, contentDescription = null) },
-                    headlineContent = { Text(entry.label) },
-                    supportingContent = {
-                        Text(
-                            text = entry.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable {
-                            when (entry.action) {
-                                GlobalSettingsAction.Cookies -> {
-                                    onOpenCookieManager?.invoke()
-                                }
-                                GlobalSettingsAction.Email -> {
-                                    urlLauncher("mailto:admin@valoser.com?subject=お問い合わせ")
-                                }
-                                GlobalSettingsAction.X -> {
-                                    urlLauncher("https://x.com/may_012345")
-                                }
-                                GlobalSettingsAction.Developer -> {
-                                    urlLauncher("https://github.com/inqueuet/futacha")
-                                }
-                                GlobalSettingsAction.PrivacyPolicy -> {
-                                    urlLauncher("https://note.com/inqueuet/n/nc6ebcc1d6a67")
-                                }
-                            }
-                            onBack()
-                        }
-                )
-                HorizontalDivider()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             item {
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("アプリバージョン") },
-                    trailingContent = { Text(appVersion) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                )
+                SettingsSection(
+                    title = "リンク・ポリシー",
+                    icon = Icons.Rounded.Link
+                ) {
+                    settingsEntries.forEachIndexed { index, entry ->
+                        ListItem(
+                            leadingContent = { Icon(imageVector = entry.icon, contentDescription = null) },
+                            headlineContent = { Text(entry.label) },
+                            supportingContent = {
+                                Text(
+                                    text = entry.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    when (entry.action) {
+                                        GlobalSettingsAction.Cookies -> {
+                                            onOpenCookieManager?.invoke()
+                                        }
+                                        GlobalSettingsAction.Email -> {
+                                            urlLauncher("mailto:admin@valoser.com?subject=お問い合わせ")
+                                        }
+                                        GlobalSettingsAction.X -> {
+                                            urlLauncher("https://x.com/may_012345")
+                                        }
+                                        GlobalSettingsAction.Developer -> {
+                                            urlLauncher("https://github.com/inqueuet/futacha")
+                                        }
+                                        GlobalSettingsAction.PrivacyPolicy -> {
+                                            urlLauncher("https://note.com/inqueuet/n/nc6ebcc1d6a67")
+                                        }
+                                    }
+                                    onBack()
+                                }
+                        )
+                        if (index != settingsEntries.lastIndex) {
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+            item {
+                SettingsSection(
+                    title = "アプリ情報",
+                    icon = Icons.Rounded.Info
+                ) {
+                    ListItem(
+                        headlineContent = { Text("アプリバージョン") },
+                        trailingContent = { Text(appVersion) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }

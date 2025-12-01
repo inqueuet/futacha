@@ -38,8 +38,11 @@ private class AndroidPlatformStateStorage(
     private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
     private val watchWordsKey = stringPreferencesKey("watch_words_json")
     private val selfPostIdentifiersKey = stringPreferencesKey("self_post_identifiers_json")
+    private val threadMenuConfigKey = stringPreferencesKey("thread_menu_config_json")
+    private val threadMenuEntriesKey = stringPreferencesKey("thread_menu_entries_json")
     private val preferredFileManagerPackageKey = stringPreferencesKey("preferred_file_manager_package")
     private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
+    private val threadSettingsMenuConfigKey = stringPreferencesKey("thread_settings_menu_config_json")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -115,6 +118,21 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[selfPostIdentifiersKey] }
+
+    override val threadMenuConfigJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[threadMenuConfigKey] }
+
+    override val threadMenuEntriesConfigJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[threadMenuEntriesKey] }
+
+    override val threadSettingsMenuConfigJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[threadSettingsMenuConfigKey] }
 
     override val preferredFileManagerPackage: Flow<String> =
         context.dataStore.data
@@ -264,6 +282,33 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updateThreadMenuConfigJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[threadMenuConfigKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update thread menu config: ${e.message}")
+            throw StorageException("Failed to save thread menu config", e)
+        }
+    }
+
+    override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[threadMenuEntriesKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update thread menu entries: ${e.message}")
+            throw StorageException("Failed to save thread menu entries", e)
+        }
+    }
+
+    override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[threadSettingsMenuConfigKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update thread settings menu config: ${e.message}")
+            throw StorageException("Failed to save thread settings menu config", e)
+        }
+    }
+
     override suspend fun updatePreferredFileManagerPackage(packageName: String) {
         try {
             context.dataStore.edit { prefs -> prefs[preferredFileManagerPackageKey] = packageName }
@@ -292,7 +337,10 @@ private class AndroidPlatformStateStorage(
         defaultSelfPostIdentifiersJson: String?,
         defaultCatalogModeMapJson: String?,
         defaultAttachmentPickerPreference: String?,
-        defaultSaveDirectorySelection: String?
+        defaultSaveDirectorySelection: String?,
+        defaultThreadMenuConfigJson: String?,
+        defaultThreadSettingsMenuConfigJson: String?,
+        defaultThreadMenuEntriesConfigJson: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -328,6 +376,15 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultSaveDirectorySelection != null && !prefs.contains(saveDirectorySelectionKey)) {
                     prefs[saveDirectorySelectionKey] = defaultSaveDirectorySelection
+                }
+                if (defaultThreadMenuConfigJson != null && !prefs.contains(threadMenuConfigKey)) {
+                    prefs[threadMenuConfigKey] = defaultThreadMenuConfigJson
+                }
+                if (defaultThreadSettingsMenuConfigJson != null && !prefs.contains(threadSettingsMenuConfigKey)) {
+                    prefs[threadSettingsMenuConfigKey] = defaultThreadSettingsMenuConfigJson
+                }
+                if (defaultThreadMenuEntriesConfigJson != null && !prefs.contains(threadMenuEntriesKey)) {
+                    prefs[threadMenuEntriesKey] = defaultThreadMenuEntriesConfigJson
                 }
             }
         } catch (e: Exception) {

@@ -6,6 +6,17 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
+import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -63,6 +74,9 @@ class AppStateStore internal constructor(
     private val selfPostIdentifiersMutex = Mutex()
     private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListSerializer = ListSerializer(String.serializer())
+    private val threadMenuConfigSerializer = ListSerializer(ThreadMenuItemConfig.serializer())
+    private val threadSettingsMenuConfigSerializer = ListSerializer(ThreadSettingsMenuItemConfig.serializer())
+    private val threadMenuEntriesSerializer = ListSerializer(ThreadMenuEntryConfig.serializer())
     private val catalogModeMapSerializer = MapSerializer(String.serializer(), String.serializer())
 
     // FIX: スレッドセーフなJobマップに変更
@@ -134,6 +148,15 @@ class AppStateStore internal constructor(
     }
     val selfPostIdentifiers: Flow<List<String>> = storage.selfPostIdentifiersJson.map { raw ->
         aggregateIdentifiers(decodeSelfPostIdentifierMap(raw))
+    }
+    val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = storage.threadMenuConfigJson.map { raw ->
+        decodeThreadMenuConfig(raw)
+    }
+    val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = storage.threadSettingsMenuConfigJson.map { raw ->
+        decodeThreadSettingsMenuConfig(raw)
+    }
+    val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = storage.threadMenuEntriesConfigJson.map { raw ->
+        decodeThreadMenuEntries(raw)
     }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
@@ -291,6 +314,33 @@ class AppStateStore internal constructor(
             storage.updateWatchWordsJson(json.encodeToString(stringListSerializer, words))
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save watch words (${words.size})", e)
+        }
+    }
+
+    suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) {
+        val normalized = normalizeThreadMenuConfig(config)
+        try {
+            storage.updateThreadMenuConfigJson(json.encodeToString(threadMenuConfigSerializer, normalized))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save thread menu config (${normalized.size} items)", e)
+        }
+    }
+
+    suspend fun setThreadSettingsMenuConfig(config: List<ThreadSettingsMenuItemConfig>) {
+        val normalized = normalizeThreadSettingsMenuConfig(config)
+        try {
+            storage.updateThreadSettingsMenuConfigJson(json.encodeToString(threadSettingsMenuConfigSerializer, normalized))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save thread settings menu config (${normalized.size} items)", e)
+        }
+    }
+
+    suspend fun setThreadMenuEntries(config: List<ThreadMenuEntryConfig>) {
+        val normalized = normalizeThreadMenuEntries(config)
+        try {
+            storage.updateThreadMenuEntriesConfigJson(json.encodeToString(threadMenuEntriesSerializer, normalized))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save thread menu entries (${normalized.size} items)", e)
         }
     }
 
@@ -501,7 +551,10 @@ class AppStateStore internal constructor(
         defaultCatalogNgWords: List<String> = emptyList(),
         defaultWatchWords: List<String> = emptyList(),
         defaultSelfPostIdentifierMap: Map<String, List<String>> = emptyMap(),
-        defaultCatalogModeMap: Map<String, CatalogMode> = emptyMap()
+        defaultCatalogModeMap: Map<String, CatalogMode> = emptyMap(),
+        defaultThreadMenuConfig: List<ThreadMenuItemConfig> = defaultThreadMenuConfig(),
+        defaultThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig> = defaultThreadSettingsMenuConfig(),
+        defaultThreadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries()
     ) {
         try {
             storage.seedIfEmpty(
@@ -514,7 +567,10 @@ class AppStateStore internal constructor(
                 json.encodeToString(selfPostIdentifierMapSerializer, defaultSelfPostIdentifierMap),
                 json.encodeToString(encodeCatalogModeMap(defaultCatalogModeMap)),
                 AttachmentPickerPreference.MEDIA.name,
-                SaveDirectorySelection.MANUAL_INPUT.name
+                SaveDirectorySelection.MANUAL_INPUT.name,
+                json.encodeToString(threadMenuConfigSerializer, normalizeThreadMenuConfig(defaultThreadMenuConfig)),
+                json.encodeToString(threadSettingsMenuConfigSerializer, normalizeThreadSettingsMenuConfig(defaultThreadSettingsMenuConfig)),
+                json.encodeToString(threadMenuEntriesSerializer, normalizeThreadMenuEntries(defaultThreadMenuEntries))
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -627,6 +683,42 @@ class AppStateStore internal constructor(
         return aggregated
     }
 
+    private fun decodeThreadMenuConfig(raw: String?): List<ThreadMenuItemConfig> {
+        if (raw.isNullOrBlank()) return defaultThreadMenuConfig()
+        return runCatching {
+            json.decodeFromString(threadMenuConfigSerializer, raw)
+        }.map { stored ->
+            normalizeThreadMenuConfig(stored)
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode thread menu config", e)
+            defaultThreadMenuConfig()
+        }
+    }
+
+    private fun decodeThreadSettingsMenuConfig(raw: String?): List<ThreadSettingsMenuItemConfig> {
+        if (raw.isNullOrBlank()) return defaultThreadSettingsMenuConfig()
+        return runCatching {
+            json.decodeFromString(threadSettingsMenuConfigSerializer, raw)
+        }.map { stored ->
+            normalizeThreadSettingsMenuConfig(stored)
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode thread settings menu config", e)
+            defaultThreadSettingsMenuConfig()
+        }
+    }
+
+    private fun decodeThreadMenuEntries(raw: String?): List<ThreadMenuEntryConfig> {
+        if (raw.isNullOrBlank()) return defaultThreadMenuEntries()
+        return runCatching {
+            json.decodeFromString(threadMenuEntriesSerializer, raw)
+        }.map { stored ->
+            normalizeThreadMenuEntries(stored)
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode thread menu entries", e)
+            defaultThreadMenuEntries()
+        }
+    }
+
     private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {
         return try {
             val raw = storage.selfPostIdentifiersJson.first()
@@ -664,6 +756,9 @@ internal interface PlatformStateStorage {
     val selfPostIdentifiersJson: Flow<String?>
     val preferredFileManagerPackage: Flow<String>
     val preferredFileManagerLabel: Flow<String>
+    val threadMenuConfigJson: Flow<String?>
+    val threadSettingsMenuConfigJson: Flow<String?>
+    val threadMenuEntriesConfigJson: Flow<String?>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
@@ -682,6 +777,9 @@ internal interface PlatformStateStorage {
     suspend fun updateSelfPostIdentifiersJson(value: String)
     suspend fun updatePreferredFileManagerPackage(packageName: String)
     suspend fun updatePreferredFileManagerLabel(label: String)
+    suspend fun updateThreadMenuConfigJson(value: String)
+    suspend fun updateThreadSettingsMenuConfigJson(value: String)
+    suspend fun updateThreadMenuEntriesConfigJson(value: String)
 
     suspend fun seedIfEmpty(
         defaultBoardsJson: String,
@@ -693,7 +791,10 @@ internal interface PlatformStateStorage {
         defaultSelfPostIdentifiersJson: String?,
         defaultCatalogModeMapJson: String?,
         defaultAttachmentPickerPreference: String?,
-        defaultSaveDirectorySelection: String?
+        defaultSaveDirectorySelection: String?,
+        defaultThreadMenuConfigJson: String?,
+        defaultThreadSettingsMenuConfigJson: String?,
+        defaultThreadMenuEntriesConfigJson: String?
     )
 }
 

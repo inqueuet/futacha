@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -14,9 +16,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.createRemoteBoardRepository
@@ -43,6 +50,9 @@ import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import io.ktor.http.URLBuilder
+import io.ktor.http.Url
+import io.ktor.http.encodedPath
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import version.VersionChecker
@@ -172,6 +182,7 @@ fun FutachaApp(
 
             val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
             val persistedHistory by stateStore.history.collectAsState(initial = history)
+            val threadMenuEntries by stateStore.threadMenuEntries.collectAsState(initial = defaultThreadMenuEntries())
             val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
             val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
             val manualSaveLocation by stateStore.manualSaveLocation.collectAsState(initial = com.valoser.futacha.shared.model.SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT))
@@ -197,6 +208,11 @@ fun FutachaApp(
             val onBackgroundRefreshChanged: (Boolean) -> Unit = { enabled ->
                 coroutineScope.launch {
                     stateStore.setBackgroundRefreshEnabled(enabled)
+                }
+            }
+            val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = { config ->
+                coroutineScope.launch {
+                    stateStore.setThreadMenuEntries(config)
                 }
             }
             val onManualSaveDirectoryChanged: (String) -> Unit = { directory ->
@@ -273,7 +289,7 @@ fun FutachaApp(
             }
 
             when {
-                selectedBoard == null -> {
+                selectedBoardId == null -> {
                     selectedThreadId = null
                     selectedThreadTitle = null
                     selectedThreadReplies = null
@@ -344,8 +360,20 @@ fun FutachaApp(
                             coroutineScope.launch {
                                 stateStore.setPreferredFileManager(null, null)
                             }
-                        }
+                        },
+                        threadMenuEntries = threadMenuEntries,
+                        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
                     )
+                }
+
+                selectedBoard == null -> {
+                    // 板データ復元待ち: 選択状態は保持しスレ画面へ復帰させる
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
 
                 selectedThreadId == null -> {
@@ -407,7 +435,9 @@ fun FutachaApp(
                                 coroutineScope.launch {
                                     stateStore.setPreferredFileManager(null, null)
                                 }
-                            }
+                            },
+                            threadMenuEntries = threadMenuEntries,
+                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
                         )
                     }
                 }
@@ -528,7 +558,9 @@ fun FutachaApp(
                                 coroutineScope.launch {
                                     stateStore.setPreferredFileManager(null, null)
                                 }
-                            }
+                            },
+                            threadMenuEntries = threadMenuEntries,
+                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
                         )
                     }
                 }
@@ -619,12 +651,12 @@ private fun slugify(value: String): String {
     return builder.toString()
 }
 
-private fun normalizeBoardUrl(raw: String): String {
+internal fun normalizeBoardUrl(raw: String): String {
     val trimmed = raw.trim()
 
     // Keep user's protocol choice - don't force HTTPS conversion
     // The network security config will handle cleartext traffic restrictions
-    return when {
+    val withScheme = when {
         trimmed.startsWith("https://", ignoreCase = true) -> trimmed
         trimmed.startsWith("http://", ignoreCase = true) -> {
             // Log warning but keep HTTP if user explicitly specified it
@@ -632,5 +664,37 @@ private fun normalizeBoardUrl(raw: String): String {
             trimmed
         }
         else -> "https://$trimmed"  // Default to HTTPS for security
+    }
+
+    if (withScheme.contains("futaba.php", ignoreCase = true)) {
+        return withScheme
+    }
+
+    return runCatching {
+        val parsed = Url(withScheme)
+        val normalizedPath = when {
+            parsed.encodedPath.isBlank() || parsed.encodedPath == "/" -> "/futaba.php"
+            parsed.encodedPath.endsWith("/") -> "${parsed.encodedPath}futaba.php"
+            else -> "${parsed.encodedPath}/futaba.php"
+        }
+        URLBuilder(parsed).apply { encodedPath = normalizedPath }.buildString()
+    }.getOrElse {
+        // Fallback: append futaba.php manually without dropping query/fragment
+        val fragment = withScheme.substringAfter('#', missingDelimiterValue = "")
+        val withoutFragment = withScheme.substringBefore('#')
+        val base = withoutFragment.substringBefore('?').trimEnd('/')
+        val query = withoutFragment.substringAfter('?', missingDelimiterValue = "")
+        buildString {
+            append(base)
+            append("/futaba.php")
+            if (query.isNotEmpty()) {
+                append('?')
+                append(query)
+            }
+            if (fragment.isNotEmpty()) {
+                append('#')
+                append(fragment)
+            }
+        }
     }
 }
