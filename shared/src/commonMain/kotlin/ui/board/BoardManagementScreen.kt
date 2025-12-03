@@ -110,6 +110,7 @@ import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VideoLibrary
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -234,10 +235,16 @@ import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.CatalogNavEntryId
+import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.toThreadPage
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
@@ -255,6 +262,10 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.ui.normalizeBoardUrl
+import io.ktor.http.Url
+import io.ktor.http.encodeURLParameter
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.FlowPreview
@@ -277,6 +288,9 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
 import com.valoser.futacha.shared.repository.CookieRepository
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
@@ -315,7 +329,9 @@ fun BoardManagementScreen(
     onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     onClearPreferredFileManager: (() -> Unit)? = null,
     threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {}
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
+    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
+    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -582,7 +598,9 @@ fun BoardManagementScreen(
             historyEntries = history,
             fileSystem = fileSystem,
             threadMenuEntries = threadMenuEntries,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
+            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+            catalogNavEntries = catalogNavEntries,
+            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
         )
     }
 
@@ -1266,7 +1284,10 @@ fun CatalogScreen(
     onClearPreferredFileManager: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {}
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
+    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
+    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {},
+    httpClient: io.ktor.client.HttpClient? = null
 ) {
     val activeRepository = remember(repository) {
         repository ?: FakeBoardRepository()
@@ -1295,10 +1316,12 @@ fun CatalogScreen(
     var showDisplayStyleDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    var showPastThreadSearchDialog by remember { mutableStateOf(false) }
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     var isCookieManagementVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
     var isWatchWordsVisible by remember { mutableStateOf(false) }
+    var archiveSearchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
     var catalogNgFilteringEnabled by rememberSaveable(board?.id) { mutableStateOf(true) }
     val fallbackCatalogNgWordsState = rememberSaveable(board?.id) { mutableStateOf<List<String>>(emptyList()) }
     val catalogNgWordsState = stateStore?.catalogNgWords?.collectAsState(initial = fallbackCatalogNgWordsState.value)
@@ -1306,6 +1329,15 @@ fun CatalogScreen(
     val fallbackWatchWordsState = rememberSaveable(board?.id) { mutableStateOf<List<String>>(emptyList()) }
     val watchWordsState = stateStore?.watchWords?.collectAsState(initial = fallbackWatchWordsState.value)
     val watchWords = watchWordsState?.value ?: fallbackWatchWordsState.value
+    val archiveSearchScope = remember(board?.url) { extractArchiveSearchScope(board) }
+    val archiveSearchJson = remember {
+        Json {
+            ignoreUnknownKeys = true
+        }
+    }
+    var isPastSearchSheetVisible by remember { mutableStateOf(false) }
+    var pastSearchState by remember { mutableStateOf<ArchiveSearchState>(ArchiveSearchState.Idle) }
+    var lastArchiveSearchScope by remember { mutableStateOf<ArchiveSearchScope?>(archiveSearchScope) }
     val showNgMessage: (String) -> Unit = { message ->
         coroutineScope.launch { snackbarHostState.showSnackbar(message) }
     }
@@ -1598,14 +1630,15 @@ fun CatalogScreen(
             },
             bottomBar = {
                 CatalogNavigationBar(
-                    current = null,
+                    menuEntries = catalogNavEntries,
                     onNavigate = { destination ->
                         when (destination) {
-                            CatalogNavDestination.CreateThread -> showCreateThreadDialog = true
-                            CatalogNavDestination.ScrollToTop -> scrollCatalogToTop()
-                            CatalogNavDestination.RefreshCatalog -> performRefresh()
-                            CatalogNavDestination.Mode -> showModeDialog = true
-                            CatalogNavDestination.Settings -> showSettingsMenu = true
+                            CatalogNavEntryId.CreateThread -> showCreateThreadDialog = true
+                            CatalogNavEntryId.ScrollToTop -> scrollCatalogToTop()
+                            CatalogNavEntryId.RefreshCatalog -> performRefresh()
+                            CatalogNavEntryId.PastThreadSearch -> showPastThreadSearchDialog = true
+                            CatalogNavEntryId.Mode -> showModeDialog = true
+                            CatalogNavEntryId.Settings -> showSettingsMenu = true
                         }
                     }
                 )
@@ -1751,6 +1784,83 @@ fun CatalogScreen(
 
         val urlLauncher = rememberUrlLauncher()
 
+        if (showPastThreadSearchDialog) {
+            PastThreadSearchDialog(
+                initialQuery = archiveSearchQuery.ifBlank { searchQuery },
+                onDismiss = { showPastThreadSearchDialog = false },
+                onSearch = { query ->
+                    val trimmed = query.trim()
+                    if (trimmed.isEmpty()) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("検索ワードを入力してください")
+                        }
+                        return@PastThreadSearchDialog
+                    }
+                    val appliedScope = archiveSearchScope
+                    lastArchiveSearchScope = archiveSearchScope
+                    archiveSearchQuery = trimmed
+                    showPastThreadSearchDialog = false
+                    val client = httpClient
+                    if (client == null) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("ネットワーククライアントが利用できません")
+                        }
+                        return@PastThreadSearchDialog
+                    }
+                    isPastSearchSheetVisible = true
+                    pastSearchState = ArchiveSearchState.Loading
+                    coroutineScope.launch {
+                        pastSearchState = runCatching {
+                            fetchArchiveSearchResults(client, trimmed, appliedScope, archiveSearchJson)
+                        }.fold(
+                            onSuccess = { ArchiveSearchState.Success(it) },
+                            onFailure = { error ->
+                                ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
+                            }
+                        )
+                    }
+                }
+            )
+        }
+
+        if (isPastSearchSheetVisible) {
+            PastThreadSearchResultSheet(
+                state = pastSearchState,
+                onDismiss = { isPastSearchSheetVisible = false },
+                onRetry = {
+                    val client = httpClient
+                    if (client == null) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("ネットワーククライアントが利用できません")
+                        }
+                        return@PastThreadSearchResultSheet
+                    }
+                    pastSearchState = ArchiveSearchState.Loading
+                    coroutineScope.launch {
+                        pastSearchState = runCatching {
+                            fetchArchiveSearchResults(client, archiveSearchQuery, lastArchiveSearchScope, archiveSearchJson)
+                        }.fold(
+                            onSuccess = { ArchiveSearchState.Success(it) },
+                            onFailure = { error ->
+                                ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
+                            }
+                        )
+                    }
+                },
+                onItemSelected = { item ->
+                    val catalogItem = CatalogItem(
+                        id = item.threadId,
+                        threadUrl = item.htmlUrl,
+                        title = item.title,
+                        thumbnailUrl = item.thumbUrl,
+                        replyCount = 0
+                    )
+                    isPastSearchSheetVisible = false
+                    onThreadSelected(catalogItem)
+                }
+            )
+        }
+
         if (showSettingsMenu) {
             CatalogSettingsSheet(
                 onDismiss = { showSettingsMenu = false },
@@ -1808,7 +1918,9 @@ fun CatalogScreen(
                 historyEntries = history,
                 fileSystem = fileSystem,
                 threadMenuEntries = threadMenuEntries,
-                onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
+                onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+                catalogNavEntries = catalogNavEntries,
+                onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
             )
         }
 
@@ -1895,6 +2007,54 @@ private fun CreateThreadDialog(
         sendDescription = "スレ立て",
         showSubject = true,
         showPassword = true
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PastThreadSearchDialog(
+    initialQuery: String,
+    onDismiss: () -> Unit,
+    onSearch: (query: String) -> Unit
+) {
+    var query by rememberSaveable(initialQuery) { mutableStateOf(initialQuery) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.History,
+                contentDescription = null
+            )
+        },
+        title = { Text("過去スレ検索") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("検索ワード") },
+                    placeholder = { Text("例: ブラックフライデー") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSearch(query) }
+            ) {
+                Text("検索")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        }
     )
 }
 
@@ -2270,6 +2430,162 @@ private fun ThreadFormDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PastThreadSearchResultSheet(
+    state: ArchiveSearchState,
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit,
+    onItemSelected: (ArchiveSearchItem) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "過去スレ検索結果",
+                style = MaterialTheme.typography.titleMedium
+            )
+            when (state) {
+                ArchiveSearchState.Idle -> {
+                    Text(
+                        text = "検索ワードを入力するとここに結果が表示されます。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                ArchiveSearchState.Loading -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Text("検索中…")
+                    }
+                }
+                is ArchiveSearchState.Error -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = state.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        TextButton(onClick = onRetry) {
+                            Text("再試行")
+                        }
+                    }
+                }
+                is ArchiveSearchState.Success -> {
+                    if (state.items.isEmpty()) {
+                        Text(
+                            text = "見つかりませんでした",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(bottom = 24.dp)
+                        ) {
+                            items(state.items, key = { it.threadId }) { item ->
+                                PastSearchResultRow(
+                                    item = item,
+                                    onClick = { onItemSelected(item) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PastSearchResultRow(
+    item: ArchiveSearchItem,
+    onClick: () -> Unit
+) {
+    val imageLoader = LocalFutachaImageLoader.current
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val painter = rememberAsyncImagePainter(
+                model = ImageRequest.Builder(LocalPlatformContext.current)
+                    .data(item.thumbUrl)
+                    .crossfade(true)
+                    .build(),
+                imageLoader = imageLoader
+            )
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                when (painter.state) {
+                    is AsyncImagePainter.State.Error, AsyncImagePainter.State.Empty -> {
+                        Icon(
+                            imageVector = Icons.Outlined.Image,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    else -> {
+                        Image(
+                            painter = painter,
+                            contentDescription = item.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = item.title.orEmpty().ifBlank { "無題" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${item.server}/${item.board}  No.${item.threadId}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -3169,22 +3485,26 @@ private fun CatalogSearchTextField(
 
 @Composable
 private fun CatalogNavigationBar(
-    current: CatalogNavDestination?,
-    onNavigate: (CatalogNavDestination) -> Unit,
+    menuEntries: List<CatalogNavEntryConfig>,
+    onNavigate: (CatalogNavEntryId) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val visibleEntries = remember(menuEntries) {
+        resolveCatalogNavBarEntries(menuEntries)
+    }
     NavigationBar(modifier = modifier) {
-        CatalogNavDestination.entries.forEach { destination ->
+        visibleEntries.forEach { entry ->
+            val meta = entry.id.toMeta()
             NavigationBarItem(
-                selected = destination == current,
-                onClick = { onNavigate(destination) },
+                selected = false,
+                onClick = { onNavigate(entry.id) },
                 icon = {
                     Icon(
-                        imageVector = destination.icon,
-                        contentDescription = destination.label
+                        imageVector = meta.icon,
+                        contentDescription = meta.label
                     )
                 },
-                label = { Text(destination.label) }
+                label = { Text(meta.label) }
             )
         }
     }
@@ -3404,6 +3724,91 @@ private fun matchesCatalogNgWords(
     return wordFilters.any { titleText.contains(it) }
 }
 
+private data class ArchiveSearchScope(val server: String, val board: String)
+
+@Serializable
+private data class ArchiveSearchItem(
+    val threadId: String,
+    val server: String,
+    val board: String,
+    val title: String? = null,
+    val htmlUrl: String,
+    val thumbUrl: String? = null
+)
+
+@Serializable
+private data class ArchiveSearchResponse(
+    val query: String? = null,
+    val results: List<ArchiveSearchItem> = emptyList()
+)
+
+private sealed interface ArchiveSearchState {
+    data object Idle : ArchiveSearchState
+    data object Loading : ArchiveSearchState
+    data class Success(val items: List<ArchiveSearchItem>) : ArchiveSearchState
+    data class Error(val message: String) : ArchiveSearchState
+}
+
+private fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
+    if (board == null) return null
+    return runCatching {
+        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board.url)
+        val parsed = Url(baseUrl)
+        val server = parsed.host.substringBefore('.', parsed.host).ifBlank { return null }
+        val boardSlug = BoardUrlResolver.resolveBoardSlug(board.url).ifBlank { return null }
+        ArchiveSearchScope(server = server, board = boardSlug)
+    }.getOrNull()
+}
+
+private fun buildArchiveSearchUrl(
+    query: String,
+    scope: ArchiveSearchScope?
+): String {
+    val params = buildList<String> {
+        add("q=${query.encodeURLParameter()}")
+        scope?.let {
+            add("server=${it.server.encodeURLParameter()}")
+            add("board=${it.board.encodeURLParameter()}")
+        }
+    }
+    return "https://spider.serendipity01234.workers.dev/search?${params.joinToString("&")}"
+}
+
+private suspend fun fetchArchiveSearchResults(
+    httpClient: io.ktor.client.HttpClient,
+    query: String,
+    scope: ArchiveSearchScope?,
+    json: Json
+): List<ArchiveSearchItem> {
+    val url = buildArchiveSearchUrl(query, scope)
+    val response = httpClient.get(url)
+    val body = response.bodyAsText()
+    val parsed = json.decodeFromString<ArchiveSearchResponse>(body)
+    return parsed.results
+}
+
+private data class CatalogNavEntryMeta(
+    val label: String,
+    val icon: ImageVector
+)
+
+private fun CatalogNavEntryId.toMeta(): CatalogNavEntryMeta {
+    return when (this) {
+        CatalogNavEntryId.CreateThread -> CatalogNavEntryMeta("スレッド作成", Icons.Rounded.Add)
+        CatalogNavEntryId.ScrollToTop -> CatalogNavEntryMeta("一番上に行く", Icons.Rounded.VerticalAlignTop)
+        CatalogNavEntryId.RefreshCatalog -> CatalogNavEntryMeta("カタログ更新", Icons.Rounded.Refresh)
+        CatalogNavEntryId.PastThreadSearch -> CatalogNavEntryMeta("過去スレ検索", Icons.Rounded.History)
+        CatalogNavEntryId.Mode -> CatalogNavEntryMeta("モード", Icons.AutoMirrored.Rounded.Sort)
+        CatalogNavEntryId.Settings -> CatalogNavEntryMeta("設定", Icons.Rounded.Settings)
+    }
+}
+
+private fun resolveCatalogNavBarEntries(menuEntries: List<CatalogNavEntryConfig>): List<CatalogNavEntryConfig> {
+    return normalizeCatalogNavEntries(menuEntries)
+        .filter { it.placement == CatalogNavEntryPlacement.BAR }
+        .sortedWith(compareBy<CatalogNavEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
+}
+
 private enum class CatalogMenuAction(val label: String) {
     Settings("設定")
 }
@@ -3419,14 +3824,6 @@ private enum class CatalogSettingsMenuItem(
     DisplayStyle("表示の切り替え", Icons.Rounded.ViewModule, "カタログ表示方法を変更"),
     ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop, "グリッドの先頭へ移動"),
     Privacy("プライバシー", Icons.Rounded.Lock, "プライバシー設定を確認")
-}
-
-private enum class CatalogNavDestination(val label: String, val icon: ImageVector) {
-    CreateThread("スレッド作成", Icons.Rounded.Add),
-    ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop),
-    RefreshCatalog("カタログ更新", Icons.Rounded.Refresh),
-    Mode("モード", Icons.AutoMirrored.Rounded.Sort),
-    Settings("設定", Icons.Rounded.Settings)
 }
 
 private const val AUTO_SAVE_INTERVAL_MS = 60_000L
@@ -3446,6 +3843,7 @@ fun ThreadScreen(
     threadId: String,
     threadTitle: String?,
     initialReplyCount: Int?,
+    threadUrlOverride: String? = null,
     onBack: () -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
@@ -3478,10 +3876,15 @@ fun ThreadScreen(
     onClearPreferredFileManager: (() -> Unit)? = null,
     threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
     onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
+    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
+    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
         repository ?: FakeBoardRepository()
+    }
+    val effectiveBoardUrl = remember(threadUrlOverride, board.url) {
+        resolveEffectiveBoardUrl(threadUrlOverride, board.url)
     }
     val uiState = remember { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -3687,7 +4090,7 @@ fun ThreadScreen(
                 val savedOffset = lazyListState.firstVisibleItemScrollOffset
                 coroutineScope.launch {
                     try {
-                        val page = activeRepository.getThread(board.url, threadId)
+                        val page = activeRepository.getThread(effectiveBoardUrl, threadId)
                         if (isActive) {
                             uiState.value = ThreadUiState.Success(page)
                             snackbarHostState.showSnackbar("スレッドを更新しました")
@@ -3709,10 +4112,10 @@ fun ThreadScreen(
                     if (httpClient != null && fileSystem != null) {
                         coroutineScope.launch {
                             try {
-                                val saveService = com.valoser.futacha.shared.service.ThreadSaveService(
-                                    httpClient = httpClient,
-                                    fileSystem = fileSystem
-                                )
+                        val saveService = com.valoser.futacha.shared.service.ThreadSaveService(
+                            httpClient = httpClient,
+                            fileSystem = fileSystem
+                        )
                                 val progressJob = launch {
                                     saveService.saveProgress.collect { progress ->
                                         saveProgress = progress
@@ -3727,7 +4130,7 @@ fun ThreadScreen(
                                     threadId = threadId,
                                     boardId = board.id,
                                     boardName = board.name,
-                                    boardUrl = board.url,
+                                    boardUrl = effectiveBoardUrl,
                                     title = resolvedTitle,
                                     expiresAtLabel = page.expiresAtLabel,
                                     posts = page.posts,
@@ -3775,7 +4178,7 @@ fun ThreadScreen(
                 isNgManagementVisible = true
             }
             ThreadMenuEntryId.ExternalApp -> {
-                val baseUrl = board.url.trimEnd('/').removeSuffix("/futaba.php")
+                val baseUrl = effectiveBoardUrl.trimEnd('/').removeSuffix("/futaba.php")
                 val threadUrl = "$baseUrl/res/${threadId}.htm"
                 urlLauncher(threadUrl)
             }
@@ -3828,7 +4231,7 @@ fun ThreadScreen(
     suspend fun loadThreadWithOfflineFallback(allowOfflineFallback: Boolean): Pair<ThreadPage, Boolean> {
         try {
             isShowingOfflineCopy = false
-            val page = activeRepository.getThread(board.url, threadId)
+            val page = activeRepository.getThread(effectiveBoardUrl, threadId)
             return page to false
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -3859,7 +4262,7 @@ fun ThreadScreen(
                     threadId = threadId,
                     boardId = board.id,
                     boardName = board.name,
-                    boardUrl = board.url,
+                    boardUrl = effectiveBoardUrl,
                     title = resolvedTitle,
                     expiresAtLabel = page.expiresAtLabel,
                     posts = page.posts,
@@ -3889,7 +4292,7 @@ fun ThreadScreen(
         onBack()
     }
 
-            val refreshThread: () -> Unit = remember(board.url, threadId, activeRepository) {
+            val refreshThread: () -> Unit = remember(effectiveBoardUrl, threadId, activeRepository) {
                 {
                     coroutineScope.launch {
                         uiState.value = ThreadUiState.Loading
@@ -3903,7 +4306,8 @@ fun ThreadScreen(
                                 history = history,
                                 threadId = threadId,
                                 threadTitle = threadTitle,
-                                board = board
+                                board = board,
+                                overrideThreadUrl = threadUrlOverride
                             )
                         )
                         if (usedOffline) {
@@ -3931,7 +4335,7 @@ fun ThreadScreen(
                 }
             }
 
-    LaunchedEffect(board.url, threadId) {
+    LaunchedEffect(effectiveBoardUrl, threadId) {
         refreshThread()
     }
 
@@ -4172,7 +4576,7 @@ fun ThreadScreen(
                 saidaneOverrides[post.id] = incrementSaidaneLabel(baseLabel)
             }
         ) {
-            activeRepository.voteSaidane(board.url, threadId, post.id)
+            activeRepository.voteSaidane(effectiveBoardUrl, threadId, post.id)
         }
     }
 
@@ -4182,7 +4586,7 @@ fun ThreadScreen(
             successMessage = "DEL依頼を送信しました",
             failurePrefix = "DEL依頼に失敗しました"
         ) {
-            activeRepository.requestDeletion(board.url, threadId, post.id, DEFAULT_DEL_REASON_CODE)
+            activeRepository.requestDeletion(effectiveBoardUrl, threadId, post.id, DEFAULT_DEL_REASON_CODE)
         }
     }
 
@@ -4226,7 +4630,8 @@ fun ThreadScreen(
                         history = history,
                         threadId = threadId,
                         threadTitle = threadTitle,
-                        board = board
+                        board = board,
+                        overrideThreadUrl = threadUrlOverride
                     ))
 
                     val successMessage = if (usedOffline) {
@@ -4474,7 +4879,7 @@ fun ThreadScreen(
                     onSuccess = { refreshThread() }
                 ) {
                     activeRepository.deleteByUser(
-                        board.url,
+                        effectiveBoardUrl,
                         threadId,
                         deleteTarget.id,
                         trimmed,
@@ -4564,7 +4969,7 @@ fun ThreadScreen(
                     }
                 ) {
                     activeRepository.replyToThread(
-                        board.url,
+                        effectiveBoardUrl,
                         threadId,
                         name,
                         email,
@@ -4649,7 +5054,7 @@ fun ThreadScreen(
                     ThreadMenuEntryId.ExternalApp -> {
                         // 外部アプリで開く
                         // board.urlからfutaba.phpを削除してからres/xxx.htmを追加
-                        val baseUrl = board.url.trimEnd('/').removeSuffix("/futaba.php")
+                        val baseUrl = effectiveBoardUrl.trimEnd('/').removeSuffix("/futaba.php")
                         val threadUrl = "$baseUrl/res/${threadId}.htm"
                         urlLauncher(threadUrl)
                     }
@@ -4779,7 +5184,9 @@ fun ThreadScreen(
             historyEntries = history,
             fileSystem = fileSystem,
             threadMenuEntries = threadMenuEntries,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
+            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+            catalogNavEntries = catalogNavEntries,
+            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
         )
     }
 
@@ -7773,7 +8180,9 @@ private fun GlobalSettingsScreen(
     historyEntries: List<ThreadHistoryEntry>,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
     threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {}
+    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
+    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
+    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {}
 ) {
     val urlLauncher = rememberUrlLauncher()
     var isFileManagerPickerVisible by rememberSaveable { mutableStateOf(false) }
@@ -7785,6 +8194,9 @@ private fun GlobalSettingsScreen(
     var autoSavedSize by remember { mutableStateOf<Long?>(null) }
     var localThreadMenuEntries by remember(threadMenuEntries) {
         mutableStateOf(normalizeThreadMenuEntries(threadMenuEntries))
+    }
+    var localCatalogNavEntries by remember(catalogNavEntries) {
+        mutableStateOf(normalizeCatalogNavEntries(catalogNavEntries))
     }
 
     LaunchedEffect(fileSystem, historyEntries.size) {
@@ -7953,6 +8365,167 @@ private fun GlobalSettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+            }
+            item {
+                val localCatalogEntriesState = remember(localCatalogNavEntries) { localCatalogNavEntries }
+                val catalogBarEntries = remember(localCatalogNavEntries) {
+                    localCatalogNavEntries.filter { it.placement == CatalogNavEntryPlacement.BAR }.sortedBy { it.order }
+                }
+                val catalogHiddenEntries = remember(localCatalogNavEntries) {
+                    localCatalogNavEntries.filter { it.placement == CatalogNavEntryPlacement.HIDDEN }
+                }
+                fun updateCatalogEntries(newConfig: List<CatalogNavEntryConfig>) {
+                    val normalized = normalizeCatalogNavEntries(newConfig)
+                    localCatalogNavEntries = normalized
+                    onCatalogNavEntriesChanged(normalized)
+                }
+                fun resetCatalogEntries() {
+                    updateCatalogEntries(defaultCatalogNavEntries())
+                }
+                fun moveCatalogEntry(id: CatalogNavEntryId, delta: Int) {
+                    val sorted = localCatalogNavEntries
+                        .filter { it.placement == CatalogNavEntryPlacement.BAR }
+                        .sortedBy { it.order }
+                        .toMutableList()
+                    val index = sorted.indexOfFirst { it.id == id }
+                    if (index == -1) return
+                    val target = (index + delta).coerceIn(0, sorted.lastIndex)
+                    if (target == index) return
+                    val item = sorted.removeAt(index)
+                    sorted.add(target, item)
+                    val merged = localCatalogNavEntries.toMutableList()
+                    sorted.forEachIndexed { idx, config ->
+                        val origin = merged.indexOfFirst { it.id == config.id }
+                        if (origin >= 0) {
+                            merged[origin] = config.copy(order = idx)
+                        }
+                    }
+                    updateCatalogEntries(merged)
+                }
+                fun setCatalogPlacement(id: CatalogNavEntryId, placement: CatalogNavEntryPlacement) {
+                    val updated = localCatalogNavEntries.map {
+                        if (it.id == id) it.copy(placement = placement) else it
+                    }
+                    updateCatalogEntries(updated)
+                }
+                SettingsSection(
+                    title = "カタログメニュー構成",
+                    icon = Icons.Rounded.ViewModule,
+                    description = "カタログ下部バーの並びを編集できます。"
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "表示するボタンと順序をカスタマイズできます。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { resetCatalogEntries() }) {
+                            Text("リセット")
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("バー:")
+                        if (catalogBarEntries.isEmpty()) {
+                            Text("なし", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        } else {
+                            catalogBarEntries.forEach { entry ->
+                                val meta = entry.id.toMeta()
+                                Icon(imageVector = meta.icon, contentDescription = meta.label, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                    if (catalogHiddenEntries.isNotEmpty()) {
+                        Text(
+                            text = "非表示: ${catalogHiddenEntries.size} 件",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    val allCatalogEntries = remember(localCatalogEntriesState) {
+                        localCatalogNavEntries.sortedBy { it.id.name }
+                    }
+                    allCatalogEntries.forEach { item ->
+                        val meta = item.id.toMeta()
+                        val barIndex = catalogBarEntries.indexOfFirst { it.id == item.id }
+                        val canMoveLeft = item.placement == CatalogNavEntryPlacement.BAR && barIndex > 0
+                        val canMoveRight = item.placement == CatalogNavEntryPlacement.BAR && barIndex in 0 until catalogBarEntries.lastIndex
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = meta.icon,
+                                        contentDescription = meta.label,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(meta.label, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                IconButton(
+                                    onClick = { moveCatalogEntry(item.id, -1) },
+                                    enabled = canMoveLeft
+                                ) {
+                                    Icon(imageVector = Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "左へ移動")
+                                }
+                                IconButton(
+                                    onClick = { moveCatalogEntry(item.id, 1) },
+                                    enabled = canMoveRight
+                                ) {
+                                    Icon(imageVector = Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "右へ移動")
+                                }
+                                AssistChip(
+                                    onClick = { setCatalogPlacement(item.id, CatalogNavEntryPlacement.BAR) },
+                                    label = { Text("バー") },
+                                    leadingIcon = if (item.placement == CatalogNavEntryPlacement.BAR) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = if (item.placement == CatalogNavEntryPlacement.BAR) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                )
+                                AssistChip(
+                                    onClick = { setCatalogPlacement(item.id, CatalogNavEntryPlacement.HIDDEN) },
+                                    label = { Text("非表示") },
+                                    leadingIcon = if (item.placement == CatalogNavEntryPlacement.HIDDEN) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = if (item.placement == CatalogNavEntryPlacement.HIDDEN) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                    }
                 }
             }
             item {
@@ -8509,7 +9082,8 @@ private fun buildHistoryEntryFromPage(
     history: List<ThreadHistoryEntry>,
     threadId: String,
     threadTitle: String?,
-    board: BoardSummary
+    board: BoardSummary,
+    overrideThreadUrl: String? = null
 ): ThreadHistoryEntry {
     val existingEntry = history.firstOrNull { it.threadId == threadId }
     val firstPost = page.posts.firstOrNull()
@@ -8528,8 +9102,28 @@ private fun buildHistoryEntryFromPage(
         title = candidateTitle,
         titleImageUrl = resolvedImageUrl,
         boardName = board.name,
-        boardUrl = board.url,
+        boardUrl = overrideThreadUrl ?: board.url,
         lastVisitedEpochMillis = timestamp,
         replyCount = page.posts.size
     )
+}
+
+private fun resolveEffectiveBoardUrl(threadUrlOverride: String?, fallbackBoardUrl: String): String {
+    if (threadUrlOverride.isNullOrBlank()) return fallbackBoardUrl
+    return runCatching {
+        val url = Url(threadUrlOverride)
+        val segments = url.encodedPath.split('/').filter { it.isNotBlank() }
+        val boardSegments = segments.takeWhile { it.lowercase() != "res" }
+        if (boardSegments.isEmpty()) return@runCatching fallbackBoardUrl
+        val path = "/" + boardSegments.joinToString("/")
+        buildString {
+            append(url.protocol.name)
+            append("://")
+            append(url.host)
+            if (url.port != url.protocol.defaultPort) {
+                append(":${url.port}")
+            }
+            append(path.trimEnd('/'))
+        }
+    }.getOrElse { fallbackBoardUrl }
 }

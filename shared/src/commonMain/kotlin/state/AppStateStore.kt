@@ -11,6 +11,9 @@ import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuConfig
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
@@ -77,6 +80,7 @@ class AppStateStore internal constructor(
     private val threadMenuConfigSerializer = ListSerializer(ThreadMenuItemConfig.serializer())
     private val threadSettingsMenuConfigSerializer = ListSerializer(ThreadSettingsMenuItemConfig.serializer())
     private val threadMenuEntriesSerializer = ListSerializer(ThreadMenuEntryConfig.serializer())
+    private val catalogNavEntriesSerializer = ListSerializer(CatalogNavEntryConfig.serializer())
     private val catalogModeMapSerializer = MapSerializer(String.serializer(), String.serializer())
 
     // FIX: スレッドセーフなJobマップに変更
@@ -157,6 +161,9 @@ class AppStateStore internal constructor(
     }
     val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = storage.threadMenuEntriesConfigJson.map { raw ->
         decodeThreadMenuEntries(raw)
+    }
+    val catalogNavEntries: Flow<List<CatalogNavEntryConfig>> = storage.catalogNavEntriesConfigJson.map { raw ->
+        decodeCatalogNavEntries(raw)
     }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
@@ -341,6 +348,15 @@ class AppStateStore internal constructor(
             storage.updateThreadMenuEntriesConfigJson(json.encodeToString(threadMenuEntriesSerializer, normalized))
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save thread menu entries (${normalized.size} items)", e)
+        }
+    }
+
+    suspend fun setCatalogNavEntries(config: List<CatalogNavEntryConfig>) {
+        val normalized = normalizeCatalogNavEntries(config)
+        try {
+            storage.updateCatalogNavEntriesConfigJson(json.encodeToString(catalogNavEntriesSerializer, normalized))
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save catalog nav entries (${normalized.size} items)", e)
         }
     }
 
@@ -554,7 +570,8 @@ class AppStateStore internal constructor(
         defaultCatalogModeMap: Map<String, CatalogMode> = emptyMap(),
         defaultThreadMenuConfig: List<ThreadMenuItemConfig> = defaultThreadMenuConfig(),
         defaultThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig> = defaultThreadSettingsMenuConfig(),
-        defaultThreadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries()
+        defaultThreadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
+        defaultCatalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries()
     ) {
         try {
             storage.seedIfEmpty(
@@ -570,7 +587,8 @@ class AppStateStore internal constructor(
                 SaveDirectorySelection.MANUAL_INPUT.name,
                 json.encodeToString(threadMenuConfigSerializer, normalizeThreadMenuConfig(defaultThreadMenuConfig)),
                 json.encodeToString(threadSettingsMenuConfigSerializer, normalizeThreadSettingsMenuConfig(defaultThreadSettingsMenuConfig)),
-                json.encodeToString(threadMenuEntriesSerializer, normalizeThreadMenuEntries(defaultThreadMenuEntries))
+                json.encodeToString(threadMenuEntriesSerializer, normalizeThreadMenuEntries(defaultThreadMenuEntries)),
+                json.encodeToString(catalogNavEntriesSerializer, normalizeCatalogNavEntries(defaultCatalogNavEntries))
             )
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to seed default data", e)
@@ -719,6 +737,18 @@ class AppStateStore internal constructor(
         }
     }
 
+    private fun decodeCatalogNavEntries(raw: String?): List<CatalogNavEntryConfig> {
+        if (raw.isNullOrBlank()) return defaultCatalogNavEntries()
+        return runCatching {
+            json.decodeFromString(catalogNavEntriesSerializer, raw)
+        }.map { stored ->
+            normalizeCatalogNavEntries(stored)
+        }.getOrElse { e ->
+            Logger.e(TAG, "Failed to decode catalog nav entries", e)
+            defaultCatalogNavEntries()
+        }
+    }
+
     private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {
         return try {
             val raw = storage.selfPostIdentifiersJson.first()
@@ -759,6 +789,7 @@ internal interface PlatformStateStorage {
     val threadMenuConfigJson: Flow<String?>
     val threadSettingsMenuConfigJson: Flow<String?>
     val threadMenuEntriesConfigJson: Flow<String?>
+    val catalogNavEntriesConfigJson: Flow<String?>
 
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
@@ -780,6 +811,7 @@ internal interface PlatformStateStorage {
     suspend fun updateThreadMenuConfigJson(value: String)
     suspend fun updateThreadSettingsMenuConfigJson(value: String)
     suspend fun updateThreadMenuEntriesConfigJson(value: String)
+    suspend fun updateCatalogNavEntriesConfigJson(value: String)
 
     suspend fun seedIfEmpty(
         defaultBoardsJson: String,
@@ -794,7 +826,8 @@ internal interface PlatformStateStorage {
         defaultSaveDirectorySelection: String?,
         defaultThreadMenuConfigJson: String?,
         defaultThreadSettingsMenuConfigJson: String?,
-        defaultThreadMenuEntriesConfigJson: String?
+        defaultThreadMenuEntriesConfigJson: String?,
+        defaultCatalogNavEntriesJson: String?
     )
 }
 

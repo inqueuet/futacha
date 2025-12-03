@@ -24,6 +24,8 @@ import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.defaultThreadMenuConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.createRemoteBoardRepository
@@ -183,6 +185,7 @@ fun FutachaApp(
             val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
             val persistedHistory by stateStore.history.collectAsState(initial = history)
             val threadMenuEntries by stateStore.threadMenuEntries.collectAsState(initial = defaultThreadMenuEntries())
+            val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
             val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
             val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
             val manualSaveLocation by stateStore.manualSaveLocation.collectAsState(initial = com.valoser.futacha.shared.model.SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT))
@@ -362,7 +365,13 @@ fun FutachaApp(
                             }
                         },
                         threadMenuEntries = threadMenuEntries,
-                        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
+                        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+                        catalogNavEntries = catalogNavEntries,
+                        onCatalogNavEntriesChanged = { updated ->
+                            coroutineScope.launch {
+                                stateStore.setCatalogNavEntries(updated)
+                            }
+                        }
                     )
                 }
 
@@ -437,7 +446,14 @@ fun FutachaApp(
                                 }
                             },
                             threadMenuEntries = threadMenuEntries,
-                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
+                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+                            catalogNavEntries = catalogNavEntries,
+                            onCatalogNavEntriesChanged = { updated ->
+                                coroutineScope.launch {
+                                    stateStore.setCatalogNavEntries(updated)
+                                }
+                            },
+                            httpClient = httpClient
                         )
                     }
                 }
@@ -511,6 +527,7 @@ fun FutachaApp(
                             history = persistedHistory,
                             threadId = activeThreadId,
                             threadTitle = selectedThreadTitle,
+                            threadUrlOverride = selectedThreadUrl,
                             initialReplyCount = selectedThreadReplies,
                             onBack = {
                                 selectedThreadId = null
@@ -560,7 +577,13 @@ fun FutachaApp(
                                 }
                             },
                             threadMenuEntries = threadMenuEntries,
-                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged
+                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+                            catalogNavEntries = catalogNavEntries,
+                            onCatalogNavEntriesChanged = { updated ->
+                                coroutineScope.launch {
+                                    stateStore.setCatalogNavEntries(updated)
+                                }
+                            }
                         )
                     }
                 }

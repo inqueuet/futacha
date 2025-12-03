@@ -23,6 +23,7 @@ private const val SELF_POST_IDENTIFIERS_KEY = "self_post_identifiers_json"
 private const val THREAD_MENU_CONFIG_KEY = "thread_menu_config_json"
 private const val THREAD_SETTINGS_MENU_CONFIG_KEY = "thread_settings_menu_config_json"
 private const val THREAD_MENU_ENTRIES_KEY = "thread_menu_entries_config_json"
+private const val CATALOG_NAV_ENTRIES_KEY = "catalog_nav_entries_config_json"
 private const val PREFERRED_FILE_MANAGER_PACKAGE_KEY = "preferred_file_manager_package"
 private const val PREFERRED_FILE_MANAGER_LABEL_KEY = "preferred_file_manager_label"
 
@@ -52,6 +53,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val threadMenuConfigState = MutableStateFlow(defaults.stringForKey(THREAD_MENU_CONFIG_KEY))
     private val threadSettingsMenuConfigState = MutableStateFlow(defaults.stringForKey(THREAD_SETTINGS_MENU_CONFIG_KEY))
     private val threadMenuEntriesState = MutableStateFlow(defaults.stringForKey(THREAD_MENU_ENTRIES_KEY))
+    private val catalogNavEntriesState = MutableStateFlow(defaults.stringForKey(CATALOG_NAV_ENTRIES_KEY))
     private val preferredFileManagerPackageState = MutableStateFlow(defaults.stringForKey(PREFERRED_FILE_MANAGER_PACKAGE_KEY) ?: "")
     private val preferredFileManagerLabelState = MutableStateFlow(defaults.stringForKey(PREFERRED_FILE_MANAGER_LABEL_KEY) ?: "")
 
@@ -73,6 +75,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val threadMenuConfigJson: Flow<String?> = threadMenuConfigState
     override val threadSettingsMenuConfigJson: Flow<String?> = threadSettingsMenuConfigState
     override val threadMenuEntriesConfigJson: Flow<String?> = threadMenuEntriesState
+    override val catalogNavEntriesConfigJson: Flow<String?> = catalogNavEntriesState
     override val preferredFileManagerPackage: Flow<String> = preferredFileManagerPackageState
     override val preferredFileManagerLabel: Flow<String> = preferredFileManagerLabelState
 
@@ -184,6 +187,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         threadMenuEntriesState.value = value
     }
 
+    override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
+        defaults.setObject(value, forKey = CATALOG_NAV_ENTRIES_KEY)
+        defaults.synchronize()
+        catalogNavEntriesState.value = value
+    }
+
     override suspend fun updatePreferredFileManagerPackage(packageName: String) {
         defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
         defaults.synchronize()
@@ -209,7 +218,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaultSaveDirectorySelection: String?,
         defaultThreadMenuConfigJson: String?,
         defaultThreadSettingsMenuConfigJson: String?,
-        defaultThreadMenuEntriesConfigJson: String?
+        defaultThreadMenuEntriesConfigJson: String?,
+        defaultCatalogNavEntriesJson: String?
     ) {
         var updated = false
         if (defaults.stringForKey(BOARDS_KEY) == null) {
@@ -275,6 +285,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaultThreadMenuEntriesConfigJson != null && defaults.stringForKey(THREAD_MENU_ENTRIES_KEY) == null) {
             defaults.setObject(defaultThreadMenuEntriesConfigJson, forKey = THREAD_MENU_ENTRIES_KEY)
             threadMenuEntriesState.value = defaultThreadMenuEntriesConfigJson
+            updated = true
+        }
+        if (defaultCatalogNavEntriesJson != null && defaults.stringForKey(CATALOG_NAV_ENTRIES_KEY) == null) {
+            defaults.setObject(defaultCatalogNavEntriesJson, forKey = CATALOG_NAV_ENTRIES_KEY)
+            catalogNavEntriesState.value = defaultCatalogNavEntriesJson
             updated = true
         }
         if (defaultCatalogModeMapJson != null && defaults.stringForKey(CATALOG_MODE_MAP_KEY) == null) {

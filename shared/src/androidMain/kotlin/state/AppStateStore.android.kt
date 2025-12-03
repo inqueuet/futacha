@@ -40,6 +40,7 @@ private class AndroidPlatformStateStorage(
     private val selfPostIdentifiersKey = stringPreferencesKey("self_post_identifiers_json")
     private val threadMenuConfigKey = stringPreferencesKey("thread_menu_config_json")
     private val threadMenuEntriesKey = stringPreferencesKey("thread_menu_entries_json")
+    private val catalogNavEntriesKey = stringPreferencesKey("catalog_nav_entries_json")
     private val preferredFileManagerPackageKey = stringPreferencesKey("preferred_file_manager_package")
     private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
     private val threadSettingsMenuConfigKey = stringPreferencesKey("thread_settings_menu_config_json")
@@ -128,6 +129,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[threadMenuEntriesKey] }
+
+    override val catalogNavEntriesConfigJson: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[catalogNavEntriesKey] }
 
     override val threadSettingsMenuConfigJson: Flow<String?> =
         context.dataStore.data
@@ -300,6 +306,15 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[catalogNavEntriesKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update catalog nav entries: ${e.message}")
+            throw StorageException("Failed to save catalog nav entries", e)
+        }
+    }
+
     override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
         try {
             context.dataStore.edit { prefs -> prefs[threadSettingsMenuConfigKey] = value }
@@ -340,7 +355,8 @@ private class AndroidPlatformStateStorage(
         defaultSaveDirectorySelection: String?,
         defaultThreadMenuConfigJson: String?,
         defaultThreadSettingsMenuConfigJson: String?,
-        defaultThreadMenuEntriesConfigJson: String?
+        defaultThreadMenuEntriesConfigJson: String?,
+        defaultCatalogNavEntriesJson: String?
     ) {
         try {
             context.dataStore.edit { prefs ->
@@ -385,6 +401,9 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultThreadMenuEntriesConfigJson != null && !prefs.contains(threadMenuEntriesKey)) {
                     prefs[threadMenuEntriesKey] = defaultThreadMenuEntriesConfigJson
+                }
+                if (defaultCatalogNavEntriesJson != null && !prefs.contains(catalogNavEntriesKey)) {
+                    prefs[catalogNavEntriesKey] = defaultCatalogNavEntriesJson
                 }
             }
         } catch (e: Exception) {
