@@ -2580,6 +2580,20 @@ private fun PastSearchResultRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                item.status?.let { status ->
+                    Text(
+                        text = status,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                item.uploadedAt?.let { uploadedAt ->
+                    Text(
+                        text = "uploaded: $uploadedAt",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
@@ -3733,12 +3747,18 @@ private data class ArchiveSearchItem(
     val board: String,
     val title: String? = null,
     val htmlUrl: String,
-    val thumbUrl: String? = null
+    val thumbUrl: String? = null,
+    val status: String? = null,
+    val createdAt: String? = null,
+    val finalizedAt: String? = null,
+    val uploadedAt: String? = null
 )
 
 @Serializable
 private data class ArchiveSearchResponse(
     val query: String? = null,
+    val filter: String? = null,
+    val count: Int? = null,
     val results: List<ArchiveSearchItem> = emptyList()
 )
 
