@@ -288,9 +288,19 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
 import com.valoser.futacha.shared.repository.CookieRepository
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
@@ -1790,12 +1800,6 @@ fun CatalogScreen(
                 onDismiss = { showPastThreadSearchDialog = false },
                 onSearch = { query ->
                     val trimmed = query.trim()
-                    if (trimmed.isEmpty()) {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("検索ワードを入力してください")
-                        }
-                        return@PastThreadSearchDialog
-                    }
                     val appliedScope = archiveSearchScope
                     lastArchiveSearchScope = archiveSearchScope
                     archiveSearchQuery = trimmed
@@ -2037,7 +2041,7 @@ private fun PastThreadSearchDialog(
                     value = query,
                     onValueChange = { query = it },
                     label = { Text("検索ワード") },
-                    placeholder = { Text("例: ブラックフライデー") },
+                    placeholder = { Text("例: ふたば (空欄で全件取得)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -3749,9 +3753,12 @@ private data class ArchiveSearchItem(
     val htmlUrl: String,
     val thumbUrl: String? = null,
     val status: String? = null,
-    val createdAt: String? = null,
-    val finalizedAt: String? = null,
-    val uploadedAt: String? = null
+    @Serializable(with = ArchiveSearchTimestampSerializer::class)
+    val createdAt: Long? = null,
+    @Serializable(with = ArchiveSearchTimestampSerializer::class)
+    val finalizedAt: Long? = null,
+    @Serializable(with = ArchiveSearchTimestampSerializer::class)
+    val uploadedAt: Long? = null
 )
 
 @Serializable
@@ -3767,6 +3774,27 @@ private sealed interface ArchiveSearchState {
     data object Loading : ArchiveSearchState
     data class Success(val items: List<ArchiveSearchItem>) : ArchiveSearchState
     data class Error(val message: String) : ArchiveSearchState
+}
+
+private object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("ArchiveSearchTimestamp", PrimitiveKind.LONG)
+
+    override fun deserialize(decoder: Decoder): Long? {
+        val jsonDecoder = decoder as? JsonDecoder ?: return runCatching { decoder.decodeLong() }.getOrNull()
+        val element = jsonDecoder.decodeJsonElement()
+        if (element is JsonNull) return null
+        val primitive = element.jsonPrimitive
+        return primitive.longOrNull ?: primitive.content.toLongOrNull()
+    }
+
+    override fun serialize(encoder: Encoder, value: Long?) {
+        if (value == null) {
+            encoder.encodeNull()
+        } else {
+            encoder.encodeLong(value)
+        }
+    }
 }
 
 private fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
@@ -3785,13 +3813,21 @@ private fun buildArchiveSearchUrl(
     scope: ArchiveSearchScope?
 ): String {
     val params = buildList<String> {
-        add("q=${query.encodeURLParameter()}")
+        if (query.isNotBlank()) {
+            add("q=${query.encodeURLParameter()}")
+        }
         scope?.let {
             add("server=${it.server.encodeURLParameter()}")
             add("board=${it.board.encodeURLParameter()}")
         }
     }
-    return "https://spider.serendipity01234.workers.dev/search?${params.joinToString("&")}"
+    return buildString {
+        append("https://spider.serendipity01234.workers.dev/search")
+        if (params.isNotEmpty()) {
+            append("?")
+            append(params.joinToString("&"))
+        }
+    }
 }
 
 private suspend fun fetchArchiveSearchResults(
