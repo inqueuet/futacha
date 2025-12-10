@@ -118,6 +118,7 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -3885,6 +3886,53 @@ private enum class CatalogSettingsMenuItem(
 private const val AUTO_SAVE_INTERVAL_MS = 60_000L
 private const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
 
+private val FutabaBackground = Color(0xFFFFFFEE)
+private val FutabaSurface = Color(0xFFF0E0D6)
+private val FutabaSurfaceVariant = Color(0xFFE9CCCC)
+private val FutabaLabelSurface = Color(0xFFEEAA88)
+private val FutabaText = Color(0xFF800000)
+private val FutabaTextDim = Color(0xCC800000)
+private val FutabaAccentRed = Color(0xFFCC1105)
+private val FutabaNameGreen = Color(0xFF117743)
+private val FutabaQuoteGreen = Color(0xFF789922)
+private val FutabaLinkColor = Color(0xFF800000)
+
+@Composable
+private fun rememberFutabaThreadColorScheme(
+    base: ColorScheme = MaterialTheme.colorScheme
+): ColorScheme {
+    return remember(base) {
+        base.copy(
+            primary = FutabaSurface,
+            onPrimary = FutabaText,
+            primaryContainer = FutabaLabelSurface,
+            onPrimaryContainer = FutabaText,
+            inversePrimary = FutabaAccentRed,
+            secondary = FutabaNameGreen,
+            onSecondary = FutabaBackground,
+            secondaryContainer = FutabaSurface,
+            onSecondaryContainer = FutabaNameGreen,
+            tertiary = FutabaAccentRed,
+            onTertiary = FutabaBackground,
+            tertiaryContainer = FutabaSurfaceVariant,
+            onTertiaryContainer = FutabaText,
+            background = FutabaBackground,
+            onBackground = FutabaText,
+            surface = FutabaSurface,
+            onSurface = FutabaText,
+            surfaceVariant = FutabaSurfaceVariant,
+            onSurfaceVariant = FutabaTextDim,
+            surfaceTint = FutabaSurface,
+            error = FutabaAccentRed,
+            onError = FutabaBackground,
+            errorContainer = FutabaSurfaceVariant,
+            onErrorContainer = FutabaText,
+            outline = FutabaText,
+            outlineVariant = FutabaTextDim
+        )
+    }
+}
+
 sealed interface ThreadUiState {
     data object Loading : ThreadUiState
     data class Error(val message: String = "スレッドを読み込めませんでした") : ThreadUiState
@@ -4717,6 +4765,13 @@ fun ThreadScreen(
         }
     }
 
+    val futabaThreadColorScheme = rememberFutabaThreadColorScheme()
+
+    MaterialTheme(
+        colorScheme = futabaThreadColorScheme,
+        typography = MaterialTheme.typography,
+        shapes = MaterialTheme.shapes
+    ) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = isDrawerOpen,
@@ -5253,6 +5308,7 @@ fun ThreadScreen(
         )
     }
 }
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadTopBar(
@@ -5666,10 +5722,13 @@ private fun ThreadContent(
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (index != page.posts.lastIndex) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                            thickness = 1.dp
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                )
                         )
                     }
                 }
@@ -5822,6 +5881,7 @@ private fun ThreadPostCard(
             posterIdLabel = posterIdLabel,
             posterIdValue = posterIdValue,
             saidaneLabel = saidaneLabel,
+            onUrlClick = onUrlClick,
             onSaidaneClick = onSaidaneClick,
             onPosterIdClick = onPosterIdClick,
             onReferencedByClick = onReferencedByClick
@@ -5865,6 +5925,7 @@ private fun ThreadPostMetadata(
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
     saidaneLabel: String?,
+    onUrlClick: (String) -> Unit,
     onSaidaneClick: (() -> Unit)? = null,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null
@@ -5876,8 +5937,8 @@ private fun ThreadPostMetadata(
         val subjectText = post.subject?.ifBlank { "無題" } ?: "無題"
         val authorText = post.author?.ifBlank { "名無し" } ?: "名無し"
         val subjectColor = when {
-            subjectText.contains("無念") || subjectText.contains("株") -> Color(0xFFD32F2F)
-            isOp -> MaterialTheme.colorScheme.primary
+            subjectText.contains("無念") || subjectText.contains("株") -> MaterialTheme.colorScheme.tertiary
+            isOp -> MaterialTheme.colorScheme.onSurface
             else -> MaterialTheme.colorScheme.onSurface
         }
         Row(
@@ -5889,7 +5950,7 @@ private fun ThreadPostMetadata(
                 text = (post.order ?: 0).toString(),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFD32F2F)
+                color = MaterialTheme.colorScheme.tertiary
             )
             Text(
                 text = subjectText,
@@ -5901,7 +5962,7 @@ private fun ThreadPostMetadata(
             Text(
                 text = authorText,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF2E7D32)
+                color = MaterialTheme.colorScheme.secondary
             )
             Spacer(modifier = Modifier.weight(1f))
             if (post.referencedCount > 0) {
@@ -5910,6 +5971,17 @@ private fun ThreadPostMetadata(
                     onClick = onReferencedByClick
                 )
             }
+        }
+        val fileName = extractFileNameFromUrl(post.imageUrl ?: post.thumbnailUrl)
+        val targetUrl = post.imageUrl ?: post.thumbnailUrl
+        if (fileName != null && targetUrl != null) {
+            Text(
+                text = fileName,
+                style = MaterialTheme.typography.bodySmall,
+                color = FutabaLinkColor,
+                textDecoration = TextDecoration.None,
+                modifier = Modifier.clickable { onUrlClick(targetUrl) }
+            )
         }
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -5937,7 +6009,7 @@ private fun ThreadPostMetadata(
                         modifier = idModifier,
                         text = label.text,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (label.highlight) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (label.highlight) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 if (saidaneLabel != null && onSaidaneClick != null) {
@@ -6420,7 +6492,7 @@ private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)
 private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
 
 private val urlSpanStyle = SpanStyle(
-    color = Color(0xFF1E88E5),
+    color = FutabaLinkColor,
     textDecoration = TextDecoration.Underline
 )
 
@@ -6446,7 +6518,7 @@ private fun buildAnnotatedMessage(
             val content = line.trimEnd()
             val isQuote = content.startsWith(">") || content.startsWith("＞")
             if (isQuote) {
-                val spanStyle = SpanStyle(color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
+                val spanStyle = SpanStyle(color = FutabaQuoteGreen, fontWeight = FontWeight.SemiBold)
                 val reference = quoteReferences.getOrNull(referenceIndex)
                 if (reference != null && reference.targetPostIds.isNotEmpty()) {
                     pushStringAnnotation(QUOTE_ANNOTATION_TAG, referenceIndex.toString())
@@ -7482,7 +7554,7 @@ private fun ReplyCountLabel(
         text = "${count}レス",
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
-        color = Color(0xFFD32F2F)
+        color = MaterialTheme.colorScheme.tertiary
     )
 }
 
@@ -7495,10 +7567,10 @@ private fun SaidaneLink(
     Text(
         text = normalized,
         style = MaterialTheme.typography.labelMedium.copy(
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.SemiBold
         ),
-        textDecoration = TextDecoration.Underline,
+        textDecoration = TextDecoration.None,
         modifier = Modifier.clickable(onClick = onClick)
     )
 }
