@@ -6385,13 +6385,23 @@ private fun QuoteSelectionDialog(
                         .map { it.content }
                     onConfirm(lines)
                 },
-                enabled = selectedIds.isNotEmpty()
+                enabled = selectedIds.isNotEmpty(),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             ) {
                 Text("コピー")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            ) {
                 Text("キャンセル")
             }
         },
