@@ -82,6 +82,7 @@ internal object ThreadHtmlParserCore {
         pattern = "<img[^>]+src=['\"]([^'\"]*/thumb/[^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    private const val ISOLATION_NOTICE_TEXT = "削除依頼によって隔離されました"
     // FIX: ReDoS対策 - 非貪欲量指定子を使用
     private val saidaneRegex = Regex(
         pattern = "<a\\s+[^>]{0,200}?class=['\"]?sod['\"]?[^>]{0,200}?>([^<]{1,500}?)</a>",
@@ -343,6 +344,8 @@ internal object ThreadHtmlParserCore {
         val messageHtml = extractBetween(block, blockquoteRegex, blockquoteEndRegex)
             ?.let(::cleanMessageHtml)
             .orEmpty()
+        val normalizedMessageText = normalizeMessageText(messageHtml)
+        if (containsIsolationNotice(normalizedMessageText)) return null
         val imageUrl = srcLinkRegex.find(block)?.groupValues?.getOrNull(1)?.let { resolveUrl(it, baseUrl) }
         val thumbnailUrl = thumbImgRegex.find(block)?.groupValues?.getOrNull(1)?.let { resolveUrl(it, baseUrl) }
         val order = orderRegex.find(block)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -392,6 +395,17 @@ internal object ThreadHtmlParserCore {
         value.replace(Regex("(?i)<br\\s*/?>"), "\n"),
         ""
     )
+
+    private fun normalizeMessageText(messageHtml: String): String {
+        if (messageHtml.isEmpty()) return ""
+        val plain = decodeHtmlEntities(stripTags(messageHtml))
+        return plain.replace(Regex("\\s+"), "")
+    }
+
+    private fun containsIsolationNotice(normalizedMessageText: String): Boolean {
+        if (normalizedMessageText.isEmpty()) return false
+        return normalizedMessageText.contains(ISOLATION_NOTICE_TEXT)
+    }
 
     private fun decodeHtmlEntities(value: String): String {
         return HtmlEntityDecoder.decode(value)

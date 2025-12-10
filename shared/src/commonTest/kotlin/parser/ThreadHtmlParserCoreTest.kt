@@ -58,6 +58,37 @@ class ThreadHtmlParserCoreTest {
     }
 
     @Test
+    fun parseThread_hidesIsolationNoticePosts() {
+        val html = """
+            <html>
+            <head><link rel="canonical" href="https://www.example.com/res/500.htm"></head>
+            <body>
+            <div class="thre" data-res="500">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.500</span>
+            <blockquote>OP body</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:01:00 ID:DEL</span><span class="cno">No.501</span>
+            <blockquote>削除依頼によって隔離されました<br>二行目</blockquote>
+            </td></tr>
+            </table>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:02:00 ID:OK</span><span class="cno">No.502</span>
+            <blockquote>通常レス</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertEquals(listOf("500", "502"), page.posts.map { it.id })
+    }
+
+    @Test
     fun extractOpImageUrl_returnsFirstSrcLinkFromSnippet() {
         val snippet = sampleThreadHtml
             .lineSequence()
