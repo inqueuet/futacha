@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -1464,6 +1465,9 @@ fun CatalogScreen(
     val persistentDisplayStyleState = stateStore?.catalogDisplayStyle?.collectAsState(initial = CatalogDisplayStyle.Grid)
     var localCatalogDisplayStyle by rememberSaveable { mutableStateOf(CatalogDisplayStyle.Grid) }
     val catalogDisplayStyle = persistentDisplayStyleState?.value ?: localCatalogDisplayStyle
+    val persistentGridColumnsState = stateStore?.catalogGridColumns?.collectAsState(initial = DEFAULT_CATALOG_GRID_COLUMNS)
+    var localCatalogGridColumns by rememberSaveable { mutableStateOf(DEFAULT_CATALOG_GRID_COLUMNS) }
+    val catalogGridColumns = persistentGridColumnsState?.value ?: localCatalogGridColumns
     val updateCatalogDisplayStyle: (CatalogDisplayStyle) -> Unit = { style ->
         if (stateStore != null) {
             coroutineScope.launch {
@@ -1471,6 +1475,16 @@ fun CatalogScreen(
             }
         } else {
             localCatalogDisplayStyle = style
+        }
+    }
+    val updateCatalogGridColumns: (Int) -> Unit = { columns ->
+        val clamped = columns.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)
+        if (stateStore != null) {
+            coroutineScope.launch {
+                stateStore.setCatalogGridColumns(clamped)
+            }
+        } else {
+            localCatalogGridColumns = clamped
         }
     }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
@@ -1685,6 +1699,7 @@ fun CatalogScreen(
                         onRefresh = performRefresh,
                         isRefreshing = isRefreshing,
                         displayStyle = catalogDisplayStyle,
+                        gridColumns = catalogGridColumns,
                         gridState = catalogGridState,
                         listState = catalogListState,
                         modifier = contentModifier
@@ -1746,9 +1761,13 @@ fun CatalogScreen(
         if (showDisplayStyleDialog) {
             DisplayStyleDialog(
                 currentStyle = catalogDisplayStyle,
+                currentGridColumns = catalogGridColumns,
                 onStyleSelected = { style ->
                     updateCatalogDisplayStyle(style)
                     showDisplayStyleDialog = false
+                },
+                onGridColumnsSelected = { columns ->
+                    updateCatalogGridColumns(columns)
                 },
                 onDismiss = { showDisplayStyleDialog = false }
             )
@@ -2675,6 +2694,7 @@ private fun CatalogSuccessContent(
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     displayStyle: CatalogDisplayStyle,
+    gridColumns: Int,
     gridState: LazyGridState,
     listState: LazyListState,
     modifier: Modifier = Modifier
@@ -2693,6 +2713,7 @@ private fun CatalogSuccessContent(
                 onThreadSelected = onThreadSelected,
                 onRefresh = onRefresh,
                 isRefreshing = isRefreshing,
+                gridColumns = gridColumns,
                 gridState = gridState,
                 modifier = modifier
             )
@@ -2736,6 +2757,7 @@ private fun CatalogGrid(
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
+    gridColumns: Int,
     gridState: LazyGridState,
     modifier: Modifier = Modifier
 ) {
@@ -2844,7 +2866,7 @@ private fun CatalogGrid(
                     }
                 }
             },
-        columns = GridCells.Fixed(5),
+        columns = GridCells.Fixed(gridColumns.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         contentPadding = PaddingValues(
@@ -3670,10 +3692,13 @@ private fun WatchWordsSheet(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DisplayStyleDialog(
     currentStyle: CatalogDisplayStyle,
+    currentGridColumns: Int,
     onStyleSelected: (CatalogDisplayStyle) -> Unit,
+    onGridColumnsSelected: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -3698,6 +3723,28 @@ private fun DisplayStyleDialog(
                             text = style.label,
                             style = MaterialTheme.typography.bodyLarge
                         )
+                    }
+                }
+                if (currentStyle == CatalogDisplayStyle.Grid) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "列数",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        (MIN_CATALOG_GRID_COLUMNS..MAX_CATALOG_GRID_COLUMNS).forEach { columns ->
+                            FilterChip(
+                                selected = columns == currentGridColumns,
+                                onClick = { onGridColumnsSelected(columns) },
+                                label = { Text("${columns}列") }
+                            )
+                        }
                     }
                 }
             }
@@ -3882,6 +3929,10 @@ private enum class CatalogSettingsMenuItem(
     ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop, "グリッドの先頭へ移動"),
     Privacy("プライバシー", Icons.Rounded.Lock, "プライバシー設定を確認")
 }
+
+private const val DEFAULT_CATALOG_GRID_COLUMNS = 5
+private const val MIN_CATALOG_GRID_COLUMNS = 2
+private const val MAX_CATALOG_GRID_COLUMNS = 8
 
 private const val AUTO_SAVE_INTERVAL_MS = 60_000L
 private const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
@@ -4914,6 +4965,11 @@ fun ThreadScreen(
                                 actionTargetPost = post
                                 isActionSheetVisible = true
                             },
+                            onQuoteRequestedForPost = { post ->
+                                isActionSheetVisible = false
+                                actionTargetPost = null
+                                quoteSelectionTarget = post
+                            },
                             onSaidaneClick = handleSaidaneAction,
                             onMediaClick = handleMediaClick,
                             onUrlClick = urlLauncher,
@@ -5536,6 +5592,7 @@ private fun ThreadContent(
     saidaneOverrides: Map<String, String>,
     searchHighlightRanges: Map<String, List<IntRange>>,
     onPostLongPress: (Post) -> Unit,
+    onQuoteRequestedForPost: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
     onUrlClick: (String) -> Unit,
@@ -5695,6 +5752,7 @@ private fun ThreadContent(
                             showQuotePreview(reference.text, targets)
                         },
                         onUrlClick = onUrlClick,
+                        onQuoteRequested = { onQuoteRequestedForPost(post) },
                         onPosterIdClick = normalizedPosterId
                             ?.let { normalizedId ->
                                 postsByPosterId[normalizedId]
@@ -5835,6 +5893,7 @@ private fun ThreadPostCard(
     highlightRanges: List<IntRange> = emptyList(),
     onQuoteClick: (QuoteReference) -> Unit,
     onUrlClick: (String) -> Unit,
+    onQuoteRequested: (() -> Unit)? = null,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
@@ -5882,6 +5941,7 @@ private fun ThreadPostCard(
             posterIdValue = posterIdValue,
             saidaneLabel = saidaneLabel,
             onUrlClick = onUrlClick,
+            onQuoteRequested = onQuoteRequested,
             onSaidaneClick = onSaidaneClick,
             onPosterIdClick = onPosterIdClick,
             onReferencedByClick = onReferencedByClick
@@ -5926,6 +5986,7 @@ private fun ThreadPostMetadata(
     posterIdValue: String?,
     saidaneLabel: String?,
     onUrlClick: (String) -> Unit,
+    onQuoteRequested: (() -> Unit)? = null,
     onSaidaneClick: (() -> Unit)? = null,
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null
@@ -5972,17 +6033,6 @@ private fun ThreadPostMetadata(
                 )
             }
         }
-        val fileName = extractFileNameFromUrl(post.imageUrl ?: post.thumbnailUrl)
-        val targetUrl = post.imageUrl ?: post.thumbnailUrl
-        if (fileName != null && targetUrl != null) {
-            Text(
-                text = fileName,
-                style = MaterialTheme.typography.bodySmall,
-                color = FutabaLinkColor,
-                textDecoration = TextDecoration.None,
-                modifier = Modifier.clickable { onUrlClick(targetUrl) }
-            )
-        }
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -6024,6 +6074,41 @@ private fun ThreadPostMetadata(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            val fileName = extractFileNameFromUrl(post.imageUrl ?: post.thumbnailUrl)
+            val targetUrl = post.imageUrl ?: post.thumbnailUrl
+            if (fileName != null && targetUrl != null) {
+                var showFileMenu by remember { mutableStateOf(false) }
+                Box {
+                    Text(
+                        text = fileName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = FutabaLinkColor,
+                        textDecoration = TextDecoration.None,
+                        modifier = Modifier.clickable { showFileMenu = true }
+                    )
+                    DropdownMenu(
+                        expanded = showFileMenu,
+                        onDismissRequest = { showFileMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("添付を開く") },
+                            onClick = {
+                                showFileMenu = false
+                                onUrlClick(targetUrl)
+                            }
+                        )
+                        onQuoteRequested?.let { quote ->
+                            DropdownMenuItem(
+                                text = { Text("引用") },
+                                onClick = {
+                                    showFileMenu = false
+                                    quote()
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

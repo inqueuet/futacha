@@ -29,6 +29,7 @@ private class AndroidPlatformStateStorage(
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
+    private val gridColumnsKey = stringPreferencesKey("catalog_grid_columns")
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
     private val attachmentPickerPreferenceKey = stringPreferencesKey("attachment_picker_preference")
     private val saveDirectorySelectionKey = stringPreferencesKey("save_directory_selection")
@@ -94,6 +95,10 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[displayStyleKey] }
+    override val catalogGridColumns: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[gridColumnsKey] }
 
     override val ngHeadersJson: Flow<String?> =
         context.dataStore.data
@@ -240,6 +245,15 @@ private class AndroidPlatformStateStorage(
         } catch (e: Exception) {
             println("AndroidPlatformStateStorage: Failed to update catalog display style: ${e.message}")
             throw StorageException("Failed to save catalog display style", e)
+        }
+    }
+
+    override suspend fun updateCatalogGridColumns(columns: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[gridColumnsKey] = columns }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update catalog grid columns: ${e.message}")
+            throw StorageException("Failed to save catalog grid columns", e)
         }
     }
 

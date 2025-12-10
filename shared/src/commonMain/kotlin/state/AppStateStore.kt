@@ -41,6 +41,10 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
+private const val DEFAULT_CATALOG_GRID_COLUMNS = 5
+private const val MIN_CATALOG_GRID_COLUMNS = 2
+private const val MAX_CATALOG_GRID_COLUMNS = 8
+
 // FIX: KMP対応のスレッドセーフJobマップクラス
 private class AtomicJobMap {
     private val mutex = Mutex()
@@ -137,6 +141,9 @@ class AppStateStore internal constructor(
     }
     val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
         decodeCatalogDisplayStyle(raw)
+    }
+    val catalogGridColumns: Flow<Int> = storage.catalogGridColumns.map { raw ->
+        decodeCatalogGridColumns(raw)
     }
     val ngHeaders: Flow<List<String>> = storage.ngHeadersJson.map { raw ->
         decodeStringList(raw)
@@ -276,6 +283,15 @@ class AppStateStore internal constructor(
             storage.updateCatalogDisplayStyle(style.name)
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save catalog display style: ${style.name}", e)
+        }
+    }
+
+    suspend fun setCatalogGridColumns(columns: Int) {
+        val clamped = columns.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)
+        try {
+            storage.updateCatalogGridColumns(clamped.toString())
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save catalog grid columns: $clamped", e)
         }
     }
 
@@ -644,6 +660,11 @@ class AppStateStore internal constructor(
         } ?: CatalogDisplayStyle.Grid
     }
 
+    private fun decodeCatalogGridColumns(raw: String?): Int {
+        val parsed = raw?.toIntOrNull() ?: DEFAULT_CATALOG_GRID_COLUMNS
+        return parsed.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)
+    }
+
     private fun decodeCatalogModeMap(raw: String?): Map<String, CatalogMode> {
         if (raw.isNullOrBlank()) return emptyMap()
         return runCatching {
@@ -779,6 +800,7 @@ internal interface PlatformStateStorage {
     val saveDirectorySelection: Flow<String?>
     val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
+    val catalogGridColumns: Flow<String?>
     val ngHeadersJson: Flow<String?>
     val ngWordsJson: Flow<String?>
     val catalogNgWordsJson: Flow<String?>
@@ -801,6 +823,7 @@ internal interface PlatformStateStorage {
     suspend fun updateSaveDirectorySelection(selection: String)
     suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)
+    suspend fun updateCatalogGridColumns(columns: String)
     suspend fun updateNgHeadersJson(value: String)
     suspend fun updateNgWordsJson(value: String)
     suspend fun updateCatalogNgWordsJson(value: String)

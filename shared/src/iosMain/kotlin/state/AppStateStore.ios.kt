@@ -8,6 +8,7 @@ import platform.Foundation.NSUserDefaults
 private const val BOARDS_KEY = "boards_json"
 private const val HISTORY_KEY = "history_json"
 private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
+private const val CATALOG_GRID_COLUMNS_KEY = "catalog_grid_columns"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
@@ -36,6 +37,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val boardsState = MutableStateFlow(defaults.stringForKey(BOARDS_KEY))
     private val historyState = MutableStateFlow(defaults.stringForKey(HISTORY_KEY))
     private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
+    private val gridColumnsState = MutableStateFlow(defaults.stringForKey(CATALOG_GRID_COLUMNS_KEY))
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
     private val backgroundRefreshState = MutableStateFlow(defaults.boolForKey(BACKGROUND_REFRESH_KEY))
     private val lightweightModeState = MutableStateFlow(defaults.boolForKey(LIGHTWEIGHT_MODE_KEY))
@@ -67,6 +69,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
+    override val catalogGridColumns: Flow<String?> = gridColumnsState
     override val ngHeadersJson: Flow<String?> = ngHeadersState
     override val ngWordsJson: Flow<String?> = ngWordsState
     override val catalogNgWordsJson: Flow<String?> = catalogNgWordsState
@@ -137,6 +140,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaults.setObject(style, forKey = CATALOG_DISPLAY_STYLE_KEY)
         defaults.synchronize()
         displayStyleState.value = style
+    }
+
+    override suspend fun updateCatalogGridColumns(columns: String) {
+        defaults.setObject(columns, forKey = CATALOG_GRID_COLUMNS_KEY)
+        defaults.synchronize()
+        gridColumnsState.value = columns
     }
 
     override suspend fun updateNgHeadersJson(value: String) {
