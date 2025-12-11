@@ -5,6 +5,7 @@ data class CatalogItem(
     val threadUrl: String,
     val title: String?,
     val thumbnailUrl: String?,
+    val fullImageUrl: String?,
     val thumbnailWidth: Int? = null,
     val thumbnailHeight: Int? = null,
     val replyCount: Int,

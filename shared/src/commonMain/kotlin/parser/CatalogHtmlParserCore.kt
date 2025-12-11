@@ -108,16 +108,57 @@ internal object CatalogHtmlParserCore {
                 val cell = normalized.substring(cellContentStart, cellEndIndex)
 
                 // Parse cell content
-                val hrefMatch = anchorRegex.find(cell)
-                val href = hrefMatch?.groupValues?.getOrNull(1)
-                val threadId = href?.let { threadIdRegex.find(it)?.groupValues?.getOrNull(1) }
+                val allHrefs = anchorRegex.findAll(cell).mapNotNull { it.groupValues.getOrNull(1) }.toList()
+                val threadHref = allHrefs.find { threadIdRegex.matches(it) }
+                val threadId = threadHref?.let { threadIdRegex.find(it)?.groupValues?.getOrNull(1) }
 
                 if (threadId != null) {
+                    val fullImageUrlHref = allHrefs.find {
+                        it != threadHref && (
+                            it.endsWith(".jpg", ignoreCase = true) || it.endsWith(".jpeg", ignoreCase = true) ||
+                                it.endsWith(".png", ignoreCase = true) || it.endsWith(".gif", ignoreCase = true) ||
+                                it.endsWith(".webp", ignoreCase = true) || it.endsWith(".mp4", ignoreCase = true) ||
+                                it.endsWith(".webm", ignoreCase = true)
+                            )
+                    }
+
                     val imageMatch = imageRegex.find(cell)
-                    val thumbnail = imageMatch
+                    val rawThumbnail = imageMatch
                         ?.groupValues
                         ?.getOrNull(1)
                         ?.let { resolveUrl(it, resolvedBaseUrl) }
+                    
+                    // Use /thumb/ instead of /cat/ for higher quality thumbnails.
+                    // Futaba thumbnails in /thumb/ are standardized to .jpg.
+                    // We enforce .jpg extension to avoid issues if /cat/ had a different extension (e.g. .gif)
+                    // but the high-res thumb is .jpg.
+                    val thumbnail = rawThumbnail?.let { raw ->
+                        val withThumbDir = raw.replace("/cat/", "/thumb/")
+                        // Ensure extension is .jpg (case-insensitive replace)
+                        if (withThumbDir.endsWith(".jpg", ignoreCase = true)) {
+                            withThumbDir
+                        } else {
+                            // Replace extension with .jpg
+                            withThumbDir.replace(Regex("\\.[a-zA-Z0-9]+$"), ".jpg")
+                        }
+                    }
+
+                    var fullImageUrl = fullImageUrlHref?.let { resolveUrl(it, resolvedBaseUrl) }
+                    
+                    // If full image is missing, try to guess from thumbnail
+                    if (fullImageUrl == null && thumbnail != null && thumbnail.contains("/thumb/")) {
+                        // Try to guess the source URL.
+                        // Standard pattern: /thumb/123s.jpg -> /src/123.jpg
+                        // We must handle case sensitivity: 123S.JPG -> 123.JPG
+                        // Also, 123s.jpg -> 123.jpg
+                        
+                        // First switch directory
+                        val srcBase = thumbnail.replace("/thumb/", "/src/")
+                        
+                        // Then strip the trailing 's' (or 'S') from the filename, preserving extension case
+                        fullImageUrl = srcBase.replace(Regex("(?i)s(\\.[a-zA-Z0-9]+)$"), "$1")
+                    }
+
                     val imageTag = imageMatch?.value
                     val width = imageTag
                         ?.let { widthAttrRegex.find(it) }
@@ -136,9 +177,10 @@ internal object CatalogHtmlParserCore {
 
                     items.add(CatalogItem(
                         id = threadId,
-                        threadUrl = resolveUrl(href, resolvedBaseUrl),
+                        threadUrl = resolveUrl(threadHref, resolvedBaseUrl),
                         title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${items.size + 1}",
                         thumbnailUrl = thumbnail,
+                        fullImageUrl = fullImageUrl,
                         thumbnailWidth = width,
                         thumbnailHeight = height,
                         replyCount = replies

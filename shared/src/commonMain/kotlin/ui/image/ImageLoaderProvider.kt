@@ -5,8 +5,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import coil3.ImageLoader
 import coil3.compose.LocalPlatformContext
+import coil3.decode.Decoder
 import coil3.disk.DiskCache
+import coil3.intercept.Interceptor
 import coil3.memory.MemoryCache
+import coil3.request.ErrorResult
+import coil3.request.ImageResult
+import coil3.request.SuccessResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -33,6 +38,8 @@ val LocalFutachaImageLoader = staticCompositionLocalOf<ImageLoader> {
     error("FutachaImageLoader is not provided")
 }
 
+expect fun getPlatformDecoders(): List<Decoder.Factory>
+
 @Composable
 @OptIn(ExperimentalCoroutinesApi::class)
 fun rememberFutachaImageLoader(
@@ -58,6 +65,10 @@ fun rememberFutachaImageLoader(
     }
     return remember(platformContext, fetcherDispatcher, memoryCache, diskCache) {
         ImageLoader.Builder(platformContext)
+            .components {
+                add(FutabaExtensionFallbackInterceptor())
+                getPlatformDecoders().forEach { add(it) }
+            }
             .fetcherCoroutineContext(fetcherDispatcher)
             .decoderCoroutineContext(fetcherDispatcher)
             .memoryCache { memoryCache }
@@ -67,6 +78,38 @@ fun rememberFutachaImageLoader(
                 }
             }
             .build()
+    }
+}
+
+/**
+ * Interceptor that attempts to find the correct file extension for Futaba images.
+ * Since the catalog parser guesses .jpg for full images, this interceptor handles
+ * cases where the actual file is .gif, .png, .webm, or .mp4.
+ */
+private class FutabaExtensionFallbackInterceptor : Interceptor {
+    override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
+        val initialRequest = chain.request
+        val initialResult = chain.proceed()
+
+        // Only retry if we got an error and the URL looks like a Futaba source URL ending in .jpg
+        if (initialResult is ErrorResult) {
+            val url = initialRequest.data.toString()
+            if (url.contains("/src/") && url.endsWith(".jpg", ignoreCase = true)) {
+                // Try extensions in order of likelihood for "playable" or static content
+                val extensions = listOf(".webp", ".gif", ".png", ".mp4", ".webm")
+                
+                for (ext in extensions) {
+                    val newUrl = url.replace(Regex("(?i)\\.jpg$"), ext)
+                    val newRequest = initialRequest.newBuilder().data(newUrl).build()
+                    val newResult = chain.withRequest(newRequest).proceed()
+                    
+                    if (newResult is SuccessResult) {
+                        return newResult
+                    }
+                }
+            }
+        }
+        return initialResult
     }
 }
 

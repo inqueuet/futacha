@@ -1936,6 +1936,7 @@ fun CatalogScreen(
                         threadUrl = item.htmlUrl,
                         title = item.title,
                         thumbnailUrl = item.thumbUrl,
+                        fullImageUrl = item.thumbUrl,
                         replyCount = 0
                     )
                     isPastSearchSheetVisible = false
@@ -3086,16 +3087,7 @@ private fun CatalogList(
     }
 }
 
-@Composable
-private fun rememberResolvedCatalogThumbnailUrl(
-    item: CatalogItem,
-    boardUrl: String?,
-    repository: BoardRepository
-): Pair<String?, Boolean> {
-    // カタログではサムネイルのみを表示し、フルサイズ画像の先行読み込みは行わない
-    // これにより、大量のAPIリクエストとメモリスパイクを防ぐ
-    return Pair(item.thumbnailUrl, false)
-}
+
 
 @Composable
 private fun CatalogCard(
@@ -3107,54 +3099,35 @@ private fun CatalogCard(
 ) {
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
-    val (resolvedThumbnailUrl, isLoadingFullsize) = rememberResolvedCatalogThumbnailUrl(
-        item = item,
-        boardUrl = boardUrl,
-        repository = repository
-    )
 
     // 4列グリッドでの推定カードサイズ（画面幅360dpの場合約75dp）
     // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
 
-    // サムネイル画像（初期表示用）
-    val thumbnailUrl = item.thumbnailUrl ?: ""
+    val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
+    val thumbnailUrl = item.thumbnailUrl
 
-    // 表示する画像URL（フルサイズまたはサムネイル）
-    val imageUrlToShow = resolvedThumbnailUrl ?: ""
-
-    // 画像リクエストを作成（resolvedThumbnailUrlが変わったときのみ再作成）
-    val imageRequest = remember(imageUrlToShow, targetSizePx) {
+    // 画像リクエストを作成
+    val imageRequest = remember(imageUrl, thumbnailUrl, targetSizePx) {
         ImageRequest.Builder(platformContext)
-            .data(imageUrlToShow.takeIf { it.isNotBlank() })
+            .data(imageUrl)
             .crossfade(true)
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
             .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
             .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .build()
-    }
-
-    // サムネイル画像のリクエスト（フォールバック用）
-    val thumbnailRequest = remember(thumbnailUrl, targetSizePx) {
-        ImageRequest.Builder(platformContext)
-            .data(thumbnailUrl.takeIf { it.isNotBlank() })
-            .size(targetSizePx, targetSizePx)
-            .precision(Precision.INEXACT)
-            .scale(Scale.FIT)
-            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+            .apply {
+                if (!thumbnailUrl.isNullOrBlank()) {
+                    placeholderMemoryCacheKey(thumbnailUrl)
+                }
+            }
             .build()
     }
 
     val imageLoader = LocalFutachaImageLoader.current
     val imagePainter = rememberAsyncImagePainter(
         model = imageRequest,
-        imageLoader = imageLoader
-    )
-    val thumbnailPainter = rememberAsyncImagePainter(
-        model = thumbnailRequest,
         imageLoader = imageLoader
     )
 
@@ -3181,41 +3154,19 @@ private fun CatalogCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUrlToShow.isBlank()) {
+                if (imageUrl.isNullOrBlank()) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    // フルサイズ画像がロード中またはエラーの場合はサムネイルを表示
-                    val painterState = imagePainter.state
-                    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
-                    val shouldShowThumbnail = thumbnailUrl.isNotBlank() &&
-                                             imageUrlToShow != thumbnailUrl &&
-                                             (painterState is AsyncImagePainter.State.Loading ||
-                                              painterState is AsyncImagePainter.State.Error)
-
-                    when {
-                        shouldShowThumbnail -> {
-                            // サムネイル画像を表示（フルサイズ画像のロード中）
-                            Image(
-                                painter = thumbnailPainter,
-                                contentDescription = item.title ?: "サムネイル",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        else -> {
-                            // フルサイズ画像またはサムネイルのみの場合
-                            Image(
-                                painter = imagePainter,
-                                contentDescription = item.title ?: "サムネイル",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
+                    Image(
+                        painter = imagePainter,
+                        contentDescription = item.title ?: "サムネイル",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
                 if (item.replyCount > 0) {
                     Surface(
@@ -3262,51 +3213,32 @@ private fun CatalogListItem(
 ) {
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
-    val (resolvedThumbnailUrl, isLoadingFullsize) = rememberResolvedCatalogThumbnailUrl(
-        item = item,
-        boardUrl = boardUrl,
-        repository = repository
-    )
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
 
-    // サムネイル画像（初期表示用）
-    val thumbnailUrl = item.thumbnailUrl ?: ""
-
-    // 表示する画像URL（フルサイズまたはサムネイル）
-    val imageUrlToShow = resolvedThumbnailUrl ?: ""
+    val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
+    val thumbnailUrl = item.thumbnailUrl
 
     // 画像リクエストを作成
-    val imageRequest = remember(imageUrlToShow, targetSizePx) {
+    val imageRequest = remember(imageUrl, thumbnailUrl, targetSizePx) {
         ImageRequest.Builder(platformContext)
-            .data(imageUrlToShow.takeIf { it.isNotBlank() })
+            .data(imageUrl)
             .crossfade(true)
             .size(targetSizePx, targetSizePx)
             .precision(Precision.INEXACT)
             .scale(Scale.FIT)
             .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
             .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .build()
-    }
-
-    // サムネイル画像のリクエスト（フォールバック用）
-    val thumbnailRequest = remember(thumbnailUrl, targetSizePx) {
-        ImageRequest.Builder(platformContext)
-            .data(thumbnailUrl.takeIf { it.isNotBlank() })
-            .size(targetSizePx, targetSizePx)
-            .precision(Precision.INEXACT)
-            .scale(Scale.FIT)
-            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+            .apply {
+                if (!thumbnailUrl.isNullOrBlank()) {
+                    placeholderMemoryCacheKey(thumbnailUrl)
+                }
+            }
             .build()
     }
 
     val imageLoader = LocalFutachaImageLoader.current
     val imagePainter = rememberAsyncImagePainter(
         model = imageRequest,
-        imageLoader = imageLoader
-    )
-    val thumbnailPainter = rememberAsyncImagePainter(
-        model = thumbnailRequest,
         imageLoader = imageLoader
     )
 
@@ -3330,41 +3262,19 @@ private fun CatalogListItem(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUrlToShow.isBlank()) {
+                if (imageUrl.isNullOrBlank()) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    // フルサイズ画像がロード中またはエラーの場合はサムネイルを表示
-                    val painterState = imagePainter.state
-                    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
-                    val shouldShowThumbnail = thumbnailUrl.isNotBlank() &&
-                                             imageUrlToShow != thumbnailUrl &&
-                                             (painterState is AsyncImagePainter.State.Loading ||
-                                              painterState is AsyncImagePainter.State.Error)
-
-                    when {
-                        shouldShowThumbnail -> {
-                            // サムネイル画像を表示（フルサイズ画像のロード中）
-                            Image(
-                                painter = thumbnailPainter,
-                                contentDescription = item.title ?: "サムネイル",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        else -> {
-                            // フルサイズ画像またはサムネイルのみの場合
-                            Image(
-                                painter = imagePainter,
-                                contentDescription = item.title ?: "サムネイル",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
+                    Image(
+                        painter = imagePainter,
+                        contentDescription = item.title ?: "サムネイル",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))

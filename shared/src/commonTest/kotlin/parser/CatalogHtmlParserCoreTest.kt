@@ -25,7 +25,10 @@ class CatalogHtmlParserCoreTest {
         assertEquals(2, items.size)
         assertEquals("354621", items[0].id)
         assertEquals("https://www.example.com/res/354621.htm", items[0].threadUrl)
-        assertEquals("https://www.example.com/t/cat/1762145224666s.jpg", items[0].thumbnailUrl)
+        // Updated expectation: /cat/ -> /thumb/
+        assertEquals("https://www.example.com/t/thumb/1762145224666s.jpg", items[0].thumbnailUrl)
+        // Updated expectation: Derived full image URL
+        assertEquals("https://www.example.com/t/src/1762145224666.jpg", items[0].fullImageUrl)
         assertEquals(17, items[0].replyCount)
         assertEquals("17", items[0].title)
 

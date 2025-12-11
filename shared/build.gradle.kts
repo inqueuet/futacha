@@ -56,6 +56,8 @@ kotlin {
                 implementation(libs.androidx.media3.exoplayer)
                 implementation(libs.androidx.media3.ui)
                 implementation(libs.androidx.documentfile)
+                implementation(libs.coil3.video)
+                implementation(libs.coil3.gif)
             }
         }
         val androidUnitTest by getting
