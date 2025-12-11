@@ -159,6 +159,9 @@ class AppStateStore internal constructor(
     val watchWords: Flow<List<String>> = storage.watchWordsJson.map { raw ->
         decodeStringList(raw)
     }
+    val selfPostIdentifiersByThread: Flow<Map<String, List<String>>> = storage.selfPostIdentifiersJson.map { raw ->
+        decodeSelfPostIdentifierMap(raw)
+    }
     val selfPostIdentifiers: Flow<List<String>> = storage.selfPostIdentifiersJson.map { raw ->
         aggregateIdentifiers(decodeSelfPostIdentifierMap(raw))
     }

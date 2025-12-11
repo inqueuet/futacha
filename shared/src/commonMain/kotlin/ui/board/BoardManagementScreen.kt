@@ -188,6 +188,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -4177,8 +4178,16 @@ fun ThreadScreen(
     var selectedThreadFilterOptions by remember { mutableStateOf(emptySet<ThreadFilterOption>()) }
     var selectedThreadSortOption by rememberSaveable { mutableStateOf<ThreadFilterSortOption?>(null) }
     var threadFilterKeyword by rememberSaveable { mutableStateOf("") }
-    val persistedSelfPostIdentifiersState = stateStore?.selfPostIdentifiers?.collectAsState(initial = emptyList())
-    val persistedSelfPostIdentifiers = persistedSelfPostIdentifiersState?.value ?: emptyList()
+    val persistedSelfPostIdentifiersState = stateStore?.selfPostIdentifiersByThread?.collectAsState(initial = emptyMap())
+    val persistedSelfPostIdentifiers = persistedSelfPostIdentifiersState?.value?.get(threadId) ?: emptyList()
+    val selfPostIdentifierSet = remember(threadId, persistedSelfPostIdentifiers) {
+        persistedSelfPostIdentifiers
+            .mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() } }
+            .toSet()
+    }
+    val isSelfPost: (Post) -> Boolean = remember(selfPostIdentifierSet) {
+        { post -> selfPostIdentifierSet.contains(post.id.trim()) }
+    }
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
     var isCookieManagementVisible by remember { mutableStateOf(false) }
     var isNgManagementVisible by remember { mutableStateOf(false) }
@@ -4794,7 +4803,12 @@ fun ThreadScreen(
         }
     }
 
-    val handleSaidaneAction: (Post) -> Unit = { post ->
+    val handleSaidaneAction: (Post) -> Unit = handleSaidaneAction@{ post ->
+        if (isSelfPost(post)) {
+            isActionSheetVisible = false
+            coroutineScope.launch { snackbarHostState.showSnackbar("自分のレスにはそうだねできません") }
+            return@handleSaidaneAction
+        }
         isActionSheetVisible = false
         val baseLabel = saidaneOverrides[post.id] ?: post.saidaneLabel
         launchThreadAction(
@@ -5033,6 +5047,7 @@ fun ThreadScreen(
                             page = filteredPage,
                             listState = lazyListState,
                             saidaneOverrides = saidaneOverrides,
+                            selfPostIdentifiers = selfPostIdentifierSet,
                             searchHighlightRanges = postHighlightRanges,
                             onPostLongPress = { post ->
                                 actionTargetPost = post
@@ -5084,6 +5099,7 @@ fun ThreadScreen(
             onQuote = { openQuoteSelection(sheetTarget) },
             onNgRegister = { handleNgRegistration(sheetTarget) },
             onSaidane = { handleSaidaneAction(sheetTarget) },
+            isSaidaneEnabled = !isSelfPost(sheetTarget),
             onDelRequest = { handleDelRequest(sheetTarget) },
             onDelete = { openDeleteDialog(sheetTarget) }
         )
@@ -5664,6 +5680,7 @@ private fun ThreadContent(
     page: ThreadPage,
     listState: LazyListState,
     saidaneOverrides: Map<String, String>,
+    selfPostIdentifiers: Set<String> = emptySet(),
     searchHighlightRanges: Map<String, List<IntRange>>,
     onPostLongPress: (Post) -> Unit,
     onQuoteRequestedForPost: (Post) -> Unit,
@@ -5813,10 +5830,12 @@ private fun ThreadContent(
                     items = page.posts,
                     key = { _, post -> post.id }
                 ) { index, post ->
+                    val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
                     val normalizedPosterId = normalizePosterIdValue(post.posterId)
                     ThreadPostCard(
                         post = post,
                         isOp = index == 0,
+                        isSelfPost = isSelfPost,
                         posterIdLabel = posterIdLabels[post.id],
                         posterIdValue = normalizedPosterId,
                         saidaneLabelOverride = saidaneOverrides[post.id],
@@ -5961,6 +5980,7 @@ private fun ThreadScrollbar(
 private fun ThreadPostCard(
     post: Post,
     isOp: Boolean,
+    isSelfPost: Boolean = false,
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
     saidaneLabelOverride: String?,
@@ -6011,6 +6031,7 @@ private fun ThreadPostCard(
         ThreadPostMetadata(
             post = post,
             isOp = isOp,
+            isSelfPost = isSelfPost,
             posterIdLabel = posterIdLabel,
             posterIdValue = posterIdValue,
             saidaneLabel = saidaneLabel,
@@ -6056,6 +6077,7 @@ private fun ThreadPostCard(
 private fun ThreadPostMetadata(
     post: Post,
     isOp: Boolean,
+    isSelfPost: Boolean = false,
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
     saidaneLabel: String?,
@@ -6137,8 +6159,10 @@ private fun ThreadPostMetadata(
                     )
                 }
                 if (saidaneLabel != null && onSaidaneClick != null) {
+                    val canSendSaidane = !isSelfPost
                     SaidaneLink(
                         label = saidaneLabel,
+                        enabled = canSendSaidane,
                         onClick = onSaidaneClick
                     )
                 }
@@ -6321,6 +6345,7 @@ private fun ThreadPostActionSheet(
     onQuote: () -> Unit,
     onNgRegister: () -> Unit,
     onSaidane: () -> Unit,
+    isSaidaneEnabled: Boolean = true,
     onDelRequest: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -6362,7 +6387,12 @@ private fun ThreadPostActionSheet(
                 },
                 headlineContent = { Text("そうだね") },
                 supportingContent = { Text("レスにそうだねを送信") },
-                modifier = Modifier.clickable { onSaidane() }
+                modifier = Modifier
+                    .alpha(if (isSaidaneEnabled) 1f else 0.5f)
+                    .clickable(
+                        enabled = isSaidaneEnabled,
+                        onClick = onSaidane
+                    )
             )
             ListItem(
                 leadingContent = {
@@ -7730,6 +7760,7 @@ private fun ReplyCountLabel(
 @Composable
 private fun SaidaneLink(
     label: String,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     val normalized = if (label == "+") "そうだね" else label
@@ -7740,7 +7771,10 @@ private fun SaidaneLink(
             fontWeight = FontWeight.SemiBold
         ),
         textDecoration = TextDecoration.None,
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.clickable(
+            enabled = enabled,
+            onClick = onClick
+        )
     )
 }
 
