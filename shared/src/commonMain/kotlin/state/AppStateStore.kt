@@ -135,6 +135,8 @@ class AppStateStore internal constructor(
         .map { raw -> decodeAttachmentPickerPreference(raw) }
     val saveDirectorySelection: Flow<SaveDirectorySelection> = storage.saveDirectorySelection
         .map { raw -> decodeSaveDirectorySelection(raw) }
+    val lastUsedDeleteKey: Flow<String> = storage.lastUsedDeleteKey
+        .map { raw -> raw?.take(8).orEmpty() }
 
     val catalogModes: Flow<Map<String, CatalogMode>> = storage.catalogModeMapJson.map { raw ->
         decodeCatalogModeMap(raw)
@@ -201,6 +203,15 @@ class AppStateStore internal constructor(
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save background refresh state: $enabled", e)
             // Log error but don't crash
+        }
+    }
+
+    suspend fun setLastUsedDeleteKey(deleteKey: String) {
+        val sanitized = deleteKey.trim().take(8)
+        try {
+            storage.updateLastUsedDeleteKey(sanitized)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to save last used delete key", e)
         }
     }
 
@@ -587,7 +598,8 @@ class AppStateStore internal constructor(
         defaultThreadMenuConfig: List<ThreadMenuItemConfig> = defaultThreadMenuConfig(),
         defaultThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig> = defaultThreadSettingsMenuConfig(),
         defaultThreadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-        defaultCatalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries()
+        defaultCatalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
+        defaultLastUsedDeleteKey: String = ""
     ) {
         try {
             storage.seedIfEmpty(
@@ -601,6 +613,7 @@ class AppStateStore internal constructor(
                 json.encodeToString(encodeCatalogModeMap(defaultCatalogModeMap)),
                 AttachmentPickerPreference.MEDIA.name,
                 SaveDirectorySelection.MANUAL_INPUT.name,
+                defaultLastUsedDeleteKey.take(8),
                 json.encodeToString(threadMenuConfigSerializer, normalizeThreadMenuConfig(defaultThreadMenuConfig)),
                 json.encodeToString(threadSettingsMenuConfigSerializer, normalizeThreadSettingsMenuConfig(defaultThreadSettingsMenuConfig)),
                 json.encodeToString(threadMenuEntriesSerializer, normalizeThreadMenuEntries(defaultThreadMenuEntries)),
@@ -798,6 +811,7 @@ internal interface PlatformStateStorage {
     val manualSaveDirectory: Flow<String>
     val attachmentPickerPreference: Flow<String?>
     val saveDirectorySelection: Flow<String?>
+    val lastUsedDeleteKey: Flow<String?>
     val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
     val catalogGridColumns: Flow<String?>
@@ -821,6 +835,7 @@ internal interface PlatformStateStorage {
     suspend fun updateManualSaveDirectory(directory: String)
     suspend fun updateAttachmentPickerPreference(preference: String)
     suspend fun updateSaveDirectorySelection(selection: String)
+    suspend fun updateLastUsedDeleteKey(value: String)
     suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)
     suspend fun updateCatalogGridColumns(columns: String)
@@ -847,6 +862,7 @@ internal interface PlatformStateStorage {
         defaultCatalogModeMapJson: String?,
         defaultAttachmentPickerPreference: String?,
         defaultSaveDirectorySelection: String?,
+        defaultLastUsedDeleteKey: String?,
         defaultThreadMenuConfigJson: String?,
         defaultThreadSettingsMenuConfigJson: String?,
         defaultThreadMenuEntriesConfigJson: String?,

@@ -112,6 +112,31 @@ class PersistentCookieStorage(
         }
     }
 
+    /**
+     * Checks whether there is at least one valid (non-expired, domain/path/secure matching) cookie
+     * for the given URL. If [preferredNames] is provided, only those cookie names will be considered.
+     */
+    suspend fun hasValidCookieFor(requestUrl: Url, preferredNames: Set<String> = emptySet()): Boolean {
+        val now = currentTimeMillis()
+        return mutex.withLock {
+            ensureLoadedLocked()
+            purgeExpiredLocked(now)
+            val host = requestUrl.host.lowercase()
+            val path = normalizePath(requestUrl.encodedPath)
+            val isSecure = requestUrl.isSecure()
+            val candidates = cookies.values.filter { stored ->
+                domainMatches(host, stored.domain) &&
+                    pathMatches(path, stored.path) &&
+                    (!stored.secure || isSecure)
+            }
+            if (preferredNames.isNotEmpty()) {
+                candidates.any { it.name in preferredNames }
+            } else {
+                candidates.isNotEmpty()
+            }
+        }
+    }
+
     override fun close() {
         // no-op
     }

@@ -27,6 +27,7 @@ private const val THREAD_MENU_ENTRIES_KEY = "thread_menu_entries_config_json"
 private const val CATALOG_NAV_ENTRIES_KEY = "catalog_nav_entries_config_json"
 private const val PREFERRED_FILE_MANAGER_PACKAGE_KEY = "preferred_file_manager_package"
 private const val PREFERRED_FILE_MANAGER_LABEL_KEY = "preferred_file_manager_label"
+private const val LAST_USED_DELETE_KEY = "last_used_delete_key"
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
     return IosPlatformStateStorage()
@@ -58,6 +59,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val catalogNavEntriesState = MutableStateFlow(defaults.stringForKey(CATALOG_NAV_ENTRIES_KEY))
     private val preferredFileManagerPackageState = MutableStateFlow(defaults.stringForKey(PREFERRED_FILE_MANAGER_PACKAGE_KEY) ?: "")
     private val preferredFileManagerLabelState = MutableStateFlow(defaults.stringForKey(PREFERRED_FILE_MANAGER_LABEL_KEY) ?: "")
+    private val lastUsedDeleteKeyState = MutableStateFlow(defaults.stringForKey(LAST_USED_DELETE_KEY))
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
@@ -81,6 +83,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val catalogNavEntriesConfigJson: Flow<String?> = catalogNavEntriesState
     override val preferredFileManagerPackage: Flow<String> = preferredFileManagerPackageState
     override val preferredFileManagerLabel: Flow<String> = preferredFileManagerLabelState
+    override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
 
     override suspend fun updateBoardsJson(value: String) {
         defaults.setObject(value, forKey = BOARDS_KEY)
@@ -214,6 +217,12 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         preferredFileManagerLabelState.value = label
     }
 
+    override suspend fun updateLastUsedDeleteKey(value: String) {
+        defaults.setObject(value, forKey = LAST_USED_DELETE_KEY)
+        defaults.synchronize()
+        lastUsedDeleteKeyState.value = value
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
@@ -225,6 +234,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaultCatalogModeMapJson: String?,
         defaultAttachmentPickerPreference: String?,
         defaultSaveDirectorySelection: String?,
+        defaultLastUsedDeleteKey: String?,
         defaultThreadMenuConfigJson: String?,
         defaultThreadSettingsMenuConfigJson: String?,
         defaultThreadMenuEntriesConfigJson: String?,
@@ -244,6 +254,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY) == null) {
             defaults.setObject(DEFAULT_MANUAL_SAVE_ROOT, forKey = MANUAL_SAVE_DIRECTORY_KEY)
             manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
+            updated = true
+        }
+        if (defaultLastUsedDeleteKey != null && defaults.stringForKey(LAST_USED_DELETE_KEY) == null) {
+            defaults.setObject(defaultLastUsedDeleteKey, forKey = LAST_USED_DELETE_KEY)
+            lastUsedDeleteKeyState.value = defaultLastUsedDeleteKey
             updated = true
         }
         if (defaultNgHeadersJson != null && defaults.stringForKey(NG_HEADERS_KEY) == null) {

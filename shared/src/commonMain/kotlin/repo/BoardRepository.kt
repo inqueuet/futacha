@@ -114,6 +114,17 @@ class DefaultBoardRepository(
         // Fix: Wrap the check-then-act in a mutex to prevent race conditions
         boardInitMutex.withLock {
             if (!initializedBoards.contains(board)) {
+                val hasExistingCookies = cookieRepository?.let { repository ->
+                    // Prefer known futaba cookies, but fall back to any matching cookie for the host/path.
+                    repository.hasValidCookieFor(board, preferredNames = setOf("posttime", "cxyl")) ||
+                        repository.hasValidCookieFor(board)
+                } ?: false
+                if (hasExistingCookies) {
+                    initializedBoards.add(board)
+                    Logger.d(TAG, "Skipping catalog setup for board $board (existing cookies found)")
+                    return@withLock
+                }
+
                 try {
                     api.fetchCatalogSetup(board)
                     initializedBoards.add(board)

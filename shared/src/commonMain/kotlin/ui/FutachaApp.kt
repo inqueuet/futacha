@@ -157,7 +157,8 @@ fun FutachaApp(
                     boardList,
                     history,
                     defaultSelfPostIdentifierMap = emptyMap(),
-                    defaultCatalogModeMap = emptyMap()
+                    defaultCatalogModeMap = emptyMap(),
+                    defaultLastUsedDeleteKey = ""
                 )
             }
 

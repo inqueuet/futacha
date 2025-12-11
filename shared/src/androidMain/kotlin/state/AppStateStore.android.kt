@@ -45,6 +45,7 @@ private class AndroidPlatformStateStorage(
     private val preferredFileManagerPackageKey = stringPreferencesKey("preferred_file_manager_package")
     private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
     private val threadSettingsMenuConfigKey = stringPreferencesKey("thread_settings_menu_config_json")
+    private val lastUsedDeleteKeyPreferencesKey = stringPreferencesKey("last_used_delete_key")
 
     override val boardsJson: Flow<String?> =
         context.dataStore.data
@@ -154,6 +155,11 @@ private class AndroidPlatformStateStorage(
         context.dataStore.data
             .catch { emit(emptyPreferences()) }
             .map { prefs -> prefs[preferredFileManagerLabelKey] ?: "" }
+
+    override val lastUsedDeleteKey: Flow<String?> =
+        context.dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
@@ -356,6 +362,15 @@ private class AndroidPlatformStateStorage(
         }
     }
 
+    override suspend fun updateLastUsedDeleteKey(value: String) {
+        try {
+            context.dataStore.edit { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] = value }
+        } catch (e: Exception) {
+            println("AndroidPlatformStateStorage: Failed to update last used delete key: ${e.message}")
+            throw StorageException("Failed to save last used delete key", e)
+        }
+    }
+
     override suspend fun seedIfEmpty(
         defaultBoardsJson: String,
         defaultHistoryJson: String,
@@ -367,6 +382,7 @@ private class AndroidPlatformStateStorage(
         defaultCatalogModeMapJson: String?,
         defaultAttachmentPickerPreference: String?,
         defaultSaveDirectorySelection: String?,
+        defaultLastUsedDeleteKey: String?,
         defaultThreadMenuConfigJson: String?,
         defaultThreadSettingsMenuConfigJson: String?,
         defaultThreadMenuEntriesConfigJson: String?,
@@ -406,6 +422,9 @@ private class AndroidPlatformStateStorage(
                 }
                 if (defaultSaveDirectorySelection != null && !prefs.contains(saveDirectorySelectionKey)) {
                     prefs[saveDirectorySelectionKey] = defaultSaveDirectorySelection
+                }
+                if (defaultLastUsedDeleteKey != null && !prefs.contains(lastUsedDeleteKeyPreferencesKey)) {
+                    prefs[lastUsedDeleteKeyPreferencesKey] = defaultLastUsedDeleteKey
                 }
                 if (defaultThreadMenuConfigJson != null && !prefs.contains(threadMenuConfigKey)) {
                     prefs[threadMenuConfigKey] = defaultThreadMenuConfigJson

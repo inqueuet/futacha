@@ -1327,6 +1327,12 @@ fun CatalogScreen(
     var showModeDialog by remember { mutableStateOf(false) }
     var showDisplayStyleDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
+    var createThreadName by rememberSaveable(board?.id) { mutableStateOf("") }
+    var createThreadEmail by rememberSaveable(board?.id) { mutableStateOf("") }
+    var createThreadTitle by rememberSaveable(board?.id) { mutableStateOf("") }
+    var createThreadComment by rememberSaveable(board?.id) { mutableStateOf("") }
+    var createThreadPassword by rememberSaveable(board?.id) { mutableStateOf("") }
+    var createThreadImage by remember(board?.id) { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showPastThreadSearchDialog by remember { mutableStateOf(false) }
     var isGlobalSettingsVisible by remember { mutableStateOf(false) }
@@ -1341,6 +1347,18 @@ fun CatalogScreen(
     val fallbackWatchWordsState = rememberSaveable(board?.id) { mutableStateOf<List<String>>(emptyList()) }
     val watchWordsState = stateStore?.watchWords?.collectAsState(initial = fallbackWatchWordsState.value)
     val watchWords = watchWordsState?.value ?: fallbackWatchWordsState.value
+    val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
+    var fallbackDeleteKey by rememberSaveable { mutableStateOf("") }
+    val lastUsedDeleteKey = lastUsedDeleteKeyState?.value ?: fallbackDeleteKey
+    val updateLastUsedDeleteKey: (String) -> Unit = { value ->
+        val sanitized = value.trim().take(8)
+        val store = stateStore
+        if (store != null) {
+            coroutineScope.launch { store.setLastUsedDeleteKey(sanitized) }
+        } else {
+            fallbackDeleteKey = sanitized
+        }
+    }
     val archiveSearchScope = remember(board?.url) { extractArchiveSearchScope(board) }
     val archiveSearchJson = remember {
         Json {
@@ -1658,7 +1676,12 @@ fun CatalogScreen(
                     menuEntries = catalogNavEntries,
                     onNavigate = { destination ->
                         when (destination) {
-                            CatalogNavEntryId.CreateThread -> showCreateThreadDialog = true
+                            CatalogNavEntryId.CreateThread -> {
+                                if (createThreadPassword.isBlank()) {
+                                    createThreadPassword = lastUsedDeleteKey
+                                }
+                                showCreateThreadDialog = true
+                            }
                             CatalogNavEntryId.ScrollToTop -> scrollCatalogToTop()
                             CatalogNavEntryId.RefreshCatalog -> performRefresh()
                             CatalogNavEntryId.PastThreadSearch -> showPastThreadSearchDialog = true
@@ -1774,24 +1797,57 @@ fun CatalogScreen(
         }
 
         if (showCreateThreadDialog) {
+            val resetCreateThreadDraft: () -> Unit = {
+                createThreadName = ""
+                createThreadEmail = ""
+                createThreadTitle = ""
+                createThreadComment = ""
+                createThreadPassword = ""
+                createThreadImage = null
+            }
+            val isCreateThreadSubmitEnabled = createThreadTitle.isNotBlank() || createThreadComment.isNotBlank()
             CreateThreadDialog(
                 boardName = board?.name,
                 attachmentPickerPreference = attachmentPickerPreference,
                 preferredFileManagerPackage = preferredFileManagerPackage,
+                name = createThreadName,
+                onNameChange = { createThreadName = it },
+                email = createThreadEmail,
+                onEmailChange = { createThreadEmail = it },
+                title = createThreadTitle,
+                onTitleChange = { createThreadTitle = it },
+                comment = createThreadComment,
+                onCommentChange = { createThreadComment = it },
+                password = createThreadPassword,
+                onPasswordChange = { createThreadPassword = it },
+                selectedImage = createThreadImage,
+                onImageSelected = { createThreadImage = it },
+                isSubmitEnabled = isCreateThreadSubmitEnabled,
                 onDismiss = { showCreateThreadDialog = false },
-                onSubmit = { name, email, title, comment, password, imageData ->
+                onSubmit = {
                     showCreateThreadDialog = false
-                    if (board == null) {
+                    val boardSummary = board
+                    if (boardSummary == null) {
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar("板が選択されていません")
                         }
                         return@CreateThreadDialog
                     }
+                    val trimmedPassword = createThreadPassword.trim()
+                    if (trimmedPassword.isNotBlank()) {
+                        updateLastUsedDeleteKey(trimmedPassword)
+                    }
+                    val name = createThreadName
+                    val email = createThreadEmail
+                    val title = createThreadTitle
+                    val comment = createThreadComment
+                    val password = trimmedPassword
+                    val imageData = createThreadImage
                     coroutineScope.launch {
                         try {
                             snackbarHostState.showSnackbar("スレッドを作成中...")
                             val threadId = activeRepository.createThread(
-                                board = board.url,
+                                board = boardSummary.url,
                                 name = name,
                                 email = email,
                                 subject = title,
@@ -1802,13 +1858,15 @@ fun CatalogScreen(
                                 textOnly = imageData == null
                             )
                             snackbarHostState.showSnackbar("スレッドを作成しました (ID: $threadId)")
+                            resetCreateThreadDraft()
                             // Refresh catalog to show the new thread
                             performRefresh()
                         } catch (e: Exception) {
                             snackbarHostState.showSnackbar("スレッド作成に失敗しました: ${e.message ?: "不明なエラー"}")
                         }
                     }
-                }
+                },
+                onClear = resetCreateThreadDraft
             )
         }
 
@@ -1986,15 +2044,23 @@ private fun CreateThreadDialog(
     boardName: String?,
     attachmentPickerPreference: AttachmentPickerPreference,
     preferredFileManagerPackage: String?,
+    name: String,
+    onNameChange: (String) -> Unit,
+    email: String,
+    onEmailChange: (String) -> Unit,
+    title: String,
+    onTitleChange: (String) -> Unit,
+    comment: String,
+    onCommentChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    selectedImage: com.valoser.futacha.shared.util.ImageData?,
+    onImageSelected: (com.valoser.futacha.shared.util.ImageData?) -> Unit,
+    isSubmitEnabled: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (name: String, email: String, title: String, comment: String, password: String, imageData: com.valoser.futacha.shared.util.ImageData?) -> Unit
+    onSubmit: () -> Unit,
+    onClear: () -> Unit
 ) {
-    var title by remember { mutableStateOf("") }
-    var comment by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var selectedImage by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
     val emailPresets = remember { listOf("ID表示", "IP表示", "sage") }
 
     ThreadFormDialog(
@@ -2004,30 +2070,21 @@ private fun CreateThreadDialog(
         preferredFileManagerPackage = preferredFileManagerPackage,
         emailPresets = emailPresets,
         comment = comment,
-        onCommentChange = { comment = it },
+        onCommentChange = onCommentChange,
         name = name,
-        onNameChange = { name = it },
+        onNameChange = onNameChange,
         email = email,
-        onEmailChange = { email = it },
+        onEmailChange = onEmailChange,
         subject = title,
-        onSubjectChange = { title = it },
+        onSubjectChange = onTitleChange,
         password = password,
-        onPasswordChange = { password = it },
+        onPasswordChange = onPasswordChange,
         selectedImage = selectedImage,
-        onImageSelected = { selectedImage = it },
+        onImageSelected = onImageSelected,
         onDismiss = onDismiss,
-        onSubmit = {
-            onSubmit(name, email, title, comment, password, selectedImage)
-        },
-        onClear = {
-            name = ""
-            email = ""
-            title = ""
-            comment = ""
-            password = ""
-            selectedImage = null
-        },
-        isSubmitEnabled = title.isNotBlank() || comment.isNotBlank(),
+        onSubmit = onSubmit,
+        onClear = onClear,
+        isSubmitEnabled = isSubmitEnabled,
         sendDescription = "スレ立て",
         showSubject = true,
         showPassword = true
@@ -4044,6 +4101,18 @@ fun ThreadScreen(
     val uiState = remember { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
+    var fallbackDeleteKey by rememberSaveable { mutableStateOf("") }
+    val lastUsedDeleteKey = lastUsedDeleteKeyState?.value ?: fallbackDeleteKey
+    val updateLastUsedDeleteKey: (String) -> Unit = { value ->
+        val sanitized = value.trim().take(8)
+        val store = stateStore
+        if (store != null) {
+            coroutineScope.launch { store.setLastUsedDeleteKey(sanitized) }
+        } else {
+            fallbackDeleteKey = sanitized
+        }
+    }
     val platformContext = LocalPlatformContext.current
     val textSpeaker = remember(platformContext) { createTextSpeaker(platformContext) }
     var readAloudJob by remember { mutableStateOf<Job?>(null) }
@@ -4102,7 +4171,6 @@ fun ThreadScreen(
     var isActionSheetVisible by remember { mutableStateOf(false) }
     var pendingDeletePassword by remember { mutableStateOf("") }
     var pendingDeleteImageOnly by remember { mutableStateOf(false) }
-    var lastUsedDeleteKey by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var isReplyDialogVisible by remember { mutableStateOf(false) }
     var isThreadSettingsSheetVisible by remember { mutableStateOf(false) }
     var isThreadFilterSheetVisible by remember { mutableStateOf(false) }
@@ -4202,6 +4270,11 @@ fun ThreadScreen(
     var replyComment by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replyPassword by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replyImageData by remember { mutableStateOf<com.valoser.futacha.shared.util.ImageData?>(null) }
+    LaunchedEffect(lastUsedDeleteKey) {
+        if (replyPassword.isBlank() && lastUsedDeleteKey.isNotBlank()) {
+            replyPassword = lastUsedDeleteKey
+        }
+    }
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
@@ -5039,7 +5112,7 @@ fun ThreadScreen(
                 deleteDialogTarget = null
                 pendingDeletePassword = ""
                 pendingDeleteImageOnly = false
-                lastUsedDeleteKey = trimmed
+                updateLastUsedDeleteKey(trimmed)
                 launchThreadAction(
                     successMessage = "本人削除を実行しました",
                     failurePrefix = "本人削除に失敗しました",
@@ -5111,16 +5184,13 @@ fun ThreadScreen(
                     return@ThreadReplyDialog
                 }
                 isReplyDialogVisible = false
+                updateLastUsedDeleteKey(trimmedPassword)
                 val name = replyName
                 val email = replyEmail
                 val subject = replySubject
                 val comment = replyComment
                 val imageData = replyImageData
                 val textOnly = imageData == null
-                replySubject = ""
-                replyComment = ""
-                replyImageData = null
-                lastUsedDeleteKey = trimmedPassword
                 launchThreadAction(
                     successMessage = "返信を送信しました",
                     failurePrefix = "返信の送信に失敗しました",
@@ -5132,6 +5202,10 @@ fun ThreadScreen(
                                 }
                             }
                         }
+                        replySubject = ""
+                        replyComment = ""
+                        replyPassword = ""
+                        replyImageData = null
                         refreshThread()
                     }
                 ) {
