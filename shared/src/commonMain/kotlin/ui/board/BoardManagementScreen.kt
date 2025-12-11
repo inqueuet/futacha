@@ -3092,32 +3092,9 @@ private fun rememberResolvedCatalogThumbnailUrl(
     boardUrl: String?,
     repository: BoardRepository
 ): Pair<String?, Boolean> {
-    // サムネイル画像を保持（初期値）
-    val thumbnailUrl = item.thumbnailUrl
-
-    // フルサイズ画像URLと取得状態を保持
-    var fullsizeUrl by remember(item.id, boardUrl) {
-        mutableStateOf<String?>(null)
-    }
-    var isLoading by remember(item.id, boardUrl) {
-        mutableStateOf(true)
-    }
-
-    // フルサイズ画像を非同期で取得
-    LaunchedEffect(item.id, boardUrl, repository) {
-        if (boardUrl.isNullOrBlank() || item.id.isBlank()) {
-            isLoading = false
-            return@LaunchedEffect
-        }
-        isLoading = true
-        val fetchedUrl = repository.fetchOpImageUrl(boardUrl, item.id)
-        fullsizeUrl = fetchedUrl
-        isLoading = false
-    }
-
-    // フルサイズURLが取得できていればそれを使用、そうでなければサムネイルを使用
-    val resolvedUrl = fullsizeUrl ?: thumbnailUrl
-    return Pair(resolvedUrl, isLoading)
+    // カタログではサムネイルのみを表示し、フルサイズ画像の先行読み込みは行わない
+    // これにより、大量のAPIリクエストとメモリスパイクを防ぐ
+    return Pair(item.thumbnailUrl, false)
 }
 
 @Composable
@@ -4529,7 +4506,7 @@ fun ThreadScreen(
         onBack()
     }
 
-            val refreshThread: () -> Unit = remember(effectiveBoardUrl, threadId, activeRepository) {
+            val refreshThread: () -> Unit = remember(effectiveBoardUrl, threadId, activeRepository, history, onHistoryEntryUpdated) {
                 {
                     coroutineScope.launch {
                         uiState.value = ThreadUiState.Loading
@@ -4577,8 +4554,9 @@ fun ThreadScreen(
     }
 
     val currentSuccessState = currentState as? ThreadUiState.Success
-    val mediaPreviewEntries = remember(currentSuccessState?.page?.posts) {
-        buildMediaPreviewEntries(currentSuccessState?.page?.posts ?: emptyList())
+    val currentPosts = currentSuccessState?.page?.posts ?: emptyList()
+    val mediaPreviewEntries = remember(currentPosts) {
+        buildMediaPreviewEntries(currentPosts)
     }
     var previewMediaIndex by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(mediaPreviewEntries.size) {
@@ -4592,7 +4570,10 @@ fun ThreadScreen(
             previewMediaIndex = targetIndex
         }
     }
-    LaunchedEffect(currentState, isShowingOfflineCopy, httpClient, fileSystem) {
+    
+    // Auto-save logic: Trigger only when post count changes or offline status changes
+    val currentPostsSize = currentPosts.size
+    LaunchedEffect(currentPostsSize, isShowingOfflineCopy, httpClient, fileSystem) {
         if (currentState is ThreadUiState.Success && !isShowingOfflineCopy) {
             startAutoSave(currentState.page)
         }
@@ -4618,9 +4599,9 @@ fun ThreadScreen(
         }
     }.ifBlank { null }
 
-    val readAloudSegments = remember(currentState) {
-        if (currentState is ThreadUiState.Success) {
-            buildReadAloudSegments(currentState.page.posts)
+    val readAloudSegments = remember(currentPosts) {
+        if (currentPosts.isNotEmpty()) {
+            buildReadAloudSegments(currentPosts)
         } else {
             emptyList()
         }

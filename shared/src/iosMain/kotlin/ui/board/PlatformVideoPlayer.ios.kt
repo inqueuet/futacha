@@ -119,6 +119,7 @@ private fun AvKitVideoPlayer(
     DisposableEffect(player) {
         onDispose {
             player?.pause()
+            player?.replaceCurrentItemWithPlayerItem(null)
         }
     }
     UIKitView(
@@ -176,6 +177,11 @@ private fun WebVideoPlayer(
             }
         },
         modifier = modifier,
+        onRelease = { view ->
+            view.stopLoading()
+            view.loadHTMLString("", baseURL = null)
+            view.navigationDelegate = null
+        },
         update = { view ->
             val desiredTag = html.hashCode().toLong()
             if (view.tag.toLong() != desiredTag) {

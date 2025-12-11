@@ -64,8 +64,7 @@ class FutachaApplication : Application() {
 
     override fun onTerminate() {
         // This is only called in emulators, but close resources defensively
-        boardRepository.close()
-        httpClient.close()
+        boardRepository.closeAsync()
         super.onTerminate()
     }
 }

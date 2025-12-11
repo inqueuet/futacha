@@ -319,9 +319,9 @@ class IosFileSystem : FileSystem {
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
                         val fullPath = if (relativePath.isEmpty()) {
-                            url.path!!
+                            url.path ?: throw IllegalStateException("URL path is null")
                         } else {
-                            "${url.path!!}/$relativePath"
+                            "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
                         }
                         createDirectory(fullPath).getOrThrow()
                     } finally {
@@ -348,7 +348,7 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
-                        val fullPath = "${url.path!!}/$relativePath"
+                        val fullPath = "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
                         writeBytes(fullPath, bytes).getOrThrow()
                     } finally {
                         if (startedAccess) {
@@ -374,7 +374,7 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
-                        val fullPath = "${url.path!!}/$relativePath"
+                        val fullPath = "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
                         appendBytes(fullPath, bytes).getOrThrow()
                     } finally {
                         if (startedAccess) {
@@ -404,7 +404,7 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
-                        val fullPath = "${url.path!!}/$relativePath"
+                        val fullPath = "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
                         readString(fullPath).getOrThrow()
                     } finally {
                         if (startedAccess) {
@@ -431,9 +431,9 @@ class IosFileSystem : FileSystem {
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
                         val fullPath = if (relativePath.isEmpty()) {
-                            url.path!!
+                            url.path ?: throw IllegalStateException("URL path is null")
                         } else {
-                            "${url.path!!}/$relativePath"
+                            "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
                         }
                         exists(fullPath)
                     } finally {

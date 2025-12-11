@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class Post(
     val id: String,
     val order: Int? = null,

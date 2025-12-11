@@ -79,94 +79,101 @@ class HistoryRefresher(
         val updates = mutableMapOf<String, ThreadHistoryEntry>()
         val errors = mutableListOf<ErrorDetail>()
         val skipped = skipThreadIds.value
+        
+        // FIX: Process in batches to avoid creating thousands of coroutines at once
+        // This prevents memory spikes when history size is large
+        val batchSize = 50
 
         coroutineScope {
-            history.forEach { entry ->
-                if (entry.threadId in skipped) return@forEach
-                val board = boards.firstOrNull { it.id == entry.boardId }
-                val baseUrl = board?.url
-                    ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
-                        runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
-                    }
-                if (baseUrl.isNullOrBlank() || baseUrl.contains("example.com", ignoreCase = true)) {
-                    return@forEach
-                }
-
-                async {
-                    semaphore.withPermit {
-                        try {
-                            val page = repository.getThread(baseUrl, entry.threadId)
-                            val opPost = page.posts.firstOrNull()
-                            val resolvedTitle = resolveThreadTitle(opPost, entry.title)
-                            var hasAutoSave = entry.hasAutoSave
-
-                            // 背景更新でも本文・メディアを自動保存
-                            if (httpClient != null && fileSystem != null && autoSavedThreadRepository != null) {
-                                val saver = ThreadSaveService(httpClient, fileSystem)
-                                runCatching {
-                                    saver.saveThread(
-                                        threadId = entry.threadId,
-                                        boardId = entry.boardId.ifBlank { board?.id ?: "" },
-                                        boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
-                                        boardUrl = baseUrl,
-                                        title = resolvedTitle,
-                                        expiresAtLabel = page.expiresAtLabel,
-                                        posts = page.posts,
-                                        baseDirectory = AUTO_SAVE_DIRECTORY,
-                                        writeMetadata = true
-                                    ).getOrThrow()
-                                }.onSuccess { saved ->
-                                    autoSavedThreadRepository.addThreadToIndex(saved)
-                                        .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
-                                    hasAutoSave = true
-                                }.onFailure { error ->
-                                    Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
-                                }
+            history.chunked(batchSize).forEach { batch ->
+                // Process each batch
+                batch.map { entry ->
+                    async {
+                        if (entry.threadId in skipped) return@async
+                        val board = boards.firstOrNull { it.id == entry.boardId }
+                        val baseUrl = board?.url
+                            ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
+                                runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
                             }
+                        if (baseUrl.isNullOrBlank() || baseUrl.contains("example.com", ignoreCase = true)) {
+                            return@async
+                        }
 
-                            val updatedEntry = entry.copy(
-                                title = resolvedTitle,
-                                titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
-                                boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
-                                replyCount = page.posts.size,
-                                hasAutoSave = hasAutoSave
-                            )
-                            updatesMutex.withLock {
-                                updates[entry.threadId] = updatedEntry
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Throwable) {
-                            if (isNotFound(e)) {
-                                markSkipped(entry.threadId)
-                                // FIX: 404/410の場合、自動保存があるかチェック
-                                val hasAutoSave = autoSavedThreadRepository?.let { repo ->
+                        semaphore.withPermit {
+                            try {
+                                val page = repository.getThread(baseUrl, entry.threadId)
+                                val opPost = page.posts.firstOrNull()
+                                val resolvedTitle = resolveThreadTitle(opPost, entry.title)
+                                var hasAutoSave = entry.hasAutoSave
+
+                                // 背景更新でも本文・メディアを自動保存
+                                if (httpClient != null && fileSystem != null && autoSavedThreadRepository != null) {
+                                    val saver = ThreadSaveService(httpClient, fileSystem)
                                     runCatching {
-                                        repo.loadThreadMetadata(entry.threadId).isSuccess
-                                    }.getOrDefault(false)
-                                } ?: false
-
-                                if (hasAutoSave && !entry.hasAutoSave) {
-                                    // 自動保存があることを履歴に反映
-                                    updatesMutex.withLock {
-                                        updates[entry.threadId] = entry.copy(hasAutoSave = true)
+                                        saver.saveThread(
+                                            threadId = entry.threadId,
+                                            boardId = entry.boardId.ifBlank { board?.id ?: "" },
+                                            boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                            boardUrl = baseUrl,
+                                            title = resolvedTitle,
+                                            expiresAtLabel = page.expiresAtLabel,
+                                            posts = page.posts,
+                                            baseDirectory = AUTO_SAVE_DIRECTORY,
+                                            writeMetadata = true
+                                        ).getOrThrow()
+                                    }.onSuccess { saved ->
+                                        autoSavedThreadRepository.addThreadToIndex(saved)
+                                            .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
+                                        hasAutoSave = true
+                                    }.onFailure { error ->
+                                        Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
                                     }
-                                    Logger.i(HISTORY_REFRESH_TAG, "Thread ${entry.threadId} not found but has auto-save")
-                                } else {
-                                    Logger.i(HISTORY_REFRESH_TAG, "Skip thread ${entry.threadId} (not found)")
                                 }
-                            } else {
-                                Logger.e(HISTORY_REFRESH_TAG, "Failed to refresh ${entry.threadId}", e)
+
+                                val updatedEntry = entry.copy(
+                                    title = resolvedTitle,
+                                    titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
+                                    boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                    replyCount = page.posts.size,
+                                    hasAutoSave = hasAutoSave
+                                )
                                 updatesMutex.withLock {
-                                    errors.add(ErrorDetail(
-                                        threadId = entry.threadId,
-                                        message = e.message ?: "Unknown error"
-                                    ))
+                                    updates[entry.threadId] = updatedEntry
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Throwable) {
+                                if (isNotFound(e)) {
+                                    markSkipped(entry.threadId)
+                                    // FIX: 404/410の場合、自動保存があるかチェック
+                                    val hasAutoSave = autoSavedThreadRepository?.let { repo ->
+                                        runCatching {
+                                            repo.loadThreadMetadata(entry.threadId).isSuccess
+                                        }.getOrDefault(false)
+                                    } ?: false
+
+                                    if (hasAutoSave && !entry.hasAutoSave) {
+                                        // 自動保存があることを履歴に反映
+                                        updatesMutex.withLock {
+                                            updates[entry.threadId] = entry.copy(hasAutoSave = true)
+                                        }
+                                        Logger.i(HISTORY_REFRESH_TAG, "Thread ${entry.threadId} not found but has auto-save")
+                                    } else {
+                                        Logger.i(HISTORY_REFRESH_TAG, "Skip thread ${entry.threadId} (not found)")
+                                    }
+                                } else {
+                                    Logger.e(HISTORY_REFRESH_TAG, "Failed to refresh ${entry.threadId}", e)
+                                    updatesMutex.withLock {
+                                        errors.add(ErrorDetail(
+                                            threadId = entry.threadId,
+                                            message = e.message ?: "Unknown error"
+                                        ))
+                                    }
                                 }
                             }
                         }
                     }
-                }
+                }.forEach { it.await() } // Wait for current batch to complete
             }
         }
 

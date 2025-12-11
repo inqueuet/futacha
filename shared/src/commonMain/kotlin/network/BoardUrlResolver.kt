@@ -71,48 +71,49 @@ internal object BoardUrlResolver {
             throw IllegalArgumentException("Board URL cannot be blank")
         }
 
-        val url = runCatching { Url(boardUrl) }.getOrElse { error ->
-            println("BoardUrlResolver: Failed to parse URL '$boardUrl': ${error.message}")
-            // More robust fallback - validate URL structure before using
-            val fallback = boardUrl
-                .substringBefore('#')
-                .substringBefore('?')
-                .trimEnd('/')
-
-            // Validate fallback has basic URL structure
-            if (fallback.isBlank() ||
-                (!fallback.startsWith("http://", ignoreCase = true) &&
-                 !fallback.startsWith("https://", ignoreCase = true))) {
-                throw IllegalArgumentException("Invalid board URL: $boardUrl")
-            }
-
-            // Return null to force explicit URL handling
-            return fallback
+        // Auto-fix missing scheme
+        val urlToParse = if (!boardUrl.contains("://")) {
+            "https://$boardUrl"
+        } else {
+            boardUrl
         }
+
+        val url = runCatching { Url(urlToParse) }.getOrElse { error ->
+            println("BoardUrlResolver: Failed to parse URL '$urlToParse': ${error.message}")
+            throw IllegalArgumentException("Invalid board URL: $boardUrl", error)
+        }
+
         val segments = url.encodedPath
             .split('/')
             .filter { it.isNotBlank() }
+        
+        // If the path ends with a file (e.g. futaba.php), drop it.
+        // If it looks like a directory, keep it.
+        // Heuristic: extensions imply files.
         val lastSegment = segments.lastOrNull()
         val directorySegments = when {
             lastSegment == null -> emptyList()
             lastSegment.contains('.') -> segments.dropLast(1)
             else -> segments
         }
+        
         val path = when {
             directorySegments.isEmpty() -> ""
             else -> "/" + directorySegments.joinToString("/")
         }
+        
         val portSegment = when {
             url.port == url.protocol.defaultPort -> ""
             else -> ":${url.port}"
         }
+        
         return buildString {
             append(url.protocol.name)
             append("://")
             append(url.host)
             append(portSegment)
             append(path)
-        }.trimEnd('/')
+        }
     }
 
     fun resolveSiteRoot(boardUrl: String): String {

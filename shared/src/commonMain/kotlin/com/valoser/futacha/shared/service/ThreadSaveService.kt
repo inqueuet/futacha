@@ -108,7 +108,7 @@ class ThreadSaveService(
             val boardPath = extractBoardPath(boardUrl, boardId)
 
             if (useSaveLocation) {
-                val location = baseSaveLocation!!
+                val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
                 fileSystem.createDirectory(location, threadId).getOrThrow()
                 val boardMediaPath = if (boardPath.isNotBlank()) "$threadId/$boardPath" else threadId
                 fileSystem.createDirectory(location, "$boardMediaPath/src").getOrThrow()

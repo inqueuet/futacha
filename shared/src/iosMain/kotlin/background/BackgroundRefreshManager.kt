@@ -71,7 +71,7 @@ object BackgroundRefreshManager {
         // Expiration handler: cancel work if iOS cuts us off
         task.expirationHandler = {
             job.cancel()
-            runBlocking { task.setTaskCompletedWithSuccess(false) }
+            task.setTaskCompletedWithSuccess(false)
         }
     }
 

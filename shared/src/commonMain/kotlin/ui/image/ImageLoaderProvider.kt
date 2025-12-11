@@ -48,12 +48,12 @@ fun rememberFutachaImageLoader(
     val fetcherDispatcher: CoroutineDispatcher = remember(cacheConfig.parallelism) {
         Dispatchers.Default.limitedParallelism(cacheConfig.parallelism.coerceAtLeast(1))
     }
-    val memoryCache = remember {
+    val memoryCache = remember(cacheConfig) {
         MemoryCache.Builder()
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
             .build()
     }
-    val diskCache = remember {
+    val diskCache = remember(cacheConfig) {
         createImageDiskCache(cacheConfig.diskCacheBytes)
     }
     return remember(platformContext, fetcherDispatcher, memoryCache, diskCache) {

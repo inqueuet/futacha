@@ -30,20 +30,33 @@ import kotlin.time.ExperimentalTime
 // LinkedHashMapはスレッドセーフではないため、すべての操作をMutexで保護
 private class ThreadSafeLruCache<K, V>(private val maxSize: Int) {
     private val mutex = Mutex()
-    private val cache = LinkedHashMap<K, V>(maxSize, 0.75f, true)
+    // KMP互換性のためaccessOrderパラメータに依存せず手動で順序管理を行う
+    private val cache = LinkedHashMap<K, V>(maxSize)
 
-    // FIX: 読み取り操作も必ずMutexで保護（LinkedHashMapは読み取りもスレッドセーフではない）
+    // FIX: 読み取り操作も必ずMutexで保護し、アクセス順を更新
     suspend fun get(key: K): V? = mutex.withLock {
-        cache[key]
+        val value = cache[key]
+        if (value != null) {
+            // アクセス順を更新（削除して再挿入）
+            cache.remove(key)
+            cache[key] = value
+        }
+        value
     }
 
     // FIX: 書き込み操作はMutexで保護し、サイズ制限を適用
     suspend fun put(key: K, value: V): V? = mutex.withLock {
-        if (cache.size >= maxSize && !cache.containsKey(key)) {
-            val eldest = cache.entries.firstOrNull()
-            eldest?.let { cache.remove(it.key) }
+        if (cache.containsKey(key)) {
+            cache.remove(key)
+        } else if (cache.size >= maxSize) {
+            // 一番古いエントリ（LinkedHashMapの先頭）を削除
+            val eldestKey = cache.keys.firstOrNull()
+            if (eldestKey != null) {
+                cache.remove(eldestKey)
+            }
         }
-        cache.put(key, value)
+        cache[key] = value
+        return null // putの戻り値は使用していないためnull固定
     }
 
     suspend fun clear() = mutex.withLock {

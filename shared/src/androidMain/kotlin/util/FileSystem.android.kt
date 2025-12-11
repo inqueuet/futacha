@@ -11,6 +11,7 @@ import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 /**
  * Android版FileSystem実装
@@ -23,9 +24,7 @@ class AndroidFileSystem(
         runCatching {
             val dir = File(resolveAbsolutePath(path))
             if (!dir.exists()) {
-                // FIX: mkdirs()の戻り値をチェック
-                val success = dir.mkdirs()
-                if (!success && !dir.exists()) {
+                if (!dir.mkdirs() && !dir.exists()) {
                     throw IllegalStateException("Failed to create directory: ${dir.absolutePath}")
                 }
             }
@@ -35,27 +34,41 @@ class AndroidFileSystem(
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(resolveAbsolutePath(path))
-            // FIX: mkdirs()の戻り値をチェック
             file.parentFile?.let { parent ->
                 if (!parent.exists()) {
-                    val success = parent.mkdirs()
-                    if (!success && !parent.exists()) {
+                    if (!parent.mkdirs() && !parent.exists()) {
                         throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
                     }
                 }
             }
-            file.writeBytes(bytes)
+            
+            // Atomic write: write to temp file then rename
+            val tmpFile = File.createTempFile("tmp_", ".tmp", file.parentFile)
+            try {
+                tmpFile.writeBytes(bytes)
+                if (!tmpFile.renameTo(file)) {
+                    // renameTo can fail if target exists on some file systems, try delete + rename
+                    if (file.exists() && !file.delete()) {
+                         throw IOException("Failed to delete existing file for atomic write: ${file.absolutePath}")
+                    }
+                    if (!tmpFile.renameTo(file)) {
+                        throw IOException("Failed to rename temp file to target: ${file.absolutePath}")
+                    }
+                }
+            } finally {
+                if (tmpFile.exists()) {
+                    tmpFile.delete()
+                }
+            }
         }
     }
 
     override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(resolveAbsolutePath(path))
-            // FIX: mkdirs()の戻り値をチェック
             file.parentFile?.let { parent ->
                 if (!parent.exists()) {
-                    val success = parent.mkdirs()
-                    if (!success && !parent.exists()) {
+                    if (!parent.mkdirs() && !parent.exists()) {
                         throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
                     }
                 }
@@ -65,19 +78,8 @@ class AndroidFileSystem(
     }
 
     override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val file = File(resolveAbsolutePath(path))
-            // FIX: mkdirs()の戻り値をチェック
-            file.parentFile?.let { parent ->
-                if (!parent.exists()) {
-                    val success = parent.mkdirs()
-                    if (!success && !parent.exists()) {
-                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
-                    }
-                }
-            }
-            file.writeText(content, Charsets.UTF_8)
-        }
+        // writeBytes uses atomic write, so we delegate to it
+        writeBytes(path, content.toByteArray(Charsets.UTF_8))
     }
 
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {

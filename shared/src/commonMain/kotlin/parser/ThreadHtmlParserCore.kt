@@ -374,8 +374,17 @@ internal object ThreadHtmlParserCore {
     }
 
     private fun sanitizeInlineText(block: String, className: String): String? {
-        val regex = spanRegex(className)
-        val raw = regex.find(block)?.groupValues?.getOrNull(1) ?: return null
+        val startPattern = "<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>"
+        val startRegex = Regex(startPattern, RegexOption.IGNORE_CASE)
+        val startMatch = startRegex.find(block) ?: return null
+
+        val contentStartIndex = startMatch.range.last + 1
+        val endPattern = "</span>"
+        val endIndex = block.indexOf(endPattern, startIndex = contentStartIndex, ignoreCase = true)
+
+        if (endIndex == -1) return null
+
+        val raw = block.substring(contentStartIndex, endIndex)
         val cleaned = decodeHtmlEntities(stripTags(raw)).trim()
         return cleaned.ifBlank { null }
     }
@@ -385,11 +394,6 @@ internal object ThreadHtmlParserCore {
             .replace("\r\n", "\n")
             .trim()
     }
-
-    private fun spanRegex(className: String): Regex = Regex(
-        pattern = "<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>([^<]*(?:<(?!/span>)[^<]*)*)</span>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
 
     private fun stripTags(value: String): String = htmlTagRegex.replace(
         value.replace(Regex("(?i)<br\\s*/?>"), "\n"),

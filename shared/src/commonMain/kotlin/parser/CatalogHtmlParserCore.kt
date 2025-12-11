@@ -15,22 +15,6 @@ internal object CatalogHtmlParserCore {
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
     private const val MAX_CHUNK_SIZE = 100_000 // Process HTML in chunks to prevent ReDoS
 
-    private val tableRegex = Regex(
-        pattern = "<table[^>]+id=['\"]cattable['\"][^>]*>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val tableEndRegex = Regex(
-        pattern = "</table>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val cellRegex = Regex(
-        pattern = "<td[^>]*>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val cellEndRegex = Regex(
-        pattern = "</td>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
     private val anchorRegex = Regex(
         pattern = "<a[^>]+href=['\"]([^'\"]+)['\"][^>]*>",
         options = setOf(RegexOption.IGNORE_CASE)
@@ -45,22 +29,6 @@ internal object CatalogHtmlParserCore {
     )
     private val heightAttrRegex = Regex(
         pattern = "height\\s*=\\s*['\"]?(\\d+)['\"]?",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val cellLabelRegex = Regex(
-        pattern = "<font[^>]*>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val fontEndRegex = Regex(
-        pattern = "</font>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val titleRegex = Regex(
-        pattern = "<small[^>]*>",
-        options = setOf(RegexOption.IGNORE_CASE)
-    )
-    private val smallEndRegex = Regex(
-        pattern = "</small>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val threadIdRegex = Regex("res/(\\d+)\\.htm")
@@ -79,29 +47,45 @@ internal object CatalogHtmlParserCore {
             val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
             val normalized = html.replace("\r\n", "\n")
 
-            // Find table start and end without greedy quantifiers
-            val tableStart = tableRegex.find(normalized) ?: return@withContext emptyList()
-            val tableEndMatch = tableEndRegex.find(normalized, tableStart.range.last) ?: return@withContext emptyList()
-            val tableBody = normalized.substring(tableStart.range.last + 1, tableEndMatch.range.first)
-
-            if (tableBody.length > MAX_CHUNK_SIZE) {
-                println("CatalogHtmlParserCore: Warning - large table body ${tableBody.length} bytes")
-                // Limit processing to prevent ReDoS attacks
-                if (tableBody.length > MAX_CHUNK_SIZE * 5) {
-                    throw IllegalArgumentException("Table body size ${tableBody.length} exceeds safe processing limit")
+            // Find table start and end using indexOf for better performance
+            val tableStartTag = "<table"
+            val tableIdAttr = "id=\"cattable\""
+            val tableIdAttrSingle = "id='cattable'"
+            
+            var tableStartIndex = normalized.indexOf(tableStartTag, ignoreCase = true)
+            var foundTable = false
+            
+            // Look for table with id="cattable"
+            while (tableStartIndex != -1) {
+                val tableTagEnd = normalized.indexOf(">", tableStartIndex)
+                if (tableTagEnd == -1) break
+                
+                val tableTag = normalized.substring(tableStartIndex, tableTagEnd + 1)
+                if (tableTag.contains(tableIdAttr, ignoreCase = true) || 
+                    tableTag.contains(tableIdAttrSingle, ignoreCase = true)) {
+                    foundTable = true
+                    break
                 }
+                tableStartIndex = normalized.indexOf(tableStartTag, tableTagEnd, ignoreCase = true)
             }
-
+            
+            if (!foundTable) return@withContext emptyList()
+            
+            val tableEndIndex = normalized.indexOf("</table>", startIndex = tableStartIndex, ignoreCase = true)
+            if (tableEndIndex == -1) return@withContext emptyList()
+            
+            // Process body without substringing the whole table to save memory
             val items = mutableListOf<CatalogItem>()
-            var searchStart = 0
-            var index = 0
+            var searchStart = normalized.indexOf(">", tableStartIndex) + 1
             val maxCatalogItems = 1000 // Prevent excessive parsing
-            // FIX: 無限ループ防止
-            var previousSearchStart = -1
             var loopIterations = 0
             val maxIterations = 10000
 
-            while (searchStart < tableBody.length && items.size < maxCatalogItems) {
+            // Pre-compile regexes or search strings
+            val tdStart = "<td"
+            val tdEnd = "</td>"
+
+            while (searchStart < tableEndIndex && items.size < maxCatalogItems) {
                 loopIterations++
 
                 // FIX: 定期的にキャンセルチェックを追加
@@ -109,31 +93,23 @@ internal object CatalogHtmlParserCore {
                     ensureActive()  // コルーチンがキャンセルされたら例外をスロー
                 }
 
-                // FIX: 最大ループ回数チェック
-                if (loopIterations > maxIterations) {
-                    Logger.e("CatalogHtmlParserCore", "Maximum loop iterations exceeded")
-                    break
-                }
+                if (loopIterations > maxIterations) break
 
-                // FIX: 位置が進んでいないことを検出
-                if (searchStart == previousSearchStart) {
-                    Logger.e("CatalogHtmlParserCore", "Search position not advancing (stuck at $searchStart)")
-                    break
-                }
-                previousSearchStart = searchStart
+                val cellStartIndex = normalized.indexOf(tdStart, searchStart, ignoreCase = true)
+                if (cellStartIndex == -1 || cellStartIndex >= tableEndIndex) break
+                
+                val cellContentStart = normalized.indexOf(">", cellStartIndex) + 1
+                if (cellContentStart == 0) break // ">" not found
+                
+                val cellEndIndex = normalized.indexOf(tdEnd, cellContentStart, ignoreCase = true)
+                if (cellEndIndex == -1) break
 
-                val cellStart = cellRegex.find(tableBody, searchStart) ?: break
-                val cellEnd = cellEndRegex.find(tableBody, cellStart.range.last) ?: break
+                // Extract cell content - keep it small
+                val cell = normalized.substring(cellContentStart, cellEndIndex)
 
-                // Safety check for invalid ranges
-                if (cellEnd.range.last <= cellStart.range.last) {
-                    println("CatalogHtmlParserCore: Invalid cell range detected")
-                    break
-                }
-
-                val cell = tableBody.substring(cellStart.range.last + 1, cellEnd.range.first)
-
-                val href = anchorRegex.find(cell)?.groupValues?.getOrNull(1)
+                // Parse cell content
+                val hrefMatch = anchorRegex.find(cell)
+                val href = hrefMatch?.groupValues?.getOrNull(1)
                 val threadId = href?.let { threadIdRegex.find(it)?.groupValues?.getOrNull(1) }
 
                 if (threadId != null) {
@@ -154,37 +130,27 @@ internal object CatalogHtmlParserCore {
                         ?.getOrNull(1)
                         ?.toIntOrNull()
 
-                    val titleText = extractBetween(cell, titleRegex, smallEndRegex)?.let(::cleanText)
-                    val labelText = extractBetween(cell, cellLabelRegex, fontEndRegex)?.let(::cleanText)
+                    val titleText = extractBetween(cell, "<small", "</small>")?.let(::cleanText)
+                    val labelText = extractBetween(cell, "<font", "</font>")?.let(::cleanText)
                     val replies = labelText?.toIntOrNull() ?: 0
 
                     items.add(CatalogItem(
                         id = threadId,
                         threadUrl = resolveUrl(href, resolvedBaseUrl),
-                        title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${index + 1}",
+                        title = knownTitles[threadId] ?: titleText ?: labelText ?: "スレッド ${items.size + 1}",
                         thumbnailUrl = thumbnail,
                         thumbnailWidth = width,
                         thumbnailHeight = height,
                         replyCount = replies
                     ))
-                    index++
                 }
 
-                // FIX: 次の検索位置を設定（必ず前進することを保証）
-                val nextSearchStart = cellEnd.range.last + 1
-                if (nextSearchStart <= searchStart) {
-                    Logger.e("CatalogHtmlParserCore", "Invalid next position: $nextSearchStart <= $searchStart")
-                    break
-                }
-                searchStart = nextSearchStart
+                // Advance search position
+                searchStart = cellEndIndex + tdEnd.length
             }
 
             if (items.size >= maxCatalogItems) {
                 println("CatalogHtmlParserCore: Reached maximum catalog items limit ($maxCatalogItems)")
-            }
-
-            if (loopIterations >= maxIterations) {
-                Logger.w("CatalogHtmlParserCore", "Parsing terminated due to max iterations")
             }
 
             items
@@ -197,10 +163,14 @@ internal object CatalogHtmlParserCore {
         }
     }
 
-    private fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {
-        val start = startRegex.find(text) ?: return null
-        val end = endRegex.find(text, start.range.last) ?: return null
-        return text.substring(start.range.last + 1, end.range.first)
+    private fun extractBetween(text: String, startTagPartial: String, endTag: String): String? {
+        val startIndex = text.indexOf(startTagPartial, ignoreCase = true)
+        if (startIndex == -1) return null
+        val contentStart = text.indexOf(">", startIndex) + 1
+        if (contentStart == 0) return null
+        val endIndex = text.indexOf(endTag, contentStart, ignoreCase = true)
+        if (endIndex == -1) return null
+        return text.substring(contentStart, endIndex)
     }
 
     private fun resolveUrl(path: String, baseUrl: String): String = when {

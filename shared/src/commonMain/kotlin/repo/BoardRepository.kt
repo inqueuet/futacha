@@ -73,6 +73,11 @@ interface BoardRepository {
     fun closeAsync(): Job
 
     suspend fun clearOpImageCache(board: String? = null, threadId: String? = null)
+
+    /**
+     * Invalidate cookie initialization state for a board to force re-setup on next request.
+     */
+    suspend fun invalidateCookies(board: String)
 }
 
 class DefaultBoardRepository(
@@ -136,42 +141,72 @@ class DefaultBoardRepository(
         }
     }
 
+    override suspend fun invalidateCookies(board: String) {
+        boardInitMutex.withLock {
+            initializedBoards.remove(board)
+        }
+    }
+
+    private suspend fun <T> withRetryOnAuthFailure(board: String, block: suspend () -> T): T {
+        try {
+            ensureCookiesInitialized(board)
+            return block()
+        } catch (e: Exception) {
+            // If it looks like an auth/cookie issue (e.g. 403 or redirect loop), retry once
+            // Futaba doesn't strictly return 403 for cookie issues, often just HTML errors
+            // We'll aggressively retry once on any non-cancellation error
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            
+            Logger.w(TAG, "Operation failed for board $board, retrying with fresh cookies: ${e.message}")
+            invalidateCookies(board)
+            ensureCookiesInitialized(board)
+            return block()
+        }
+    }
+
     override suspend fun getCatalog(
         board: String,
         mode: CatalogMode
     ): List<CatalogItem> {
-        ensureCookiesInitialized(board)
-        val html = api.fetchCatalog(board, mode)
-        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-        return parser.parseCatalog(html, baseUrl)
+        return withRetryOnAuthFailure(board) {
+            val html = api.fetchCatalog(board, mode)
+            val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
+            parser.parseCatalog(html, baseUrl)
+        }
     }
 
     override suspend fun fetchOpImageUrl(board: String, threadId: String): String? {
         if (threadId.isBlank()) return null
         val key = OpImageKey(board, threadId)
         getCachedOpImageUrl(key)?.let { return it }
-        ensureCookiesInitialized(board)
+        
+        // Don't wrap caching logic in retry, only the fetch part
         val resolvedUrl = opImageSemaphore.withPermit {
-            resolveOpImageUrl(board, threadId)
+            withRetryOnAuthFailure(board) {
+                resolveOpImageUrl(board, threadId)
+            }
         }
         saveOpImageUrlToCache(key, resolvedUrl)
         return resolvedUrl
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
-        ensureCookiesInitialized(board)
-        val html = api.fetchThread(board, threadId)
-        return parser.parseThread(html)
+        return withRetryOnAuthFailure(board) {
+            val html = api.fetchThread(board, threadId)
+            parser.parseThread(html)
+        }
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
-        ensureCookiesInitialized(board)
-        api.voteSaidane(board, threadId, postId)
+        withRetryOnAuthFailure(board) {
+            api.voteSaidane(board, threadId, postId)
+        }
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
-        ensureCookiesInitialized(board)
-        api.requestDeletion(board, threadId, postId, reasonCode)
+        withRetryOnAuthFailure(board) {
+            api.requestDeletion(board, threadId, postId, reasonCode)
+        }
     }
 
     override suspend fun deleteByUser(
@@ -181,8 +216,9 @@ class DefaultBoardRepository(
         password: String,
         imageOnly: Boolean
     ) {
-        ensureCookiesInitialized(board)
-        api.deleteByUser(board, threadId, postId, password, imageOnly)
+        withRetryOnAuthFailure(board) {
+            api.deleteByUser(board, threadId, postId, password, imageOnly)
+        }
     }
 
     override suspend fun replyToThread(
@@ -197,6 +233,8 @@ class DefaultBoardRepository(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
+        // Post operations are sensitive, maybe don't auto-retry if side effects occurred?
+        // For now, we'll use standard init check but not full retry loop to avoid double-posting risk
         ensureCookiesInitialized(board)
         val exec: suspend () -> String? = {
             api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)

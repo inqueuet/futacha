@@ -97,6 +97,10 @@ class FakeBoardRepository(
         onAccess()
     }
 
+    override suspend fun invalidateCookies(board: String) {
+        onAccess()
+    }
+
     override fun close() {
         // No resources to clean up for fake repository
     }

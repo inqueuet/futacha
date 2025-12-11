@@ -144,7 +144,7 @@ fun FutachaApp(
                 onDispose {
                     if (repositoryHolder.ownsRepository) {
                         runCatching {
-                            repositoryHolder.repository.close()
+                            repositoryHolder.repository.closeAsync()
                         }.onFailure { e ->
                             Logger.e("FutachaApp", "Failed to close repository", e)
                         }
