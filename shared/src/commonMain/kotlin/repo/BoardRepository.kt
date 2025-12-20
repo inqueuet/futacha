@@ -99,7 +99,7 @@ class DefaultBoardRepository(
     private val opImageCache = createOpImageCache()
 
     // FIX: close用のCoroutineScopeを追加
-    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     companion object {
         private const val TAG = "DefaultBoardRepository"

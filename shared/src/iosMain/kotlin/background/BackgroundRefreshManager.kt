@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.cinterop.ExperimentalForeignApi
 import platform.BackgroundTasks.BGAppRefreshTask
 import platform.BackgroundTasks.BGAppRefreshTaskRequest
 import platform.BackgroundTasks.BGTask
@@ -15,11 +16,12 @@ import platform.Foundation.NSLog
 /**
  * Minimal BGTask scheduler helper. Note: actual execution timing is controlled by iOS.
  */
+@OptIn(ExperimentalForeignApi::class)
 object BackgroundRefreshManager {
     private const val TASK_ID = "com.valoser.futacha.refresh"
     private var registered = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    @Volatile private var isEnabled = false
+    private var isEnabled = false
 
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
         isEnabled = enabled
@@ -40,8 +42,8 @@ object BackgroundRefreshManager {
         registered = BGTaskScheduler.sharedScheduler().registerForTaskWithIdentifier(
             identifier = TASK_ID,
             usingQueue = null
-        ) { task: BGTask ->
-            handleTask(task, onExecute)
+        ) { task: BGTask? ->
+            task?.let { handleTask(it, onExecute) }
         }
         if (!registered) {
             NSLog("Failed to register BGTask for $TASK_ID")
@@ -88,11 +90,12 @@ object BackgroundRefreshManager {
     fun cancel() {
         isEnabled = false
         if (!isSupported()) return
-        BGTaskScheduler.sharedScheduler().cancel(taskRequestWithIdentifier = TASK_ID)
+        BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(TASK_ID)
     }
 
     private fun isSupported(): Boolean {
-        val version = NSProcessInfo.processInfo.operatingSystemVersion
-        return version.majorVersion.toInt() >= 13
+        val versionString = NSProcessInfo.processInfo.operatingSystemVersionString
+        val major = versionString.substringAfter("Version ").substringBefore(".").toIntOrNull() ?: 0
+        return major >= 13
     }
 }

@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.pickImage
+import com.valoser.futacha.shared.util.pickImageFromDocuments
 import com.valoser.futacha.shared.util.pickDirectoryPath
 import com.valoser.futacha.shared.util.pickDirectorySaveLocation
 import com.valoser.futacha.shared.util.AttachmentPickerPreference

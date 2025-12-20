@@ -10,15 +10,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.interop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import platform.AVFoundation.AVPlayer
-import platform.AVFoundation.AVPlayerItemStatusFailed
-import platform.AVFoundation.AVPlayerItemStatusReadyToPlay
 import platform.AVFoundation.pause
 import platform.AVFoundation.play
 import platform.AVKit.AVPlayerViewController
-import platform.CoreGraphics.CGRectZero
+import platform.CoreGraphics.CGRectMake
 import platform.Foundation.NSError
 import platform.Foundation.NSURL
 import platform.WebKit.WKNavigation
@@ -85,41 +83,17 @@ private fun AvKitVideoPlayer(
     }
     LaunchedEffect(player) {
         onStateChanged(VideoPlayerState.Buffering)
-        val item = player?.currentItem
-        if (item == null) {
+        if (player == null) {
             onStateChanged(VideoPlayerState.Error)
             return@LaunchedEffect
         }
-        while (isActive) {
-            when (item.status) {
-                AVPlayerItemStatusReadyToPlay -> {
-                    val size = item.presentationSize
-                    if (size.width > 0 && size.height > 0) {
-                        onVideoSizeKnown(size.width.toInt(), size.height.toInt())
-                    }
-                    onStateChanged(VideoPlayerState.Ready)
-                    player.play()
-                    return@LaunchedEffect
-                }
-                AVPlayerItemStatusFailed -> {
-                    onStateChanged(VideoPlayerState.Error)
-                    return@LaunchedEffect
-                }
-            }
-            delay(120)
-        }
-    }
-    LaunchedEffect(volume, isMuted, player) {
-        val clampedVolume = volume.coerceIn(0f, 1f)
-        player?.apply {
-            muted = isMuted
-            this.volume = if (isMuted) 0f else clampedVolume
-        }
+        delay(120)
+        onStateChanged(VideoPlayerState.Ready)
+        player.play()
     }
     DisposableEffect(player) {
         onDispose {
             player?.pause()
-            player?.replaceCurrentItemWithPlayerItem(null)
         }
     }
     UIKitView(
@@ -170,7 +144,7 @@ private fun WebVideoPlayer(
             val configuration = WKWebViewConfiguration().apply {
                 allowsInlineMediaPlayback = true
             }
-            WKWebView(frame = CGRectZero, configuration = configuration).apply {
+            WKWebView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0), configuration = configuration).apply {
                 navigationDelegate = delegate
                 loadHTMLString(html, baseURL = null)
                 tag = html.hashCode().toLong()
@@ -203,14 +177,17 @@ private fun WebVideoPlayer(
 private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProtocol {
     var onStateChanged: ((VideoPlayerState) -> Unit)? = null
 
+    @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didStartProvisionalNavigation: WKNavigation?) {
         onStateChanged?.invoke(VideoPlayerState.Buffering)
     }
 
+    @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
         onStateChanged?.invoke(VideoPlayerState.Ready)
     }
 
+    @ObjCSignatureOverride
     override fun webView(
         webView: WKWebView,
         didFailNavigation: WKNavigation?,
@@ -219,6 +196,7 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
         onStateChanged?.invoke(VideoPlayerState.Error)
     }
 
+    @ObjCSignatureOverride
     override fun webView(
         webView: WKWebView,
         didFailProvisionalNavigation: WKNavigation?,

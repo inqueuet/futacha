@@ -3104,25 +3104,41 @@ private fun CatalogCard(
     // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
 
-    val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
+    val fullImageUrl = item.fullImageUrl?.takeIf { !isVideoUrl(it) }
     val thumbnailUrl = item.thumbnailUrl
+    val hasImage = !fullImageUrl.isNullOrBlank() || !thumbnailUrl.isNullOrBlank()
 
     // 画像リクエストを作成
-    val imageRequest = remember(imageUrl, thumbnailUrl, targetSizePx) {
-        ImageRequest.Builder(platformContext)
-            .data(imageUrl)
-            .crossfade(true)
-            .size(targetSizePx, targetSizePx)
-            .precision(Precision.INEXACT)
-            .scale(Scale.FIT)
-            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .apply {
-                if (!thumbnailUrl.isNullOrBlank()) {
-                    placeholderMemoryCacheKey(thumbnailUrl)
+    val imageRequest = remember(fullImageUrl, thumbnailUrl, targetSizePx) {
+        fullImageUrl?.let { url ->
+            ImageRequest.Builder(platformContext)
+                .data(url)
+                .crossfade(true)
+                .size(targetSizePx, targetSizePx)
+                .precision(Precision.INEXACT)
+                .scale(Scale.FIT)
+                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .apply {
+                    if (!thumbnailUrl.isNullOrBlank()) {
+                        placeholderMemoryCacheKey(thumbnailUrl)
+                    }
                 }
-            }
-            .build()
+                .build()
+        }
+    }
+    val thumbnailRequest = remember(thumbnailUrl, targetSizePx) {
+        thumbnailUrl?.let { url ->
+            ImageRequest.Builder(platformContext)
+                .data(url)
+                .crossfade(true)
+                .size(targetSizePx, targetSizePx)
+                .precision(Precision.INEXACT)
+                .scale(Scale.FIT)
+                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .build()
+        }
     }
 
     val imageLoader = LocalFutachaImageLoader.current
@@ -3130,6 +3146,11 @@ private fun CatalogCard(
         model = imageRequest,
         imageLoader = imageLoader
     )
+    val thumbnailPainter = rememberAsyncImagePainter(
+        model = thumbnailRequest,
+        imageLoader = imageLoader
+    )
+    val isFullImageReady = fullImageUrl != null && imagePainter.state is AsyncImagePainter.State.Success
 
     ElevatedCard(
         modifier = modifier
@@ -3154,7 +3175,7 @@ private fun CatalogCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUrl.isNullOrBlank()) {
+                if (!hasImage) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
@@ -3162,7 +3183,11 @@ private fun CatalogCard(
                     )
                 } else {
                     Image(
-                        painter = imagePainter,
+                        painter = if (isFullImageReady || thumbnailUrl.isNullOrBlank()) {
+                            imagePainter
+                        } else {
+                            thumbnailPainter
+                        },
                         contentDescription = item.title ?: "サムネイル",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -3203,6 +3228,11 @@ private fun CatalogCard(
     }
 }
 
+private fun isVideoUrl(url: String): Boolean {
+    val normalized = url.substringBefore('#').substringBefore('?').lowercase()
+    return normalized.endsWith(".mp4") || normalized.endsWith(".webm")
+}
+
 @Composable
 private fun CatalogListItem(
     item: CatalogItem,
@@ -3215,25 +3245,41 @@ private fun CatalogListItem(
     val density = LocalDensity.current
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
 
-    val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
+    val fullImageUrl = item.fullImageUrl?.takeIf { !isVideoUrl(it) }
     val thumbnailUrl = item.thumbnailUrl
+    val hasImage = !fullImageUrl.isNullOrBlank() || !thumbnailUrl.isNullOrBlank()
 
     // 画像リクエストを作成
-    val imageRequest = remember(imageUrl, thumbnailUrl, targetSizePx) {
-        ImageRequest.Builder(platformContext)
-            .data(imageUrl)
-            .crossfade(true)
-            .size(targetSizePx, targetSizePx)
-            .precision(Precision.INEXACT)
-            .scale(Scale.FIT)
-            .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
-            .apply {
-                if (!thumbnailUrl.isNullOrBlank()) {
-                    placeholderMemoryCacheKey(thumbnailUrl)
+    val imageRequest = remember(fullImageUrl, thumbnailUrl, targetSizePx) {
+        fullImageUrl?.let { url ->
+            ImageRequest.Builder(platformContext)
+                .data(url)
+                .crossfade(true)
+                .size(targetSizePx, targetSizePx)
+                .precision(Precision.INEXACT)
+                .scale(Scale.FIT)
+                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .apply {
+                    if (!thumbnailUrl.isNullOrBlank()) {
+                        placeholderMemoryCacheKey(thumbnailUrl)
+                    }
                 }
-            }
-            .build()
+                .build()
+        }
+    }
+    val thumbnailRequest = remember(thumbnailUrl, targetSizePx) {
+        thumbnailUrl?.let { url ->
+            ImageRequest.Builder(platformContext)
+                .data(url)
+                .crossfade(true)
+                .size(targetSizePx, targetSizePx)
+                .precision(Precision.INEXACT)
+                .scale(Scale.FIT)
+                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil3.request.CachePolicy.ENABLED)
+                .build()
+        }
     }
 
     val imageLoader = LocalFutachaImageLoader.current
@@ -3241,6 +3287,11 @@ private fun CatalogListItem(
         model = imageRequest,
         imageLoader = imageLoader
     )
+    val thumbnailPainter = rememberAsyncImagePainter(
+        model = thumbnailRequest,
+        imageLoader = imageLoader
+    )
+    val isFullImageReady = fullImageUrl != null && imagePainter.state is AsyncImagePainter.State.Success
 
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
@@ -3262,7 +3313,7 @@ private fun CatalogListItem(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUrl.isNullOrBlank()) {
+                if (!hasImage) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
@@ -3270,7 +3321,11 @@ private fun CatalogListItem(
                     )
                 } else {
                     Image(
-                        painter = imagePainter,
+                        painter = if (isFullImageReady || thumbnailUrl.isNullOrBlank()) {
+                            imagePainter
+                        } else {
+                            thumbnailPainter
+                        },
                         contentDescription = item.title ?: "サムネイル",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

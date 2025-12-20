@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.TextEncoding
+import io.ktor.client.call.body
 import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.FormBuilder
 import io.ktor.client.request.forms.formData
@@ -9,14 +10,11 @@ import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -103,6 +101,11 @@ class HttpBoardApi(
         private const val MAX_CACHE_SIZE = 100
     }
 
+    private suspend fun readResponseBodyAsString(response: HttpResponse): String {
+        val bytes: ByteArray = response.body()
+        return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
+    }
+
     // FIX: スレッドセーフなLRUキャッシュに変更
     private val postingConfigCache = ThreadSafeLruCache<String, PostingConfig>(MAX_CACHE_SIZE)
 
@@ -176,13 +179,9 @@ class HttpBoardApi(
                 throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
             }
 
-            val body = response.bodyAsText()
+            val body = readResponseBodyAsString(response)
 
             // Additional check after reading
-            if (body.length > MAX_RESPONSE_SIZE) {
-                throw NetworkException("Response body size (${body.length} bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-            }
-
             body
         } catch (e: NetworkException) {
             throw e
@@ -217,19 +216,10 @@ class HttpBoardApi(
                 throw NetworkException(errorMsg, response.status.value)
             }
 
-            val channel = response.bodyAsChannel()
-            val builder = StringBuilder()
-            var linesRead = 0
-            try {
-                while (!channel.isClosedForRead && linesRead < maxLines) {
-                    val line = channel.readUTF8Line() ?: break
-                    builder.appendLine(line)
-                    linesRead++
-                }
-            } finally {
-                channel.cancel(null)
-            }
-            builder.toString()
+            val body = readResponseBodyAsString(response)
+            body.lineSequence()
+                .take(maxLines)
+                .joinToString("\n")
         } catch (e: NetworkException) {
             throw e
         } catch (e: CancellationException) {
@@ -268,13 +258,9 @@ class HttpBoardApi(
                 throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
             }
 
-            val body = response.bodyAsText()
+            val body = readResponseBodyAsString(response)
 
             // Additional check after reading
-            if (body.length > MAX_RESPONSE_SIZE) {
-                throw NetworkException("Response body size (${body.length} bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-            }
-
             body
         } catch (e: NetworkException) {
             throw e
@@ -308,7 +294,7 @@ class HttpBoardApi(
             if (!response.status.isSuccess()) {
                 throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value})")
             }
-            val result = response.bodyAsText().trim()
+            val result = readResponseBodyAsString(response).trim()
             if (result != "1") {
                 throw NetworkException("そうだね投票に失敗しました (応答: '$result')")
             }
@@ -464,7 +450,7 @@ class HttpBoardApi(
         }
 
         // Parse response to extract thread ID
-        val responseBody = response.bodyAsText()
+        val responseBody = readResponseBodyAsString(response)
         val match = THREAD_ID_REGEX.find(responseBody)
         if (match != null) {
             return match.groupValues[1]
@@ -533,7 +519,7 @@ class HttpBoardApi(
         if (!response.status.isSuccess()) {
             throw NetworkException("返信に失敗しました (HTTP ${response.status.value})")
         }
-        val responseBody = response.bodyAsText()
+        val responseBody = readResponseBodyAsString(response)
         if (!isSuccessfulPostResponse(responseBody)) {
             val errorDetail = extractServerError(responseBody)
             val summary = summarizeResponse(responseBody)
@@ -788,12 +774,13 @@ class HttpBoardApi(
                 if (!boardBase.endsWith("/")) append('/')
                 append("futaba.htm")
             }
-            val html = client.get(url) {
+            val response = client.get(url) {
                 headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
                 headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
                 headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
                 headers[HttpHeaders.CacheControl] = "no-cache"
-            }.bodyAsText()
+            }
+            val html = readResponseBodyAsString(response)
             val chrencValue = parseChrencValue(html) ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE
             PostingConfig(
                 encoding = determineEncoding(chrencValue),

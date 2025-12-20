@@ -256,7 +256,7 @@ class ThreadSaveService(
                         if (baseSaveLocation != null) {
                             fileSystem.writeString(baseSaveLocation, "$threadId/$fileName", rewritten).getOrThrow()
                             // SaveLocation版ではファイルサイズ取得は省略（getFileSize未実装のため）
-                            totalSize += rewritten.toByteArray(Charsets.UTF_8).size
+                            totalSize += rewritten.encodeToByteArray().size
                         } else {
                             val fullPath = "$baseDir/$fileName"
                             fileSystem.writeString(fullPath, rewritten).getOrThrow()
@@ -350,7 +350,7 @@ class ThreadSaveService(
                 if (baseSaveLocation != null) {
                     val metadataRelativePath = "$threadId/metadata.json"
                     fileSystem.writeString(baseSaveLocation, metadataRelativePath, metadataJson).getOrThrow()
-                    val size = metadataJson.toByteArray(Charsets.UTF_8).size.toLong()
+                    val size = metadataJson.encodeToByteArray().size.toLong()
                     val metadataWithSize = metadata.copy(totalSize = totalSize + size)
                     fileSystem.writeString(baseSaveLocation, metadataRelativePath, json.encodeToString(metadataWithSize)).getOrThrow()
                     size

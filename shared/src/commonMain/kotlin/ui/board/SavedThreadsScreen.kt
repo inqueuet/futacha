@@ -33,6 +33,7 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlin.math.pow
 import kotlinx.datetime.Instant as KotlinxInstant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -351,8 +352,19 @@ private fun formatSize(bytes: Long): String {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
         bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-        else -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+        else -> {
+            val gb = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+            "${formatDecimal(gb, 2)} GB"
+        }
     }
+}
+
+private fun formatDecimal(value: Double, decimals: Int): String {
+    val factor = 10.0.pow(decimals)
+    val rounded = kotlin.math.round(value * factor) / factor
+    val parts = rounded.toString().split('.')
+    val fraction = parts.getOrNull(1).orEmpty().padEnd(decimals, '0').take(decimals)
+    return "${parts.first()}.$fraction"
 }
 
 /**
