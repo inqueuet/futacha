@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -143,6 +144,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -362,6 +364,9 @@ fun BoardManagementScreen(
                 drawerState.targetValue == DrawerValue.Open
         }
     }
+    val threadBarColors = rememberFutabaThreadColorScheme()
+    val barContainerColor = threadBarColors.primary
+    val barContentColor = threadBarColors.onPrimary
     val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
         scope.launch { drawerState.close() }
         onHistoryEntrySelected(entry)
@@ -486,10 +491,10 @@ fun BoardManagementScreen(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = barContainerColor,
+                        titleContentColor = barContentColor,
+                        navigationIconContentColor = barContentColor,
+                        actionIconContentColor = barContentColor
                     )
                 )
             }
@@ -1618,116 +1623,130 @@ fun CatalogScreen(
         }
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = isDrawerOpen,
-        drawerContent = {
-            HistoryDrawerContent(
-                history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = handleHistorySelection,
-                onBoardClick = {
-                    coroutineScope.launch {
-                        drawerState.close()
-                        onBack()
-                    }
-                },
-                onRefreshClick = handleHistoryRefresh,
-                onThreadRefreshClick = {
-                    performRefresh()
-                },
-                onBatchDeleteClick = handleBatchDelete,
-                onSettingsClick = {
-                    isGlobalSettingsVisible = true
-                }
-            )
-        }
+    val catalogColors = rememberFutabaCatalogColorScheme()
+    val threadBarColors = rememberFutabaThreadColorScheme()
+    val barContainerColor = threadBarColors.primary
+    val barContentColor = threadBarColors.onPrimary
+    MaterialTheme(
+        colorScheme = catalogColors,
+        typography = MaterialTheme.typography,
+        shapes = MaterialTheme.shapes
     ) {
-        Scaffold(
-            modifier = modifier,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
-                CatalogTopBar(
-                    board = board,
-                    mode = catalogMode,
-                    searchQuery = searchQuery,
-                    isSearchActive = isSearchActive,
-                    onSearchQueryChange = { searchQuery = it },
-                    onSearchActiveChange = { active ->
-                        isSearchActive = active
-                        if (!active) {
-                            searchQuery = ""
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = isDrawerOpen,
+            drawerContent = {
+                HistoryDrawerContent(
+                    history = history,
+                    onHistoryEntryDismissed = onHistoryEntryDismissed,
+                    onHistoryEntrySelected = handleHistorySelection,
+                    onBoardClick = {
+                        coroutineScope.launch {
+                            drawerState.close()
+                            onBack()
                         }
                     },
-                    onNavigationClick = { coroutineScope.launch { drawerState.open() } },
-                    onModeSelected = { persistCatalogMode(it) },
-                    onMenuAction = { action ->
-                        if (action == CatalogMenuAction.Settings) {
-                            isGlobalSettingsVisible = true
-                        } else {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("${action.label} はモック動作です")
-                            }
-                        }
-                    }
-                )
-            },
-            bottomBar = {
-                CatalogNavigationBar(
-                    menuEntries = catalogNavEntries,
-                    onNavigate = { destination ->
-                        when (destination) {
-                            CatalogNavEntryId.CreateThread -> {
-                                if (createThreadPassword.isBlank()) {
-                                    createThreadPassword = lastUsedDeleteKey
-                                }
-                                showCreateThreadDialog = true
-                            }
-                            CatalogNavEntryId.ScrollToTop -> scrollCatalogToTop()
-                            CatalogNavEntryId.RefreshCatalog -> performRefresh()
-                            CatalogNavEntryId.PastThreadSearch -> showPastThreadSearchDialog = true
-                            CatalogNavEntryId.Mode -> showModeDialog = true
-                            CatalogNavEntryId.Settings -> showSettingsMenu = true
-                        }
+                    onRefreshClick = handleHistoryRefresh,
+                    onThreadRefreshClick = {
+                        performRefresh()
+                    },
+                    onBatchDeleteClick = handleBatchDelete,
+                    onSettingsClick = {
+                        isGlobalSettingsVisible = true
                     }
                 )
             }
-        ) { innerPadding ->
-            val contentModifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .pointerInput(isDrawerOpen) {
-                    if (!isDrawerOpen) return@pointerInput
-                    awaitPointerEventScope {
-                        awaitFirstDown()
-                        coroutineScope.launch { drawerState.close() }
-                    }
-                }
-            val currentState = uiState.value
-            when (val state = currentState) {
-                CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
-                is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
-                is CatalogUiState.Success -> {
-                    val sortedItems = catalogMode.applyLocalSort(state.items)
-                    val ngFilteredItems = sortedItems.filterByCatalogNgWords(
-                        catalogNgWords = catalogNgWords,
-                        enabled = catalogNgFilteringEnabled
-                    )
-                    val visibleItems = ngFilteredItems.filterByQuery(searchQuery)
-                    CatalogSuccessContent(
-                        items = visibleItems,
+        ) {
+            Scaffold(
+                modifier = modifier,
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+                topBar = {
+                    CatalogTopBar(
                         board = board,
-                        repository = activeRepository,
-                        isSearching = searchQuery.isNotBlank(),
-                        onThreadSelected = onThreadSelected,
-                        onRefresh = performRefresh,
-                        isRefreshing = isRefreshing,
-                        displayStyle = catalogDisplayStyle,
-                        gridColumns = catalogGridColumns,
-                        gridState = catalogGridState,
-                        listState = catalogListState,
-                        modifier = contentModifier
+                        mode = catalogMode,
+                        searchQuery = searchQuery,
+                        isSearchActive = isSearchActive,
+                        barContainerColor = barContainerColor,
+                        barContentColor = barContentColor,
+                        onSearchQueryChange = { searchQuery = it },
+                        onSearchActiveChange = { active ->
+                            isSearchActive = active
+                            if (!active) {
+                                searchQuery = ""
+                            }
+                        },
+                        onNavigationClick = { coroutineScope.launch { drawerState.open() } },
+                        onModeSelected = { persistCatalogMode(it) },
+                        onMenuAction = { action ->
+                            if (action == CatalogMenuAction.Settings) {
+                                isGlobalSettingsVisible = true
+                            } else {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                }
+                            }
+                        }
                     )
+                },
+                bottomBar = {
+                    CatalogNavigationBar(
+                        menuEntries = catalogNavEntries,
+                        barContainerColor = barContainerColor,
+                        barContentColor = barContentColor,
+                        onNavigate = { destination ->
+                            when (destination) {
+                                CatalogNavEntryId.CreateThread -> {
+                                    if (createThreadPassword.isBlank()) {
+                                        createThreadPassword = lastUsedDeleteKey
+                                    }
+                                    showCreateThreadDialog = true
+                                }
+                                CatalogNavEntryId.ScrollToTop -> scrollCatalogToTop()
+                                CatalogNavEntryId.RefreshCatalog -> performRefresh()
+                                CatalogNavEntryId.PastThreadSearch -> showPastThreadSearchDialog = true
+                                CatalogNavEntryId.Mode -> showModeDialog = true
+                                CatalogNavEntryId.Settings -> showSettingsMenu = true
+                            }
+                        }
+                    )
+                }
+            ) { innerPadding ->
+                val contentModifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .pointerInput(isDrawerOpen) {
+                        if (!isDrawerOpen) return@pointerInput
+                        awaitPointerEventScope {
+                            awaitFirstDown()
+                            coroutineScope.launch { drawerState.close() }
+                        }
+                    }
+                val currentState = uiState.value
+                when (val state = currentState) {
+                    CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
+                    is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
+                    is CatalogUiState.Success -> {
+                        val sortedItems = catalogMode.applyLocalSort(state.items)
+                        val ngFilteredItems = sortedItems.filterByCatalogNgWords(
+                            catalogNgWords = catalogNgWords,
+                            enabled = catalogNgFilteringEnabled
+                        )
+                        val visibleItems = ngFilteredItems.filterByQuery(searchQuery)
+                        CatalogSuccessContent(
+                            items = visibleItems,
+                            board = board,
+                            repository = activeRepository,
+                            isSearching = searchQuery.isNotBlank(),
+                            onThreadSelected = onThreadSelected,
+                            onRefresh = performRefresh,
+                            isRefreshing = isRefreshing,
+                            displayStyle = catalogDisplayStyle,
+                            gridColumns = catalogGridColumns,
+                            gridState = catalogGridState,
+                            listState = catalogListState,
+                            modifier = contentModifier
+                        )
+                    }
                 }
             }
         }
@@ -3199,13 +3218,13 @@ private fun CatalogCard(
                             .align(Alignment.TopEnd)
                             .padding(4.dp),
                         shape = MaterialTheme.shapes.extraSmall,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.background,
                         tonalElevation = 2.dp
                     ) {
                         Text(
                             text = "${item.replyCount}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.Black,
+                            color = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
@@ -3371,6 +3390,8 @@ private fun CatalogTopBar(
     mode: CatalogMode,
     searchQuery: String,
     isSearchActive: Boolean,
+    barContainerColor: Color,
+    barContentColor: Color,
     onSearchQueryChange: (String) -> Unit,
     onSearchActiveChange: (Boolean) -> Unit,
     onNavigationClick: () -> Unit,
@@ -3404,6 +3425,7 @@ private fun CatalogTopBar(
                     query = searchQuery,
                     onQueryChange = onSearchQueryChange,
                     focusRequester = focusRequester,
+                    barContentColor = barContentColor,
                     modifier = Modifier.fillMaxWidth()
                 )
             } else {
@@ -3417,7 +3439,7 @@ private fun CatalogTopBar(
                     Text(
                         text = mode.label,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                        color = barContentColor.copy(alpha = 0.85f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -3472,10 +3494,10 @@ private fun CatalogTopBar(
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            titleContentColor = MaterialTheme.colorScheme.onPrimary,
-            navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-            actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+            containerColor = barContainerColor,
+            titleContentColor = barContentColor,
+            navigationIconContentColor = barContentColor,
+            actionIconContentColor = barContentColor
         )
     )
 }
@@ -3485,6 +3507,7 @@ private fun CatalogSearchTextField(
     query: String,
     onQueryChange: (String) -> Unit,
     focusRequester: FocusRequester,
+    barContentColor: Color,
     modifier: Modifier = Modifier
 ) {
     val focusManager = LocalFocusManager.current
@@ -3507,19 +3530,19 @@ private fun CatalogSearchTextField(
         keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
         shape = RoundedCornerShape(28.dp),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
-            unfocusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.1f),
+            focusedContainerColor = barContentColor.copy(alpha = 0.14f),
+            unfocusedContainerColor = barContentColor.copy(alpha = 0.1f),
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
-            focusedTextColor = MaterialTheme.colorScheme.onPrimary,
-            unfocusedTextColor = MaterialTheme.colorScheme.onPrimary,
-            cursorColor = MaterialTheme.colorScheme.onPrimary,
-            focusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
-            unfocusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
-            focusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-            unfocusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-            focusedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
-            unfocusedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
+            focusedTextColor = barContentColor,
+            unfocusedTextColor = barContentColor,
+            cursorColor = barContentColor,
+            focusedPlaceholderColor = barContentColor.copy(alpha = 0.8f),
+            unfocusedPlaceholderColor = barContentColor.copy(alpha = 0.8f),
+            focusedLeadingIconColor = barContentColor,
+            unfocusedLeadingIconColor = barContentColor,
+            focusedTrailingIconColor = barContentColor,
+            unfocusedTrailingIconColor = barContentColor
         )
     )
 }
@@ -3527,18 +3550,29 @@ private fun CatalogSearchTextField(
 @Composable
 private fun CatalogNavigationBar(
     menuEntries: List<CatalogNavEntryConfig>,
+    barContainerColor: Color,
+    barContentColor: Color,
     onNavigate: (CatalogNavEntryId) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val visibleEntries = remember(menuEntries) {
         resolveCatalogNavBarEntries(menuEntries)
     }
-    NavigationBar(modifier = modifier) {
+    NavigationBar(
+        modifier = modifier.background(barContainerColor)
+    ) {
         visibleEntries.forEach { entry ->
             val meta = entry.id.toMeta()
             NavigationBarItem(
                 selected = false,
                 onClick = { onNavigate(entry.id) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = barContentColor,
+                    unselectedIconColor = barContentColor.copy(alpha = 0.75f),
+                    selectedTextColor = barContentColor,
+                    unselectedTextColor = barContentColor.copy(alpha = 0.75f),
+                    indicatorColor = barContentColor.copy(alpha = 0.2f)
+                ),
                 icon = {
                     Icon(
                         imageVector = meta.icon,
@@ -3947,41 +3981,125 @@ private val FutabaAccentRed = Color(0xFFCC1105)
 private val FutabaNameGreen = Color(0xFF117743)
 private val FutabaQuoteGreen = Color(0xFF789922)
 private val FutabaLinkColor = Color(0xFF800000)
+private val FutabaDarkBackground = Color(0xFF201A16)
+private val FutabaDarkSurface = Color(0xFF2A201B)
+private val FutabaDarkSurfaceVariant = Color(0xFF3A2D26)
+private val FutabaDarkLabelSurface = Color(0xFF5A3D32)
+private val FutabaDarkText = Color(0xFFF2E6DC)
+private val FutabaDarkTextDim = Color(0xCCF2E6DC)
+private val FutabaDarkAccentRed = Color(0xFFFF6B5A)
+private val FutabaDarkNameGreen = Color(0xFF7BD29A)
+private val FutabaDarkQuoteGreen = Color(0xFFA3C96E)
+private val FutabaDarkLinkColor = Color(0xFFFFC1B5)
+private val FutabaCatalogBackground = Color(0xFFFFFFEE)
+private val FutabaCatalogText = Color(0xFF800000)
+private val FutabaCatalogLink = Color(0xFF0000EE)
+private val FutabaCatalogActiveLink = Color(0xFFFF0000)
+private val FutabaCatalogHeader = Color(0xFF0040E0)
+private val FutabaCatalogSurfaceVariant = Color(0xFFF0E0D6)
+private val FutabaCatalogOutline = Color(0xFFB89A8B)
+private val FutabaCatalogDarkBackground = Color(0xFF1F1915)
+private val FutabaCatalogDarkSurface = Color(0xFF2A201B)
+private val FutabaCatalogDarkText = Color(0xFFF2E6DC)
+private val FutabaCatalogDarkLink = Color(0xFF8CA7FF)
+private val FutabaCatalogDarkActiveLink = Color(0xFFFF8A7A)
+private val FutabaCatalogDarkHeader = Color(0xFF2C4EA3)
+private val FutabaCatalogDarkSurfaceVariant = Color(0xFF3A2D26)
+private val FutabaCatalogDarkOutline = Color(0xFF8B7A71)
 
 @Composable
 private fun rememberFutabaThreadColorScheme(
     base: ColorScheme = MaterialTheme.colorScheme
 ): ColorScheme {
-    return remember(base) {
+    val isDark = isSystemInDarkTheme()
+    return remember(base, isDark) {
+        val background = if (isDark) FutabaDarkBackground else FutabaBackground
+        val surface = if (isDark) FutabaDarkSurface else FutabaSurface
+        val surfaceVariant = if (isDark) FutabaDarkSurfaceVariant else FutabaSurfaceVariant
+        val labelSurface = if (isDark) FutabaDarkLabelSurface else FutabaLabelSurface
+        val text = if (isDark) FutabaDarkText else FutabaText
+        val textDim = if (isDark) FutabaDarkTextDim else FutabaTextDim
+        val accentRed = if (isDark) FutabaDarkAccentRed else FutabaAccentRed
+        val nameGreen = if (isDark) FutabaDarkNameGreen else FutabaNameGreen
+        val quoteGreen = if (isDark) FutabaDarkQuoteGreen else FutabaQuoteGreen
         base.copy(
-            primary = FutabaSurface,
-            onPrimary = FutabaText,
-            primaryContainer = FutabaLabelSurface,
-            onPrimaryContainer = FutabaText,
-            inversePrimary = FutabaAccentRed,
-            secondary = FutabaNameGreen,
-            onSecondary = FutabaBackground,
-            secondaryContainer = FutabaSurface,
-            onSecondaryContainer = FutabaNameGreen,
-            tertiary = FutabaAccentRed,
-            onTertiary = FutabaBackground,
-            tertiaryContainer = FutabaSurfaceVariant,
-            onTertiaryContainer = FutabaText,
-            background = FutabaBackground,
-            onBackground = FutabaText,
-            surface = FutabaSurface,
-            onSurface = FutabaText,
-            surfaceVariant = FutabaSurfaceVariant,
-            onSurfaceVariant = FutabaTextDim,
-            surfaceTint = FutabaSurface,
-            error = FutabaAccentRed,
-            onError = FutabaBackground,
-            errorContainer = FutabaSurfaceVariant,
-            onErrorContainer = FutabaText,
-            outline = FutabaText,
-            outlineVariant = FutabaTextDim
+            primary = surface,
+            onPrimary = text,
+            primaryContainer = labelSurface,
+            onPrimaryContainer = text,
+            inversePrimary = accentRed,
+            secondary = nameGreen,
+            onSecondary = background,
+            secondaryContainer = surface,
+            onSecondaryContainer = nameGreen,
+            tertiary = accentRed,
+            onTertiary = background,
+            tertiaryContainer = surfaceVariant,
+            onTertiaryContainer = text,
+            background = background,
+            onBackground = text,
+            surface = surface,
+            onSurface = text,
+            surfaceVariant = surfaceVariant,
+            onSurfaceVariant = textDim,
+            surfaceTint = surface,
+            error = accentRed,
+            onError = background,
+            errorContainer = surfaceVariant,
+            onErrorContainer = text,
+            outline = quoteGreen,
+            outlineVariant = textDim
         )
     }
+}
+
+@Composable
+private fun rememberFutabaCatalogColorScheme(
+    base: ColorScheme = MaterialTheme.colorScheme
+): ColorScheme {
+    val isDark = isSystemInDarkTheme()
+    return remember(base, isDark) {
+        val background = if (isDark) FutabaCatalogDarkBackground else FutabaCatalogBackground
+        val surface = if (isDark) FutabaCatalogDarkSurface else FutabaCatalogBackground
+        val surfaceVariant = if (isDark) FutabaCatalogDarkSurfaceVariant else FutabaCatalogSurfaceVariant
+        val text = if (isDark) FutabaCatalogDarkText else FutabaCatalogText
+        val link = if (isDark) FutabaCatalogDarkLink else FutabaCatalogLink
+        val activeLink = if (isDark) FutabaCatalogDarkActiveLink else FutabaCatalogActiveLink
+        val header = if (isDark) FutabaCatalogDarkHeader else FutabaCatalogHeader
+        val outline = if (isDark) FutabaCatalogDarkOutline else FutabaCatalogOutline
+        base.copy(
+            primary = text,
+            onPrimary = background,
+            primaryContainer = surfaceVariant,
+            onPrimaryContainer = text,
+            secondary = link,
+            onSecondary = background,
+            secondaryContainer = surfaceVariant,
+            onSecondaryContainer = text,
+            tertiary = header,
+            onTertiary = Color.White,
+            background = background,
+            onBackground = text,
+            surface = surface,
+            onSurface = text,
+            surfaceVariant = surfaceVariant,
+            onSurfaceVariant = text,
+            error = activeLink,
+            onError = background,
+            outline = outline,
+            outlineVariant = outline
+        )
+    }
+}
+
+@Composable
+private fun rememberFutabaLinkColor(): Color {
+    return if (isSystemInDarkTheme()) FutabaDarkLinkColor else FutabaLinkColor
+}
+
+@Composable
+private fun rememberFutabaQuoteColor(): Color {
+    return if (isSystemInDarkTheme()) FutabaDarkQuoteGreen else FutabaQuoteGreen
 }
 
 sealed interface ThreadUiState {
@@ -4233,6 +4351,10 @@ fun ThreadScreen(
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val currentState = uiState.value
+    val isDeletedByPoster = (currentState as? ThreadUiState.Success)
+        ?.page
+        ?.let(::isThreadDeletedByPoster)
+        ?: false
     val initialHistoryEntry = remember(threadId) {
         history.firstOrNull { it.threadId == threadId }
     }
@@ -4538,8 +4660,8 @@ fun ThreadScreen(
     
     // Auto-save logic: Trigger only when post count changes or offline status changes
     val currentPostsSize = currentPosts.size
-    LaunchedEffect(currentPostsSize, isShowingOfflineCopy, httpClient, fileSystem) {
-        if (currentState is ThreadUiState.Success && !isShowingOfflineCopy) {
+    LaunchedEffect(currentPostsSize, isShowingOfflineCopy, httpClient, fileSystem, isDeletedByPoster) {
+        if (currentState is ThreadUiState.Success && !isShowingOfflineCopy && !isDeletedByPoster) {
             startAutoSave(currentState.page)
         }
     }
@@ -4906,10 +5028,12 @@ fun ThreadScreen(
                 )
             },
             bottomBar = {
-                ThreadActionBar(
-                    menuEntries = threadMenuEntries,
-                    onAction = handleMenuEntry
-                )
+                if (!isDeletedByPoster) {
+                    ThreadActionBar(
+                        menuEntries = threadMenuEntries,
+                        onAction = handleMenuEntry
+                    )
+                }
             }
         ) { innerPadding ->
             val contentModifier = Modifier
@@ -4966,19 +5090,25 @@ fun ThreadScreen(
                     )
 
                     is ThreadUiState.Success -> {
-                        val threadFilterCriteria = remember(
-                            selectedThreadFilterOptions,
-                            threadFilterKeyword,
-                            selectedThreadSortOption,
-                            persistedSelfPostIdentifiers
-                        ) {
-                            ThreadFilterCriteria(
-                                options = selectedThreadFilterOptions,
-                                keyword = threadFilterKeyword,
-                                selfPostIdentifiers = persistedSelfPostIdentifiers,
-                                sortOption = selectedThreadSortOption
+                        if (isDeletedByPoster) {
+                            ThreadDeletedNotice(
+                                message = state.page.deletedNotice ?: "このスレッドは削除されました",
+                                modifier = Modifier.matchParentSize()
                             )
-                        }
+                        } else {
+                            val threadFilterCriteria = remember(
+                                selectedThreadFilterOptions,
+                                threadFilterKeyword,
+                                selectedThreadSortOption,
+                                persistedSelfPostIdentifiers
+                            ) {
+                                ThreadFilterCriteria(
+                                    options = selectedThreadFilterOptions,
+                                    keyword = threadFilterKeyword,
+                                    selfPostIdentifiers = persistedSelfPostIdentifiers,
+                                    sortOption = selectedThreadSortOption
+                                )
+                            }
                         val filteredPage = remember(
                             state.page,
                             ngHeaders,
@@ -4987,30 +5117,32 @@ fun ThreadScreen(
                             threadFilterCriteria
                         ) {
                             val ngFiltered = applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
-                            applyThreadFilters(ngFiltered, threadFilterCriteria)
+                            val deletedFiltered = hidePostsDeletedByPoster(ngFiltered)
+                            applyThreadFilters(deletedFiltered, threadFilterCriteria)
                         }
-                        ThreadContent(
-                            page = filteredPage,
-                            listState = lazyListState,
-                            saidaneOverrides = saidaneOverrides,
-                            selfPostIdentifiers = selfPostIdentifierSet,
-                            searchHighlightRanges = postHighlightRanges,
-                            onPostLongPress = { post ->
-                                actionTargetPost = post
-                                isActionSheetVisible = true
-                            },
-                            onQuoteRequestedForPost = { post ->
-                                isActionSheetVisible = false
-                                actionTargetPost = null
-                                quoteSelectionTarget = post
-                            },
-                            onSaidaneClick = handleSaidaneAction,
-                            onMediaClick = handleMediaClick,
-                            onUrlClick = urlLauncher,
-                            onRefresh = performRefresh,
-                            isRefreshing = isRefreshing,
-                            modifier = Modifier.matchParentSize()
-                        )
+                            ThreadContent(
+                                page = filteredPage,
+                                listState = lazyListState,
+                                saidaneOverrides = saidaneOverrides,
+                                selfPostIdentifiers = selfPostIdentifierSet,
+                                searchHighlightRanges = postHighlightRanges,
+                                onPostLongPress = { post ->
+                                    actionTargetPost = post
+                                    isActionSheetVisible = true
+                                },
+                                onQuoteRequestedForPost = { post ->
+                                    isActionSheetVisible = false
+                                    actionTargetPost = null
+                                    quoteSelectionTarget = post
+                                },
+                                onSaidaneClick = handleSaidaneAction,
+                                onMediaClick = handleMediaClick,
+                                onUrlClick = urlLauncher,
+                                onRefresh = performRefresh,
+                                isRefreshing = isRefreshing,
+                                modifier = Modifier.matchParentSize()
+                            )
+                        }
                     }
                 }
 
@@ -5620,6 +5752,24 @@ private fun ThreadError(
     }
 }
 
+@Composable
+private fun ThreadDeletedNotice(
+    message: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(16.dp)
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThreadContent(
@@ -5865,6 +6015,22 @@ private fun ThreadContent(
     }
 }
 
+private fun isThreadDeletedByPoster(page: ThreadPage): Boolean {
+    val notice = page.deletedNotice ?: return false
+    return notice.contains(THREAD_DELETED_BY_POSTER_KEYWORD)
+}
+
+private fun isPostDeletedByPoster(post: Post): Boolean {
+    val normalized = messageHtmlToPlainText(post.messageHtml).replace(Regex("\\s+"), "")
+    return normalized.contains(THREAD_DELETED_BY_POSTER_KEYWORD)
+}
+
+private fun hidePostsDeletedByPoster(page: ThreadPage): ThreadPage {
+    if (page.posts.isEmpty()) return page
+    val filtered = page.posts.filterNot(::isPostDeletedByPoster)
+    return if (filtered.size == page.posts.size) page else page.copy(posts = filtered)
+}
+
 @Composable
 private fun ThreadScrollbar(
     listState: LazyListState,
@@ -6033,6 +6199,7 @@ private fun ThreadPostMetadata(
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null
 ) {
+    val linkColor = rememberFutabaLinkColor()
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -6126,7 +6293,7 @@ private fun ThreadPostMetadata(
                     Text(
                         text = fileName,
                         style = MaterialTheme.typography.bodySmall,
-                        color = FutabaLinkColor,
+                        color = linkColor,
                         textDecoration = TextDecoration.None,
                         modifier = Modifier.clickable { showFileMenu = true }
                     )
@@ -6170,8 +6337,19 @@ private fun ThreadMessageText(
     val highlightStyle = SpanStyle(
         background = MaterialTheme.colorScheme.secondary.copy(alpha = 0.32f)
     )
-    val annotated: AnnotatedString = remember(messageHtml, quoteReferences, highlightRanges) {
-        buildAnnotatedMessage(messageHtml, quoteReferences, highlightRanges, highlightStyle)
+    val linkColor = rememberFutabaLinkColor()
+    val quoteColor = rememberFutabaQuoteColor()
+    val urlSpanStyle = remember(linkColor) {
+        SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+    }
+    val annotated: AnnotatedString = remember(
+        messageHtml,
+        quoteReferences,
+        highlightRanges,
+        urlSpanStyle,
+        quoteColor
+    ) {
+        buildAnnotatedMessage(messageHtml, quoteReferences, highlightRanges, highlightStyle, urlSpanStyle, quoteColor)
     }
     val textColor = if (isDeleted) {
         MaterialTheme.colorScheme.onSurfaceVariant
@@ -6636,11 +6814,6 @@ private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOpti
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
 private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
 
-private val urlSpanStyle = SpanStyle(
-    color = FutabaLinkColor,
-    textDecoration = TextDecoration.Underline
-)
-
 private data class UrlMatch(
     val url: String,
     val range: IntRange
@@ -6650,7 +6823,9 @@ private fun buildAnnotatedMessage(
     html: String,
     quoteReferences: List<QuoteReference>,
     highlightRanges: List<IntRange>,
-    highlightStyle: SpanStyle
+    highlightStyle: SpanStyle,
+    urlSpanStyle: SpanStyle,
+    quoteColor: Color
 ): AnnotatedString {
     val lines = messageHtmlToLines(html)
     var referenceIndex = 0
@@ -6663,7 +6838,7 @@ private fun buildAnnotatedMessage(
             val content = line.trimEnd()
             val isQuote = content.startsWith(">") || content.startsWith("＞")
             if (isQuote) {
-                val spanStyle = SpanStyle(color = FutabaQuoteGreen, fontWeight = FontWeight.SemiBold)
+                val spanStyle = SpanStyle(color = quoteColor, fontWeight = FontWeight.SemiBold)
                 val reference = quoteReferences.getOrNull(referenceIndex)
                 if (reference != null && reference.targetPostIds.isNotEmpty()) {
                     pushStringAnnotation(QUOTE_ANNOTATION_TAG, referenceIndex.toString())
@@ -8003,6 +8178,7 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
     "管理者によって削除されました"
 )
 private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?://\\S+|\\bttp://\\S+")
+private const val THREAD_DELETED_BY_POSTER_KEYWORD = "書き込みをした人によって削除されました"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
