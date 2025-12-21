@@ -414,7 +414,9 @@ fun BoardManagementScreen(
                 onBatchDeleteClick = handleBatchDelete,
                 onSettingsClick = {
                     isGlobalSettingsVisible = true
-                }
+                },
+                barContainerColor = barContainerColor,
+                barContentColor = barContentColor
             )
         }
     ) {
@@ -737,7 +739,9 @@ private fun HistoryDrawerContent(
     onRefreshClick: () -> Unit = {},
     onThreadRefreshClick: (() -> Unit)? = null,
     onBatchDeleteClick: () -> Unit = {},
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
+    barContainerColor: Color = MaterialTheme.colorScheme.primary,
+    barContentColor: Color = MaterialTheme.colorScheme.onPrimary
 ) {
     val drawerWidth = 320.dp
     ModalDrawerSheet(
@@ -772,7 +776,9 @@ private fun HistoryDrawerContent(
                 onRefreshClick = onRefreshClick,
                 onThreadRefreshClick = onThreadRefreshClick,
                 onBatchDeleteClick = onBatchDeleteClick,
-                onSettingsClick = onSettingsClick
+                onSettingsClick = onSettingsClick,
+                barContainerColor = barContainerColor,
+                barContentColor = barContentColor
             )
         }
     }
@@ -800,9 +806,11 @@ private fun HistoryBottomBar(
     onRefreshClick: () -> Unit = {},
     onThreadRefreshClick: (() -> Unit)? = null,
     onBatchDeleteClick: () -> Unit = {},
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
+    barContainerColor: Color = MaterialTheme.colorScheme.primary,
+    barContentColor: Color = MaterialTheme.colorScheme.onPrimary
 ) {
-    Surface(color = MaterialTheme.colorScheme.primary) {
+    Surface(color = barContainerColor) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -810,16 +818,32 @@ private fun HistoryBottomBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            HistoryBottomIcon(Icons.Rounded.Home, "板", onBoardClick)
+            HistoryBottomIcon(
+                icon = Icons.Rounded.Home,
+                label = "板",
+                contentColor = barContentColor,
+                onClick = onBoardClick
+            )
             HistoryBottomIcon(
                 icon = Icons.Rounded.Refresh,
-                label = "更新"
+                label = "更新",
+                contentColor = barContentColor
             ) {
                 onRefreshClick()
                 onThreadRefreshClick?.invoke()
             }
-            HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick)
-            HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick)
+            HistoryBottomIcon(
+                icon = Icons.Rounded.DeleteSweep,
+                label = "一括削除",
+                contentColor = barContentColor,
+                onClick = onBatchDeleteClick
+            )
+            HistoryBottomIcon(
+                icon = Icons.Rounded.Settings,
+                label = "設定",
+                contentColor = barContentColor,
+                onClick = onSettingsClick
+            )
         }
     }
 }
@@ -828,6 +852,7 @@ private fun HistoryBottomBar(
 private fun HistoryBottomIcon(
     icon: ImageVector,
     label: String,
+    contentColor: Color,
     onClick: () -> Unit = {}
 ) {
     Column(
@@ -837,12 +862,12 @@ private fun HistoryBottomIcon(
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = MaterialTheme.colorScheme.onPrimary
+            tint = contentColor
         )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimary
+            color = contentColor
         )
     }
 }
