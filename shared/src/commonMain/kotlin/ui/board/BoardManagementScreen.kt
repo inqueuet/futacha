@@ -172,6 +172,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -276,6 +277,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -4667,8 +4669,15 @@ fun ThreadScreen(
 
     val currentSuccessState = currentState as? ThreadUiState.Success
     val currentPosts = currentSuccessState?.page?.posts ?: emptyList()
-    val mediaPreviewEntries = remember(currentPosts) {
-        buildMediaPreviewEntries(currentPosts)
+    val mediaPreviewEntries by produceState(initialValue = emptyList(), currentPosts) {
+        val posts = currentPosts
+        value = if (posts.isEmpty()) {
+            emptyList()
+        } else {
+            withContext(Dispatchers.Default) {
+                buildMediaPreviewEntries(posts)
+            }
+        }
     }
     var previewMediaIndex by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(mediaPreviewEntries.size) {
@@ -4711,9 +4720,12 @@ fun ThreadScreen(
         }
     }.ifBlank { null }
 
-    val readAloudSegments = remember(currentPosts) {
-        if (currentPosts.isNotEmpty()) {
-            buildReadAloudSegments(currentPosts)
+    val readAloudSegments by produceState(initialValue = emptyList(), currentPosts) {
+        val posts = currentPosts
+        value = if (posts.isNotEmpty()) {
+            withContext(Dispatchers.Default) {
+                buildReadAloudSegments(posts)
+            }
         } else {
             emptyList()
         }
@@ -4800,15 +4812,18 @@ fun ThreadScreen(
     var searchQuery by rememberSaveable(threadId) { mutableStateOf("") }
     var currentSearchResultIndex by remember(threadId) { mutableStateOf(0) }
     val currentPage = (currentState as? ThreadUiState.Success)?.page
-    val searchMatches = if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
-        buildThreadSearchMatches(currentPage.posts, searchQuery)
-    } else {
-        emptyList()
-    }
-    val postHighlightRanges = if (isSearchActive) {
-        searchMatches.associate { it.postId to it.highlightRanges }
-    } else {
-        emptyMap()
+    var searchMatches by remember(threadId) { mutableStateOf<List<ThreadSearchMatch>>(emptyList()) }
+    LaunchedEffect(isSearchActive, searchQuery, currentPage?.posts, threadId) {
+        if (!isSearchActive || searchQuery.isBlank() || currentPage == null) {
+            searchMatches = emptyList()
+            return@LaunchedEffect
+        }
+        delay(150)
+        val posts = currentPage.posts
+        val query = searchQuery
+        searchMatches = withContext(Dispatchers.Default) {
+            buildThreadSearchMatches(posts, query)
+        }
     }
 
     LaunchedEffect(searchQuery, threadId) {
@@ -5150,7 +5165,8 @@ fun ThreadScreen(
                                 listState = lazyListState,
                                 saidaneOverrides = saidaneOverrides,
                                 selfPostIdentifiers = selfPostIdentifierSet,
-                                searchHighlightRanges = postHighlightRanges,
+                                searchQuery = if (isSearchActive) searchQuery else "",
+                                searchMatches = searchMatches,
                                 onPostLongPress = { post ->
                                     actionTargetPost = post
                                     isActionSheetVisible = true
@@ -5802,7 +5818,8 @@ private fun ThreadContent(
     listState: LazyListState,
     saidaneOverrides: Map<String, String>,
     selfPostIdentifiers: Set<String> = emptySet(),
-    searchHighlightRanges: Map<String, List<IntRange>>,
+    searchQuery: String,
+    searchMatches: List<ThreadSearchMatch>,
     onPostLongPress: (Post) -> Unit,
     onQuoteRequestedForPost: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
@@ -5812,12 +5829,88 @@ private fun ThreadContent(
     isRefreshing: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val posterIdLabels = remember(page.posts) {
-        buildPosterIdLabels(page.posts)
+    val normalizedSearchQuery = remember(searchQuery) { searchQuery.trim().lowercase() }
+    val highlightCache = remember(searchQuery) { mutableStateMapOf<String, List<IntRange>>() }
+    val posterIdLabels by produceState(initialValue = emptyMap(), page.posts) {
+        val posts = page.posts
+        value = if (posts.isEmpty()) {
+            emptyMap()
+        } else {
+            withContext(Dispatchers.Default) {
+                buildPosterIdLabels(posts)
+            }
+        }
     }
-    val postIndex = remember(page.posts) { page.posts.associateBy { it.id } }
-    val referencedByMap = remember(page.posts) { buildReferencedPostsMap(page.posts) }
-    val postsByPosterId = remember(page.posts) { buildPostsByPosterId(page.posts) }
+    val postIndex by produceState(initialValue = emptyMap<String, Post>(), page.posts) {
+        val posts = page.posts
+        value = if (posts.isEmpty()) {
+            emptyMap()
+        } else {
+            withContext(Dispatchers.Default) {
+                posts.associateBy { it.id }
+            }
+        }
+    }
+    val referencedByMap by produceState(initialValue = emptyMap<String, List<Post>>(), page.posts) {
+        val posts = page.posts
+        value = if (posts.isEmpty()) {
+            emptyMap()
+        } else {
+            withContext(Dispatchers.Default) {
+                buildReferencedPostsMap(posts)
+            }
+        }
+    }
+    val postsByPosterId by produceState(initialValue = emptyMap<String, List<Post>>(), page.posts) {
+        val posts = page.posts
+        value = if (posts.isEmpty()) {
+            emptyMap()
+        } else {
+            withContext(Dispatchers.Default) {
+                buildPostsByPosterId(posts)
+            }
+        }
+    }
+    val matchIdSet = remember(searchMatches) {
+        searchMatches.map { it.postId }.toSet()
+    }
+    val visiblePostIds by remember(page.posts, listState) {
+        derivedStateOf {
+            val visibleItems = listState.layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) return@derivedStateOf emptyList()
+            val maxIndex = page.posts.lastIndex
+            val indices = visibleItems.mapNotNull { it.index }
+            if (indices.isEmpty()) return@derivedStateOf emptyList()
+            val minIndex = (indices.minOrNull() ?: 0).coerceAtLeast(0)
+            val maxVisibleIndex = (indices.maxOrNull() ?: 0).coerceAtMost(maxIndex)
+            val buffer = 6
+            val start = (minIndex - buffer).coerceAtLeast(0)
+            val end = (maxVisibleIndex + buffer).coerceAtMost(maxIndex)
+            (start..end)
+                .mapNotNull { index -> page.posts.getOrNull(index)?.id }
+        }
+    }
+    LaunchedEffect(visiblePostIds, matchIdSet, normalizedSearchQuery, postIndex) {
+        if (normalizedSearchQuery.isBlank() || matchIdSet.isEmpty()) {
+            highlightCache.clear()
+            return@LaunchedEffect
+        }
+        val missing = visiblePostIds
+            .filter { it in matchIdSet && !highlightCache.containsKey(it) }
+        if (missing.isEmpty()) return@LaunchedEffect
+        val resolved = withContext(Dispatchers.Default) {
+            missing.associateWith { postId ->
+                val post = postIndex[postId]
+                if (post == null) {
+                    emptyList()
+                } else {
+                    val plainText = messageHtmlToPlainText(post.messageHtml)
+                    computeHighlightRanges(plainText, normalizedSearchQuery)
+                }
+            }
+        }
+        highlightCache.putAll(resolved)
+    }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -5960,7 +6053,7 @@ private fun ThreadContent(
                         posterIdLabel = posterIdLabels[post.id],
                         posterIdValue = normalizedPosterId,
                         saidaneLabelOverride = saidaneOverrides[post.id],
-                        highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
+                        highlightRanges = highlightCache[post.id] ?: emptyList(),
                         onQuoteClick = { reference ->
                             val targets = reference.targetPostIds.mapNotNull { postIndex[it] }
                             showQuotePreview(reference.text, targets)
@@ -6834,6 +6927,9 @@ private fun GalleryImageItem(
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
 private const val QUOTE_PREVIEW_HOLD_MS = 200L
+private val MESSAGE_BR_REGEX = Regex("(?i)<br\\s*/?>")
+private val MESSAGE_PARAGRAPH_REGEX = Regex("(?i)</p>")
+private val MESSAGE_TAG_REGEX = Regex("<[^>]+>")
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
@@ -6954,9 +7050,9 @@ private fun AnnotatedString.Builder.appendWithHighlights(
 
 private fun messageHtmlToLines(html: String): List<String> {
     val normalized = html
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace(Regex("(?i)</p>"), "\n\n")
-    val withoutTags = normalized.replace(Regex("<[^>]+>"), "")
+        .replace(MESSAGE_BR_REGEX, "\n")
+        .replace(MESSAGE_PARAGRAPH_REGEX, "\n\n")
+    val withoutTags = normalized.replace(MESSAGE_TAG_REGEX, "")
     val decoded = decodeAllHtmlEntities(withoutTags)
     return decoded.lines()
 }
@@ -7081,7 +7177,6 @@ private fun QuotePreviewDialog(
             color = MaterialTheme.colorScheme.background,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
         ) {
-            val scrollState = rememberScrollState()
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     modifier = Modifier
@@ -7095,25 +7190,27 @@ private fun QuotePreviewDialog(
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                     thickness = 1.dp
                 )
-                Column(
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 520.dp)
-                        .verticalScroll(scrollState)
                 ) {
-                    state.targetPosts.forEachIndexed { index, post ->
-                    ThreadPostCard(
-                        post = post,
-                        isOp = post.order == 0,
-                        posterIdLabel = state.posterIdLabels[post.id],
-                        posterIdValue = normalizePosterIdValue(post.posterId),
-                        saidaneLabelOverride = null,
-                        onQuoteClick = onQuoteClick,
-                        onUrlClick = onUrlClick,
-                        onSaidaneClick = null,
-                        onLongPress = null,
-                        onMediaClick = onMediaClick,
-                        modifier = Modifier
+                    itemsIndexed(
+                        items = state.targetPosts,
+                        key = { _, post -> post.id }
+                    ) { index, post ->
+                        ThreadPostCard(
+                            post = post,
+                            isOp = post.order == 0,
+                            posterIdLabel = state.posterIdLabels[post.id],
+                            posterIdValue = normalizePosterIdValue(post.posterId),
+                            saidaneLabelOverride = null,
+                            onQuoteClick = onQuoteClick,
+                            onUrlClick = onUrlClick,
+                            onSaidaneClick = null,
+                            onLongPress = null,
+                            onMediaClick = onMediaClick,
+                            modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 4.dp)
                         )
@@ -7262,8 +7359,7 @@ private data class QuoteSelectionItem(
 
 private data class ThreadSearchMatch(
     val postId: String,
-    val postIndex: Int,
-    val highlightRanges: List<IntRange>
+    val postIndex: Int
 )
 
 private fun buildPosterIdLabels(posts: List<Post>): Map<String, PosterIdLabel> {
@@ -7330,9 +7426,7 @@ private fun buildThreadSearchMatches(posts: List<Post>, query: String): List<Thr
     return posts.mapIndexedNotNull { index, post ->
         val haystack = buildSearchTextForPost(post)
         if (haystack.contains(normalizedQuery)) {
-            val messagePlain = messageHtmlToPlainText(post.messageHtml)
-            val ranges = computeHighlightRanges(messagePlain, normalizedQuery)
-            ThreadSearchMatch(post.id, index, ranges)
+            ThreadSearchMatch(post.id, index)
         } else {
             null
         }
