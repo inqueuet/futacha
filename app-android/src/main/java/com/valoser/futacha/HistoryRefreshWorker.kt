@@ -81,7 +81,7 @@ class HistoryRefreshWorker(
 
             workManager.enqueueUniqueWork(
                 UNIQUE_ONE_TIME_NAME,
-                ExistingWorkPolicy.REPLACE,
+                ExistingWorkPolicy.KEEP,
                 request
             )
         }

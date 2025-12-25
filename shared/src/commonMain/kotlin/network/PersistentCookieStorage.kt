@@ -54,6 +54,7 @@ class PersistentCookieStorage(
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
     private var transactionSnapshot: Map<CookieKey, StoredCookie>? = null
+    private var transactionDepth = 0
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         mutex.withLock {
@@ -77,7 +78,7 @@ class PersistentCookieStorage(
                 createdAtMillis = now
             )
             cookies[key] = stored
-            if (transactionSnapshot == null) {
+            if (transactionDepth == 0) {
                 saveLocked()
             }
         }
@@ -151,7 +152,9 @@ class PersistentCookieStorage(
         mutex.withLock {
             ensureLoadedLocked()
             cookies.remove(CookieKey(domain.lowercase(), normalizePath(path), name))
-            saveLocked()
+            if (transactionDepth == 0) {
+                saveLocked()
+            }
         }
     }
 
@@ -159,7 +162,9 @@ class PersistentCookieStorage(
         mutex.withLock {
             ensureLoadedLocked()
             cookies.clear()
-            saveLocked()
+            if (transactionDepth == 0) {
+                saveLocked()
+            }
         }
     }
 
@@ -168,9 +173,10 @@ class PersistentCookieStorage(
      */
     suspend fun <T> commitOnSuccess(block: suspend () -> T): T {
         mutex.withLock {
-            if (transactionSnapshot == null) {
+            if (transactionDepth == 0) {
                 transactionSnapshot = HashMap(cookies)
             }
+            transactionDepth += 1
         }
         return runCatching { block() }
             .onSuccess { persistTransaction() }
@@ -180,9 +186,14 @@ class PersistentCookieStorage(
 
     private suspend fun persistTransaction() {
         mutex.withLock {
-            if (transactionSnapshot != null) {
-                saveLocked()
+            if (transactionDepth <= 1) {
+                if (transactionSnapshot != null) {
+                    saveLocked()
+                }
                 transactionSnapshot = null
+                transactionDepth = 0
+            } else {
+                transactionDepth -= 1
             }
         }
     }
@@ -194,6 +205,7 @@ class PersistentCookieStorage(
                 cookies.putAll(snapshot)
             }
             transactionSnapshot = null
+            transactionDepth = 0
         }
     }
 
@@ -268,7 +280,7 @@ class PersistentCookieStorage(
         }.keys
         if (expiredKeys.isNotEmpty()) {
             expiredKeys.forEach { cookies.remove(it) }
-            if (transactionSnapshot == null) {
+            if (transactionDepth == 0) {
                 saveLocked()
             }
         }
@@ -310,7 +322,7 @@ class PersistentCookieStorage(
 
     private suspend fun removeCookieLocked(domain: String, path: String, name: String) {
         cookies.remove(CookieKey(domain, path, name))
-        if (transactionSnapshot == null) {
+        if (transactionDepth == 0) {
             saveLocked()
         }
     }

@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -269,7 +270,11 @@ class DefaultBoardRepository(
         // Note: close()はアプリ終了時などに呼ばれることを想定
         // 競合の可能性があるため、closeAsync()の使用を推奨
         try {
-            opImageCache.clear()
+            runBlocking {
+                opImageCacheMutex.withLock {
+                    opImageCache.clear()
+                }
+            }
         } catch (e: Exception) {
             Logger.w("DefaultBoardRepository", "Error clearing cache during close: ${e.message}")
         }

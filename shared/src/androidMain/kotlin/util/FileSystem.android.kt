@@ -564,5 +564,5 @@ class AndroidFileSystem(
 
 actual fun createFileSystem(platformContext: Any?): FileSystem {
     require(platformContext is Context) { "Android requires Context" }
-    return AndroidFileSystem(platformContext)
+    return AndroidFileSystem(platformContext.applicationContext)
 }

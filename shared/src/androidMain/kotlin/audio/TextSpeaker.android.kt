@@ -18,7 +18,7 @@ import kotlin.coroutines.resumeWithException
 
 @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 actual class TextSpeaker actual constructor(platformContext: Any?) {
-    private val context = platformContext as? Context
+    private val context = (platformContext as? Context)?.applicationContext
         ?: throw IllegalArgumentException("TextSpeaker requires an Android Context")
     private val initState = CompletableDeferred<Unit>()
     private val lock = Any()

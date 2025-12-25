@@ -2,7 +2,6 @@ package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.TextEncoding
-import io.ktor.client.call.body
 import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.FormBuilder
 import io.ktor.client.request.forms.formData
@@ -10,12 +9,16 @@ import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.readRemaining
+import io.ktor.utils.io.core.readBytes
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
@@ -102,8 +105,44 @@ class HttpBoardApi(
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
-        val bytes: ByteArray = response.body()
+        val channel = response.bodyAsChannel()
+        val limit = MAX_RESPONSE_SIZE + 1
+        val packet = channel.readRemaining(limit.toLong())
+        val bytes = packet.readBytes()
+        if (bytes.size > MAX_RESPONSE_SIZE || !channel.isClosedForRead) {
+            channel.cancel()
+            throw NetworkException("Response size exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+        }
         return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
+    }
+
+    private suspend fun <T> withRetry(
+        maxAttempts: Int = 2,
+        initialDelayMillis: Long = 500,
+        block: suspend () -> T
+    ): T {
+        var attempt = 0
+        var delayMillis = initialDelayMillis
+        while (true) {
+            try {
+                return block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                attempt += 1
+                if (attempt >= maxAttempts || !shouldRetry(e)) {
+                    throw e
+                }
+                delay(delayMillis)
+                delayMillis = (delayMillis * 2).coerceAtMost(5_000)
+            }
+        }
+    }
+
+    private fun shouldRetry(error: Exception): Boolean {
+        val networkError = error as? NetworkException ?: return true
+        val status = networkError.statusCode ?: return false
+        return status == 429 || status >= 500
     }
 
     // FIX: スレッドセーフなLRUキャッシュに変更
@@ -117,33 +156,35 @@ class HttpBoardApi(
             append("futaba.php?mode=catset")
         }
         try {
-            val response: HttpResponse = client.submitForm(
-                url = url,
-                formParameters = Parameters.build {
-                    append("mode", "catset")
-                    append("cx", "5")   // カタログの横サイズ
-                    append("cy", "60")  // カタログの縦サイズ
-                    append("cl", "4")   // 文字数
-                    append("cm", "0")   // 文字位置 (0=下, 1=右)
-                    append("ci", "0")   // 画像サイズ (0=小)
-                    append("vh", "on")  // 見たスレッドを見歴に追加
+            withRetry {
+                val response: HttpResponse = client.submitForm(
+                    url = url,
+                    formParameters = Parameters.build {
+                        append("mode", "catset")
+                        append("cx", "5")   // カタログの横サイズ
+                        append("cy", "60")  // カタログの縦サイズ
+                        append("cl", "4")   // 文字数
+                        append("cm", "0")   // 文字位置 (0=下, 1=右)
+                        append("ci", "0")   // 画像サイズ (0=小)
+                        append("vh", "on")  // 見たスレッドを見歴に追加
+                    }
+                ) {
+                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                    headers[HttpHeaders.CacheControl] = "max-age=0"
+                    headers[HttpHeaders.Referrer] = url
                 }
-            ) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "max-age=0"
-                headers[HttpHeaders.Referrer] = url
-            }
 
-            if (!response.status.isSuccess()) {
-                val errorMsg = "HTTP error ${response.status.value} when fetching catalog setup from $url"
-                println("HttpBoardApi: $errorMsg")
-                throw NetworkException(errorMsg, response.status.value)
-            }
+                if (!response.status.isSuccess()) {
+                    val errorMsg = "HTTP error ${response.status.value} when fetching catalog setup from $url"
+                    println("HttpBoardApi: $errorMsg")
+                    throw NetworkException(errorMsg, response.status.value)
+                }
 
-            // Cookies (posttime, cxyl, etc.) are automatically stored by HttpCookies plugin
-            println("HttpBoardApi: Catalog setup cookies initialized for board: $board (cx=5, cy=60)")
+                // Cookies (posttime, cxyl, etc.) are automatically stored by HttpCookies plugin
+                println("HttpBoardApi: Catalog setup cookies initialized for board: $board (cx=5, cy=60)")
+            }
         } catch (e: NetworkException) {
             throw e
         } catch (e: CancellationException) {
@@ -158,31 +199,30 @@ class HttpBoardApi(
     override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
         val url = BoardUrlResolver.resolveCatalogUrl(board, mode)
         return try {
-            val response: HttpResponse = client.get(url) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                headers[HttpHeaders.Referrer] = board
+            withRetry {
+                val response: HttpResponse = client.get(url) {
+                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                    headers[HttpHeaders.CacheControl] = "no-cache"
+                    headers[HttpHeaders.Pragma] = "no-cache"
+                    headers[HttpHeaders.Referrer] = board
+                }
+
+                if (!response.status.isSuccess()) {
+                    val errorMsg = "HTTP error ${response.status.value} when fetching catalog from $url"
+                    println("HttpBoardApi: $errorMsg")
+                    throw NetworkException(errorMsg, response.status.value)
+                }
+
+                // Check content length before reading
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
+                    throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+                }
+
+                readResponseBodyAsString(response)
             }
-
-            if (!response.status.isSuccess()) {
-                val errorMsg = "HTTP error ${response.status.value} when fetching catalog from $url"
-                println("HttpBoardApi: $errorMsg")
-                throw NetworkException(errorMsg, response.status.value)
-            }
-
-            // Check content length before reading
-            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-            }
-
-            val body = readResponseBodyAsString(response)
-
-            // Additional check after reading
-            body
         } catch (e: NetworkException) {
             throw e
         } catch (e: CancellationException) {
@@ -198,28 +238,30 @@ class HttpBoardApi(
         require(maxLines > 0) { "maxLines must be positive" }
         val url = BoardUrlResolver.resolveThreadUrl(board, threadId)
         return try {
-            val response: HttpResponse = client.get(url) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
-                    if (base.endsWith("/")) base else "$base/"
+            withRetry {
+                val response: HttpResponse = client.get(url) {
+                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                    headers[HttpHeaders.CacheControl] = "no-cache"
+                    headers[HttpHeaders.Pragma] = "no-cache"
+                    val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
+                        if (base.endsWith("/")) base else "$base/"
+                    }
+                    headers[HttpHeaders.Referrer] = refererBase
                 }
-                headers[HttpHeaders.Referrer] = refererBase
-            }
 
-            if (!response.status.isSuccess()) {
-                val errorMsg = "HTTP error ${response.status.value} when fetching thread head from $url"
-                println("HttpBoardApi: $errorMsg")
-                throw NetworkException(errorMsg, response.status.value)
-            }
+                if (!response.status.isSuccess()) {
+                    val errorMsg = "HTTP error ${response.status.value} when fetching thread head from $url"
+                    println("HttpBoardApi: $errorMsg")
+                    throw NetworkException(errorMsg, response.status.value)
+                }
 
-            val body = readResponseBodyAsString(response)
-            body.lineSequence()
-                .take(maxLines)
-                .joinToString("\n")
+                val body = readResponseBodyAsString(response)
+                body.lineSequence()
+                    .take(maxLines)
+                    .joinToString("\n")
+            }
         } catch (e: NetworkException) {
             throw e
         } catch (e: CancellationException) {
@@ -234,34 +276,33 @@ class HttpBoardApi(
     override suspend fun fetchThread(board: String, threadId: String): String {
         val url = BoardUrlResolver.resolveThreadUrl(board, threadId)
         return try {
-            val response: HttpResponse = client.get(url) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
-                    if (base.endsWith("/")) base else "$base/"
+            withRetry {
+                val response: HttpResponse = client.get(url) {
+                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                    headers[HttpHeaders.CacheControl] = "no-cache"
+                    headers[HttpHeaders.Pragma] = "no-cache"
+                    val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
+                        if (base.endsWith("/")) base else "$base/"
+                    }
+                    headers[HttpHeaders.Referrer] = refererBase
                 }
-                headers[HttpHeaders.Referrer] = refererBase
+
+                if (!response.status.isSuccess()) {
+                    val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url"
+                    println("HttpBoardApi: $errorMsg")
+                    throw NetworkException(errorMsg, response.status.value)
+                }
+
+                // Check content length before reading
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
+                    throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+                }
+
+                readResponseBodyAsString(response)
             }
-
-            if (!response.status.isSuccess()) {
-                val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url"
-                println("HttpBoardApi: $errorMsg")
-                throw NetworkException(errorMsg, response.status.value)
-            }
-
-            // Check content length before reading
-            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-            }
-
-            val body = readResponseBodyAsString(response)
-
-            // Additional check after reading
-            body
         } catch (e: NetworkException) {
             throw e
         } catch (e: CancellationException) {
@@ -779,6 +820,9 @@ class HttpBoardApi(
                 headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
                 headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
                 headers[HttpHeaders.CacheControl] = "no-cache"
+            }
+            if (!response.status.isSuccess()) {
+                throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url")
             }
             val html = readResponseBodyAsString(response)
             val chrencValue = parseChrencValue(html) ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE

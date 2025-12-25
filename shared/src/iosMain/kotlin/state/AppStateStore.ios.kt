@@ -87,139 +87,116 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun updateBoardsJson(value: String) {
         defaults.setObject(value, forKey = BOARDS_KEY)
-        defaults.synchronize()
         boardsState.value = value
     }
 
     override suspend fun updateHistoryJson(value: String) {
         defaults.setObject(value, forKey = HISTORY_KEY)
-        defaults.synchronize()
         historyState.value = value
     }
 
     override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
         defaults.setBool(enabled, forKey = PRIVACY_FILTER_KEY)
-        defaults.synchronize()
         privacyFilterState.value = enabled
     }
 
     override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
         defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
-        defaults.synchronize()
         backgroundRefreshState.value = enabled
     }
 
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
         defaults.setBool(enabled, forKey = LIGHTWEIGHT_MODE_KEY)
-        defaults.synchronize()
         lightweightModeState.value = enabled
     }
 
     override suspend fun updateManualSaveDirectory(directory: String) {
         defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
-        defaults.synchronize()
         manualSaveDirectoryState.value = directory
     }
 
     override suspend fun updateAttachmentPickerPreference(preference: String) {
         defaults.setObject(preference, forKey = ATTACHMENT_PICKER_PREF_KEY)
-        defaults.synchronize()
         attachmentPickerPreferenceState.value = preference
     }
 
     override suspend fun updateSaveDirectorySelection(selection: String) {
         defaults.setObject(selection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
-        defaults.synchronize()
         saveDirectorySelectionState.value = selection
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {
         defaults.setObject(value, forKey = CATALOG_MODE_MAP_KEY)
-        defaults.synchronize()
         catalogModeMapState.value = value
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
         defaults.setObject(style, forKey = CATALOG_DISPLAY_STYLE_KEY)
-        defaults.synchronize()
         displayStyleState.value = style
     }
 
     override suspend fun updateCatalogGridColumns(columns: String) {
         defaults.setObject(columns, forKey = CATALOG_GRID_COLUMNS_KEY)
-        defaults.synchronize()
         gridColumnsState.value = columns
     }
 
     override suspend fun updateNgHeadersJson(value: String) {
         defaults.setObject(value, forKey = NG_HEADERS_KEY)
-        defaults.synchronize()
         ngHeadersState.value = value
     }
 
     override suspend fun updateNgWordsJson(value: String) {
         defaults.setObject(value, forKey = NG_WORDS_KEY)
-        defaults.synchronize()
         ngWordsState.value = value
     }
 
     override suspend fun updateCatalogNgWordsJson(value: String) {
         defaults.setObject(value, forKey = CATALOG_NG_WORDS_KEY)
-        defaults.synchronize()
         catalogNgWordsState.value = value
     }
 
     override suspend fun updateWatchWordsJson(value: String) {
         defaults.setObject(value, forKey = WATCH_WORDS_KEY)
-        defaults.synchronize()
         watchWordsState.value = value
     }
 
     override suspend fun updateSelfPostIdentifiersJson(value: String) {
         defaults.setObject(value, forKey = SELF_POST_IDENTIFIERS_KEY)
-        defaults.synchronize()
         selfPostIdentifiersState.value = value
     }
 
     override suspend fun updateThreadMenuConfigJson(value: String) {
         defaults.setObject(value, forKey = THREAD_MENU_CONFIG_KEY)
-        defaults.synchronize()
         threadMenuConfigState.value = value
     }
 
     override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
         defaults.setObject(value, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
-        defaults.synchronize()
         threadSettingsMenuConfigState.value = value
     }
 
     override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
         defaults.setObject(value, forKey = THREAD_MENU_ENTRIES_KEY)
-        defaults.synchronize()
         threadMenuEntriesState.value = value
     }
 
     override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
         defaults.setObject(value, forKey = CATALOG_NAV_ENTRIES_KEY)
-        defaults.synchronize()
         catalogNavEntriesState.value = value
     }
 
     override suspend fun updatePreferredFileManagerPackage(packageName: String) {
         defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
-        defaults.synchronize()
         preferredFileManagerPackageState.value = packageName
     }
 
     override suspend fun updatePreferredFileManagerLabel(label: String) {
         defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
-        defaults.synchronize()
         preferredFileManagerLabelState.value = label
     }
 
     override suspend fun updateLastUsedDeleteKey(value: String) {
         defaults.setObject(value, forKey = LAST_USED_DELETE_KEY)
-        defaults.synchronize()
         lastUsedDeleteKeyState.value = value
     }
 
@@ -321,9 +298,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             catalogModeMapState.value = defaultCatalogModeMapJson
             updated = true
         }
-        if (updated) {
-            defaults.synchronize()
-        }
+        // NSUserDefaults writes are automatically persisted; explicit synchronize is unnecessary.
     }
 
     private fun sanitizeManualSaveDirectoryValue(value: String?): String {

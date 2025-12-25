@@ -51,26 +51,72 @@ private val json = Json {
  * @return latestVersion > currentVersion の場合 true
  */
 fun isNewerVersion(currentVersion: String, latestVersion: String): Boolean {
-    // "v1.0.0" のような prefix を削除
-    val current = currentVersion.removePrefix("v")
-    val latest = latestVersion.removePrefix("v")
+    val current = parseSemVer(currentVersion) ?: return false
+    val latest = parseSemVer(latestVersion) ?: return false
+    return compareSemVer(latest, current) > 0
+}
 
-    val currentParts = current.split(".").mapNotNull { it.toIntOrNull() }
-    val latestParts = latest.split(".").mapNotNull { it.toIntOrNull() }
+private data class SemVer(
+    val major: Int,
+    val minor: Int,
+    val patch: Int,
+    val preRelease: List<PreRelease>
+)
 
-    val maxLength = maxOf(currentParts.size, latestParts.size)
+private data class PreRelease(
+    val value: String,
+    val isNumeric: Boolean
+)
 
-    for (i in 0 until maxLength) {
-        val currentPart = currentParts.getOrNull(i) ?: 0
-        val latestPart = latestParts.getOrNull(i) ?: 0
+private fun parseSemVer(raw: String): SemVer? {
+    val trimmed = raw.removePrefix("v").trim()
+    if (trimmed.isEmpty()) return null
 
-        when {
-            latestPart > currentPart -> return true
-            latestPart < currentPart -> return false
+    val mainAndPre = trimmed.split("-", limit = 2)
+    val mainPart = mainAndPre[0].substringBefore("+").trim()
+    val mainSegments = mainPart.split(".")
+    val major = mainSegments.getOrNull(0)?.toIntOrNull() ?: return null
+    val minor = mainSegments.getOrNull(1)?.toIntOrNull() ?: 0
+    val patch = mainSegments.getOrNull(2)?.toIntOrNull() ?: 0
+
+    val preRelease = if (mainAndPre.size > 1) {
+        mainAndPre[1].substringBefore("+").split(".").filter { it.isNotBlank() }.map { token ->
+            val numeric = token.all { it.isDigit() }
+            PreRelease(token, numeric)
         }
+    } else {
+        emptyList()
     }
 
-    return false
+    return SemVer(major, minor, patch, preRelease)
+}
+
+private fun compareSemVer(left: SemVer, right: SemVer): Int {
+    if (left.major != right.major) return left.major.compareTo(right.major)
+    if (left.minor != right.minor) return left.minor.compareTo(right.minor)
+    if (left.patch != right.patch) return left.patch.compareTo(right.patch)
+
+    val leftPre = left.preRelease
+    val rightPre = right.preRelease
+    if (leftPre.isEmpty() && rightPre.isEmpty()) return 0
+    if (leftPre.isEmpty()) return 1
+    if (rightPre.isEmpty()) return -1
+
+    val max = maxOf(leftPre.size, rightPre.size)
+    for (i in 0 until max) {
+        val l = leftPre.getOrNull(i) ?: return -1
+        val r = rightPre.getOrNull(i) ?: return 1
+        if (l.isNumeric && r.isNumeric) {
+            val lNum = l.value.toIntOrNull() ?: 0
+            val rNum = r.value.toIntOrNull() ?: 0
+            if (lNum != rNum) return lNum.compareTo(rNum)
+        } else if (l.isNumeric != r.isNumeric) {
+            return if (l.isNumeric) -1 else 1
+        } else {
+            if (l.value != r.value) return l.value.compareTo(r.value)
+        }
+    }
+    return 0
 }
 
 /**

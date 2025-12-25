@@ -313,7 +313,12 @@ internal object ThreadHtmlParserCore {
     private fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {
         val start = startRegex.find(text) ?: return null
         val end = endRegex.find(text, start.range.last) ?: return null
-        return text.substring(start.range.last + 1, end.range.first)
+        val contentStart = start.range.last + 1
+        val contentEnd = end.range.first
+        if (contentStart > contentEnd || contentStart < 0 || contentEnd > text.length) {
+            return null
+        }
+        return text.substring(contentStart, contentEnd)
     }
 
     private fun extractOpBlock(html: String, firstReplyIndex: Int): String? {

@@ -212,6 +212,7 @@ internal object CatalogHtmlParserCore {
         if (contentStart == 0) return null
         val endIndex = text.indexOf(endTag, contentStart, ignoreCase = true)
         if (endIndex == -1) return null
+        if (contentStart > endIndex) return null
         return text.substring(contentStart, endIndex)
     }
 

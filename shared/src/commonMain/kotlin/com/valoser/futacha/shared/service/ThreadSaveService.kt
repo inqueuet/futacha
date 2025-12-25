@@ -213,8 +213,7 @@ class ThreadSaveService(
 
                             downloadResult
                                 .onSuccess { fileInfo ->
-                                    val fileSize = fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
-                                    totalSize += fileSize
+                                    totalSize += fileInfo.sizeBytes
                                     enforceBudget(totalSize, startedAtMillis)
                                     // URL→ローカルパスマッピングに追加
                                     urlToPathMap[mediaItem.url] = fileInfo.relativePath
@@ -493,7 +492,8 @@ class ThreadSaveService(
 
             LocalFileInfo(
                 relativePath = relativePath,
-                fileType = fileType
+                fileType = fileType,
+                sizeBytes = totalBytesRead
             )
         }
     }
@@ -725,12 +725,42 @@ class ThreadSaveService(
             .substringBefore('?')
             .substringAfterLast('/')
             .takeIf { it.isNotBlank() }
-        return candidate ?: "${postId}_${Clock.System.now().toEpochMilliseconds()}.$extension"
+        val fallbackBase = sanitizePathSegment(postId, "thread")
+        val safeExtension = sanitizeExtension(extension).ifBlank { "dat" }
+        val rawName = candidate ?: "${fallbackBase}_${Clock.System.now().toEpochMilliseconds()}.$safeExtension"
+        val base = rawName.substringBeforeLast('.', rawName)
+        val ext = rawName.substringAfterLast('.', safeExtension)
+        val safeBase = sanitizePathSegment(base, fallbackBase)
+        val safeExt = sanitizeExtension(ext).ifBlank { safeExtension }
+        return "${safeBase.take(64)}.$safeExt"
+    }
+
+    private fun sanitizeExtension(raw: String): String {
+        val trimmed = raw.trim().lowercase()
+        return trimmed.filter { it.isLetterOrDigit() }.take(8)
+    }
+
+    private fun sanitizePathSegment(raw: String, fallback: String): String {
+        val cleaned = raw.trim().replace('\\', '/')
+        val segments = cleaned.split('/').filter { it.isNotBlank() && it != "." && it != ".." }
+        val joined = segments.joinToString("_") { segment ->
+            buildString(segment.length) {
+                segment.forEach { ch ->
+                    when {
+                        ch.isLetterOrDigit() -> append(ch)
+                        ch == '-' || ch == '_' || ch == '.' -> append(ch)
+                        else -> append('_')
+                    }
+                }
+            }
+        }
+        return joined.ifBlank { fallback }
     }
 
     private data class LocalFileInfo(
         val relativePath: String,
-        val fileType: FileType
+        val fileType: FileType,
+        val sizeBytes: Long
     )
 
     /**

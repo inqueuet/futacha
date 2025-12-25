@@ -178,11 +178,7 @@ class HistoryRefresher(
         }
 
         if (updates.isNotEmpty()) {
-            val latestHistory = stateStore.history.first()
-            val merged = latestHistory.map { entry ->
-                updates[entry.threadId] ?: entry
-            }
-            stateStore.setHistory(merged)
+            stateStore.updateHistoryEntries(updates)
         }
 
         // FIX: エラー情報をより詳細に記録

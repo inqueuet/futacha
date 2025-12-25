@@ -18,6 +18,7 @@ import com.valoser.futacha.shared.util.createFileSystem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 class FutachaApplication : Application() {
     lateinit var appStateStore: AppStateStore
@@ -64,7 +65,8 @@ class FutachaApplication : Application() {
 
     override fun onTerminate() {
         // This is only called in emulators, but close resources defensively
-        boardRepository.closeAsync()
+        applicationScope.cancel()
+        boardRepository.close()
         super.onTerminate()
     }
 }

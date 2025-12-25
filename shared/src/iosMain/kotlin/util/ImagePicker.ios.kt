@@ -10,7 +10,6 @@ import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.refTo
 import kotlinx.cinterop.value
 import kotlinx.cinterop.usePinned
 import platform.Foundation.*
@@ -24,6 +23,7 @@ import platform.PhotosUI.PHPickerViewControllerDelegateProtocol
 import platform.UIKit.UIApplication
 import platform.UIKit.UIImage
 import platform.UIKit.UIImageJPEGRepresentation
+import platform.UIKit.UIViewController
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.darwin.NSObject
@@ -81,8 +81,7 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
     }
 
     picker.delegate = delegate
-    val rootViewController = UIApplication.sharedApplication.keyWindow?.rootViewController
-    rootViewController?.presentViewController(picker, animated = true, completion = null)
+    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
 }
 
 actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
@@ -114,7 +113,9 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                 }
 
                 val bytes = ByteArray(data.length.toInt())
-                memcpy(bytes.refTo(0), data.bytes, data.length.toULong())
+                bytes.usePinned { pinned ->
+                    memcpy(pinned.addressOf(0), data.bytes, data.length)
+                }
 
                 continuation.resume(ImageData(bytes, "image.jpg"))
             }
@@ -123,8 +124,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
 
     picker.delegate = delegate
 
-    val rootViewController = UIApplication.sharedApplication.keyWindow?.rootViewController
-    rootViewController?.presentViewController(picker, animated = true, completion = null)
+    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
 }
 
 actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuation ->
@@ -150,8 +150,7 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
         }
     }
     picker.delegate = delegate
-    val rootViewController = UIApplication.sharedApplication.keyWindow?.rootViewController
-    rootViewController?.presentViewController(picker, animated = true, completion = null)
+    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
 }
 
 /**
@@ -188,8 +187,7 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
         }
     }
     picker.delegate = delegate
-    val rootViewController = UIApplication.sharedApplication.keyWindow?.rootViewController
-    rootViewController?.presentViewController(picker, animated = true, completion = null)
+    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
 }
 
 /**
@@ -215,6 +213,12 @@ private fun createSecureBookmark(url: NSURL): SaveLocation.Bookmark? {
         val base64 = encodeBase64(bytes)
         SaveLocation.Bookmark(base64)
     }
+}
+
+private fun getRootViewController(): UIViewController? {
+    val application = UIApplication.sharedApplication
+    val keyWindow = application.windows.firstOrNull { it.isKeyWindow } ?: application.windows.firstOrNull()
+    return keyWindow?.rootViewController
 }
 
 /**

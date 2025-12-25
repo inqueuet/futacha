@@ -2,9 +2,9 @@ package com.valoser.futacha.shared.background
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.BackgroundTasks.BGAppRefreshTask
 import platform.BackgroundTasks.BGAppRefreshTaskRequest
@@ -20,11 +20,15 @@ import platform.Foundation.NSLog
 object BackgroundRefreshManager {
     private const val TASK_ID = "com.valoser.futacha.refresh"
     private var registered = false
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val stateLock = Any()
     private var isEnabled = false
 
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
-        isEnabled = enabled
+        synchronized(stateLock) {
+            isEnabled = enabled
+            ensureScope()
+        }
         if (!isSupported()) {
             NSLog("BGTask not supported on this OS")
             return
@@ -51,14 +55,14 @@ object BackgroundRefreshManager {
     }
 
     private fun handleTask(task: BGTask, onExecute: suspend () -> Unit) {
-        if (!isEnabled) {
+        if (!isEnabledSafe()) {
             task.setTaskCompletedWithSuccess(false)
             cancel()
             return
         }
         val job = scope.launch {
             try {
-                if (isEnabled) {
+                if (isEnabledSafe()) {
                     onExecute()
                     task.setTaskCompletedWithSuccess(true)
                 } else {
@@ -78,7 +82,7 @@ object BackgroundRefreshManager {
     }
 
     private fun scheduleRefresh() {
-        if (!isEnabled) return
+        if (!isEnabledSafe()) return
         val request = BGAppRefreshTaskRequest(TASK_ID)
         runCatching {
             BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
@@ -88,14 +92,25 @@ object BackgroundRefreshManager {
     }
 
     fun cancel() {
-        isEnabled = false
+        synchronized(stateLock) {
+            isEnabled = false
+            scope.coroutineContext[Job]?.cancel()
+        }
         if (!isSupported()) return
         BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(TASK_ID)
     }
 
     private fun isSupported(): Boolean {
-        val versionString = NSProcessInfo.processInfo.operatingSystemVersionString
-        val major = versionString.substringAfter("Version ").substringBefore(".").toIntOrNull() ?: 0
-        return major >= 13
+        val version = NSProcessInfo.processInfo.operatingSystemVersion
+        return version.majorVersion >= 13
+    }
+
+    private fun isEnabledSafe(): Boolean = synchronized(stateLock) { isEnabled }
+
+    private fun ensureScope() {
+        val job = scope.coroutineContext[Job]
+        if (job == null || !job.isActive) {
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        }
     }
 }

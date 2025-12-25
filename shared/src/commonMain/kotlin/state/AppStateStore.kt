@@ -30,6 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -79,6 +80,7 @@ class AppStateStore internal constructor(
     private val historyMutex = Mutex()
     private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex
     private val selfPostIdentifiersMutex = Mutex()
+    private val catalogModeMutex = Mutex()
     private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     private val stringListSerializer = ListSerializer(String.serializer())
     private val threadMenuConfigSerializer = ListSerializer(ThreadMenuItemConfig.serializer())
@@ -274,14 +276,14 @@ class AppStateStore internal constructor(
         }
     }
 
-    fun getPreferredFileManager(): Flow<PreferredFileManager?> = storage.preferredFileManagerPackage.map { pkg ->
-        if (pkg.isBlank()) {
-            null
-        } else {
-            val label = storage.preferredFileManagerLabel.first()
-            PreferredFileManager(pkg, label)
+    fun getPreferredFileManager(): Flow<PreferredFileManager?> =
+        combine(storage.preferredFileManagerPackage, storage.preferredFileManagerLabel) { pkg, label ->
+            if (pkg.isBlank()) {
+                null
+            } else {
+                PreferredFileManager(pkg, label)
+            }
         }
-    }
 
     suspend fun setPrivacyFilterEnabled(enabled: Boolean) {
         try {
@@ -310,15 +312,17 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) {
-        try {
-            val currentRaw = storage.catalogModeMapJson.first()
-            val current = decodeCatalogModeMap(currentRaw)
-            val updated = current + (boardId to mode)
-            storage.updateCatalogModeMapJson(
-                json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
-            )
-        } catch (e: Exception) {
-            Logger.e(TAG, "Failed to save catalog mode for $boardId: ${mode.name}", e)
+        catalogModeMutex.withLock {
+            try {
+                val currentRaw = storage.catalogModeMapJson.first()
+                val current = decodeCatalogModeMap(currentRaw)
+                val updated = current + (boardId to mode)
+                storage.updateCatalogModeMapJson(
+                    json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
+                )
+            } catch (e: Exception) {
+                Logger.e(TAG, "Failed to save catalog mode for $boardId: ${mode.name}", e)
+            }
         }
     }
 
@@ -455,6 +459,28 @@ class AppStateStore internal constructor(
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to upsert history entry ${entry.threadId}", e)
                 // Log error but don't crash
+            }
+        }
+    }
+
+    /**
+     * Update multiple history entries in a single locked transaction.
+     * This avoids races with concurrent history writes and prevents lost updates.
+     */
+    suspend fun updateHistoryEntries(updatedEntries: Map<String, ThreadHistoryEntry>) {
+        if (updatedEntries.isEmpty()) return
+        historyMutex.withLock {
+            val currentHistory = readHistorySnapshotLocked() ?: run {
+                Logger.w(TAG, "Skipping history update due to missing snapshot")
+                return
+            }
+            val merged = currentHistory.map { entry ->
+                updatedEntries[entry.threadId] ?: entry
+            }
+            try {
+                persistHistory(merged)
+            } catch (e: Exception) {
+                Logger.e(TAG, "Failed to update history entries (${updatedEntries.size})", e)
             }
         }
     }
