@@ -9,7 +9,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.ui.FutachaApp
-import version.createVersionChecker
+import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import androidx.work.WorkManager

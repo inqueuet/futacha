@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.valoser.futacha.shared.util.Logger
 import java.io.IOException
 import java.util.Locale
 import java.util.UUID
@@ -24,14 +25,28 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private val lock = Any()
     private val continuations = mutableMapOf<String, CancellableContinuation<Unit>>()
     private val tts: TextToSpeech
+    // FIX: スレッド安全性のため@Volatileを追加
+    @Volatile
     private var closed = false
+
+    companion object {
+        private const val TAG = "TextSpeaker"
+    }
 
     init {
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 val result = tts.setLanguage(Locale.JAPAN)
-                if (result in TextToSpeech.LANG_AVAILABLE..TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
-                    // Language initialized
+                when (result) {
+                    TextToSpeech.LANG_MISSING_DATA -> {
+                        Logger.w(TAG, "日本語の音声データがありません。デフォルト言語を使用します")
+                    }
+                    TextToSpeech.LANG_NOT_SUPPORTED -> {
+                        Logger.w(TAG, "日本語はサポートされていません。デフォルト言語を使用します")
+                    }
+                    else -> {
+                        // Language initialized successfully
+                    }
                 }
                 initState.complete(Unit)
             } else {

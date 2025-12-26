@@ -170,6 +170,13 @@ class PersistentCookieStorage(
 
     /**
      * Run [block] while staging cookie changes; commit to disk only if it succeeds.
+     *
+     * Note: ブロック実行中はロックを保持しないため、他のコルーチンがクッキーを
+     * 変更する可能性があります。ただし、失敗時はスナップショットにロールバックされ、
+     * 成功時のみディスクに永続化されます。
+     *
+     * トランザクション中の操作（addCookie等）はメモリ上でのみ行われ、
+     * ディスクへの書き込みはトランザクション完了時に一括で行われます。
      */
     suspend fun <T> commitOnSuccess(block: suspend () -> T): T {
         mutex.withLock {
@@ -286,13 +293,20 @@ class PersistentCookieStorage(
         }
     }
 
+    /**
+     * クッキーの有効期限を解決する。
+     * - maxAge == 0 または maxAge < 0: クッキーを削除（nullを返す）
+     * - maxAge > 0: 現在時刻 + maxAge
+     * - maxAge == null: expiresを使用
+     *
+     * RFC 6265: 負のmax-ageは無効とみなし、クッキーを即座に削除する
+     */
     private fun resolveExpiresAt(cookie: Cookie, now: Long): Long? {
         val maxAgeSeconds = cookie.maxAge
         if (maxAgeSeconds != null) {
-            if (maxAgeSeconds == 0) return null
-            if (maxAgeSeconds > 0) {
-                return now + maxAgeSeconds.seconds.inWholeMilliseconds
-            }
+            // max-age=0 または負の値はクッキー削除を意味する
+            if (maxAgeSeconds <= 0) return null
+            return now + maxAgeSeconds.seconds.inWholeMilliseconds
         }
         return cookie.expires?.timestamp
     }
@@ -314,8 +328,23 @@ class PersistentCookieStorage(
         return normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain")
     }
 
+    /**
+     * RFC 6265準拠のパスマッチング
+     * cookiePath が "/" の場合は常にマッチ
+     * そうでない場合、requestPath が cookiePath と等しいか、cookiePath + "/" で始まる必要がある
+     */
     private fun pathMatches(requestPath: String, cookiePath: String): Boolean {
-        return requestPath == cookiePath || requestPath.startsWith(cookiePath)
+        // 空のパスは"/"として扱う（RFC 6265 Section 5.1.4）
+        val normalizedRequest = requestPath.ifEmpty { "/" }
+        val normalizedCookie = cookiePath.ifEmpty { "/" }
+
+        if (normalizedRequest == normalizedCookie) return true
+        // cookiePath が "/" の場合は全てにマッチ
+        if (normalizedCookie == "/") return true
+        // requestPath が cookiePath で始まり、その後に "/" が続く場合のみマッチ
+        // 例: cookiePath="/foo" の場合、requestPath="/foo/bar" はマッチするが "/foobar" はマッチしない
+        return normalizedRequest.startsWith(normalizedCookie) &&
+               (normalizedRequest.length > normalizedCookie.length && normalizedRequest[normalizedCookie.length] == '/')
     }
 
     private fun Url.isSecure(): Boolean = protocol.name.equals("https", ignoreCase = true)

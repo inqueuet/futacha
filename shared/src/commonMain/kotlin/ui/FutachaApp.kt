@@ -57,8 +57,8 @@ import io.ktor.http.Url
 import io.ktor.http.encodedPath
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
-import version.VersionChecker
-import version.UpdateInfo
+import com.valoser.futacha.shared.version.VersionChecker
+import com.valoser.futacha.shared.version.UpdateInfo
 
 private const val TAG = "FutachaApp"
 

@@ -21,17 +21,30 @@ import platform.PhotosUI.PHPickerResult
 import platform.PhotosUI.PHPickerViewController
 import platform.PhotosUI.PHPickerViewControllerDelegateProtocol
 import platform.UIKit.UIApplication
-import platform.UIKit.UIImage
-import platform.UIKit.UIImageJPEGRepresentation
 import platform.UIKit.UIViewController
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.darwin.NSObject
 import platform.posix.memcpy
+import kotlin.concurrent.AtomicReference
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+
+/**
+ * セキュリティスコープリソースの管理
+ * pickDirectoryPath()で取得したURLへのアクセスを追跡し、
+ * 次回呼び出し時または明示的なリリース時に解放する
+ */
+private val currentSecurityScopedUrl = AtomicReference<NSURL?>(null)
+
+/**
+ * 現在保持しているセキュリティスコープリソースへのアクセスを解放する
+ */
+fun releaseSecurityScopedResource() {
+    currentSecurityScopedUrl.getAndSet(null)?.stopAccessingSecurityScopedResource()
+}
 
 /**
  * UIDocumentPicker で Files.app 経由の画像を選択
@@ -127,6 +140,16 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
     getRootViewController()?.presentViewController(picker, animated = true, completion = null)
 }
 
+/**
+ * ディレクトリを選択してパスを返す。
+ *
+ * 注意: この関数が返すパスは現在のアプリセッション中のみ有効です。
+ * アプリを再起動すると、セキュリティスコープリソースへのアクセス権が失われます。
+ * 永続的なアクセスが必要な場合は [pickDirectorySaveLocation] を使用してください。
+ *
+ * セキュリティスコープリソースは次回の呼び出し時に自動的に解放されます。
+ * 明示的に解放する場合は [releaseSecurityScopedResource] を呼び出してください。
+ */
 actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuation ->
     val picker = UIDocumentPickerViewController(
         forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
@@ -136,10 +159,28 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
         override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
             controller.dismissViewControllerAnimated(true, null)
             val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
-            val path = url?.path
+            if (url == null) {
+                continuation.resume(null)
+                return
+            }
+
+            // 前回のセキュリティスコープリソースを解放
+            releaseSecurityScopedResource()
+
+            // Security-scoped resourceへのアクセスを開始
+            val started = url.startAccessingSecurityScopedResource()
+            val path = url.path
             if (path != null && canWriteTestFile(path)) {
+                // 成功時はURLを保持（次回呼び出し時またはreleaseSecurityScopedResource()で解放）
+                if (started) {
+                    currentSecurityScopedUrl.value = url
+                }
                 continuation.resume(path)
             } else {
+                // 失敗時は即座に解放
+                if (started) {
+                    url.stopAccessingSecurityScopedResource()
+                }
                 continuation.resume(null)
             }
         }

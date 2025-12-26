@@ -67,6 +67,8 @@ class FutachaApplication : Application() {
         // This is only called in emulators, but close resources defensively
         applicationScope.cancel()
         boardRepository.close()
+        // FIX: HttpClientも閉じてリソースリークを防ぐ
+        httpClient.close()
         super.onTerminate()
     }
 }

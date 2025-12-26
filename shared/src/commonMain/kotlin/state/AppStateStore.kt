@@ -78,7 +78,6 @@ class AppStateStore internal constructor(
     private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
     private val boardsMutex = Mutex()
     private val historyMutex = Mutex()
-    private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex
     private val selfPostIdentifiersMutex = Mutex()
     private val catalogModeMutex = Mutex()
     private val selfPostIdentifierMapSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
@@ -509,6 +508,7 @@ class AppStateStore internal constructor(
         }
 
         // FIX: アトミックなJobマップ操作でデッドロックを回避
+        // 先にジョブを作成し、即座にマップに登録することで競合を回避
         val newJob = scope.launch {
             delay(SCROLL_DEBOUNCE_DELAY_MS)
 
@@ -519,7 +519,8 @@ class AppStateStore internal constructor(
                 )
             } finally {
                 // 完了後に自動的にマップから削除
-                scrollPositionJobs.removeIfSame(threadId, this.coroutineContext[Job])
+                // coroutineContext[Job]を使用して現在のジョブを取得
+                scrollPositionJobs.removeIfSame(threadId, coroutineContext[Job])
             }
         }
 
@@ -531,7 +532,7 @@ class AppStateStore internal constructor(
     /**
      * Immediate update of scroll position without debouncing.
      * Internal method used by the debounced public method.
-     * FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
+     * FIX: デッドロック回避のため、historyMutexのみを使用する（ネストされたロックを避ける）
      */
     private suspend fun updateHistoryScrollPositionImmediate(
         threadId: String,
@@ -544,12 +545,9 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
-        // FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
-        scrollPositionMutex.withLock {
-            // FIX: history読み取りは最小限のロックで実行
-            val currentHistory = historyMutex.withLock {
-                readHistorySnapshotLocked()
-            } ?: run {
+        // FIX: 単一のMutexで読み取りと書き込みを一括処理（デッドロック回避）
+        historyMutex.withLock {
+            val currentHistory = readHistorySnapshotLocked() ?: run {
                 Logger.w(TAG, "Skipping scroll position update due to missing snapshot")
                 return
             }
@@ -603,11 +601,8 @@ class AppStateStore internal constructor(
                 }
             }
 
-            // FIX: 書き込みのみhistoryMutexでロック
             try {
-                historyMutex.withLock {
-                    persistHistory(updatedHistory)
-                }
+                persistHistory(updatedHistory)
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to update scroll position for thread $threadId", e)
                 // Log error but don't crash

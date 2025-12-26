@@ -14,7 +14,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -261,29 +260,20 @@ class DefaultBoardRepository(
         return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
-    // FIX: 同期的にクリーンアップを実行（メインスレッドからの呼び出しを想定しない）
+    // FIX: 同期的にクリーンアップを実行
+    // Note: キャッシュはメモリ上のみなので、スコープキャンセル時にGCされる
+    // runBlockingを使用しないことでANRを回避
     override fun close() {
         // Close the underlying API if it supports cleanup
         (api as? AutoCloseable)?.close()
 
-        // FIX: キャッシュをクリア
-        // Note: close()はアプリ終了時などに呼ばれることを想定
-        // 競合の可能性があるため、closeAsync()の使用を推奨
-        try {
-            runBlocking {
-                opImageCacheMutex.withLock {
-                    opImageCache.clear()
-                }
-            }
-        } catch (e: Exception) {
-            Logger.w("DefaultBoardRepository", "Error clearing cache during close: ${e.message}")
-        }
-
         // スコープをキャンセル（バックグラウンドタスクを停止）
+        // Note: キャッシュのクリアはcloseAsync()で行うか、GCに任せる
         closeScope.cancel()
     }
 
     // FIX: 非同期版closeAsync（必要に応じて使用）
+    // レースコンディション回避: ジョブ完了後にスコープをキャンセル
     override fun closeAsync(): Job {
         (api as? AutoCloseable)?.close()
 
@@ -291,8 +281,9 @@ class DefaultBoardRepository(
             opImageCacheMutex.withLock {
                 opImageCache.clear()
             }
-        }.also {
-            it.invokeOnCompletion {
+        }.also { job ->
+            job.invokeOnCompletion { _ ->
+                // ジョブが完了（成功・失敗・キャンセル問わず）してからスコープをキャンセル
                 closeScope.cancel()
             }
         }
