@@ -83,9 +83,10 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private const val ISOLATION_NOTICE_TEXT = "削除依頼によって隔離されました"
-    // FIX: ReDoS対策 - 非貪欲量指定子を使用
+    // FIX: ReDoS対策 - 非貪欲量指定子を削除し、より厳密なパターンに変更
+    // 悪意のある入力による指数時間的なバックトラックを防ぐ
     private val saidaneRegex = Regex(
-        pattern = "<a\\s+[^>]{0,200}?class=['\"]?sod['\"]?[^>]{0,200}?>([^<]{1,500}?)</a>",
+        pattern = "<a\\s+(?:[^>\"']*\\s+)?class=['\"]?sod['\"]?(?:\\s+[^>]*)?>([^<]{1,500})</a>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val posterIdRegex = Regex("ID:[^\\s<]+")
@@ -173,11 +174,18 @@ internal object ThreadHtmlParserCore {
                         }
                     }
 
-                    // Safety check: detect if searchStart hasn't moved
+                    // FIX: 無限ループ対策 - 停滞検出と範囲チェックを強化
                     if (searchStart == lastSearchStart) {
                         Logger.e(TAG, "Search position stalled at $searchStart, stopping parse")
                         isTruncated = true
                         truncationReason = "Parse error: search position stalled"
+                        break
+                    }
+                    // FIX: 追加の安全チェック - 負の値や異常な値の検出
+                    if (searchStart < 0 || searchStart > repliesHtml.length) {
+                        Logger.e(TAG, "Invalid search position: $searchStart (html length: ${repliesHtml.length}), stopping parse")
+                        isTruncated = true
+                        truncationReason = "Parse error: invalid search position ($searchStart)"
                         break
                     }
                     lastSearchStart = searchStart

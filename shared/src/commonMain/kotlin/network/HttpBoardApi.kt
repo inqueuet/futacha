@@ -570,6 +570,12 @@ class HttpBoardApi(
         return tryExtractThisNo(responseBody)
     }
 
+    // SECURITY NOTE: パスワードはStringで渡されるため、メモリダンプから漏洩する可能性があります。
+    // 将来的な改善案:
+    // 1. CharArrayを使用してパスワードを渡し、使用後即座にクリア
+    // 2. プラットフォーム固有のSecureString実装を使用
+    // 3. パスワードの保持時間を最小化
+    // 現状では、呼び出し元がパスワードの寿命管理を行う必要があります。
     private fun buildPostFormData(
         threadId: String?,
         name: String,
@@ -858,13 +864,30 @@ class HttpBoardApi(
                 else -> payload.toIntOrNull(10)
             }
             codePoint?.let {
-                if (it <= Char.MAX_VALUE.code) {
-                    Char(it).toString()
-                } else {
-                    val adjusted = it - 0x10000
-                    val high = 0xD800 + (adjusted shr 10)
-                    val low = 0xDC00 + (adjusted and 0x3FF)
-                    charArrayOf(high.toChar(), low.toChar()).concatToString()
+                // FIX: サロゲートペア計算の修正 - 範囲チェックと正しい変換
+                when {
+                    it in 0x0000..0xFFFF -> {
+                        // BMP (Basic Multilingual Plane) - 直接変換可能
+                        if (it in 0xD800..0xDFFF) {
+                            // サロゲート範囲は無効
+                            return@replace match.value
+                        }
+                        it.toChar().toString()
+                    }
+                    it in 0x10000..0x10FFFF -> {
+                        // 補助平面 - サロゲートペアが必要
+                        val adjusted = it - 0x10000
+                        val highSurrogate = 0xD800 + (adjusted shr 10)
+                        val lowSurrogate = 0xDC00 + (adjusted and 0x3FF)
+                        buildString {
+                            append(highSurrogate.toChar())
+                            append(lowSurrogate.toChar())
+                        }
+                    }
+                    else -> {
+                        // 範囲外のコードポイントは無視
+                        match.value
+                    }
                 }
             } ?: match.value
         }

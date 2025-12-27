@@ -311,9 +311,16 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) {
+        // FIX: デッドロック対策 - Mutex外でsuspend関数を呼び出す
+        val currentRaw = try {
+            storage.catalogModeMapJson.first()
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to read current catalog mode map", e)
+            null
+        }
+
         catalogModeMutex.withLock {
             try {
-                val currentRaw = storage.catalogModeMapJson.first()
                 val current = decodeCatalogModeMap(currentRaw)
                 val updated = current + (boardId to mode)
                 storage.updateCatalogModeMapJson(
@@ -507,7 +514,7 @@ class AppStateStore internal constructor(
             return
         }
 
-        // FIX: アトミックなJobマップ操作でデッドロックを回避
+        // FIX: メモリリーク対策 - Jobの確実なクリーンアップ
         // 先にジョブを作成し、即座にマップに登録することで競合を回避
         val newJob = scope.launch {
             delay(SCROLL_DEBOUNCE_DELAY_MS)
@@ -518,9 +525,15 @@ class AppStateStore internal constructor(
                     titleImageUrl, boardName, boardUrl, replyCount
                 )
             } finally {
-                // 完了後に自動的にマップから削除
-                // coroutineContext[Job]を使用して現在のジョブを取得
-                scrollPositionJobs.removeIfSame(threadId, coroutineContext[Job])
+                // FIX: 完了後に自動的にマップから削除（nullチェック追加）
+                val currentJob = coroutineContext[Job]
+                if (currentJob != null) {
+                    scrollPositionJobs.removeIfSame(threadId, currentJob)
+                } else {
+                    // フォールバック: currentJobがnullの場合もクリーンアップ
+                    Logger.w(TAG, "Job context is null for thread $threadId, forcing cleanup")
+                    scrollPositionJobs.removeIfSame(threadId, null)
+                }
             }
         }
 

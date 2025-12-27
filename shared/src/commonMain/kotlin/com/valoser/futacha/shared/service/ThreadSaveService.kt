@@ -70,12 +70,6 @@ class ThreadSaveService(
         private const val MAX_MEDIA_ITEMS = 10000
     }
 
-    private fun <K, V> trimMap(map: LinkedHashMap<K, V>) {
-        while (map.size > MAX_MEDIA_ITEMS) {
-            val firstKey = map.keys.firstOrNull() ?: break
-            map.remove(firstKey)
-        }
-    }
 
     /**
      * スレッドを保存
@@ -126,10 +120,11 @@ class ThreadSaveService(
                 fileSystem.createDirectory(thumbDir).getOrThrow()
             }
 
-            // FIX: マップのサイズ制限とメモリ効率化
-            // accessOrder 付きコンストラクタはKMPに無いため、標準のLinkedHashMapを使い都度トリム
-            val urlToPathMap = LinkedHashMap<String, String>()
-            val urlToFileInfoMap = LinkedHashMap<String, LocalFileInfo>()
+            // FIX: 並行処理対応 - スレッドセーフなマップに変更
+            // 並列ダウンロード中に複数のコルーチンから同時アクセスされるため、Mutexで保護
+            val urlToPathMapMutex = Mutex()
+            val urlToPathMap = mutableMapOf<String, String>()
+            val urlToFileInfoMap = mutableMapOf<String, LocalFileInfo>()
 
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
@@ -215,11 +210,19 @@ class ThreadSaveService(
                                 .onSuccess { fileInfo ->
                                     totalSize += fileInfo.sizeBytes
                                     enforceBudget(totalSize, startedAtMillis)
-                                    // URL→ローカルパスマッピングに追加
-                                    urlToPathMap[mediaItem.url] = fileInfo.relativePath
-                                    trimMap(urlToPathMap)
-                                    urlToFileInfoMap[mediaItem.url] = fileInfo
-                                    trimMap(urlToFileInfoMap)
+                                    // FIX: Mutex保護下でマップに書き込み（並行処理対応）
+                                    urlToPathMapMutex.withLock {
+                                        urlToPathMap[mediaItem.url] = fileInfo.relativePath
+                                        urlToFileInfoMap[mediaItem.url] = fileInfo
+                                        // サイズ制限を適用
+                                        if (urlToPathMap.size > MAX_MEDIA_ITEMS) {
+                                            val keysToRemove = urlToPathMap.keys.take(urlToPathMap.size - MAX_MEDIA_ITEMS)
+                                            keysToRemove.forEach { key ->
+                                                urlToPathMap.remove(key)
+                                                urlToFileInfoMap.remove(key)
+                                            }
+                                        }
+                                    }
 
                                     when (fileInfo.fileType) {
                                         FileType.THUMBNAIL -> {

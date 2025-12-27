@@ -224,32 +224,41 @@ class PersistentCookieStorage(
         }
         val content = fileSystem.readString(storagePath).getOrNull().orEmpty()
         if (content.isNotBlank()) {
-            // FIX: エラーログを追加し、破損時はバックアップから復元を試みる
-            runCatching<Unit> {
-                val parsed = json.decodeFromString<StoredCookieFile>(content)
-                cookies.clear()
-                parsed.cookies.forEach { stored ->
-                    val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
-                    cookies[key] = stored
-                }
-            }.onFailure { error ->
-                Logger.e("PersistentCookieStorage", "Failed to parse cookie file: ${error.message}")
-                // バックアップから復元を試みる
-                val backupPath = "$storagePath.backup"
-                if (fileSystem.exists(backupPath)) {
-                    val backupContent = fileSystem.readString(backupPath).getOrNull().orEmpty()
-                    runCatching<Unit> {
-                        val parsed = json.decodeFromString<StoredCookieFile>(backupContent)
-                        cookies.clear()
-                        parsed.cookies.forEach { stored ->
-                            val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
-                            cookies[key] = stored
-                        }
-                        Logger.i("PersistentCookieStorage", "Successfully restored from backup")
-                    }.onFailure { backupError ->
-                        Logger.e("PersistentCookieStorage", "Backup restoration also failed: ${backupError.message}")
+            // FIX: 複数世代バックアップ対応 - メインファイルが破損している場合、最大3世代のバックアップを試す
+            val attemptPaths = listOf(
+                storagePath to "main",
+                "$storagePath.backup" to "backup",
+                "$storagePath.backup2" to "backup2",
+                "$storagePath.backup3" to "backup3"
+            )
+
+            var restored = false
+            for ((path, label) in attemptPaths) {
+                if (!fileSystem.exists(path)) continue
+
+                val fileContent = fileSystem.readString(path).getOrNull().orEmpty()
+                if (fileContent.isBlank()) continue
+
+                runCatching<Unit> {
+                    val parsed = json.decodeFromString<StoredCookieFile>(fileContent)
+                    cookies.clear()
+                    parsed.cookies.forEach { stored ->
+                        val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
+                        cookies[key] = stored
                     }
+                    if (label != "main") {
+                        Logger.i("PersistentCookieStorage", "Successfully restored from $label")
+                    }
+                    restored = true
+                }.onFailure { error ->
+                    Logger.e("PersistentCookieStorage", "Failed to parse $label: ${error.message}")
                 }
+
+                if (restored) break
+            }
+
+            if (!restored) {
+                Logger.e("PersistentCookieStorage", "All cookie files are corrupted, starting fresh")
             }
         }
         purgeExpiredLocked(currentTimeMillis())
@@ -263,17 +272,44 @@ class PersistentCookieStorage(
         if (parentDir.isNotEmpty()) {
             fileSystem.createDirectory(parentDir)
         }
-        // FIX: 保存前に現在のファイルをバックアップ
-        val backupPath = "$storagePath.backup"
+        // FIX: 複数世代バックアップのローテーション（3世代保持）
+        // backup2 -> backup3, backup -> backup2, main -> backupの順で移動
         if (fileSystem.exists(storagePath)) {
             val currentContent = fileSystem.readString(storagePath).getOrNull()
             if (currentContent != null && currentContent.isNotBlank()) {
+                // 古いバックアップをローテーション
+                val backup2Path = "$storagePath.backup2"
+                val backup3Path = "$storagePath.backup3"
+                if (fileSystem.exists(backup2Path)) {
+                    fileSystem.readString(backup2Path).getOrNull()?.let { backup2Content ->
+                        fileSystem.writeString(backup3Path, backup2Content)
+                            .onFailure { error ->
+                                Logger.w("PersistentCookieStorage", "Failed to rotate backup3: ${error.message}")
+                            }
+                    }
+                }
+
+                val backupPath = "$storagePath.backup"
+                if (fileSystem.exists(backupPath)) {
+                    fileSystem.readString(backupPath).getOrNull()?.let { backupContent ->
+                        fileSystem.writeString(backup2Path, backupContent)
+                            .onFailure { error ->
+                                Logger.w("PersistentCookieStorage", "Failed to rotate backup2: ${error.message}")
+                            }
+                    }
+                }
+
+                // 現在のファイルをbackupに
                 fileSystem.writeString(backupPath, currentContent)
                     .onFailure { error ->
                         Logger.w("PersistentCookieStorage", "Failed to create backup: ${error.message}")
+                        // バックアップ作成に失敗した場合、メイン書き込みを中止
+                        return
                     }
             }
         }
+
+        // メインファイルに書き込み
         fileSystem.writeString(storagePath, content)
             .onFailure { error ->
                 Logger.e("PersistentCookieStorage", "Failed to save cookie file: ${error.message}", error)
