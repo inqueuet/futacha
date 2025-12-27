@@ -14,6 +14,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 
 @Composable
@@ -52,6 +53,7 @@ actual fun PlatformVideoPlayer(
         factory = {
             PlayerView(context).apply {
                 useController = true
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 this.player = player
             }
         },
