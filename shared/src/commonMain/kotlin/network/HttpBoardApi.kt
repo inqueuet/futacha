@@ -110,7 +110,7 @@ class HttpBoardApi(
         val packet = channel.readRemaining(limit.toLong())
         val bytes = packet.readBytes()
         if (bytes.size > MAX_RESPONSE_SIZE || !channel.isClosedForRead) {
-            channel.cancel()
+            channel.cancel(CancellationException("Response size exceeds maximum allowed"))
             throw NetworkException("Response size exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
         }
         return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
