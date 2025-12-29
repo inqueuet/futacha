@@ -99,7 +99,7 @@ class DefaultBoardRepository(
     private val opImageCache = createOpImageCache()
 
     // FIX: close用のCoroutineScopeを追加
-    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     // FIX: close状態を管理（二重close防止）
     private val closeMutex = Mutex()

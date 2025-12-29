@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.time.Clock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -58,7 +59,7 @@ class SavedThreadRepository(
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
                 totalSize = updatedThreads.sumOf { it.totalSize },
-                lastUpdated = System.currentTimeMillis()
+                lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
             saveIndexUnlocked(updatedIndex)
@@ -76,7 +77,7 @@ class SavedThreadRepository(
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
                 totalSize = updatedThreads.sumOf { it.totalSize },
-                lastUpdated = System.currentTimeMillis()
+                lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
             saveIndexUnlocked(updatedIndex)
@@ -120,7 +121,7 @@ class SavedThreadRepository(
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
                 totalSize = updatedThreads.sumOf { it.totalSize },
-                lastUpdated = System.currentTimeMillis()
+                lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
             saveIndexUnlocked(updatedIndex)
@@ -159,7 +160,7 @@ class SavedThreadRepository(
             val updatedIndex = SavedThreadIndex(
                 threads = remainingThreads,
                 totalSize = remainingThreads.sumOf { it.totalSize },
-                lastUpdated = System.currentTimeMillis()
+                lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
             saveIndexUnlocked(updatedIndex)
 
@@ -222,7 +223,7 @@ class SavedThreadRepository(
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
                 totalSize = updatedThreads.sumOf { it.totalSize },
-                lastUpdated = System.currentTimeMillis()
+                lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
             saveIndexUnlocked(updatedIndex)
@@ -244,7 +245,7 @@ class SavedThreadRepository(
                     SavedThreadIndex(
                         threads = emptyList(),
                         totalSize = 0L,
-                        lastUpdated = System.currentTimeMillis()
+                        lastUpdated = Clock.System.now().toEpochMilliseconds()
                     )
                 }
             }
@@ -252,7 +253,7 @@ class SavedThreadRepository(
                 SavedThreadIndex(
                     threads = emptyList(),
                     totalSize = 0L,
-                    lastUpdated = System.currentTimeMillis()
+                    lastUpdated = Clock.System.now().toEpochMilliseconds()
                 )
             }
     }

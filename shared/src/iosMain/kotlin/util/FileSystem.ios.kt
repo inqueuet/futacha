@@ -6,6 +6,7 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.BooleanVar
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
@@ -14,6 +15,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.*
 import platform.posix.memcpy
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * iOS版FileSystem実装
@@ -286,7 +289,8 @@ class IosFileSystem : FileSystem {
                 NSData()
             }
 
-            val combinedData = NSMutableData.dataWithData(existingData)
+            val combinedData = NSMutableData()
+            combinedData.appendData(existingData)
             bytes.usePinned { pinned ->
                 val newData = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
                 combinedData.appendData(newData)
@@ -390,7 +394,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
-        return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
+        return writeBytes(base, relativePath, content.encodeToByteArray())
     }
 
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
@@ -460,7 +464,7 @@ class IosFileSystem : FileSystem {
         val data = bookmarkData.decodeBase64ToNSData()
         memScoped {
             val error = alloc<ObjCObjectVar<NSError?>>()
-            val isStale = alloc<ObjCObjectVar<Boolean>>()
+            val isStale = alloc<BooleanVar>()
             val url = NSURL.URLByResolvingBookmarkData(
                 data,
                 options = 0u,
@@ -480,11 +484,13 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    @OptIn(ExperimentalEncodingApi::class)
     private fun String.decodeBase64ToNSData(): NSData {
-        val base64String = this as NSString
-        val data = NSData.create(base64EncodedString = base64String, options = 0u)
+        val bytes = runCatching { Base64.decode(this) }.getOrNull()
             ?: throw IllegalArgumentException("Invalid base64 bookmark data")
-        return data
+        return bytes.usePinned { pinned ->
+            NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+        }
     }
 }
 

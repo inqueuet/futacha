@@ -8,4 +8,5 @@ package com.valoser.futacha.shared.util
  */
 expect object TextEncoding {
     fun encodeToShiftJis(text: String): ByteArray
+    fun decodeToString(bytes: ByteArray, contentType: String? = null): String
 }

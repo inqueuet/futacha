@@ -1,18 +1,19 @@
+@file:OptIn(ExperimentalForeignApi::class)
+
 package com.valoser.futacha.shared.util
 
 import com.valoser.futacha.shared.model.SaveLocation
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
+import kotlinx.cinterop.BooleanVar
+import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.refTo
 import kotlinx.cinterop.value
-import platform.Foundation.NSData
-import platform.Foundation.NSURL
-import platform.Foundation.dataWithContentsOfURL
-import platform.Foundation.NSFileManager
-import platform.Foundation.NSUUID
+import kotlinx.cinterop.usePinned
+import platform.Foundation.*
 import platform.UIKit.UIDocumentPickerDelegateProtocol
 import platform.UIKit.UIDocumentPickerViewController
 import platform.PhotosUI.PHPickerConfiguration
@@ -27,13 +28,14 @@ import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.darwin.NSObject
 import platform.posix.memcpy
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 /**
  * UIDocumentPicker で Files.app 経由の画像を選択
  */
-@OptIn(ExperimentalForeignApi::class)
 suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuation ->
     val imageTypes = listOf(
         platform.UniformTypeIdentifiers.UTTypeImage,
@@ -83,7 +85,6 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
     rootViewController?.presentViewController(picker, animated = true, completion = null)
 }
 
-@OptIn(ExperimentalForeignApi::class)
 actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
     val config = PHPickerConfiguration().apply {
         selectionLimit = 1
@@ -126,7 +127,6 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
     rootViewController?.presentViewController(picker, animated = true, completion = null)
 }
 
-@OptIn(ExperimentalForeignApi::class)
 actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuation ->
     val picker = UIDocumentPickerViewController(
         forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
@@ -158,7 +158,6 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
  * iOS ディレクトリピッカーで SaveLocation を選択
  * セキュアブックマークを作成して永続化可能にする
  */
-@OptIn(ExperimentalForeignApi::class)
 actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine { continuation ->
     val picker = UIDocumentPickerViewController(
         forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
@@ -209,7 +208,11 @@ private fun createSecureBookmark(url: NSURL): SaveLocation.Bookmark? {
             Logger.e("ImagePicker.ios", "Failed to create bookmark: ${error.value?.localizedDescription}")
             return null
         }
-        val base64 = bookmarkData.base64EncodedStringWithOptions(0u)
+        val bytes = ByteArray(bookmarkData.length.toInt())
+        bytes.usePinned { pinned ->
+            memcpy(pinned.addressOf(0), bookmarkData.bytes, bookmarkData.length)
+        }
+        val base64 = encodeBase64(bytes)
         SaveLocation.Bookmark(base64)
     }
 }
@@ -223,12 +226,9 @@ private fun canWriteToSaveLocation(location: SaveLocation): Boolean {
         is SaveLocation.Bookmark -> {
             memScoped {
                 try {
-                    val data = (location.bookmarkData as platform.Foundation.NSString).dataUsingEncoding(platform.Foundation.NSUTF8StringEncoding)
-                        ?: return false
-                    val bookmarkNSData = platform.Foundation.NSData.create(base64EncodedString = location.bookmarkData as platform.Foundation.NSString, options = 0u)
-                        ?: return false
+                    val bookmarkNSData = decodeBase64ToNSData(location.bookmarkData) ?: return false
                     val error = alloc<ObjCObjectVar<platform.Foundation.NSError?>>()
-                    val isStale = alloc<ObjCObjectVar<Boolean>>()
+                    val isStale = alloc<BooleanVar>()
                     val url = NSURL.URLByResolvingBookmarkData(
                         bookmarkNSData,
                         options = 0u,
@@ -267,5 +267,18 @@ private fun canWriteTestFile(directoryPath: String): Boolean {
         true
     } catch (e: Exception) {
         false
+    }
+}
+
+@OptIn(ExperimentalEncodingApi::class)
+private fun encodeBase64(bytes: ByteArray): String {
+    return Base64.encode(bytes)
+}
+
+@OptIn(ExperimentalEncodingApi::class)
+private fun decodeBase64ToNSData(base64: String): NSData? {
+    val bytes = runCatching { Base64.decode(base64) }.getOrNull() ?: return null
+    return bytes.usePinned { pinned ->
+        NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
     }
 }

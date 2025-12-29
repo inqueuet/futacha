@@ -1,0 +1,2912 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		41E35B7D2EF6EE7C00F3E5B5 /* shared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 41E3597C2EF6EE6900F3E5B5 /* shared.framework */; };
+		41E35B7E2EF6EE7C00F3E5B5 /* shared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 41E3597C2EF6EE6900F3E5B5 /* shared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		41E35B7F2EF6EE7C00F3E5B5 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				41E35B7E2EF6EE7C00F3E5B5 /* shared.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		41E3597C2EF6EE6900F3E5B5 /* shared.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = shared.framework; sourceTree = "<group>"; };
+		41E359802EF6EE6900F3E5B5 /* bodies.knb */ = {isa = PBXFileReference; lastKnownFileType = file; path = bodies.knb; sourceTree = "<group>"; };
+		41E359812EF6EE6900F3E5B5 /* debugInfo.knd */ = {isa = PBXFileReference; lastKnownFileType = file; path = debugInfo.knd; sourceTree = "<group>"; };
+		41E359822EF6EE6900F3E5B5 /* fileEntries.knf */ = {isa = PBXFileReference; lastKnownFileType = file; path = fileEntries.knf; sourceTree = "<group>"; };
+		41E359832EF6EE6900F3E5B5 /* files.knf */ = {isa = PBXFileReference; lastKnownFileType = file; path = files.knf; sourceTree = "<group>"; };
+		41E359842EF6EE6900F3E5B5 /* irDeclarations.knd */ = {isa = PBXFileReference; lastKnownFileType = file; path = irDeclarations.knd; sourceTree = "<group>"; };
+		41E359852EF6EE6900F3E5B5 /* signatures.knt */ = {isa = PBXFileReference; lastKnownFileType = file; path = signatures.knt; sourceTree = "<group>"; };
+		41E359862EF6EE6900F3E5B5 /* strings.knt */ = {isa = PBXFileReference; lastKnownFileType = file; path = strings.knt; sourceTree = "<group>"; };
+		41E359872EF6EE6900F3E5B5 /* types.knt */ = {isa = PBXFileReference; lastKnownFileType = file; path = types.knt; sourceTree = "<group>"; };
+		41E359892EF6EE6900F3E5B5 /* 0_shared.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_shared.knm; sourceTree = "<group>"; };
+		41E3598B2EF6EE6900F3E5B5 /* 0_audio.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_audio.knm; sourceTree = "<group>"; };
+		41E3598C2EF6EE6900F3E5B5 /* 1_audio.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_audio.knm; sourceTree = "<group>"; };
+		41E3598E2EF6EE6900F3E5B5 /* 0_background.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_background.knm; sourceTree = "<group>"; };
+		41E359902EF6EE6900F3E5B5 /* 00_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 00_model.knm; sourceTree = "<group>"; };
+		41E359912EF6EE6900F3E5B5 /* 01_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 01_model.knm; sourceTree = "<group>"; };
+		41E359922EF6EE6900F3E5B5 /* 02_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 02_model.knm; sourceTree = "<group>"; };
+		41E359932EF6EE6900F3E5B5 /* 03_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 03_model.knm; sourceTree = "<group>"; };
+		41E359942EF6EE6900F3E5B5 /* 04_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 04_model.knm; sourceTree = "<group>"; };
+		41E359952EF6EE6900F3E5B5 /* 05_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 05_model.knm; sourceTree = "<group>"; };
+		41E359962EF6EE6900F3E5B5 /* 06_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 06_model.knm; sourceTree = "<group>"; };
+		41E359972EF6EE6900F3E5B5 /* 07_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 07_model.knm; sourceTree = "<group>"; };
+		41E359982EF6EE6900F3E5B5 /* 08_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 08_model.knm; sourceTree = "<group>"; };
+		41E359992EF6EE6900F3E5B5 /* 09_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 09_model.knm; sourceTree = "<group>"; };
+		41E3599A2EF6EE6900F3E5B5 /* 10_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 10_model.knm; sourceTree = "<group>"; };
+		41E3599B2EF6EE6900F3E5B5 /* 11_model.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 11_model.knm; sourceTree = "<group>"; };
+		41E3599D2EF6EE6900F3E5B5 /* 0_network.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_network.knm; sourceTree = "<group>"; };
+		41E3599E2EF6EE6900F3E5B5 /* 1_network.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 1_network.knm; sourceTree = "<group>"; };
+		41E3599F2EF6EE6900F3E5B5 /* 2_network.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 2_network.knm; sourceTree = "<group>"; };
+		41E359A02EF6EE6900F3E5B5 /* 3_network.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 3_network.knm; sourceTree = "<group>"; };
+		41E359A12EF6EE6900F3E5B5 /* 4_network.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 4_network.knm; sourceTree = "<group>"; };
+		41E359A22EF6EE6900F3E5B5 /* 5_network.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 5_network.knm; sourceTree = "<group>"; };
+		41E359A32EF6EE6900F3E5B5 /* 6_network.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 6_network.knm; sourceTree = "<group>"; };
+		41E359A52EF6EE6900F3E5B5 /* 0_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_parser.knm; sourceTree = "<group>"; };
+		41E359A62EF6EE6900F3E5B5 /* 1_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_parser.knm; sourceTree = "<group>"; };
+		41E359A72EF6EE6900F3E5B5 /* 2_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 2_parser.knm; sourceTree = "<group>"; };
+		41E359A82EF6EE6900F3E5B5 /* 3_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 3_parser.knm; sourceTree = "<group>"; };
+		41E359A92EF6EE6900F3E5B5 /* 4_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 4_parser.knm; sourceTree = "<group>"; };
+		41E359AA2EF6EE6900F3E5B5 /* 5_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 5_parser.knm; sourceTree = "<group>"; };
+		41E359AB2EF6EE6900F3E5B5 /* 6_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 6_parser.knm; sourceTree = "<group>"; };
+		41E359AC2EF6EE6900F3E5B5 /* 7_parser.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 7_parser.knm; sourceTree = "<group>"; };
+		41E359AE2EF6EE6900F3E5B5 /* 0_repo.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_repo.knm; sourceTree = "<group>"; };
+		41E359AF2EF6EE6900F3E5B5 /* 1_repo.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_repo.knm; sourceTree = "<group>"; };
+		41E359B12EF6EE6900F3E5B5 /* 0_repository.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_repository.knm; sourceTree = "<group>"; };
+		41E359B22EF6EE6900F3E5B5 /* 1_repository.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 1_repository.knm; sourceTree = "<group>"; };
+		41E359B42EF6EE6900F3E5B5 /* 0_state.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_state.knm; sourceTree = "<group>"; };
+		41E359B52EF6EE6900F3E5B5 /* 1_state.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 1_state.knm; sourceTree = "<group>"; };
+		41E359B72EF6EE6900F3E5B5 /* 0_ui.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_ui.knm; sourceTree = "<group>"; };
+		41E359B82EF6EE6900F3E5B5 /* 1_ui.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_ui.knm; sourceTree = "<group>"; };
+		41E359B92EF6EE6900F3E5B5 /* 2_ui.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 2_ui.knm; sourceTree = "<group>"; };
+		41E359BA2EF6EE6900F3E5B5 /* 3_ui.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 3_ui.knm; sourceTree = "<group>"; };
+		41E359BC2EF6EE6900F3E5B5 /* 00_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 00_util.knm; sourceTree = "<group>"; };
+		41E359BD2EF6EE6900F3E5B5 /* 01_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 01_util.knm; sourceTree = "<group>"; };
+		41E359BE2EF6EE6900F3E5B5 /* 02_util.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 02_util.knm; sourceTree = "<group>"; };
+		41E359BF2EF6EE6900F3E5B5 /* 03_util.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 03_util.knm; sourceTree = "<group>"; };
+		41E359C02EF6EE6900F3E5B5 /* 04_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 04_util.knm; sourceTree = "<group>"; };
+		41E359C12EF6EE6900F3E5B5 /* 05_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 05_util.knm; sourceTree = "<group>"; };
+		41E359C22EF6EE6900F3E5B5 /* 06_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 06_util.knm; sourceTree = "<group>"; };
+		41E359C32EF6EE6900F3E5B5 /* 07_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 07_util.knm; sourceTree = "<group>"; };
+		41E359C42EF6EE6900F3E5B5 /* 08_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 08_util.knm; sourceTree = "<group>"; };
+		41E359C52EF6EE6900F3E5B5 /* 09_util.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 09_util.knm; sourceTree = "<group>"; };
+		41E359C62EF6EE6900F3E5B5 /* 10_util.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 10_util.knm; sourceTree = "<group>"; };
+		41E359C72EF6EE6900F3E5B5 /* 11_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 11_util.knm; sourceTree = "<group>"; };
+		41E359C82EF6EE6900F3E5B5 /* 12_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 12_util.knm; sourceTree = "<group>"; };
+		41E359C92EF6EE6900F3E5B5 /* 13_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 13_util.knm; sourceTree = "<group>"; };
+		41E359CB2EF6EE6900F3E5B5 /* 0_mock.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_mock.knm; sourceTree = "<group>"; };
+		41E359CC2EF6EE6900F3E5B5 /* 1_mock.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 1_mock.knm; sourceTree = "<group>"; };
+		41E359CD2EF6EE6900F3E5B5 /* 2_mock.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 2_mock.knm; sourceTree = "<group>"; };
+		41E359CE2EF6EE6900F3E5B5 /* 3_mock.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 3_mock.knm; sourceTree = "<group>"; };
+		41E359CF2EF6EE6900F3E5B5 /* 4_mock.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 4_mock.knm; sourceTree = "<group>"; };
+		41E359D12EF6EE6900F3E5B5 /* 0_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_board.knm; sourceTree = "<group>"; };
+		41E359D22EF6EE6900F3E5B5 /* 1_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 1_board.knm; sourceTree = "<group>"; };
+		41E359D32EF6EE6900F3E5B5 /* 2_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 2_board.knm; sourceTree = "<group>"; };
+		41E359D42EF6EE6900F3E5B5 /* 3_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 3_board.knm; sourceTree = "<group>"; };
+		41E359D52EF6EE6900F3E5B5 /* 4_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 4_board.knm; sourceTree = "<group>"; };
+		41E359D62EF6EE6900F3E5B5 /* 5_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 5_board.knm; sourceTree = "<group>"; };
+		41E359D72EF6EE6900F3E5B5 /* 6_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 6_board.knm; sourceTree = "<group>"; };
+		41E359D82EF6EE6900F3E5B5 /* 7_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 7_board.knm; sourceTree = "<group>"; };
+		41E359D92EF6EE6900F3E5B5 /* 8_board.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 8_board.knm; sourceTree = "<group>"; };
+		41E359DB2EF6EE6900F3E5B5 /* 0_image.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_image.knm; sourceTree = "<group>"; };
+		41E359DC2EF6EE6900F3E5B5 /* 1_image.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_image.knm; sourceTree = "<group>"; };
+		41E359DE2EF6EE6900F3E5B5 /* 0_theme.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_theme.knm; sourceTree = "<group>"; };
+		41E359E02EF6EE6900F3E5B5 /* 0_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 0_util.knm; sourceTree = "<group>"; };
+		41E359E12EF6EE6900F3E5B5 /* 1_util.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_util.knm; sourceTree = "<group>"; };
+		41E359E32EF6EE6900F3E5B5 /* 0_version.knm */ = {isa = PBXFileReference; lastKnownFileType = text; path = 0_version.knm; sourceTree = "<group>"; };
+		41E359E42EF6EE6900F3E5B5 /* 1_version.knm */ = {isa = PBXFileReference; lastKnownFileType = file; path = 1_version.knm; sourceTree = "<group>"; };
+		41E359E62EF6EE6900F3E5B5 /* module */ = {isa = PBXFileReference; lastKnownFileType = text; path = module; sourceTree = "<group>"; };
+		41E359E72EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.service */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = package_com.valoser.futacha.shared.service; sourceTree = "<group>"; };
+		41E359EE2EF6EE6900F3E5B5 /* manifest */ = {isa = PBXFileReference; lastKnownFileType = text; path = manifest; sourceTree = "<group>"; };
+		41E359F62EF6EE6900F3E5B5 /* commonizedNativeDistributionLocation.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = commonizedNativeDistributionLocation.txt; sourceTree = "<group>"; };
+		41E359FA2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E359FD2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A002EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A032EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A062EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A092EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A0C2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A0F2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A122EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A152EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A182EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A1B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A1E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A212EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A242EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A272EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A2A2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A2D2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A302EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A332EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A362EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A392EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A3C2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A3F2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A422EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A452EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A482EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A4B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A4E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A522EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A552EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A582EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A5B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A5E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A612EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A642EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A672EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A6A2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A6D2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A702EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A732EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A762EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A792EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A7C2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A7F2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A822EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A852EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A882EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A8B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A8E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A912EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A942EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A972EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A9A2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35A9D2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AA02EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AA32EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AA62EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AA92EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AAC2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AAF2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AB22EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AB52EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AB82EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35ABB2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35ABE2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AC12EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AC42EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AC72EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35ACA2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35ACD2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AD02EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AD32EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35AD62EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "kotlin-project-structure-metadata.json"; sourceTree = "<group>"; };
+		41E35ADC2EF6EE6900F3E5B5 /* konan.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = konan.txt; sourceTree = "<group>"; };
+		41E35ADE2EF6EE6900F3E5B5 /* TextSpeaker.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = TextSpeaker.android.kt; sourceTree = "<group>"; };
+		41E35AE02EF6EE6900F3E5B5 /* HttpClientFactory.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HttpClientFactory.android.kt; sourceTree = "<group>"; };
+		41E35AE22EF6EE6900F3E5B5 /* JsoupHtmlParser.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = JsoupHtmlParser.kt; sourceTree = "<group>"; };
+		41E35AE32EF6EE6900F3E5B5 /* ParserFactory.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ParserFactory.android.kt; sourceTree = "<group>"; };
+		41E35AE52EF6EE6900F3E5B5 /* AppStateStore.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AppStateStore.android.kt; sourceTree = "<group>"; };
+		41E35AE72EF6EE6900F3E5B5 /* FileManagerPickerDialog.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FileManagerPickerDialog.android.kt; sourceTree = "<group>"; };
+		41E35AE82EF6EE6900F3E5B5 /* ImagePickerButton.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImagePickerButton.android.kt; sourceTree = "<group>"; };
+		41E35AE92EF6EE6900F3E5B5 /* PlatformVideoPlayer.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PlatformVideoPlayer.android.kt; sourceTree = "<group>"; };
+		41E35AEB2EF6EE6900F3E5B5 /* ImageLoaderProvider.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImageLoaderProvider.android.kt; sourceTree = "<group>"; };
+		41E35AED2EF6EE6900F3E5B5 /* PlatformBackHandler.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PlatformBackHandler.kt; sourceTree = "<group>"; };
+		41E35AEF2EF6EE6900F3E5B5 /* PermissionRequest.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PermissionRequest.android.kt; sourceTree = "<group>"; };
+		41E35AF12EF6EE6900F3E5B5 /* DevicePerformance.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = DevicePerformance.android.kt; sourceTree = "<group>"; };
+		41E35AF22EF6EE6900F3E5B5 /* FileManagerPicker.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FileManagerPicker.android.kt; sourceTree = "<group>"; };
+		41E35AF32EF6EE6900F3E5B5 /* FileSystem.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FileSystem.android.kt; sourceTree = "<group>"; };
+		41E35AF42EF6EE6900F3E5B5 /* ImagePicker.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImagePicker.android.kt; sourceTree = "<group>"; };
+		41E35AF52EF6EE6900F3E5B5 /* Logger.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Logger.android.kt; sourceTree = "<group>"; };
+		41E35AF62EF6EE6900F3E5B5 /* PermissionHelper.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PermissionHelper.android.kt; sourceTree = "<group>"; };
+		41E35AF72EF6EE6900F3E5B5 /* TextEncoding.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = TextEncoding.android.kt; sourceTree = "<group>"; };
+		41E35AF82EF6EE6900F3E5B5 /* UrlLauncher.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = UrlLauncher.android.kt; sourceTree = "<group>"; };
+		41E35AFA2EF6EE6900F3E5B5 /* VersionChecker.android.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = VersionChecker.android.kt; sourceTree = "<group>"; };
+		41E35AFE2EF6EE6900F3E5B5 /* TextSpeaker.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = TextSpeaker.kt; sourceTree = "<group>"; };
+		41E35B002EF6EE6900F3E5B5 /* SavedThreadExtensions.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SavedThreadExtensions.kt; sourceTree = "<group>"; };
+		41E35B022EF6EE6900F3E5B5 /* SaveDirectories.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SaveDirectories.kt; sourceTree = "<group>"; };
+		41E35B032EF6EE6900F3E5B5 /* ThreadSaveService.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThreadSaveService.kt; sourceTree = "<group>"; };
+		41E35B092EF6EE6900F3E5B5 /* BoardStateModels.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardStateModels.kt; sourceTree = "<group>"; };
+		41E35B0A2EF6EE6900F3E5B5 /* CatalogDisplayStyle.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogDisplayStyle.kt; sourceTree = "<group>"; };
+		41E35B0B2EF6EE6900F3E5B5 /* CatalogItem.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogItem.kt; sourceTree = "<group>"; };
+		41E35B0C2EF6EE6900F3E5B5 /* CatalogItemExtensions.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogItemExtensions.kt; sourceTree = "<group>"; };
+		41E35B0D2EF6EE6900F3E5B5 /* CatalogMode.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogMode.kt; sourceTree = "<group>"; };
+		41E35B0E2EF6EE6900F3E5B5 /* CatalogNavConfig.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogNavConfig.kt; sourceTree = "<group>"; };
+		41E35B0F2EF6EE6900F3E5B5 /* Post.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Post.kt; sourceTree = "<group>"; };
+		41E35B102EF6EE6900F3E5B5 /* SavedThread.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SavedThread.kt; sourceTree = "<group>"; };
+		41E35B112EF6EE6900F3E5B5 /* SaveLocation.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SaveLocation.kt; sourceTree = "<group>"; };
+		41E35B122EF6EE6900F3E5B5 /* ThreadMenuConfig.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThreadMenuConfig.kt; sourceTree = "<group>"; };
+		41E35B132EF6EE6900F3E5B5 /* ThreadPage.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThreadPage.kt; sourceTree = "<group>"; };
+		41E35B152EF6EE6900F3E5B5 /* BoardApi.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardApi.kt; sourceTree = "<group>"; };
+		41E35B162EF6EE6900F3E5B5 /* BoardUrlResolver.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardUrlResolver.kt; sourceTree = "<group>"; };
+		41E35B172EF6EE6900F3E5B5 /* HttpBoardApi.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HttpBoardApi.kt; sourceTree = "<group>"; };
+		41E35B182EF6EE6900F3E5B5 /* HttpClientFactory.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HttpClientFactory.kt; sourceTree = "<group>"; };
+		41E35B192EF6EE6900F3E5B5 /* NetworkException.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = NetworkException.kt; sourceTree = "<group>"; };
+		41E35B1A2EF6EE6900F3E5B5 /* PersistentCookieStorage.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PersistentCookieStorage.kt; sourceTree = "<group>"; };
+		41E35B1C2EF6EE6900F3E5B5 /* CatalogHtmlParserCore.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogHtmlParserCore.kt; sourceTree = "<group>"; };
+		41E35B1D2EF6EE6900F3E5B5 /* HtmlEntityDecoder.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HtmlEntityDecoder.kt; sourceTree = "<group>"; };
+		41E35B1E2EF6EE6900F3E5B5 /* HtmlParser.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HtmlParser.kt; sourceTree = "<group>"; };
+		41E35B1F2EF6EE6900F3E5B5 /* ParserException.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ParserException.kt; sourceTree = "<group>"; };
+		41E35B202EF6EE6900F3E5B5 /* ParserFactory.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ParserFactory.kt; sourceTree = "<group>"; };
+		41E35B212EF6EE6900F3E5B5 /* ThreadHtmlParserCore.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThreadHtmlParserCore.kt; sourceTree = "<group>"; };
+		41E35B232EF6EE6900F3E5B5 /* ExampleBoardHttpSamples.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ExampleBoardHttpSamples.kt; sourceTree = "<group>"; };
+		41E35B242EF6EE6900F3E5B5 /* FakeBoardRepository.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FakeBoardRepository.kt; sourceTree = "<group>"; };
+		41E35B252EF6EE6900F3E5B5 /* MockBoardData.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = MockBoardData.kt; sourceTree = "<group>"; };
+		41E35B262EF6EE6900F3E5B5 /* MockCatalogFixtures.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = MockCatalogFixtures.kt; sourceTree = "<group>"; };
+		41E35B272EF6EE6900F3E5B5 /* MockThreadFixtures.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = MockThreadFixtures.kt; sourceTree = "<group>"; };
+		41E35B292EF6EE6900F3E5B5 /* BoardRepository.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardRepository.kt; sourceTree = "<group>"; };
+		41E35B2A2EF6EE6900F3E5B5 /* BoardRepositoryFactory.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardRepositoryFactory.kt; sourceTree = "<group>"; };
+		41E35B2C2EF6EE6900F3E5B5 /* CookieRepository.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CookieRepository.kt; sourceTree = "<group>"; };
+		41E35B2D2EF6EE6900F3E5B5 /* SavedThreadRepository.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SavedThreadRepository.kt; sourceTree = "<group>"; };
+		41E35B2F2EF6EE6900F3E5B5 /* HistoryRefresher.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HistoryRefresher.kt; sourceTree = "<group>"; };
+		41E35B312EF6EE6900F3E5B5 /* AppStateStore.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AppStateStore.kt; sourceTree = "<group>"; };
+		41E35B332EF6EE6900F3E5B5 /* BoardManagementFixtures.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardManagementFixtures.kt; sourceTree = "<group>"; };
+		41E35B342EF6EE6900F3E5B5 /* BoardManagementScreen.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardManagementScreen.kt; sourceTree = "<group>"; };
+		41E35B352EF6EE6900F3E5B5 /* CookieManagementScreen.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CookieManagementScreen.kt; sourceTree = "<group>"; };
+		41E35B362EF6EE6900F3E5B5 /* PlatformVideoPlayer.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PlatformVideoPlayer.kt; sourceTree = "<group>"; };
+		41E35B372EF6EE6900F3E5B5 /* SavedThreadsScreen.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SavedThreadsScreen.kt; sourceTree = "<group>"; };
+		41E35B382EF6EE6900F3E5B5 /* SaveProgressDialog.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SaveProgressDialog.kt; sourceTree = "<group>"; };
+		41E35B3A2EF6EE6900F3E5B5 /* ImageLoaderProvider.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImageLoaderProvider.kt; sourceTree = "<group>"; };
+		41E35B3C2EF6EE6900F3E5B5 /* FutachaTheme.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FutachaTheme.kt; sourceTree = "<group>"; };
+		41E35B3E2EF6EE6900F3E5B5 /* PlatformBackHandler.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PlatformBackHandler.kt; sourceTree = "<group>"; };
+		41E35B402EF6EE6900F3E5B5 /* FutachaApp.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FutachaApp.kt; sourceTree = "<group>"; };
+		41E35B412EF6EE6900F3E5B5 /* PermissionRequest.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PermissionRequest.kt; sourceTree = "<group>"; };
+		41E35B422EF6EE6900F3E5B5 /* UpdateNotificationDialog.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = UpdateNotificationDialog.kt; sourceTree = "<group>"; };
+		41E35B442EF6EE6900F3E5B5 /* BoardConfig.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardConfig.kt; sourceTree = "<group>"; };
+		41E35B452EF6EE6900F3E5B5 /* DevicePerformance.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = DevicePerformance.kt; sourceTree = "<group>"; };
+		41E35B462EF6EE6900F3E5B5 /* FileSystem.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FileSystem.kt; sourceTree = "<group>"; };
+		41E35B472EF6EE6900F3E5B5 /* ImagePicker.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImagePicker.kt; sourceTree = "<group>"; };
+		41E35B482EF6EE6900F3E5B5 /* Logger.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Logger.kt; sourceTree = "<group>"; };
+		41E35B492EF6EE6900F3E5B5 /* TextEncoding.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = TextEncoding.kt; sourceTree = "<group>"; };
+		41E35B4A2EF6EE6900F3E5B5 /* ThreadTitleResolver.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThreadTitleResolver.kt; sourceTree = "<group>"; };
+		41E35B4B2EF6EE6900F3E5B5 /* UrlLauncher.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = UrlLauncher.kt; sourceTree = "<group>"; };
+		41E35B4D2EF6EE6900F3E5B5 /* VersionChecker.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = VersionChecker.kt; sourceTree = "<group>"; };
+		41E35B512EF6EE6900F3E5B5 /* CatalogHtmlParserCoreTest.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CatalogHtmlParserCoreTest.kt; sourceTree = "<group>"; };
+		41E35B522EF6EE6900F3E5B5 /* ThreadHtmlParserCoreTest.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThreadHtmlParserCoreTest.kt; sourceTree = "<group>"; };
+		41E35B542EF6EE6900F3E5B5 /* BoardManagementScreenTest.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BoardManagementScreenTest.kt; sourceTree = "<group>"; };
+		41E35B592EF6EE6900F3E5B5 /* TextSpeaker.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = TextSpeaker.ios.kt; sourceTree = "<group>"; };
+		41E35B5B2EF6EE6900F3E5B5 /* BackgroundRefreshManager.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = BackgroundRefreshManager.kt; sourceTree = "<group>"; };
+		41E35B5D2EF6EE6900F3E5B5 /* HttpClientFactory.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = HttpClientFactory.ios.kt; sourceTree = "<group>"; };
+		41E35B5F2EF6EE6900F3E5B5 /* AppleHtmlParser.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AppleHtmlParser.kt; sourceTree = "<group>"; };
+		41E35B602EF6EE6900F3E5B5 /* ParserFactory.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ParserFactory.ios.kt; sourceTree = "<group>"; };
+		41E35B622EF6EE6900F3E5B5 /* AppStateStore.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AppStateStore.ios.kt; sourceTree = "<group>"; };
+		41E35B642EF6EE6900F3E5B5 /* FileManagerPickerDialog.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FileManagerPickerDialog.ios.kt; sourceTree = "<group>"; };
+		41E35B652EF6EE6900F3E5B5 /* ImagePickerButton.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImagePickerButton.ios.kt; sourceTree = "<group>"; };
+		41E35B662EF6EE6900F3E5B5 /* PlatformVideoPlayer.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PlatformVideoPlayer.ios.kt; sourceTree = "<group>"; };
+		41E35B682EF6EE6900F3E5B5 /* ImageLoaderProvider.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImageLoaderProvider.ios.kt; sourceTree = "<group>"; };
+		41E35B6A2EF6EE6900F3E5B5 /* PlatformBackHandler.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PlatformBackHandler.kt; sourceTree = "<group>"; };
+		41E35B6C2EF6EE6900F3E5B5 /* PermissionRequest.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = PermissionRequest.ios.kt; sourceTree = "<group>"; };
+		41E35B6E2EF6EE6900F3E5B5 /* DevicePerformance.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = DevicePerformance.ios.kt; sourceTree = "<group>"; };
+		41E35B6F2EF6EE6900F3E5B5 /* FileSystem.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = FileSystem.ios.kt; sourceTree = "<group>"; };
+		41E35B702EF6EE6900F3E5B5 /* ImagePicker.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ImagePicker.ios.kt; sourceTree = "<group>"; };
+		41E35B712EF6EE6900F3E5B5 /* Logger.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Logger.ios.kt; sourceTree = "<group>"; };
+		41E35B722EF6EE6900F3E5B5 /* TextEncoding.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = TextEncoding.ios.kt; sourceTree = "<group>"; };
+		41E35B732EF6EE6900F3E5B5 /* UrlLauncher.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = UrlLauncher.ios.kt; sourceTree = "<group>"; };
+		41E35B752EF6EE6900F3E5B5 /* VersionChecker.ios.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = VersionChecker.ios.kt; sourceTree = "<group>"; };
+		41E35B772EF6EE6900F3E5B5 /* MainViewController.kt */ = {isa = PBXFileReference; lastKnownFileType = text; path = MainViewController.kt; sourceTree = "<group>"; };
+		41E35B7B2EF6EE6900F3E5B5 /* build.gradle.kts */ = {isa = PBXFileReference; lastKnownFileType = text; path = build.gradle.kts; sourceTree = "<group>"; };
+		7FE8AFC77F4F4EA4D8D76CF1 /* futacha.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = futacha.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		6CB8117AAB6039E9396DC3E5 /* Exceptions for "iosApp" folder in "iosApp" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A46D3815533677F7187C07A8 /* iosApp */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		529658B8C1F0E941FDCAC756 /* iosApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				6CB8117AAB6039E9396DC3E5 /* Exceptions for "iosApp" folder in "iosApp" target */,
+			);
+			path = iosApp;
+			sourceTree = "<group>";
+		};
+		9135B878D9EB55DD1D4C52A9 /* Configuration */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Configuration;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		FCACE185D236A2F694EEFC88 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				41E35B7D2EF6EE7C00F3E5B5 /* shared.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0A9D7C4CB472774EDC3BF6DD = {
+			isa = PBXGroup;
+			children = (
+				9135B878D9EB55DD1D4C52A9 /* Configuration */,
+				529658B8C1F0E941FDCAC756 /* iosApp */,
+				41E3597B2EF6EE6900F3E5B5 /* Frameworks */,
+				A970358FE7E33D5FFF4934B6 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		41E3597B2EF6EE6900F3E5B5 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B7C2EF6EE6900F3E5B5 /* shared */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		41E3597D2EF6EE6900F3E5B5 /* debugFramework */ = {
+			isa = PBXGroup;
+			children = (
+				41E3597C2EF6EE6900F3E5B5 /* shared.framework */,
+			);
+			path = debugFramework;
+			sourceTree = "<group>";
+		};
+		41E3597E2EF6EE6900F3E5B5 /* iosSimulatorArm64 */ = {
+			isa = PBXGroup;
+			children = (
+				41E3597D2EF6EE6900F3E5B5 /* debugFramework */,
+			);
+			path = iosSimulatorArm64;
+			sourceTree = "<group>";
+		};
+		41E3597F2EF6EE6900F3E5B5 /* bin */ = {
+			isa = PBXGroup;
+			children = (
+				41E3597E2EF6EE6900F3E5B5 /* iosSimulatorArm64 */,
+			);
+			path = bin;
+			sourceTree = "<group>";
+		};
+		41E359882EF6EE6900F3E5B5 /* ir */ = {
+			isa = PBXGroup;
+			children = (
+				41E359802EF6EE6900F3E5B5 /* bodies.knb */,
+				41E359812EF6EE6900F3E5B5 /* debugInfo.knd */,
+				41E359822EF6EE6900F3E5B5 /* fileEntries.knf */,
+				41E359832EF6EE6900F3E5B5 /* files.knf */,
+				41E359842EF6EE6900F3E5B5 /* irDeclarations.knd */,
+				41E359852EF6EE6900F3E5B5 /* signatures.knt */,
+				41E359862EF6EE6900F3E5B5 /* strings.knt */,
+				41E359872EF6EE6900F3E5B5 /* types.knt */,
+			);
+			path = ir;
+			sourceTree = "<group>";
+		};
+		41E3598A2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared */ = {
+			isa = PBXGroup;
+			children = (
+				41E359892EF6EE6900F3E5B5 /* 0_shared.knm */,
+			);
+			path = package_com.valoser.futacha.shared;
+			sourceTree = "<group>";
+		};
+		41E3598D2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.audio */ = {
+			isa = PBXGroup;
+			children = (
+				41E3598B2EF6EE6900F3E5B5 /* 0_audio.knm */,
+				41E3598C2EF6EE6900F3E5B5 /* 1_audio.knm */,
+			);
+			path = package_com.valoser.futacha.shared.audio;
+			sourceTree = "<group>";
+		};
+		41E3598F2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.background */ = {
+			isa = PBXGroup;
+			children = (
+				41E3598E2EF6EE6900F3E5B5 /* 0_background.knm */,
+			);
+			path = package_com.valoser.futacha.shared.background;
+			sourceTree = "<group>";
+		};
+		41E3599C2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.model */ = {
+			isa = PBXGroup;
+			children = (
+				41E359902EF6EE6900F3E5B5 /* 00_model.knm */,
+				41E359912EF6EE6900F3E5B5 /* 01_model.knm */,
+				41E359922EF6EE6900F3E5B5 /* 02_model.knm */,
+				41E359932EF6EE6900F3E5B5 /* 03_model.knm */,
+				41E359942EF6EE6900F3E5B5 /* 04_model.knm */,
+				41E359952EF6EE6900F3E5B5 /* 05_model.knm */,
+				41E359962EF6EE6900F3E5B5 /* 06_model.knm */,
+				41E359972EF6EE6900F3E5B5 /* 07_model.knm */,
+				41E359982EF6EE6900F3E5B5 /* 08_model.knm */,
+				41E359992EF6EE6900F3E5B5 /* 09_model.knm */,
+				41E3599A2EF6EE6900F3E5B5 /* 10_model.knm */,
+				41E3599B2EF6EE6900F3E5B5 /* 11_model.knm */,
+			);
+			path = package_com.valoser.futacha.shared.model;
+			sourceTree = "<group>";
+		};
+		41E359A42EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.network */ = {
+			isa = PBXGroup;
+			children = (
+				41E3599D2EF6EE6900F3E5B5 /* 0_network.knm */,
+				41E3599E2EF6EE6900F3E5B5 /* 1_network.knm */,
+				41E3599F2EF6EE6900F3E5B5 /* 2_network.knm */,
+				41E359A02EF6EE6900F3E5B5 /* 3_network.knm */,
+				41E359A12EF6EE6900F3E5B5 /* 4_network.knm */,
+				41E359A22EF6EE6900F3E5B5 /* 5_network.knm */,
+				41E359A32EF6EE6900F3E5B5 /* 6_network.knm */,
+			);
+			path = package_com.valoser.futacha.shared.network;
+			sourceTree = "<group>";
+		};
+		41E359AD2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.parser */ = {
+			isa = PBXGroup;
+			children = (
+				41E359A52EF6EE6900F3E5B5 /* 0_parser.knm */,
+				41E359A62EF6EE6900F3E5B5 /* 1_parser.knm */,
+				41E359A72EF6EE6900F3E5B5 /* 2_parser.knm */,
+				41E359A82EF6EE6900F3E5B5 /* 3_parser.knm */,
+				41E359A92EF6EE6900F3E5B5 /* 4_parser.knm */,
+				41E359AA2EF6EE6900F3E5B5 /* 5_parser.knm */,
+				41E359AB2EF6EE6900F3E5B5 /* 6_parser.knm */,
+				41E359AC2EF6EE6900F3E5B5 /* 7_parser.knm */,
+			);
+			path = package_com.valoser.futacha.shared.parser;
+			sourceTree = "<group>";
+		};
+		41E359B02EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.repo */ = {
+			isa = PBXGroup;
+			children = (
+				41E359AE2EF6EE6900F3E5B5 /* 0_repo.knm */,
+				41E359AF2EF6EE6900F3E5B5 /* 1_repo.knm */,
+			);
+			path = package_com.valoser.futacha.shared.repo;
+			sourceTree = "<group>";
+		};
+		41E359B32EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.repository */ = {
+			isa = PBXGroup;
+			children = (
+				41E359B12EF6EE6900F3E5B5 /* 0_repository.knm */,
+				41E359B22EF6EE6900F3E5B5 /* 1_repository.knm */,
+			);
+			path = package_com.valoser.futacha.shared.repository;
+			sourceTree = "<group>";
+		};
+		41E359B62EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.state */ = {
+			isa = PBXGroup;
+			children = (
+				41E359B42EF6EE6900F3E5B5 /* 0_state.knm */,
+				41E359B52EF6EE6900F3E5B5 /* 1_state.knm */,
+			);
+			path = package_com.valoser.futacha.shared.state;
+			sourceTree = "<group>";
+		};
+		41E359BB2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui */ = {
+			isa = PBXGroup;
+			children = (
+				41E359B72EF6EE6900F3E5B5 /* 0_ui.knm */,
+				41E359B82EF6EE6900F3E5B5 /* 1_ui.knm */,
+				41E359B92EF6EE6900F3E5B5 /* 2_ui.knm */,
+				41E359BA2EF6EE6900F3E5B5 /* 3_ui.knm */,
+			);
+			path = package_com.valoser.futacha.shared.ui;
+			sourceTree = "<group>";
+		};
+		41E359CA2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.util */ = {
+			isa = PBXGroup;
+			children = (
+				41E359BC2EF6EE6900F3E5B5 /* 00_util.knm */,
+				41E359BD2EF6EE6900F3E5B5 /* 01_util.knm */,
+				41E359BE2EF6EE6900F3E5B5 /* 02_util.knm */,
+				41E359BF2EF6EE6900F3E5B5 /* 03_util.knm */,
+				41E359C02EF6EE6900F3E5B5 /* 04_util.knm */,
+				41E359C12EF6EE6900F3E5B5 /* 05_util.knm */,
+				41E359C22EF6EE6900F3E5B5 /* 06_util.knm */,
+				41E359C32EF6EE6900F3E5B5 /* 07_util.knm */,
+				41E359C42EF6EE6900F3E5B5 /* 08_util.knm */,
+				41E359C52EF6EE6900F3E5B5 /* 09_util.knm */,
+				41E359C62EF6EE6900F3E5B5 /* 10_util.knm */,
+				41E359C72EF6EE6900F3E5B5 /* 11_util.knm */,
+				41E359C82EF6EE6900F3E5B5 /* 12_util.knm */,
+				41E359C92EF6EE6900F3E5B5 /* 13_util.knm */,
+			);
+			path = package_com.valoser.futacha.shared.util;
+			sourceTree = "<group>";
+		};
+		41E359D02EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.repo.mock */ = {
+			isa = PBXGroup;
+			children = (
+				41E359CB2EF6EE6900F3E5B5 /* 0_mock.knm */,
+				41E359CC2EF6EE6900F3E5B5 /* 1_mock.knm */,
+				41E359CD2EF6EE6900F3E5B5 /* 2_mock.knm */,
+				41E359CE2EF6EE6900F3E5B5 /* 3_mock.knm */,
+				41E359CF2EF6EE6900F3E5B5 /* 4_mock.knm */,
+			);
+			path = package_com.valoser.futacha.shared.repo.mock;
+			sourceTree = "<group>";
+		};
+		41E359DA2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.board */ = {
+			isa = PBXGroup;
+			children = (
+				41E359D12EF6EE6900F3E5B5 /* 0_board.knm */,
+				41E359D22EF6EE6900F3E5B5 /* 1_board.knm */,
+				41E359D32EF6EE6900F3E5B5 /* 2_board.knm */,
+				41E359D42EF6EE6900F3E5B5 /* 3_board.knm */,
+				41E359D52EF6EE6900F3E5B5 /* 4_board.knm */,
+				41E359D62EF6EE6900F3E5B5 /* 5_board.knm */,
+				41E359D72EF6EE6900F3E5B5 /* 6_board.knm */,
+				41E359D82EF6EE6900F3E5B5 /* 7_board.knm */,
+				41E359D92EF6EE6900F3E5B5 /* 8_board.knm */,
+			);
+			path = package_com.valoser.futacha.shared.ui.board;
+			sourceTree = "<group>";
+		};
+		41E359DD2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.image */ = {
+			isa = PBXGroup;
+			children = (
+				41E359DB2EF6EE6900F3E5B5 /* 0_image.knm */,
+				41E359DC2EF6EE6900F3E5B5 /* 1_image.knm */,
+			);
+			path = package_com.valoser.futacha.shared.ui.image;
+			sourceTree = "<group>";
+		};
+		41E359DF2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.theme */ = {
+			isa = PBXGroup;
+			children = (
+				41E359DE2EF6EE6900F3E5B5 /* 0_theme.knm */,
+			);
+			path = package_com.valoser.futacha.shared.ui.theme;
+			sourceTree = "<group>";
+		};
+		41E359E22EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.util */ = {
+			isa = PBXGroup;
+			children = (
+				41E359E02EF6EE6900F3E5B5 /* 0_util.knm */,
+				41E359E12EF6EE6900F3E5B5 /* 1_util.knm */,
+			);
+			path = package_com.valoser.futacha.shared.ui.util;
+			sourceTree = "<group>";
+		};
+		41E359E52EF6EE6900F3E5B5 /* package_version */ = {
+			isa = PBXGroup;
+			children = (
+				41E359E32EF6EE6900F3E5B5 /* 0_version.knm */,
+				41E359E42EF6EE6900F3E5B5 /* 1_version.knm */,
+			);
+			path = package_version;
+			sourceTree = "<group>";
+		};
+		41E359E82EF6EE6900F3E5B5 /* linkdata */ = {
+			isa = PBXGroup;
+			children = (
+				41E3598A2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared */,
+				41E3598D2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.audio */,
+				41E3598F2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.background */,
+				41E3599C2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.model */,
+				41E359A42EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.network */,
+				41E359AD2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.parser */,
+				41E359B02EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.repo */,
+				41E359B32EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.repository */,
+				41E359B62EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.state */,
+				41E359BB2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui */,
+				41E359CA2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.util */,
+				41E359D02EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.repo.mock */,
+				41E359DA2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.board */,
+				41E359DD2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.image */,
+				41E359DF2EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.theme */,
+				41E359E22EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.ui.util */,
+				41E359E52EF6EE6900F3E5B5 /* package_version */,
+				41E359E62EF6EE6900F3E5B5 /* module */,
+				41E359E72EF6EE6900F3E5B5 /* package_com.valoser.futacha.shared.service */,
+			);
+			path = linkdata;
+			sourceTree = "<group>";
+		};
+		41E359E92EF6EE6900F3E5B5 /* resources */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = resources;
+			sourceTree = "<group>";
+		};
+		41E359EA2EF6EE6900F3E5B5 /* included */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = included;
+			sourceTree = "<group>";
+		};
+		41E359EB2EF6EE6900F3E5B5 /* native */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = native;
+			sourceTree = "<group>";
+		};
+		41E359EC2EF6EE6900F3E5B5 /* ios_simulator_arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				41E359EA2EF6EE6900F3E5B5 /* included */,
+				41E359EB2EF6EE6900F3E5B5 /* native */,
+			);
+			path = ios_simulator_arm64;
+			sourceTree = "<group>";
+		};
+		41E359ED2EF6EE6900F3E5B5 /* targets */ = {
+			isa = PBXGroup;
+			children = (
+				41E359EC2EF6EE6900F3E5B5 /* ios_simulator_arm64 */,
+			);
+			path = targets;
+			sourceTree = "<group>";
+		};
+		41E359EF2EF6EE6900F3E5B5 /* default */ = {
+			isa = PBXGroup;
+			children = (
+				41E359882EF6EE6900F3E5B5 /* ir */,
+				41E359E82EF6EE6900F3E5B5 /* linkdata */,
+				41E359E92EF6EE6900F3E5B5 /* resources */,
+				41E359ED2EF6EE6900F3E5B5 /* targets */,
+				41E359EE2EF6EE6900F3E5B5 /* manifest */,
+			);
+			path = default;
+			sourceTree = "<group>";
+		};
+		41E359F02EF6EE6900F3E5B5 /* shared */ = {
+			isa = PBXGroup;
+			children = (
+				41E359EF2EF6EE6900F3E5B5 /* default */,
+			);
+			path = shared;
+			sourceTree = "<group>";
+		};
+		41E359F12EF6EE6900F3E5B5 /* klib */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F02EF6EE6900F3E5B5 /* shared */,
+			);
+			path = klib;
+			sourceTree = "<group>";
+		};
+		41E359F22EF6EE6900F3E5B5 /* main */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F12EF6EE6900F3E5B5 /* klib */,
+			);
+			path = main;
+			sourceTree = "<group>";
+		};
+		41E359F32EF6EE6900F3E5B5 /* iosSimulatorArm64 */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F22EF6EE6900F3E5B5 /* main */,
+			);
+			path = iosSimulatorArm64;
+			sourceTree = "<group>";
+		};
+		41E359F42EF6EE6900F3E5B5 /* kotlin */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F32EF6EE6900F3E5B5 /* iosSimulatorArm64 */,
+			);
+			path = kotlin;
+			sourceTree = "<group>";
+		};
+		41E359F52EF6EE6900F3E5B5 /* classes */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F42EF6EE6900F3E5B5 /* kotlin */,
+			);
+			path = classes;
+			sourceTree = "<group>";
+		};
+		41E359F72EF6EE6900F3E5B5 /* kotlin */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F62EF6EE6900F3E5B5 /* commonizedNativeDistributionLocation.txt */,
+			);
+			path = kotlin;
+			sourceTree = "<group>";
+		};
+		41E359F82EF6EE6900F3E5B5 /* tar_7a5002a6b4e614b67c32df471ed70cf5 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = tar_7a5002a6b4e614b67c32df471ed70cf5;
+			sourceTree = "<group>";
+		};
+		41E359F92EF6EE6900F3E5B5 /* tar_c7c7db8cc86a928f0e12021fcca25a3c */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = tar_c7c7db8cc86a928f0e12021fcca25a3c;
+			sourceTree = "<group>";
+		};
+		41E359FB2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E359FA2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E359FC2EF6EE6900F3E5B5 /* zip_0a37bcd5953c2e322dadf8a7c99105f0 */ = {
+			isa = PBXGroup;
+			children = (
+				41E359FB2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_0a37bcd5953c2e322dadf8a7c99105f0;
+			sourceTree = "<group>";
+		};
+		41E359FE2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E359FD2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E359FF2EF6EE6900F3E5B5 /* zip_0acfe9f97a5ff664dd99fc7ddd59b65f */ = {
+			isa = PBXGroup;
+			children = (
+				41E359FE2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_0acfe9f97a5ff664dd99fc7ddd59b65f;
+			sourceTree = "<group>";
+		};
+		41E35A012EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A002EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A022EF6EE6900F3E5B5 /* zip_1e6455b401f61ffd247e961d7cc90130 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A012EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_1e6455b401f61ffd247e961d7cc90130;
+			sourceTree = "<group>";
+		};
+		41E35A042EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A032EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A052EF6EE6900F3E5B5 /* zip_2a1fa4a85a3e2a5b021d4d47dd8d8a09 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A042EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_2a1fa4a85a3e2a5b021d4d47dd8d8a09;
+			sourceTree = "<group>";
+		};
+		41E35A072EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A062EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A082EF6EE6900F3E5B5 /* zip_2a23412bfa2b0c1d589bb7926c91d464 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A072EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_2a23412bfa2b0c1d589bb7926c91d464;
+			sourceTree = "<group>";
+		};
+		41E35A0A2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A092EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A0B2EF6EE6900F3E5B5 /* zip_2b2455e3517dad43f2694f2c74c8ece9 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A0A2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_2b2455e3517dad43f2694f2c74c8ece9;
+			sourceTree = "<group>";
+		};
+		41E35A0D2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A0C2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A0E2EF6EE6900F3E5B5 /* zip_2ce42e7eee4a6933a0d3a92537ab4694 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A0D2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_2ce42e7eee4a6933a0d3a92537ab4694;
+			sourceTree = "<group>";
+		};
+		41E35A102EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A0F2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A112EF6EE6900F3E5B5 /* zip_2e16d27bd423ea828db18eb40a7a9006 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A102EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_2e16d27bd423ea828db18eb40a7a9006;
+			sourceTree = "<group>";
+		};
+		41E35A132EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A122EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A142EF6EE6900F3E5B5 /* zip_3b469696c12d2405c0c2e19c68f1810c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A132EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_3b469696c12d2405c0c2e19c68f1810c;
+			sourceTree = "<group>";
+		};
+		41E35A162EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A152EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A172EF6EE6900F3E5B5 /* zip_3f4aea6c2f369e00dd202573315f7329 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A162EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_3f4aea6c2f369e00dd202573315f7329;
+			sourceTree = "<group>";
+		};
+		41E35A192EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A182EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A1A2EF6EE6900F3E5B5 /* zip_4b0ed322e12493fada67e39ab122d3e0 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A192EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_4b0ed322e12493fada67e39ab122d3e0;
+			sourceTree = "<group>";
+		};
+		41E35A1C2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A1B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A1D2EF6EE6900F3E5B5 /* zip_6a18484b23394e244cdc0b507fd927c5 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A1C2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_6a18484b23394e244cdc0b507fd927c5;
+			sourceTree = "<group>";
+		};
+		41E35A1F2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A1E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A202EF6EE6900F3E5B5 /* zip_6f546e495cdd286429c2e4f8e6fa8926 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A1F2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_6f546e495cdd286429c2e4f8e6fa8926;
+			sourceTree = "<group>";
+		};
+		41E35A222EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A212EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A232EF6EE6900F3E5B5 /* zip_07a0c3d7868d808e3557165984aec051 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A222EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_07a0c3d7868d808e3557165984aec051;
+			sourceTree = "<group>";
+		};
+		41E35A252EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A242EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A262EF6EE6900F3E5B5 /* zip_7ebc4a6c3c9d37840325819a11e8408a */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A252EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_7ebc4a6c3c9d37840325819a11e8408a;
+			sourceTree = "<group>";
+		};
+		41E35A282EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A272EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A292EF6EE6900F3E5B5 /* zip_8c8382026b57a9b73db85366b49f355c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A282EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_8c8382026b57a9b73db85366b49f355c;
+			sourceTree = "<group>";
+		};
+		41E35A2B2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A2A2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A2C2EF6EE6900F3E5B5 /* zip_9ba25079516ff8806050fd3c7b487830 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A2B2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_9ba25079516ff8806050fd3c7b487830;
+			sourceTree = "<group>";
+		};
+		41E35A2E2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A2D2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A2F2EF6EE6900F3E5B5 /* zip_10d680f3f780617175e6cffe9884983c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A2E2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_10d680f3f780617175e6cffe9884983c;
+			sourceTree = "<group>";
+		};
+		41E35A312EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A302EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A322EF6EE6900F3E5B5 /* zip_015d2460ff4f9fdd4002807c7a4dbe48 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A312EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_015d2460ff4f9fdd4002807c7a4dbe48;
+			sourceTree = "<group>";
+		};
+		41E35A342EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A332EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A352EF6EE6900F3E5B5 /* zip_19bf3680f82f6f248d40aeddbe16e49c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A342EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_19bf3680f82f6f248d40aeddbe16e49c;
+			sourceTree = "<group>";
+		};
+		41E35A372EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A362EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A382EF6EE6900F3E5B5 /* zip_31ac00c9523d38f9faf14f1375842fe9 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A372EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_31ac00c9523d38f9faf14f1375842fe9;
+			sourceTree = "<group>";
+		};
+		41E35A3A2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A392EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A3B2EF6EE6900F3E5B5 /* zip_37f227765595ac64651aac63db762571 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A3A2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_37f227765595ac64651aac63db762571;
+			sourceTree = "<group>";
+		};
+		41E35A3D2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A3C2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A3E2EF6EE6900F3E5B5 /* zip_51f40203abd801151f905e1d3235568d */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A3D2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_51f40203abd801151f905e1d3235568d;
+			sourceTree = "<group>";
+		};
+		41E35A402EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A3F2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A412EF6EE6900F3E5B5 /* zip_57c7f55e1406998afe3054e8c0ea473d */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A402EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_57c7f55e1406998afe3054e8c0ea473d;
+			sourceTree = "<group>";
+		};
+		41E35A432EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A422EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A442EF6EE6900F3E5B5 /* zip_62a336e4f07d44117069c65bf5913fcd */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A432EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_62a336e4f07d44117069c65bf5913fcd;
+			sourceTree = "<group>";
+		};
+		41E35A462EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A452EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A472EF6EE6900F3E5B5 /* zip_074f904e992e24a8a26172d0a90872fb */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A462EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_074f904e992e24a8a26172d0a90872fb;
+			sourceTree = "<group>";
+		};
+		41E35A492EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A482EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A4A2EF6EE6900F3E5B5 /* zip_85f88e4769f5dfddbe755f2934eff8ed */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A492EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_85f88e4769f5dfddbe755f2934eff8ed;
+			sourceTree = "<group>";
+		};
+		41E35A4C2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A4B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A4D2EF6EE6900F3E5B5 /* zip_441be08718c9f63c1d787a1684d142f0 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A4C2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_441be08718c9f63c1d787a1684d142f0;
+			sourceTree = "<group>";
+		};
+		41E35A4F2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A4E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A502EF6EE6900F3E5B5 /* zip_516b7e4531c960b961188acf0a0ed97a */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A4F2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_516b7e4531c960b961188acf0a0ed97a;
+			sourceTree = "<group>";
+		};
+		41E35A512EF6EE6900F3E5B5 /* zip_773ef6f1fd5e89c54c67b2f34d6184e8 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = zip_773ef6f1fd5e89c54c67b2f34d6184e8;
+			sourceTree = "<group>";
+		};
+		41E35A532EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A522EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A542EF6EE6900F3E5B5 /* zip_2274b8b249aa2cabd0b78a65de8f7744 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A532EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_2274b8b249aa2cabd0b78a65de8f7744;
+			sourceTree = "<group>";
+		};
+		41E35A562EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A552EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A572EF6EE6900F3E5B5 /* zip_8810cee07b40df695d5d4863c848a16a */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A562EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_8810cee07b40df695d5d4863c848a16a;
+			sourceTree = "<group>";
+		};
+		41E35A592EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A582EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A5A2EF6EE6900F3E5B5 /* zip_9735b30a9b0d11348787911ecada2b14 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A592EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_9735b30a9b0d11348787911ecada2b14;
+			sourceTree = "<group>";
+		};
+		41E35A5C2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A5B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A5D2EF6EE6900F3E5B5 /* zip_13543f02529efe5610bfcd80f53f9904 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A5C2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_13543f02529efe5610bfcd80f53f9904;
+			sourceTree = "<group>";
+		};
+		41E35A5F2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A5E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A602EF6EE6900F3E5B5 /* zip_23490be39c6698683d125a53a788808a */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A5F2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_23490be39c6698683d125a53a788808a;
+			sourceTree = "<group>";
+		};
+		41E35A622EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A612EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A632EF6EE6900F3E5B5 /* zip_40319df2cc868c5568de5562c70d06b7 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A622EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_40319df2cc868c5568de5562c70d06b7;
+			sourceTree = "<group>";
+		};
+		41E35A652EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A642EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A662EF6EE6900F3E5B5 /* zip_70894b53806c03610f1726c354aed18c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A652EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_70894b53806c03610f1726c354aed18c;
+			sourceTree = "<group>";
+		};
+		41E35A682EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A672EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A692EF6EE6900F3E5B5 /* zip_95484c39328763481c5514720a2ce867 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A682EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_95484c39328763481c5514720a2ce867;
+			sourceTree = "<group>";
+		};
+		41E35A6B2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A6A2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A6C2EF6EE6900F3E5B5 /* zip_956020e7a9f4c3a2aafc55c71048cd87 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A6B2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_956020e7a9f4c3a2aafc55c71048cd87;
+			sourceTree = "<group>";
+		};
+		41E35A6E2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A6D2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A6F2EF6EE6900F3E5B5 /* zip_1353846ea95d1a113d0137cba525c09c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A6E2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_1353846ea95d1a113d0137cba525c09c;
+			sourceTree = "<group>";
+		};
+		41E35A712EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A702EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A722EF6EE6900F3E5B5 /* zip_3067561bab06f6b03d25b471801cc89e */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A712EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_3067561bab06f6b03d25b471801cc89e;
+			sourceTree = "<group>";
+		};
+		41E35A742EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A732EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A752EF6EE6900F3E5B5 /* zip_45040301365cfeb87fe63bde3cb75885 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A742EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_45040301365cfeb87fe63bde3cb75885;
+			sourceTree = "<group>";
+		};
+		41E35A772EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A762EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A782EF6EE6900F3E5B5 /* zip_a4f7b1e9bb7966bdeef3c82d43e5f55c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A772EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_a4f7b1e9bb7966bdeef3c82d43e5f55c;
+			sourceTree = "<group>";
+		};
+		41E35A7A2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A792EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A7B2EF6EE6900F3E5B5 /* zip_aac2523fec29df7ad9b6784d00b56712 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A7A2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_aac2523fec29df7ad9b6784d00b56712;
+			sourceTree = "<group>";
+		};
+		41E35A7D2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A7C2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A7E2EF6EE6900F3E5B5 /* zip_ad3774de062703af8109845b1b8bcfde */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A7D2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_ad3774de062703af8109845b1b8bcfde;
+			sourceTree = "<group>";
+		};
+		41E35A802EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A7F2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A812EF6EE6900F3E5B5 /* zip_ae63d9ec1e1f6e78fac4b9f538edfe61 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A802EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_ae63d9ec1e1f6e78fac4b9f538edfe61;
+			sourceTree = "<group>";
+		};
+		41E35A832EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A822EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A842EF6EE6900F3E5B5 /* zip_bb06739d0c5045375b5e44919298c50a */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A832EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_bb06739d0c5045375b5e44919298c50a;
+			sourceTree = "<group>";
+		};
+		41E35A862EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A852EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A872EF6EE6900F3E5B5 /* zip_bf26b003b7b6b35b13e47c7e6b166e5e */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A862EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_bf26b003b7b6b35b13e47c7e6b166e5e;
+			sourceTree = "<group>";
+		};
+		41E35A892EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A882EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A8A2EF6EE6900F3E5B5 /* zip_c6ea5cb9e495cb4291d8b89b0b91f798 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A892EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_c6ea5cb9e495cb4291d8b89b0b91f798;
+			sourceTree = "<group>";
+		};
+		41E35A8C2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A8B2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A8D2EF6EE6900F3E5B5 /* zip_c30490f87138c17635696176ec715b59 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A8C2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_c30490f87138c17635696176ec715b59;
+			sourceTree = "<group>";
+		};
+		41E35A8F2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A8E2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A902EF6EE6900F3E5B5 /* zip_cc288a5b3c0466653c1bc20271157db1 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A8F2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_cc288a5b3c0466653c1bc20271157db1;
+			sourceTree = "<group>";
+		};
+		41E35A922EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A912EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A932EF6EE6900F3E5B5 /* zip_d59b333cd49fb5fbd6fca08e5c30582f */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A922EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_d59b333cd49fb5fbd6fca08e5c30582f;
+			sourceTree = "<group>";
+		};
+		41E35A952EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A942EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A962EF6EE6900F3E5B5 /* zip_d75b7d52897a2a1703e99ee6cd1c9745 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A952EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_d75b7d52897a2a1703e99ee6cd1c9745;
+			sourceTree = "<group>";
+		};
+		41E35A982EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A972EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A992EF6EE6900F3E5B5 /* zip_d180d884b5fbbdd7d03fd889453dfc58 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A982EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_d180d884b5fbbdd7d03fd889453dfc58;
+			sourceTree = "<group>";
+		};
+		41E35A9B2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A9A2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A9C2EF6EE6900F3E5B5 /* zip_d238c310de25e29b86e99e3965d5c17f */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A9B2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_d238c310de25e29b86e99e3965d5c17f;
+			sourceTree = "<group>";
+		};
+		41E35A9E2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A9D2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35A9F2EF6EE6900F3E5B5 /* zip_df6d852db9b3d3e6b84c9af89bf98d15 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35A9E2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_df6d852db9b3d3e6b84c9af89bf98d15;
+			sourceTree = "<group>";
+		};
+		41E35AA12EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA02EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AA22EF6EE6900F3E5B5 /* zip_e3ba6acb4862818f6408386f49b11c28 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA12EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e3ba6acb4862818f6408386f49b11c28;
+			sourceTree = "<group>";
+		};
+		41E35AA42EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA32EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AA52EF6EE6900F3E5B5 /* zip_e9ef663d07a8363fecb4fc7148362d14 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA42EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e9ef663d07a8363fecb4fc7148362d14;
+			sourceTree = "<group>";
+		};
+		41E35AA72EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA62EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AA82EF6EE6900F3E5B5 /* zip_e11a8b407d6802a548c535196ff67c73 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA72EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e11a8b407d6802a548c535196ff67c73;
+			sourceTree = "<group>";
+		};
+		41E35AAA2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AA92EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AAB2EF6EE6900F3E5B5 /* zip_e17eaf8f85f9b47cad90e02397741c0d */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AAA2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e17eaf8f85f9b47cad90e02397741c0d;
+			sourceTree = "<group>";
+		};
+		41E35AAD2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AAC2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AAE2EF6EE6900F3E5B5 /* zip_e023f0f7cd5c2a2c3f93c35d5fa4a5cc */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AAD2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e023f0f7cd5c2a2c3f93c35d5fa4a5cc;
+			sourceTree = "<group>";
+		};
+		41E35AB02EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AAF2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AB12EF6EE6900F3E5B5 /* zip_e549716c7cf992dc0f6f11188646aa15 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB02EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e549716c7cf992dc0f6f11188646aa15;
+			sourceTree = "<group>";
+		};
+		41E35AB32EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB22EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AB42EF6EE6900F3E5B5 /* zip_e4940102377b5eab013f180e6692d734 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB32EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_e4940102377b5eab013f180e6692d734;
+			sourceTree = "<group>";
+		};
+		41E35AB62EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB52EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AB72EF6EE6900F3E5B5 /* zip_eb0e3aa11ab6758e04764f3ab512894b */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB62EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_eb0e3aa11ab6758e04764f3ab512894b;
+			sourceTree = "<group>";
+		};
+		41E35AB92EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB82EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35ABA2EF6EE6900F3E5B5 /* zip_eb16db63910bac063bb4919d7f1edba5 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AB92EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_eb16db63910bac063bb4919d7f1edba5;
+			sourceTree = "<group>";
+		};
+		41E35ABC2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ABB2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35ABD2EF6EE6900F3E5B5 /* zip_ef7f585232c57b741971cd2d614aadfd */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ABC2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_ef7f585232c57b741971cd2d614aadfd;
+			sourceTree = "<group>";
+		};
+		41E35ABF2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ABE2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AC02EF6EE6900F3E5B5 /* zip_f0a78d62230f78194b3af45d158b3c52 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ABF2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_f0a78d62230f78194b3af45d158b3c52;
+			sourceTree = "<group>";
+		};
+		41E35AC22EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AC12EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AC32EF6EE6900F3E5B5 /* zip_f0f301445155781f9a42f3e850433374 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AC22EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_f0f301445155781f9a42f3e850433374;
+			sourceTree = "<group>";
+		};
+		41E35AC52EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AC42EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AC62EF6EE6900F3E5B5 /* zip_f5fef7d8bcb4f64053e5ced229f4fe8c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AC52EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_f5fef7d8bcb4f64053e5ced229f4fe8c;
+			sourceTree = "<group>";
+		};
+		41E35AC82EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AC72EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AC92EF6EE6900F3E5B5 /* zip_f792565fbd9a496705ba18e116ebc554 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AC82EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_f792565fbd9a496705ba18e116ebc554;
+			sourceTree = "<group>";
+		};
+		41E35ACB2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ACA2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35ACC2EF6EE6900F3E5B5 /* zip_f361356391282f1a0d2c8153bf9c2256 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ACB2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_f361356391282f1a0d2c8153bf9c2256;
+			sourceTree = "<group>";
+		};
+		41E35ACE2EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ACD2EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35ACF2EF6EE6900F3E5B5 /* zip_fcbd85211f4ec1477a7037b70256f49c */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ACE2EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_fcbd85211f4ec1477a7037b70256f49c;
+			sourceTree = "<group>";
+		};
+		41E35AD12EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD02EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AD22EF6EE6900F3E5B5 /* zip_fcda5d9556b3e2070195da76f4dd6150 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD12EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_fcda5d9556b3e2070195da76f4dd6150;
+			sourceTree = "<group>";
+		};
+		41E35AD42EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD32EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AD52EF6EE6900F3E5B5 /* zip_fd8f7c54ddffaf4bf5f6c9782c161984 */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD42EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_fd8f7c54ddffaf4bf5f6c9782c161984;
+			sourceTree = "<group>";
+		};
+		41E35AD72EF6EE6900F3E5B5 /* META-INF */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD62EF6EE6900F3E5B5 /* kotlin-project-structure-metadata.json */,
+			);
+			path = "META-INF";
+			sourceTree = "<group>";
+		};
+		41E35AD82EF6EE6900F3E5B5 /* zip_fe134d03b50c4e5adcb8e5fd3c32514b */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD72EF6EE6900F3E5B5 /* META-INF */,
+			);
+			path = zip_fe134d03b50c4e5adcb8e5fd3c32514b;
+			sourceTree = "<group>";
+		};
+		41E35AD92EF6EE6900F3E5B5 /* expanded */ = {
+			isa = PBXGroup;
+			children = (
+				41E359F82EF6EE6900F3E5B5 /* tar_7a5002a6b4e614b67c32df471ed70cf5 */,
+				41E359F92EF6EE6900F3E5B5 /* tar_c7c7db8cc86a928f0e12021fcca25a3c */,
+				41E359FC2EF6EE6900F3E5B5 /* zip_0a37bcd5953c2e322dadf8a7c99105f0 */,
+				41E359FF2EF6EE6900F3E5B5 /* zip_0acfe9f97a5ff664dd99fc7ddd59b65f */,
+				41E35A022EF6EE6900F3E5B5 /* zip_1e6455b401f61ffd247e961d7cc90130 */,
+				41E35A052EF6EE6900F3E5B5 /* zip_2a1fa4a85a3e2a5b021d4d47dd8d8a09 */,
+				41E35A082EF6EE6900F3E5B5 /* zip_2a23412bfa2b0c1d589bb7926c91d464 */,
+				41E35A0B2EF6EE6900F3E5B5 /* zip_2b2455e3517dad43f2694f2c74c8ece9 */,
+				41E35A0E2EF6EE6900F3E5B5 /* zip_2ce42e7eee4a6933a0d3a92537ab4694 */,
+				41E35A112EF6EE6900F3E5B5 /* zip_2e16d27bd423ea828db18eb40a7a9006 */,
+				41E35A142EF6EE6900F3E5B5 /* zip_3b469696c12d2405c0c2e19c68f1810c */,
+				41E35A172EF6EE6900F3E5B5 /* zip_3f4aea6c2f369e00dd202573315f7329 */,
+				41E35A1A2EF6EE6900F3E5B5 /* zip_4b0ed322e12493fada67e39ab122d3e0 */,
+				41E35A1D2EF6EE6900F3E5B5 /* zip_6a18484b23394e244cdc0b507fd927c5 */,
+				41E35A202EF6EE6900F3E5B5 /* zip_6f546e495cdd286429c2e4f8e6fa8926 */,
+				41E35A232EF6EE6900F3E5B5 /* zip_07a0c3d7868d808e3557165984aec051 */,
+				41E35A262EF6EE6900F3E5B5 /* zip_7ebc4a6c3c9d37840325819a11e8408a */,
+				41E35A292EF6EE6900F3E5B5 /* zip_8c8382026b57a9b73db85366b49f355c */,
+				41E35A2C2EF6EE6900F3E5B5 /* zip_9ba25079516ff8806050fd3c7b487830 */,
+				41E35A2F2EF6EE6900F3E5B5 /* zip_10d680f3f780617175e6cffe9884983c */,
+				41E35A322EF6EE6900F3E5B5 /* zip_015d2460ff4f9fdd4002807c7a4dbe48 */,
+				41E35A352EF6EE6900F3E5B5 /* zip_19bf3680f82f6f248d40aeddbe16e49c */,
+				41E35A382EF6EE6900F3E5B5 /* zip_31ac00c9523d38f9faf14f1375842fe9 */,
+				41E35A3B2EF6EE6900F3E5B5 /* zip_37f227765595ac64651aac63db762571 */,
+				41E35A3E2EF6EE6900F3E5B5 /* zip_51f40203abd801151f905e1d3235568d */,
+				41E35A412EF6EE6900F3E5B5 /* zip_57c7f55e1406998afe3054e8c0ea473d */,
+				41E35A442EF6EE6900F3E5B5 /* zip_62a336e4f07d44117069c65bf5913fcd */,
+				41E35A472EF6EE6900F3E5B5 /* zip_074f904e992e24a8a26172d0a90872fb */,
+				41E35A4A2EF6EE6900F3E5B5 /* zip_85f88e4769f5dfddbe755f2934eff8ed */,
+				41E35A4D2EF6EE6900F3E5B5 /* zip_441be08718c9f63c1d787a1684d142f0 */,
+				41E35A502EF6EE6900F3E5B5 /* zip_516b7e4531c960b961188acf0a0ed97a */,
+				41E35A512EF6EE6900F3E5B5 /* zip_773ef6f1fd5e89c54c67b2f34d6184e8 */,
+				41E35A542EF6EE6900F3E5B5 /* zip_2274b8b249aa2cabd0b78a65de8f7744 */,
+				41E35A572EF6EE6900F3E5B5 /* zip_8810cee07b40df695d5d4863c848a16a */,
+				41E35A5A2EF6EE6900F3E5B5 /* zip_9735b30a9b0d11348787911ecada2b14 */,
+				41E35A5D2EF6EE6900F3E5B5 /* zip_13543f02529efe5610bfcd80f53f9904 */,
+				41E35A602EF6EE6900F3E5B5 /* zip_23490be39c6698683d125a53a788808a */,
+				41E35A632EF6EE6900F3E5B5 /* zip_40319df2cc868c5568de5562c70d06b7 */,
+				41E35A662EF6EE6900F3E5B5 /* zip_70894b53806c03610f1726c354aed18c */,
+				41E35A692EF6EE6900F3E5B5 /* zip_95484c39328763481c5514720a2ce867 */,
+				41E35A6C2EF6EE6900F3E5B5 /* zip_956020e7a9f4c3a2aafc55c71048cd87 */,
+				41E35A6F2EF6EE6900F3E5B5 /* zip_1353846ea95d1a113d0137cba525c09c */,
+				41E35A722EF6EE6900F3E5B5 /* zip_3067561bab06f6b03d25b471801cc89e */,
+				41E35A752EF6EE6900F3E5B5 /* zip_45040301365cfeb87fe63bde3cb75885 */,
+				41E35A782EF6EE6900F3E5B5 /* zip_a4f7b1e9bb7966bdeef3c82d43e5f55c */,
+				41E35A7B2EF6EE6900F3E5B5 /* zip_aac2523fec29df7ad9b6784d00b56712 */,
+				41E35A7E2EF6EE6900F3E5B5 /* zip_ad3774de062703af8109845b1b8bcfde */,
+				41E35A812EF6EE6900F3E5B5 /* zip_ae63d9ec1e1f6e78fac4b9f538edfe61 */,
+				41E35A842EF6EE6900F3E5B5 /* zip_bb06739d0c5045375b5e44919298c50a */,
+				41E35A872EF6EE6900F3E5B5 /* zip_bf26b003b7b6b35b13e47c7e6b166e5e */,
+				41E35A8A2EF6EE6900F3E5B5 /* zip_c6ea5cb9e495cb4291d8b89b0b91f798 */,
+				41E35A8D2EF6EE6900F3E5B5 /* zip_c30490f87138c17635696176ec715b59 */,
+				41E35A902EF6EE6900F3E5B5 /* zip_cc288a5b3c0466653c1bc20271157db1 */,
+				41E35A932EF6EE6900F3E5B5 /* zip_d59b333cd49fb5fbd6fca08e5c30582f */,
+				41E35A962EF6EE6900F3E5B5 /* zip_d75b7d52897a2a1703e99ee6cd1c9745 */,
+				41E35A992EF6EE6900F3E5B5 /* zip_d180d884b5fbbdd7d03fd889453dfc58 */,
+				41E35A9C2EF6EE6900F3E5B5 /* zip_d238c310de25e29b86e99e3965d5c17f */,
+				41E35A9F2EF6EE6900F3E5B5 /* zip_df6d852db9b3d3e6b84c9af89bf98d15 */,
+				41E35AA22EF6EE6900F3E5B5 /* zip_e3ba6acb4862818f6408386f49b11c28 */,
+				41E35AA52EF6EE6900F3E5B5 /* zip_e9ef663d07a8363fecb4fc7148362d14 */,
+				41E35AA82EF6EE6900F3E5B5 /* zip_e11a8b407d6802a548c535196ff67c73 */,
+				41E35AAB2EF6EE6900F3E5B5 /* zip_e17eaf8f85f9b47cad90e02397741c0d */,
+				41E35AAE2EF6EE6900F3E5B5 /* zip_e023f0f7cd5c2a2c3f93c35d5fa4a5cc */,
+				41E35AB12EF6EE6900F3E5B5 /* zip_e549716c7cf992dc0f6f11188646aa15 */,
+				41E35AB42EF6EE6900F3E5B5 /* zip_e4940102377b5eab013f180e6692d734 */,
+				41E35AB72EF6EE6900F3E5B5 /* zip_eb0e3aa11ab6758e04764f3ab512894b */,
+				41E35ABA2EF6EE6900F3E5B5 /* zip_eb16db63910bac063bb4919d7f1edba5 */,
+				41E35ABD2EF6EE6900F3E5B5 /* zip_ef7f585232c57b741971cd2d614aadfd */,
+				41E35AC02EF6EE6900F3E5B5 /* zip_f0a78d62230f78194b3af45d158b3c52 */,
+				41E35AC32EF6EE6900F3E5B5 /* zip_f0f301445155781f9a42f3e850433374 */,
+				41E35AC62EF6EE6900F3E5B5 /* zip_f5fef7d8bcb4f64053e5ced229f4fe8c */,
+				41E35AC92EF6EE6900F3E5B5 /* zip_f792565fbd9a496705ba18e116ebc554 */,
+				41E35ACC2EF6EE6900F3E5B5 /* zip_f361356391282f1a0d2c8153bf9c2256 */,
+				41E35ACF2EF6EE6900F3E5B5 /* zip_fcbd85211f4ec1477a7037b70256f49c */,
+				41E35AD22EF6EE6900F3E5B5 /* zip_fcda5d9556b3e2070195da76f4dd6150 */,
+				41E35AD52EF6EE6900F3E5B5 /* zip_fd8f7c54ddffaf4bf5f6c9782c161984 */,
+				41E35AD82EF6EE6900F3E5B5 /* zip_fe134d03b50c4e5adcb8e5fd3c32514b */,
+			);
+			path = expanded;
+			sourceTree = "<group>";
+		};
+		41E35ADA2EF6EE6900F3E5B5 /* .cache */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AD92EF6EE6900F3E5B5 /* expanded */,
+			);
+			path = .cache;
+			sourceTree = "<group>";
+		};
+		41E35ADB2EF6EE6900F3E5B5 /* tmp */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ADA2EF6EE6900F3E5B5 /* .cache */,
+			);
+			path = tmp;
+			sourceTree = "<group>";
+		};
+		41E35ADD2EF6EE6900F3E5B5 /* build */ = {
+			isa = PBXGroup;
+			children = (
+				41E3597F2EF6EE6900F3E5B5 /* bin */,
+				41E359F52EF6EE6900F3E5B5 /* classes */,
+				41E359F72EF6EE6900F3E5B5 /* kotlin */,
+				41E35ADB2EF6EE6900F3E5B5 /* tmp */,
+				41E35ADC2EF6EE6900F3E5B5 /* konan.txt */,
+			);
+			path = build;
+			sourceTree = "<group>";
+		};
+		41E35ADF2EF6EE6900F3E5B5 /* audio */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ADE2EF6EE6900F3E5B5 /* TextSpeaker.android.kt */,
+			);
+			path = audio;
+			sourceTree = "<group>";
+		};
+		41E35AE12EF6EE6900F3E5B5 /* network */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AE02EF6EE6900F3E5B5 /* HttpClientFactory.android.kt */,
+			);
+			path = network;
+			sourceTree = "<group>";
+		};
+		41E35AE42EF6EE6900F3E5B5 /* parser */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AE22EF6EE6900F3E5B5 /* JsoupHtmlParser.kt */,
+				41E35AE32EF6EE6900F3E5B5 /* ParserFactory.android.kt */,
+			);
+			path = parser;
+			sourceTree = "<group>";
+		};
+		41E35AE62EF6EE6900F3E5B5 /* state */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AE52EF6EE6900F3E5B5 /* AppStateStore.android.kt */,
+			);
+			path = state;
+			sourceTree = "<group>";
+		};
+		41E35AEA2EF6EE6900F3E5B5 /* board */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AE72EF6EE6900F3E5B5 /* FileManagerPickerDialog.android.kt */,
+				41E35AE82EF6EE6900F3E5B5 /* ImagePickerButton.android.kt */,
+				41E35AE92EF6EE6900F3E5B5 /* PlatformVideoPlayer.android.kt */,
+			);
+			path = board;
+			sourceTree = "<group>";
+		};
+		41E35AEC2EF6EE6900F3E5B5 /* image */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AEB2EF6EE6900F3E5B5 /* ImageLoaderProvider.android.kt */,
+			);
+			path = image;
+			sourceTree = "<group>";
+		};
+		41E35AEE2EF6EE6900F3E5B5 /* util */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AED2EF6EE6900F3E5B5 /* PlatformBackHandler.kt */,
+			);
+			path = util;
+			sourceTree = "<group>";
+		};
+		41E35AF02EF6EE6900F3E5B5 /* ui */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AEA2EF6EE6900F3E5B5 /* board */,
+				41E35AEC2EF6EE6900F3E5B5 /* image */,
+				41E35AEE2EF6EE6900F3E5B5 /* util */,
+				41E35AEF2EF6EE6900F3E5B5 /* PermissionRequest.android.kt */,
+			);
+			path = ui;
+			sourceTree = "<group>";
+		};
+		41E35AF92EF6EE6900F3E5B5 /* util */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AF12EF6EE6900F3E5B5 /* DevicePerformance.android.kt */,
+				41E35AF22EF6EE6900F3E5B5 /* FileManagerPicker.android.kt */,
+				41E35AF32EF6EE6900F3E5B5 /* FileSystem.android.kt */,
+				41E35AF42EF6EE6900F3E5B5 /* ImagePicker.android.kt */,
+				41E35AF52EF6EE6900F3E5B5 /* Logger.android.kt */,
+				41E35AF62EF6EE6900F3E5B5 /* PermissionHelper.android.kt */,
+				41E35AF72EF6EE6900F3E5B5 /* TextEncoding.android.kt */,
+				41E35AF82EF6EE6900F3E5B5 /* UrlLauncher.android.kt */,
+			);
+			path = util;
+			sourceTree = "<group>";
+		};
+		41E35AFB2EF6EE6900F3E5B5 /* version */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AFA2EF6EE6900F3E5B5 /* VersionChecker.android.kt */,
+			);
+			path = version;
+			sourceTree = "<group>";
+		};
+		41E35AFC2EF6EE6900F3E5B5 /* kotlin */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ADF2EF6EE6900F3E5B5 /* audio */,
+				41E35AE12EF6EE6900F3E5B5 /* network */,
+				41E35AE42EF6EE6900F3E5B5 /* parser */,
+				41E35AE62EF6EE6900F3E5B5 /* state */,
+				41E35AF02EF6EE6900F3E5B5 /* ui */,
+				41E35AF92EF6EE6900F3E5B5 /* util */,
+				41E35AFB2EF6EE6900F3E5B5 /* version */,
+			);
+			path = kotlin;
+			sourceTree = "<group>";
+		};
+		41E35AFD2EF6EE6900F3E5B5 /* androidMain */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AFC2EF6EE6900F3E5B5 /* kotlin */,
+			);
+			path = androidMain;
+			sourceTree = "<group>";
+		};
+		41E35AFF2EF6EE6900F3E5B5 /* audio */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AFE2EF6EE6900F3E5B5 /* TextSpeaker.kt */,
+			);
+			path = audio;
+			sourceTree = "<group>";
+		};
+		41E35B012EF6EE6900F3E5B5 /* model */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B002EF6EE6900F3E5B5 /* SavedThreadExtensions.kt */,
+			);
+			path = model;
+			sourceTree = "<group>";
+		};
+		41E35B042EF6EE6900F3E5B5 /* service */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B022EF6EE6900F3E5B5 /* SaveDirectories.kt */,
+				41E35B032EF6EE6900F3E5B5 /* ThreadSaveService.kt */,
+			);
+			path = service;
+			sourceTree = "<group>";
+		};
+		41E35B052EF6EE6900F3E5B5 /* shared */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B012EF6EE6900F3E5B5 /* model */,
+				41E35B042EF6EE6900F3E5B5 /* service */,
+			);
+			path = shared;
+			sourceTree = "<group>";
+		};
+		41E35B062EF6EE6900F3E5B5 /* futacha */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B052EF6EE6900F3E5B5 /* shared */,
+			);
+			path = futacha;
+			sourceTree = "<group>";
+		};
+		41E35B072EF6EE6900F3E5B5 /* valoser */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B062EF6EE6900F3E5B5 /* futacha */,
+			);
+			path = valoser;
+			sourceTree = "<group>";
+		};
+		41E35B082EF6EE6900F3E5B5 /* com */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B072EF6EE6900F3E5B5 /* valoser */,
+			);
+			path = com;
+			sourceTree = "<group>";
+		};
+		41E35B142EF6EE6900F3E5B5 /* model */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B092EF6EE6900F3E5B5 /* BoardStateModels.kt */,
+				41E35B0A2EF6EE6900F3E5B5 /* CatalogDisplayStyle.kt */,
+				41E35B0B2EF6EE6900F3E5B5 /* CatalogItem.kt */,
+				41E35B0C2EF6EE6900F3E5B5 /* CatalogItemExtensions.kt */,
+				41E35B0D2EF6EE6900F3E5B5 /* CatalogMode.kt */,
+				41E35B0E2EF6EE6900F3E5B5 /* CatalogNavConfig.kt */,
+				41E35B0F2EF6EE6900F3E5B5 /* Post.kt */,
+				41E35B102EF6EE6900F3E5B5 /* SavedThread.kt */,
+				41E35B112EF6EE6900F3E5B5 /* SaveLocation.kt */,
+				41E35B122EF6EE6900F3E5B5 /* ThreadMenuConfig.kt */,
+				41E35B132EF6EE6900F3E5B5 /* ThreadPage.kt */,
+			);
+			path = model;
+			sourceTree = "<group>";
+		};
+		41E35B1B2EF6EE6900F3E5B5 /* network */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B152EF6EE6900F3E5B5 /* BoardApi.kt */,
+				41E35B162EF6EE6900F3E5B5 /* BoardUrlResolver.kt */,
+				41E35B172EF6EE6900F3E5B5 /* HttpBoardApi.kt */,
+				41E35B182EF6EE6900F3E5B5 /* HttpClientFactory.kt */,
+				41E35B192EF6EE6900F3E5B5 /* NetworkException.kt */,
+				41E35B1A2EF6EE6900F3E5B5 /* PersistentCookieStorage.kt */,
+			);
+			path = network;
+			sourceTree = "<group>";
+		};
+		41E35B222EF6EE6900F3E5B5 /* parser */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B1C2EF6EE6900F3E5B5 /* CatalogHtmlParserCore.kt */,
+				41E35B1D2EF6EE6900F3E5B5 /* HtmlEntityDecoder.kt */,
+				41E35B1E2EF6EE6900F3E5B5 /* HtmlParser.kt */,
+				41E35B1F2EF6EE6900F3E5B5 /* ParserException.kt */,
+				41E35B202EF6EE6900F3E5B5 /* ParserFactory.kt */,
+				41E35B212EF6EE6900F3E5B5 /* ThreadHtmlParserCore.kt */,
+			);
+			path = parser;
+			sourceTree = "<group>";
+		};
+		41E35B282EF6EE6900F3E5B5 /* mock */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B232EF6EE6900F3E5B5 /* ExampleBoardHttpSamples.kt */,
+				41E35B242EF6EE6900F3E5B5 /* FakeBoardRepository.kt */,
+				41E35B252EF6EE6900F3E5B5 /* MockBoardData.kt */,
+				41E35B262EF6EE6900F3E5B5 /* MockCatalogFixtures.kt */,
+				41E35B272EF6EE6900F3E5B5 /* MockThreadFixtures.kt */,
+			);
+			path = mock;
+			sourceTree = "<group>";
+		};
+		41E35B2B2EF6EE6900F3E5B5 /* repo */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B282EF6EE6900F3E5B5 /* mock */,
+				41E35B292EF6EE6900F3E5B5 /* BoardRepository.kt */,
+				41E35B2A2EF6EE6900F3E5B5 /* BoardRepositoryFactory.kt */,
+			);
+			path = repo;
+			sourceTree = "<group>";
+		};
+		41E35B2E2EF6EE6900F3E5B5 /* repository */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B2C2EF6EE6900F3E5B5 /* CookieRepository.kt */,
+				41E35B2D2EF6EE6900F3E5B5 /* SavedThreadRepository.kt */,
+			);
+			path = repository;
+			sourceTree = "<group>";
+		};
+		41E35B302EF6EE6900F3E5B5 /* service */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B2F2EF6EE6900F3E5B5 /* HistoryRefresher.kt */,
+			);
+			path = service;
+			sourceTree = "<group>";
+		};
+		41E35B322EF6EE6900F3E5B5 /* state */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B312EF6EE6900F3E5B5 /* AppStateStore.kt */,
+			);
+			path = state;
+			sourceTree = "<group>";
+		};
+		41E35B392EF6EE6900F3E5B5 /* board */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B332EF6EE6900F3E5B5 /* BoardManagementFixtures.kt */,
+				41E35B342EF6EE6900F3E5B5 /* BoardManagementScreen.kt */,
+				41E35B352EF6EE6900F3E5B5 /* CookieManagementScreen.kt */,
+				41E35B362EF6EE6900F3E5B5 /* PlatformVideoPlayer.kt */,
+				41E35B372EF6EE6900F3E5B5 /* SavedThreadsScreen.kt */,
+				41E35B382EF6EE6900F3E5B5 /* SaveProgressDialog.kt */,
+			);
+			path = board;
+			sourceTree = "<group>";
+		};
+		41E35B3B2EF6EE6900F3E5B5 /* image */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B3A2EF6EE6900F3E5B5 /* ImageLoaderProvider.kt */,
+			);
+			path = image;
+			sourceTree = "<group>";
+		};
+		41E35B3D2EF6EE6900F3E5B5 /* theme */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B3C2EF6EE6900F3E5B5 /* FutachaTheme.kt */,
+			);
+			path = theme;
+			sourceTree = "<group>";
+		};
+		41E35B3F2EF6EE6900F3E5B5 /* util */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B3E2EF6EE6900F3E5B5 /* PlatformBackHandler.kt */,
+			);
+			path = util;
+			sourceTree = "<group>";
+		};
+		41E35B432EF6EE6900F3E5B5 /* ui */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B392EF6EE6900F3E5B5 /* board */,
+				41E35B3B2EF6EE6900F3E5B5 /* image */,
+				41E35B3D2EF6EE6900F3E5B5 /* theme */,
+				41E35B3F2EF6EE6900F3E5B5 /* util */,
+				41E35B402EF6EE6900F3E5B5 /* FutachaApp.kt */,
+				41E35B412EF6EE6900F3E5B5 /* PermissionRequest.kt */,
+				41E35B422EF6EE6900F3E5B5 /* UpdateNotificationDialog.kt */,
+			);
+			path = ui;
+			sourceTree = "<group>";
+		};
+		41E35B4C2EF6EE6900F3E5B5 /* util */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B442EF6EE6900F3E5B5 /* BoardConfig.kt */,
+				41E35B452EF6EE6900F3E5B5 /* DevicePerformance.kt */,
+				41E35B462EF6EE6900F3E5B5 /* FileSystem.kt */,
+				41E35B472EF6EE6900F3E5B5 /* ImagePicker.kt */,
+				41E35B482EF6EE6900F3E5B5 /* Logger.kt */,
+				41E35B492EF6EE6900F3E5B5 /* TextEncoding.kt */,
+				41E35B4A2EF6EE6900F3E5B5 /* ThreadTitleResolver.kt */,
+				41E35B4B2EF6EE6900F3E5B5 /* UrlLauncher.kt */,
+			);
+			path = util;
+			sourceTree = "<group>";
+		};
+		41E35B4E2EF6EE6900F3E5B5 /* version */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B4D2EF6EE6900F3E5B5 /* VersionChecker.kt */,
+			);
+			path = version;
+			sourceTree = "<group>";
+		};
+		41E35B4F2EF6EE6900F3E5B5 /* kotlin */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AFF2EF6EE6900F3E5B5 /* audio */,
+				41E35B082EF6EE6900F3E5B5 /* com */,
+				41E35B142EF6EE6900F3E5B5 /* model */,
+				41E35B1B2EF6EE6900F3E5B5 /* network */,
+				41E35B222EF6EE6900F3E5B5 /* parser */,
+				41E35B2B2EF6EE6900F3E5B5 /* repo */,
+				41E35B2E2EF6EE6900F3E5B5 /* repository */,
+				41E35B302EF6EE6900F3E5B5 /* service */,
+				41E35B322EF6EE6900F3E5B5 /* state */,
+				41E35B432EF6EE6900F3E5B5 /* ui */,
+				41E35B4C2EF6EE6900F3E5B5 /* util */,
+				41E35B4E2EF6EE6900F3E5B5 /* version */,
+			);
+			path = kotlin;
+			sourceTree = "<group>";
+		};
+		41E35B502EF6EE6900F3E5B5 /* commonMain */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B4F2EF6EE6900F3E5B5 /* kotlin */,
+			);
+			path = commonMain;
+			sourceTree = "<group>";
+		};
+		41E35B532EF6EE6900F3E5B5 /* parser */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B512EF6EE6900F3E5B5 /* CatalogHtmlParserCoreTest.kt */,
+				41E35B522EF6EE6900F3E5B5 /* ThreadHtmlParserCoreTest.kt */,
+			);
+			path = parser;
+			sourceTree = "<group>";
+		};
+		41E35B552EF6EE6900F3E5B5 /* board */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B542EF6EE6900F3E5B5 /* BoardManagementScreenTest.kt */,
+			);
+			path = board;
+			sourceTree = "<group>";
+		};
+		41E35B562EF6EE6900F3E5B5 /* ui */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B552EF6EE6900F3E5B5 /* board */,
+			);
+			path = ui;
+			sourceTree = "<group>";
+		};
+		41E35B572EF6EE6900F3E5B5 /* kotlin */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B532EF6EE6900F3E5B5 /* parser */,
+				41E35B562EF6EE6900F3E5B5 /* ui */,
+			);
+			path = kotlin;
+			sourceTree = "<group>";
+		};
+		41E35B582EF6EE6900F3E5B5 /* commonTest */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B572EF6EE6900F3E5B5 /* kotlin */,
+			);
+			path = commonTest;
+			sourceTree = "<group>";
+		};
+		41E35B5A2EF6EE6900F3E5B5 /* audio */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B592EF6EE6900F3E5B5 /* TextSpeaker.ios.kt */,
+			);
+			path = audio;
+			sourceTree = "<group>";
+		};
+		41E35B5C2EF6EE6900F3E5B5 /* background */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B5B2EF6EE6900F3E5B5 /* BackgroundRefreshManager.kt */,
+			);
+			path = background;
+			sourceTree = "<group>";
+		};
+		41E35B5E2EF6EE6900F3E5B5 /* network */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B5D2EF6EE6900F3E5B5 /* HttpClientFactory.ios.kt */,
+			);
+			path = network;
+			sourceTree = "<group>";
+		};
+		41E35B612EF6EE6900F3E5B5 /* parser */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B5F2EF6EE6900F3E5B5 /* AppleHtmlParser.kt */,
+				41E35B602EF6EE6900F3E5B5 /* ParserFactory.ios.kt */,
+			);
+			path = parser;
+			sourceTree = "<group>";
+		};
+		41E35B632EF6EE6900F3E5B5 /* state */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B622EF6EE6900F3E5B5 /* AppStateStore.ios.kt */,
+			);
+			path = state;
+			sourceTree = "<group>";
+		};
+		41E35B672EF6EE6900F3E5B5 /* board */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B642EF6EE6900F3E5B5 /* FileManagerPickerDialog.ios.kt */,
+				41E35B652EF6EE6900F3E5B5 /* ImagePickerButton.ios.kt */,
+				41E35B662EF6EE6900F3E5B5 /* PlatformVideoPlayer.ios.kt */,
+			);
+			path = board;
+			sourceTree = "<group>";
+		};
+		41E35B692EF6EE6900F3E5B5 /* image */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B682EF6EE6900F3E5B5 /* ImageLoaderProvider.ios.kt */,
+			);
+			path = image;
+			sourceTree = "<group>";
+		};
+		41E35B6B2EF6EE6900F3E5B5 /* util */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B6A2EF6EE6900F3E5B5 /* PlatformBackHandler.kt */,
+			);
+			path = util;
+			sourceTree = "<group>";
+		};
+		41E35B6D2EF6EE6900F3E5B5 /* ui */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B672EF6EE6900F3E5B5 /* board */,
+				41E35B692EF6EE6900F3E5B5 /* image */,
+				41E35B6B2EF6EE6900F3E5B5 /* util */,
+				41E35B6C2EF6EE6900F3E5B5 /* PermissionRequest.ios.kt */,
+			);
+			path = ui;
+			sourceTree = "<group>";
+		};
+		41E35B742EF6EE6900F3E5B5 /* util */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B6E2EF6EE6900F3E5B5 /* DevicePerformance.ios.kt */,
+				41E35B6F2EF6EE6900F3E5B5 /* FileSystem.ios.kt */,
+				41E35B702EF6EE6900F3E5B5 /* ImagePicker.ios.kt */,
+				41E35B712EF6EE6900F3E5B5 /* Logger.ios.kt */,
+				41E35B722EF6EE6900F3E5B5 /* TextEncoding.ios.kt */,
+				41E35B732EF6EE6900F3E5B5 /* UrlLauncher.ios.kt */,
+			);
+			path = util;
+			sourceTree = "<group>";
+		};
+		41E35B762EF6EE6900F3E5B5 /* version */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B752EF6EE6900F3E5B5 /* VersionChecker.ios.kt */,
+			);
+			path = version;
+			sourceTree = "<group>";
+		};
+		41E35B782EF6EE6900F3E5B5 /* kotlin */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B5A2EF6EE6900F3E5B5 /* audio */,
+				41E35B5C2EF6EE6900F3E5B5 /* background */,
+				41E35B5E2EF6EE6900F3E5B5 /* network */,
+				41E35B612EF6EE6900F3E5B5 /* parser */,
+				41E35B632EF6EE6900F3E5B5 /* state */,
+				41E35B6D2EF6EE6900F3E5B5 /* ui */,
+				41E35B742EF6EE6900F3E5B5 /* util */,
+				41E35B762EF6EE6900F3E5B5 /* version */,
+				41E35B772EF6EE6900F3E5B5 /* MainViewController.kt */,
+			);
+			path = kotlin;
+			sourceTree = "<group>";
+		};
+		41E35B792EF6EE6900F3E5B5 /* iosMain */ = {
+			isa = PBXGroup;
+			children = (
+				41E35B782EF6EE6900F3E5B5 /* kotlin */,
+			);
+			path = iosMain;
+			sourceTree = "<group>";
+		};
+		41E35B7A2EF6EE6900F3E5B5 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				41E35AFD2EF6EE6900F3E5B5 /* androidMain */,
+				41E35B502EF6EE6900F3E5B5 /* commonMain */,
+				41E35B582EF6EE6900F3E5B5 /* commonTest */,
+				41E35B792EF6EE6900F3E5B5 /* iosMain */,
+			);
+			path = src;
+			sourceTree = "<group>";
+		};
+		41E35B7C2EF6EE6900F3E5B5 /* shared */ = {
+			isa = PBXGroup;
+			children = (
+				41E35ADD2EF6EE6900F3E5B5 /* build */,
+				41E35B7A2EF6EE6900F3E5B5 /* src */,
+				41E35B7B2EF6EE6900F3E5B5 /* build.gradle.kts */,
+			);
+			name = shared;
+			path = ../shared;
+			sourceTree = "<group>";
+		};
+		A970358FE7E33D5FFF4934B6 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7FE8AFC77F4F4EA4D8D76CF1 /* futacha.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A46D3815533677F7187C07A8 /* iosApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6364E3247AFFC8755A4FB09C /* Build configuration list for PBXNativeTarget "iosApp" */;
+			buildPhases = (
+				F4EFE5556D8116C6CE987688 /* Compile Kotlin Framework */,
+				973196A0A7F479BFCAC39A3E /* Sources */,
+				FCACE185D236A2F694EEFC88 /* Frameworks */,
+				00A73916B012CA183BB8B211 /* Resources */,
+				41E35B7F2EF6EE7C00F3E5B5 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				529658B8C1F0E941FDCAC756 /* iosApp */,
+			);
+			name = iosApp;
+			packageProductDependencies = (
+			);
+			productName = iosApp;
+			productReference = 7FE8AFC77F4F4EA4D8D76CF1 /* futacha.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		907A7B74B29A84A3DD1B34CE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					A46D3815533677F7187C07A8 = {
+						CreatedOnToolsVersion = 16.2;
+					};
+				};
+			};
+			buildConfigurationList = 3E3D7D3E8277765EC732E2E3 /* Build configuration list for PBXProject "iosApp" */;
+			developmentRegion = ja;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				ja,
+			);
+			mainGroup = 0A9D7C4CB472774EDC3BF6DD;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A970358FE7E33D5FFF4934B6 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A46D3815533677F7187C07A8 /* iosApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		00A73916B012CA183BB8B211 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		F4EFE5556D8116C6CE987688 /* Compile Kotlin Framework */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Compile Kotlin Framework";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build task invocation due to OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED environment variable set to \\\"YES\\\"\"\n  exit 0\nfi\ncd \"$SRCROOT/..\"\n./gradlew :shared:embedAndSignAppleFrameworkForXcode\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		973196A0A7F479BFCAC39A3E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1B5A4849EBE819992D873AD3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 9135B878D9EB55DD1D4C52A9 /* Configuration */;
+			baseConfigurationReferenceRelativePath = Config.xcconfig;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "${TEAM_ID}";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		6CE2309D08B9A58358B17627 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = futacha;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9AD6D2E7322506C442B603AD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = futacha;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D97FD6EB0C48C022F2139137 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 9135B878D9EB55DD1D4C52A9 /* Configuration */;
+			baseConfigurationReferenceRelativePath = Config.xcconfig;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "${TEAM_ID}";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3E3D7D3E8277765EC732E2E3 /* Build configuration list for PBXProject "iosApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1B5A4849EBE819992D873AD3 /* Debug */,
+				D97FD6EB0C48C022F2139137 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6364E3247AFFC8755A4FB09C /* Build configuration list for PBXNativeTarget "iosApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6CE2309D08B9A58358B17627 /* Debug */,
+				9AD6D2E7322506C442B603AD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 907A7B74B29A84A3DD1B34CE /* Project object */;
+}

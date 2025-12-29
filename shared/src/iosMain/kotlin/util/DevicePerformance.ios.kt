@@ -10,7 +10,7 @@ import platform.Foundation.NSProcessInfo
 @OptIn(ExperimentalForeignApi::class)
 public actual fun detectDevicePerformanceProfile(platformContext: Any?): DevicePerformanceProfile {
     val processInfo = NSProcessInfo.processInfo
-    val totalRamMb = (processInfo.physicalMemory / (1024 * 1024)).toInt()
+    val totalRamMb = (processInfo.physicalMemory.toLong() / (1024 * 1024)).toInt()
     // 2GB未満の端末を低RAM扱いにする
     val isLowRam = totalRamMb < 2048
 
