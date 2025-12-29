@@ -14,6 +14,11 @@ import java.io.File
 import java.io.IOException
 
 /**
+ * Exception thrown when DocumentFile permissions have been revoked
+ */
+class PermissionRevokedException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+/**
  * Android版FileSystem実装
  */
 class AndroidFileSystem(
@@ -190,11 +195,16 @@ class AndroidFileSystem(
 
     /**
      * 共有Documentsフォルダのパスを取得
+     *
+     * 警告: Android 10以降、getExternalStoragePublicDirectory()は非推奨で、書き込み制限があります。
+     * SAF (Storage Access Framework)の使用を推奨します。
+     * このメソッドはフォールバックとしてのみ使用され、失敗時は内部ストレージにフォールバックします。
      */
     private fun getPublicDocumentsDirectory(): String {
         try {
             val documentsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10以降: getExternalStoragePublicDirectory は非推奨だが Documents は引き続き使用可能
+                // Android 10以降: 非推奨APIだが、読み取り専用として使用可能
+                // 書き込みには権限が必要で、多くのケースで失敗する
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
             } else {
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
@@ -252,10 +262,16 @@ class AndroidFileSystem(
 
     /**
      * 共有Downloadフォルダのパスを取得
+     *
+     * 警告: Android 10以降、getExternalStoragePublicDirectory()は非推奨で、書き込み制限があります。
+     * SAF (Storage Access Framework)の使用を推奨します。
+     * このメソッドはフォールバックとしてのみ使用され、失敗時は内部ストレージにフォールバックします。
      */
     private fun getPublicDownloadsDirectory(): String {
         try {
             val downloadsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10以降: 非推奨APIだが、読み取り専用として使用可能
+                // 書き込みには権限が必要で、多くのケースで失敗する
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             } else {
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -346,7 +362,7 @@ class AndroidFileSystem(
 
                     // Verify we still have permission
                     if (!baseDir.canWrite()) {
-                        throw SecurityException("No write permission for tree URI: ${base.uri}")
+                        throw PermissionRevokedException("Write permission lost for tree URI: ${base.uri}. Please select the folder again.")
                     }
 
                     if (relativePath.isEmpty()) {
@@ -559,6 +575,31 @@ class AndroidFileSystem(
             }
         }
         return current
+    }
+
+    /**
+     * FIX: 古い一時ファイルをクリーンアップ
+     * アプリ起動時に呼び出して、前回のクラッシュなどで残った一時ファイルを削除
+     */
+    fun cleanupTempFiles(): Result<Int> = runCatching {
+        var deletedCount = 0
+        val cacheDir = context.cacheDir
+
+        // .tmpファイルを検索して削除
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".tmp")) {
+                try {
+                    if (file.delete()) {
+                        deletedCount++
+                        Logger.d("AndroidFileSystem", "Deleted temp file: ${file.name}")
+                    }
+                } catch (e: Exception) {
+                    Logger.w("AndroidFileSystem", "Failed to delete temp file: ${file.name} - ${e.message}")
+                }
+            }
+        }
+
+        deletedCount
     }
 }
 

@@ -1,8 +1,8 @@
 package com.valoser.futacha.shared.parser
 
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -38,7 +38,7 @@ internal object CatalogHtmlParserCore {
     )
 
     // FIX: サスペンド関数に変更してバックグラウンドで実行
-    suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> = withContext(Dispatchers.Default) {
+    suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> = withContext(AppDispatchers.parsing) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }

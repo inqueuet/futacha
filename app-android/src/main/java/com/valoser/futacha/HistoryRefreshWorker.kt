@@ -1,6 +1,7 @@
 package com.valoser.futacha
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -57,6 +58,7 @@ class HistoryRefreshWorker(
 
         private val constraints: Constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
             .build()
 
         fun enqueuePeriodic(workManager: WorkManager) {
@@ -65,6 +67,11 @@ class HistoryRefreshWorker(
                 TimeUnit.MINUTES
             )
                 .setConstraints(constraints)
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    30,
+                    TimeUnit.SECONDS
+                )
                 .build()
 
             workManager.enqueueUniquePeriodicWork(

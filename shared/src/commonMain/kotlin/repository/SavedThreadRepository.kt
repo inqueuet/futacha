@@ -86,7 +86,7 @@ class SavedThreadRepository(
     /**
      * スレッドメタデータを読み込み
      */
-    suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.Default) {
+    suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.IO) {
         runCatching {
             val metadataPath = "$baseDirectory/$threadId/metadata.json"
             val jsonString = fileSystem.readString(metadataPath).getOrThrow()
@@ -183,7 +183,7 @@ class SavedThreadRepository(
     /**
      * スレッドが存在するか確認
      */
-    suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.Default) {
+    suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.IO) {
         val threadPath = "$baseDirectory/$threadId"
         fileSystem.exists(threadPath)
     }
@@ -229,7 +229,7 @@ class SavedThreadRepository(
         }
     }
 
-    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.Default) {
+    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.IO) {
         indexMutex.withLock {
             block()
         }

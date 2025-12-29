@@ -70,10 +70,14 @@ class ThreadSaveService(
         private const val MAX_MEDIA_ITEMS = 10000
     }
 
-    private fun <K, V> trimMap(map: LinkedHashMap<K, V>) {
-        while (map.size > MAX_MEDIA_ITEMS) {
-            val firstKey = map.keys.firstOrNull() ?: break
-            map.remove(firstKey)
+    /**
+     * LRU cache implementation using LinkedHashMap with access order
+     */
+    private fun <K, V> createLruCache(maxSize: Int): LinkedHashMap<K, V> {
+        return object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<K, V>): Boolean {
+                return size > maxSize
+            }
         }
     }
 
@@ -95,7 +99,7 @@ class ThreadSaveService(
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
-    ): Result<SavedThread> = withContext(Dispatchers.Default) {
+    ): Result<SavedThread> = withContext(Dispatchers.IO) {
         runCatching {
             val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
             val startedAtMillis = savedAtTimestamp
@@ -127,9 +131,9 @@ class ThreadSaveService(
             }
 
             // FIX: マップのサイズ制限とメモリ効率化
-            // accessOrder 付きコンストラクタはKMPに無いため、標準のLinkedHashMapを使い都度トリム
-            val urlToPathMap = LinkedHashMap<String, String>()
-            val urlToFileInfoMap = LinkedHashMap<String, LocalFileInfo>()
+            // LRUキャッシュを使用して自動的に古いエントリを削除
+            val urlToPathMap = createLruCache<String, String>(MAX_MEDIA_ITEMS)
+            val urlToFileInfoMap = createLruCache<String, LocalFileInfo>(MAX_MEDIA_ITEMS)
 
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
@@ -145,7 +149,8 @@ class ThreadSaveService(
             var downloadFailureCount = 0
 
             // FIX: Build media items in chunks to avoid massive list creation
-            val totalMediaCount = posts.sumOf {
+            // Use asSequence() to avoid creating intermediate collections
+            val totalMediaCount = posts.asSequence().sumOf {
                 (if (it.thumbnailUrl != null) 1 else 0) + (if (it.imageUrl != null) 1 else 0)
             }
 
@@ -169,7 +174,7 @@ class ThreadSaveService(
                 mediaItems.chunked(4).forEach { itemBatch ->
                     kotlinx.coroutines.coroutineScope {
                         val deferredResults = itemBatch.map { mediaItem ->
-                            async(Dispatchers.Default) {
+                            async(Dispatchers.IO) {
                                 // FIX: 最大数を超えたらスキップ
                                 if (processedMediaCount >= MAX_MEDIA_ITEMS) {
                                     Logger.w("ThreadSaveService", "Skipping media item (exceeds MAX_MEDIA_ITEMS)")
@@ -218,9 +223,7 @@ class ThreadSaveService(
                                     enforceBudget(totalSize, startedAtMillis)
                                     // URL→ローカルパスマッピングに追加
                                     urlToPathMap[mediaItem.url] = fileInfo.relativePath
-                                    trimMap(urlToPathMap)
                                     urlToFileInfoMap[mediaItem.url] = fileInfo
-                                    trimMap(urlToFileInfoMap)
 
                                     when (fileInfo.fileType) {
                                         FileType.THUMBNAIL -> {
@@ -397,7 +400,7 @@ class ThreadSaveService(
         type: MediaType,
         postId: String,
         startedAtMillis: Long
-    ): Result<LocalFileInfo> = withContext(Dispatchers.Default) {
+    ): Result<LocalFileInfo> = withContext(Dispatchers.IO) {
         runCatching {
             // Download media directly and inspect headers from GET response
             val response: HttpResponse = httpClient.get(url) {
@@ -669,7 +672,7 @@ class ThreadSaveService(
     /**
      * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
      */
-    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(Dispatchers.Default) {
+    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
             val response: HttpResponse = httpClient.get(threadUrl) {

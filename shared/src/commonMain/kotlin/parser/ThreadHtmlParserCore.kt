@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.parser
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.ensureActive
 import kotlin.text.concatToString
@@ -21,7 +22,7 @@ internal object ThreadHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://www.example.com"
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
     private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
-    private const val MAX_PARSE_TIME_MS = 5000L // FIX: 5秒に戻す（既にDispatchers.Defaultで実行されるため安全）
+    private const val MAX_PARSE_TIME_MS = 5000L // FIX: 5秒に戻す（parsing専用dispatcherで実行）
     private const val MAX_SINGLE_BLOCK_SIZE = 300_000 // FIX: 500KB→300KBに削減してより早く異常を検出
 
     private val canonicalRegex = Regex(
@@ -99,9 +100,13 @@ internal object ThreadHtmlParserCore {
         pattern = "([A-Za-z0-9._-]+\\.(?:jpe?g|png|gif|webp|bmp|mp4|webm|mkv|mov|avi|ts|flv|m4v))",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: 正規表現の再コンパイル防止 - 関数内で毎回生成されていたパターンをトップレベルに移動
+    private val deletedRegex = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE)
+    private val brTagRegex = Regex("(?i)<br\\s*/?>")
+    private val whitespaceRegex = Regex("\\s+")
 
     // FIX: サスペンド関数に変更し、必ずバックグラウンドで実行
-    suspend fun parseThread(html: String): ThreadPage = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+    suspend fun parseThread(html: String): ThreadPage = kotlinx.coroutines.withContext(AppDispatchers.parsing) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
@@ -310,10 +315,19 @@ internal object ThreadHtmlParserCore {
         return extension.lowercase() in videoExtensions
     }
 
-    private fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {
-        val start = startRegex.find(text) ?: return null
-        val end = endRegex.find(text, start.range.last) ?: return null
-        return text.substring(start.range.last + 1, end.range.first)
+    // FIX: ReDoS対策 - タイムアウト付きregex検索に変更
+    private suspend fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {
+        return try {
+            // FIX: 複雑なパターンマッチングに100msタイムアウトを設定
+            kotlinx.coroutines.withTimeoutOrNull(100) {
+                val start = startRegex.find(text) ?: return@withTimeoutOrNull null
+                val end = endRegex.find(text, start.range.last) ?: return@withTimeoutOrNull null
+                text.substring(start.range.last + 1, end.range.first)
+            }
+        } catch (e: Exception) {
+            Logger.w("ThreadHtmlParserCore", "extractBetween timeout or error: ${e.message}")
+            null
+        }
     }
 
     private fun extractOpBlock(html: String, firstReplyIndex: Int): String? {
@@ -328,7 +342,7 @@ internal object ThreadHtmlParserCore {
         return html.substring(start, end)
     }
 
-    private fun parsePostBlock(
+    private suspend fun parsePostBlock(
         block: String,
         baseUrl: String,
         isOp: Boolean
@@ -356,7 +370,7 @@ internal object ThreadHtmlParserCore {
             ?.let(::stripTags)
             ?.trim()
             ?.ifBlank { null }
-        val isDeleted = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE).containsMatchIn(block)
+        val isDeleted = deletedRegex.containsMatchIn(block)
 
         return Post(
             id = postId,
@@ -396,14 +410,14 @@ internal object ThreadHtmlParserCore {
     }
 
     private fun stripTags(value: String): String = htmlTagRegex.replace(
-        value.replace(Regex("(?i)<br\\s*/?>"), "\n"),
+        value.replace(brTagRegex, "\n"),
         ""
     )
 
     private fun normalizeMessageText(messageHtml: String): String {
         if (messageHtml.isEmpty()) return ""
         val plain = decodeHtmlEntities(stripTags(messageHtml))
-        return plain.replace(Regex("\\s+"), "")
+        return plain.replace(whitespaceRegex, "")
     }
 
     private fun containsIsolationNotice(normalizedMessageText: String): Boolean {
@@ -656,7 +670,7 @@ internal object ThreadHtmlParserCore {
     }
 
     private fun normalizeQuoteText(value: String): String {
-        return value.replace("\\s+".toRegex(), " ").trim()
+        return value.replace(whitespaceRegex, " ").trim()
     }
 
     private fun findPartialLineTargets(

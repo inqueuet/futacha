@@ -18,7 +18,8 @@ import kotlin.coroutines.resumeWithException
 
 @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 actual class TextSpeaker actual constructor(platformContext: Any?) {
-    private val context = platformContext as? Context
+    // FIX: Activity ContextではなくApplicationContextを使用してメモリリークを防止
+    private val appContext = (platformContext as? Context)?.applicationContext
         ?: throw IllegalArgumentException("TextSpeaker requires an Android Context")
     private val initState = CompletableDeferred<Unit>()
     private val lock = Any()
@@ -27,7 +28,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private var closed = false
 
     init {
-        tts = TextToSpeech(context) { status ->
+        tts = TextToSpeech(appContext) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 val result = tts.setLanguage(Locale.JAPAN)
                 if (result in TextToSpeech.LANG_AVAILABLE..TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {

@@ -181,12 +181,24 @@ actual fun rememberDirectoryPickerLauncher(
             )
         } catch (e: Exception) {
             Logger.e("DirectoryPicker", "Failed to persist URI permission for $uri", e)
+            // FIX: ユーザーにエラーフィードバックを表示
+            android.widget.Toast.makeText(
+                context,
+                "フォルダへのアクセス権限を保存できませんでした",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             return@rememberLauncherForActivityResult
         }
 
         // 書き込みテスト
         if (!canWriteToDocumentTree(context, uri)) {
             Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+            // FIX: ユーザーにエラーフィードバックを表示
+            android.widget.Toast.makeText(
+                context,
+                "選択したフォルダに書き込み権限がありません",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             return@rememberLauncherForActivityResult
         }
 
@@ -269,7 +281,11 @@ private fun canWriteToDocumentTree(context: android.content.Context, treeUri: an
         val docFile = DocumentFile.fromTreeUri(context, treeUri) ?: return false
         val probe = docFile.createFile("text/plain", ".futacha_write_probe") ?: return false
         context.contentResolver.openOutputStream(probe.uri)?.use { it.write("ok".toByteArray()) }
-        probe.delete()
+        // FIX: テストファイル削除の結果を確認してログに記録
+        val deleted = probe.delete()
+        if (!deleted) {
+            Logger.w("DirectoryPicker", "Failed to delete test file from DocumentTree $treeUri")
+        }
         true
     } catch (e: Exception) {
         Logger.e("DirectoryPicker", "Failed to write test file to DocumentTree $treeUri", e)
@@ -299,7 +315,11 @@ private fun canWriteTestFile(directoryPath: String): Boolean {
         }
         val probe = File(dir, ".futacha_write_probe")
         FileOutputStream(probe).use { it.write("ok".toByteArray()) }
+        // FIX: テストファイル削除の結果を確認してログに記録
         val deleted = probe.delete()
+        if (!deleted && probe.exists()) {
+            Logger.w("DirectoryPicker", "Failed to delete test file from $directoryPath")
+        }
         deleted || !probe.exists()
     } catch (e: Exception) {
         Logger.e("DirectoryPicker", "Failed to write test file to $directoryPath", e)

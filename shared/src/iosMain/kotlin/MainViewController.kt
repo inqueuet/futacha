@@ -71,7 +71,7 @@ private fun configureIosBackgroundRefresh(
             val refresher = HistoryRefresher(
                 stateStore = stateStore,
                 repository = repo,
-                dispatcher = kotlinx.coroutines.Dispatchers.Default,
+                dispatcher = kotlinx.coroutines.Dispatchers.IO,
                 autoSavedThreadRepository = autoSaveRepo,
                 httpClient = httpClient,
                 fileSystem = fileSystem

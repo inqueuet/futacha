@@ -12,6 +12,7 @@ import androidx.compose.ui.interop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeoutOrNull
 import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerItemStatusFailed
 import platform.AVFoundation.AVPlayerItemStatusReadyToPlay
@@ -90,23 +91,29 @@ private fun AvKitVideoPlayer(
             onStateChanged(VideoPlayerState.Error)
             return@LaunchedEffect
         }
-        while (isActive) {
-            when (item.status) {
-                AVPlayerItemStatusReadyToPlay -> {
-                    val size = item.presentationSize
-                    if (size.width > 0 && size.height > 0) {
-                        onVideoSizeKnown(size.width.toInt(), size.height.toInt())
+        val ready = withTimeoutOrNull(10_000L) {
+            while (isActive) {
+                when (item.status) {
+                    AVPlayerItemStatusReadyToPlay -> {
+                        val size = item.presentationSize
+                        if (size.width > 0 && size.height > 0) {
+                            onVideoSizeKnown(size.width.toInt(), size.height.toInt())
+                        }
+                        onStateChanged(VideoPlayerState.Ready)
+                        player.play()
+                        return@withTimeoutOrNull true
                     }
-                    onStateChanged(VideoPlayerState.Ready)
-                    player.play()
-                    return@LaunchedEffect
+                    AVPlayerItemStatusFailed -> {
+                        onStateChanged(VideoPlayerState.Error)
+                        return@withTimeoutOrNull false
+                    }
                 }
-                AVPlayerItemStatusFailed -> {
-                    onStateChanged(VideoPlayerState.Error)
-                    return@LaunchedEffect
-                }
+                delay(120)
             }
-            delay(120)
+            false
+        }
+        if (ready == null) {
+            onStateChanged(VideoPlayerState.Error)
         }
     }
     LaunchedEffect(volume, isMuted, player) {

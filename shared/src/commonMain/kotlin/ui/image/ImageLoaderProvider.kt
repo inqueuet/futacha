@@ -12,11 +12,11 @@ import coil3.memory.MemoryCache
 import coil3.request.ErrorResult
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.DevicePerformanceProfile
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import okio.FileSystem
 import okio.Path
 
@@ -53,7 +53,7 @@ fun rememberFutachaImageLoader(
         resolveCacheConfig(lightweightMode, performanceProfile)
     }
     val fetcherDispatcher: CoroutineDispatcher = remember(cacheConfig.parallelism) {
-        Dispatchers.Default.limitedParallelism(cacheConfig.parallelism.coerceAtLeast(1))
+        AppDispatchers.imageFetch(cacheConfig.parallelism)
     }
     val memoryCache = remember(cacheConfig) {
         MemoryCache.Builder()

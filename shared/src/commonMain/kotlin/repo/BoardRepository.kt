@@ -101,6 +101,10 @@ class DefaultBoardRepository(
     // FIX: close用のCoroutineScopeを追加
     private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // FIX: close状態を管理（二重close防止）
+    private val closeMutex = Mutex()
+    private var isClosed = false
+
     companion object {
         private const val TAG = "DefaultBoardRepository"
         private const val OP_IMAGE_LINE_LIMIT = 65
@@ -261,7 +265,15 @@ class DefaultBoardRepository(
     }
 
     // FIX: 同期的にクリーンアップを実行（メインスレッドからの呼び出しを想定しない）
+    @Deprecated(
+        message = "Use closeAsync() instead to avoid blocking the main thread",
+        replaceWith = ReplaceWith("closeAsync()"),
+        level = DeprecationLevel.WARNING
+    )
     override fun close() {
+        // FIX: 二重close防止
+        if (isClosed) return
+
         // Close the underlying API if it supports cleanup
         (api as? AutoCloseable)?.close()
 
@@ -276,13 +288,20 @@ class DefaultBoardRepository(
 
         // スコープをキャンセル（バックグラウンドタスクを停止）
         closeScope.cancel()
+        isClosed = true
     }
 
     // FIX: 非同期版closeAsync（必要に応じて使用）
     override fun closeAsync(): Job {
-        (api as? AutoCloseable)?.close()
-
         return closeScope.launch {
+            closeMutex.withLock {
+                // FIX: 二重close防止
+                if (isClosed) return@launch
+                isClosed = true
+            }
+
+            (api as? AutoCloseable)?.close()
+
             opImageCacheMutex.withLock {
                 opImageCache.clear()
             }

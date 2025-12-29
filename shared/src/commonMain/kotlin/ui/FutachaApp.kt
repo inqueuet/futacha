@@ -131,7 +131,7 @@ fun FutachaApp(
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
-                    dispatcher = Dispatchers.Default,
+                    dispatcher = Dispatchers.IO,
                     autoSavedThreadRepository = autoSavedThreadRepository,  // FIX: 自動保存チェック用
                     httpClient = httpClient,
                     fileSystem = fileSystem,
@@ -473,7 +473,8 @@ fun FutachaApp(
                     // Reduce LaunchedEffect dependencies to only essential keys to prevent excessive coroutine creation
                     // Use a key that only changes when navigating to a different thread
                     // Also use currentBoard.id to ensure we update when board context changes
-                    LaunchedEffect(activeThreadId, currentBoard.id) {
+                    // Include persistedHistory.size to react to history changes
+                    LaunchedEffect(activeThreadId, currentBoard.id, persistedHistory.size) {
                         // FIX: デバウンス時間を60秒に増やしてDataStore書き込みを削減
                         val existingEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
                         val currentTime = Clock.System.now().toEpochMilliseconds()

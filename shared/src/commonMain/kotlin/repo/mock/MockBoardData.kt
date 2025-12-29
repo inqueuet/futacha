@@ -4,9 +4,9 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.parser.CatalogHtmlParserCore
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
+import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlin.time.Clock
@@ -27,7 +27,7 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalTime::class)
 internal object MockBoardData {
     private val now = Clock.System.now()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + AppDispatchers.mockData)
 
     private val catalogItemsDeferred = scope.async(start = CoroutineStart.LAZY) {
         CatalogHtmlParserCore.parseCatalog(exampleCatalogHtml).mapIndexed { index, item ->

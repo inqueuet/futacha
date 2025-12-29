@@ -30,6 +30,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -39,7 +42,17 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+
+/**
+ * Represents a storage error that occurred during DataStore operations
+ */
+data class StorageError(
+    val operation: String,
+    val message: String,
+    val timestamp: Long
+)
 
 private const val DEFAULT_CATALOG_GRID_COLUMNS = 5
 private const val MIN_CATALOG_GRID_COLUMNS = 2
@@ -90,6 +103,10 @@ class AppStateStore internal constructor(
     // FIX: スレッドセーフなJobマップに変更
     private val scrollPositionJobs = AtomicJobMap()
     private var scrollDebounceScope: CoroutineScope? = null
+
+    // Error propagation
+    private val _lastStorageError = MutableStateFlow<StorageError?>(null)
+    val lastStorageError: StateFlow<StorageError?> = _lastStorageError.asStateFlow()
 
     companion object {
         private const val TAG = "AppStateStore"
@@ -184,6 +201,11 @@ class AppStateStore internal constructor(
                 storage.updateBoardsJson(json.encodeToString(boardsSerializer, boards))
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to save ${boards.size} boards", e)
+                _lastStorageError.value = StorageError(
+                    operation = "setBoards",
+                    message = e.message ?: "Unknown error",
+                    timestamp = Clock.System.now().toEpochMilliseconds()
+                )
                 // Log error but don't crash - data will be lost but app continues
             }
         }
@@ -195,6 +217,11 @@ class AppStateStore internal constructor(
                 persistHistory(history)
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to save history with ${history.size} entries", e)
+                _lastStorageError.value = StorageError(
+                    operation = "setHistory",
+                    message = e.message ?: "Unknown error",
+                    timestamp = Clock.System.now().toEpochMilliseconds()
+                )
                 // Log error but don't crash - data will be lost but app continues
             }
         }
@@ -547,7 +574,7 @@ class AppStateStore internal constructor(
                                 lastReadItemIndex = index,
                                 lastReadItemOffset = offset,
                                 // Update visit time to reflect recent activity
-                                lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                                lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
                             )
                         } else {
                             entry
@@ -566,7 +593,7 @@ class AppStateStore internal constructor(
                                 titleImageUrl = titleImageUrl,
                                 boardName = boardName,
                                 boardUrl = boardUrl,
-                                lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                                lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
                                 replyCount = replyCount,
                                 lastReadItemIndex = index,
                                 lastReadItemOffset = offset

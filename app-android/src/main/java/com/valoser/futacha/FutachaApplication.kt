@@ -1,6 +1,7 @@
 package com.valoser.futacha
 
 import android.app.Application
+import androidx.work.WorkManager
 import com.valoser.futacha.shared.network.HttpBoardApi
 import com.valoser.futacha.shared.network.createHttpClient
 import com.valoser.futacha.shared.parser.createHtmlParser
@@ -18,6 +19,9 @@ import com.valoser.futacha.shared.util.createFileSystem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 class FutachaApplication : Application() {
     lateinit var appStateStore: AppStateStore
@@ -43,6 +47,15 @@ class FutachaApplication : Application() {
         super.onCreate()
         appStateStore = createAppStateStore(applicationContext)
         fileSystem = createFileSystem(applicationContext)
+
+        // FIX: クラッシュなどで残った古い一時ファイルをクリーンアップ
+        (fileSystem as? com.valoser.futacha.shared.util.AndroidFileSystem)?.cleanupTempFiles()
+            ?.onSuccess { count ->
+                if (count > 0) {
+                    com.valoser.futacha.shared.util.Logger.i("FutachaApplication", "Cleaned up $count temp files")
+                }
+            }
+
         autoSavedThreadRepository = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
         cookieStorage = PersistentCookieStorage(fileSystem)
         cookieRepository = CookieRepository(cookieStorage)
@@ -60,10 +73,28 @@ class FutachaApplication : Application() {
             httpClient = httpClient,
             fileSystem = fileSystem
         )
+
+        // Initialize WorkManager for background refresh
+        val workManager = WorkManager.getInstance(applicationContext)
+        applicationScope.launch {
+            appStateStore.isBackgroundRefreshEnabled
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    if (enabled) {
+                        HistoryRefreshWorker.enqueuePeriodic(workManager)
+                    } else {
+                        HistoryRefreshWorker.cancel(workManager)
+                    }
+                }
+        }
     }
 
     override fun onTerminate() {
         // This is only called in emulators, but close resources defensively
+        applicationScope.cancel()
+        kotlinx.coroutines.runBlocking {
+            httpClient.close()
+        }
         boardRepository.closeAsync()
         super.onTerminate()
     }
