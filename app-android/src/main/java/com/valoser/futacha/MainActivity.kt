@@ -6,7 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.ui.FutachaApp
-import version.createVersionChecker
+import com.valoser.futacha.shared.version.createVersionChecker
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
