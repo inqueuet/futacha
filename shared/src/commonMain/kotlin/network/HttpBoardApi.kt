@@ -23,26 +23,30 @@ import kotlin.text.RegexOption
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
-// FIX: 効率的なスレッドセーフLRUキャッシュ（LinkedHashMapのaccessOrder機能を使用）
-// NOTE: KMPではConcurrentHashMapが使えないため、Mutexで保護する必要がある
-// LinkedHashMapはスレッドセーフではないため、すべての操作をMutexで保護
+// FIX: KMP commonMainでも動くスレッドセーフLRUキャッシュ
+// NOTE: LinkedHashMapのaccessOrderコンストラクタ/継承がcommonMainで不可なため、手動で順序管理
 private class ThreadSafeLruCache<K, V>(private val maxSize: Int) {
     private val mutex = Mutex()
-    // LinkedHashMapのaccessOrder=trueでアクセス順を自動管理（O(1)操作）
-    private val cache = object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
-            return size > maxSize
-        }
-    }
+    private val cache: LinkedHashMap<K, V> = LinkedHashMap()
 
-    // FIX: 読み取り操作もMutexで保護（accessOrder=trueで自動的にアクセス順更新）
+    // FIX: 読み取り操作もMutexで保護（アクセス順を手動で更新）
     suspend fun get(key: K): V? = mutex.withLock {
-        cache[key]
+        val value = cache.remove(key) ?: return@withLock null
+        cache[key] = value
+        value
     }
 
-    // FIX: 書き込み操作はMutexで保護（removeEldestEntryで自動的にサイズ制限適用）
+    // FIX: 書き込み操作はMutexで保護（サイズ制限は手動適用）
     suspend fun put(key: K, value: V): V? = mutex.withLock {
-        cache.put(key, value)
+        val previous = cache.remove(key)
+        cache[key] = value
+        if (cache.size > maxSize) {
+            val eldestKey = cache.entries.firstOrNull()?.key
+            if (eldestKey != null) {
+                cache.remove(eldestKey)
+            }
+        }
+        previous
     }
 
     suspend fun clear() = mutex.withLock {
