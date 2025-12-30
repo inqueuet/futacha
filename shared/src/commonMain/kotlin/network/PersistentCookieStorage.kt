@@ -54,12 +54,19 @@ class PersistentCookieStorage(
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
     private var transactionSnapshot: Map<CookieKey, StoredCookie>? = null
+    // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
+    private var lastPurgeTimeMillis = 0L
+    private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         mutex.withLock {
             ensureLoadedLocked()
             val now = currentTimeMillis()
-            val domain = resolveDomain(cookie.domain, requestUrl.host) ?: return
+            val domain = resolveDomain(cookie.domain, requestUrl.host)
+            if (domain == null) {
+                Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' with invalid domain: ${cookie.domain} for host: ${requestUrl.host}")
+                return
+            }
             val path = normalizePath(cookie.path)
             val expiresAt = resolveExpiresAt(cookie, now) ?: return removeCookieLocked(domain, path, cookie.name)
             val key = CookieKey(domain, path, cookie.name)
@@ -215,7 +222,7 @@ class PersistentCookieStorage(
                 }
             }.onFailure { error ->
                 Logger.e("PersistentCookieStorage", "Failed to parse cookie file: ${error.message}")
-                // バックアップから復元を試みる
+                // FIX: バックアップから復元を試みる
                 val backupPath = "$storagePath.backup"
                 if (fileSystem.exists(backupPath)) {
                     val backupContent = fileSystem.readString(backupPath).getOrNull().orEmpty()
@@ -262,6 +269,13 @@ class PersistentCookieStorage(
     }
 
     private suspend fun purgeExpiredLocked(now: Long) {
+        // FIX: パフォーマンス最適化 - 一定間隔でのみパージを実行
+        // 毎回のget()で全Cookie走査するのは非効率なため、5分に1回に制限
+        if (now - lastPurgeTimeMillis < purgeIntervalMillis) {
+            return
+        }
+        lastPurgeTimeMillis = now
+
         val expiredKeys = cookies.filterValues { stored ->
             val expires = stored.expiresAtMillis ?: return@filterValues false
             expires <= now

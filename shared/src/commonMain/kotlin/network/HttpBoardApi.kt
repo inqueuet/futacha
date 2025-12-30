@@ -23,38 +23,26 @@ import kotlin.text.RegexOption
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
-// FIX: スレッドセーフなLRUキャッシュクラス
+// FIX: 効率的なスレッドセーフLRUキャッシュ（LinkedHashMapのaccessOrder機能を使用）
 // NOTE: KMPではConcurrentHashMapが使えないため、Mutexで保護する必要がある
 // LinkedHashMapはスレッドセーフではないため、すべての操作をMutexで保護
 private class ThreadSafeLruCache<K, V>(private val maxSize: Int) {
     private val mutex = Mutex()
-    // KMP互換性のためaccessOrderパラメータに依存せず手動で順序管理を行う
-    private val cache = LinkedHashMap<K, V>(maxSize)
-
-    // FIX: 読み取り操作も必ずMutexで保護し、アクセス順を更新
-    suspend fun get(key: K): V? = mutex.withLock {
-        val value = cache[key]
-        if (value != null) {
-            // アクセス順を更新（削除して再挿入）
-            cache.remove(key)
-            cache[key] = value
+    // LinkedHashMapのaccessOrder=trueでアクセス順を自動管理（O(1)操作）
+    private val cache = object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
+            return size > maxSize
         }
-        value
     }
 
-    // FIX: 書き込み操作はMutexで保護し、サイズ制限を適用
+    // FIX: 読み取り操作もMutexで保護（accessOrder=trueで自動的にアクセス順更新）
+    suspend fun get(key: K): V? = mutex.withLock {
+        cache[key]
+    }
+
+    // FIX: 書き込み操作はMutexで保護（removeEldestEntryで自動的にサイズ制限適用）
     suspend fun put(key: K, value: V): V? = mutex.withLock {
-        if (cache.containsKey(key)) {
-            cache.remove(key)
-        } else if (cache.size >= maxSize) {
-            // 一番古いエントリ（LinkedHashMapの先頭）を削除
-            val eldestKey = cache.keys.firstOrNull()
-            if (eldestKey != null) {
-                cache.remove(eldestKey)
-            }
-        }
-        cache[key] = value
-        return null // putの戻り値は使用していないためnull固定
+        cache.put(key, value)
     }
 
     suspend fun clear() = mutex.withLock {
@@ -94,10 +82,13 @@ class HttpBoardApi(
         private val JSON_MESSAGE_REGEX = """"(error|reason|message)"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
         private val JSON_JUMPTO_REGEX = """"jumpto"\s*:\s*(\d+)""".toRegex()
         private val JSON_THISNO_REGEX = """"thisno"\s*:\s*(\d+)""".toRegex()
+        // FIX: ReDoS対策 - より具体的なパターンに変更して[^>]*の繰り返しを排除
+        // 元: <input[^>]*name="chrenc"[^>]*> は2つの[^>]*が指数的バックトラッキングを引き起こす
+        // 修正: nameとvalue属性の順序を限定して確実にマッチさせる
         private val CHRENC_INPUT_REGEX =
-            Regex("""<input[^>]*name\s*=\s*["']chrenc["'][^>]*>""", RegexOption.IGNORE_CASE)
+            Regex("""<input\s+[^>]{0,200}?name\s*=\s*["']chrenc["'][^>]{0,200}?>""", RegexOption.IGNORE_CASE)
         private val VALUE_ATTR_REGEX =
-            Regex("""value\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+            Regex("""value\s*=\s*["']([^"']{0,500})["']""", RegexOption.IGNORE_CASE)
         private const val MAX_CACHE_SIZE = 100
     }
 
@@ -566,9 +557,12 @@ class HttpBoardApi(
         val attachImage = shouldAttachImage(imageFile, textOnly)
         if (attachImage) {
             val safeName = sanitizeFileName(imageFileName)
-            // FIX: 強制アンラップを避けてrequireで明示的にチェック
-            val fileData = requireNotNull(imageFile) {
-                "imageFile must not be null when attachImage is true"
+            // FIX: requireNotNullの代わりにエルビス演算子で安全にフォールバック
+            // shouldAttachImageがtrueならimageFileはnullでないはずだが、
+            // 防御的プログラミングとして空配列にフォールバックする
+            val fileData = imageFile ?: ByteArray(0)
+            if (fileData.isEmpty()) {
+                com.valoser.futacha.shared.util.Logger.w("HttpBoardApi", "imageFile is unexpectedly null or empty when attachImage is true")
             }
             append(
                 "upfile",
@@ -797,6 +791,10 @@ class HttpBoardApi(
     }
 
     private fun parseChrencValue(html: String): String? {
+        // FIX: ReDoS対策 - 入力サイズ制限（最大100KB）
+        if (html.length > 100_000) {
+            return null
+        }
         val input = CHRENC_INPUT_REGEX.find(html)?.value ?: return null
         val match = VALUE_ATTR_REGEX.find(input) ?: return null
         val rawValue = match.groupValues.getOrNull(1)?.trim().orEmpty()

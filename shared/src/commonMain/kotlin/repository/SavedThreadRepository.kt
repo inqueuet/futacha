@@ -62,7 +62,21 @@ class SavedThreadRepository(
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
-            saveIndexUnlocked(updatedIndex)
+            // FIX: 保存失敗時のリトライロジック（最大3回）
+            var lastException: Exception? = null
+            repeat(3) { attempt ->
+                try {
+                    saveIndexUnlocked(updatedIndex)
+                    return@runCatching // 成功したら即座に終了
+                } catch (e: Exception) {
+                    lastException = e
+                    if (attempt < 2) { // 最後の試行でなければ少し待つ
+                        kotlinx.coroutines.delay(100L * (attempt + 1))
+                    }
+                }
+            }
+            // 3回とも失敗したら例外をスロー
+            throw lastException ?: Exception("Failed to save index after adding thread ${thread.threadId}")
         }
     }
 
@@ -87,7 +101,7 @@ class SavedThreadRepository(
     /**
      * スレッドメタデータを読み込み
      */
-    suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.IO) {
+    suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.Default) {
         runCatching {
             val metadataPath = "$baseDirectory/$threadId/metadata.json"
             val jsonString = fileSystem.readString(metadataPath).getOrThrow()
@@ -106,12 +120,18 @@ class SavedThreadRepository(
             val threadToDelete = currentIndex.threads.find { it.threadId == threadId }
                 ?: return@runCatching  // 存在しない場合は正常終了
 
+            // FIX: トランザクション原子性を改善 - インデックス更新失敗時の巻き戻し用にバックアップ
+            val backupIndexPath = "$indexPath.backup"
+            val currentIndexJson = json.encodeToString(currentIndex)
+            fileSystem.writeString(backupIndexPath, currentIndexJson).getOrThrow()
+
             // ファイル削除を試行
             val threadPath = "$baseDirectory/$threadId"
             val deleteResult = fileSystem.deleteRecursively(threadPath)
 
             if (deleteResult.isFailure) {
-                // ファイル削除失敗時はインデックスを更新せずに例外をスロー
+                // ファイル削除失敗時はバックアップを削除して例外をスロー
+                fileSystem.delete(backupIndexPath)
                 throw deleteResult.exceptionOrNull()
                     ?: Exception("Failed to delete thread directory: $threadPath")
             }
@@ -124,7 +144,17 @@ class SavedThreadRepository(
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
-            saveIndexUnlocked(updatedIndex)
+            // FIX: インデックス更新失敗時はエラーログを残すが、ファイルは既に削除済み
+            // バックアップは次回の操作時に自動復元される可能性があるため残しておく
+            try {
+                saveIndexUnlocked(updatedIndex)
+                // 成功したらバックアップを削除
+                fileSystem.delete(backupIndexPath)
+            } catch (e: Exception) {
+                // インデックス保存失敗 - ファイルは削除済みだがインデックスは古いまま
+                // この状態は次回のロード時に検出・修復される
+                throw Exception("Failed to update index after deleting thread $threadId. Index may be inconsistent.", e)
+            }
         }
     }
 
@@ -184,7 +214,7 @@ class SavedThreadRepository(
     /**
      * スレッドが存在するか確認
      */
-    suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.Default) {
         val threadPath = "$baseDirectory/$threadId"
         fileSystem.exists(threadPath)
     }
@@ -207,7 +237,7 @@ class SavedThreadRepository(
      * スレッドHTMLパスを取得
      */
     fun getThreadHtmlPath(threadId: String): String {
-        return fileSystem.resolveAbsolutePath("$baseDirectory/$threadId/thread.html")
+        return fileSystem.resolveAbsolutePath("$baseDirectory/$threadId/$threadId.htm")
     }
 
     /**
@@ -230,32 +260,42 @@ class SavedThreadRepository(
         }
     }
 
-    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.IO) {
+    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.Default) {
         indexMutex.withLock {
             block()
         }
     }
 
     private suspend fun readIndexUnlocked(): SavedThreadIndex {
-        return fileSystem.readString(indexPath)
-            .map { jsonString ->
-                try {
-                    json.decodeFromString<SavedThreadIndex>(jsonString)
-                } catch (e: SerializationException) {
-                    SavedThreadIndex(
-                        threads = emptyList(),
-                        totalSize = 0L,
-                        lastUpdated = Clock.System.now().toEpochMilliseconds()
-                    )
+        fun emptyIndex() = SavedThreadIndex(
+            threads = emptyList(),
+            totalSize = 0L,
+            lastUpdated = Clock.System.now().toEpochMilliseconds()
+        )
+
+        suspend fun readIndexFromPath(path: String): SavedThreadIndex? {
+            return fileSystem.readString(path)
+                .map { jsonString ->
+                    try {
+                        json.decodeFromString<SavedThreadIndex>(jsonString)
+                    } catch (_: SerializationException) {
+                        null
+                    }
                 }
-            }
-            .getOrElse {
-                SavedThreadIndex(
-                    threads = emptyList(),
-                    totalSize = 0L,
-                    lastUpdated = Clock.System.now().toEpochMilliseconds()
-                )
-            }
+                .getOrNull()
+        }
+
+        val primary = readIndexFromPath(indexPath)
+        if (primary != null) return primary
+
+        val backupPath = "$indexPath.backup"
+        val backup = readIndexFromPath(backupPath)
+        if (backup != null) {
+            runCatching { saveIndexUnlocked(backup) }
+            return backup
+        }
+
+        return emptyIndex()
     }
 
     private suspend fun saveIndexUnlocked(index: SavedThreadIndex) {

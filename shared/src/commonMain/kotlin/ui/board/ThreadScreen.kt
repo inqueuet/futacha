@@ -779,15 +779,19 @@ fun ThreadScreen(
     var searchQuery by rememberSaveable(threadId) { mutableStateOf("") }
     var currentSearchResultIndex by remember(threadId) { mutableStateOf(0) }
     val currentPage = (currentState as? ThreadUiState.Success)?.page
-    val searchMatches = if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
-        buildThreadSearchMatches(currentPage.posts, searchQuery)
-    } else {
-        emptyList()
+    val searchMatches = remember(isSearchActive, searchQuery, currentPage) {
+        if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
+            buildThreadSearchMatches(currentPage.posts, searchQuery)
+        } else {
+            emptyList()
+        }
     }
-    val postHighlightRanges = if (isSearchActive) {
-        searchMatches.associate { it.postId to it.highlightRanges }
-    } else {
-        emptyMap()
+    val postHighlightRanges = remember(isSearchActive, searchMatches) {
+        if (isSearchActive) {
+            searchMatches.associate { it.postId to it.highlightRanges }
+        } else {
+            emptyMap()
+        }
     }
 
     LaunchedEffect(searchQuery, threadId) {

@@ -77,24 +77,28 @@ class FutachaApplication : Application() {
         // Initialize WorkManager for background refresh
         val workManager = WorkManager.getInstance(applicationContext)
         applicationScope.launch {
-            appStateStore.isBackgroundRefreshEnabled
-                .distinctUntilChanged()
-                .collect { enabled ->
-                    if (enabled) {
-                        HistoryRefreshWorker.enqueuePeriodic(workManager)
-                    } else {
-                        HistoryRefreshWorker.cancel(workManager)
+            try {
+                appStateStore.isBackgroundRefreshEnabled
+                    .distinctUntilChanged()
+                    .collect { enabled ->
+                        if (enabled) {
+                            HistoryRefreshWorker.enqueuePeriodic(workManager)
+                        } else {
+                            HistoryRefreshWorker.cancel(workManager)
+                        }
                     }
-                }
+            } catch (e: Exception) {
+                com.valoser.futacha.shared.util.Logger.e("FutachaApplication", "Background refresh flow collection failed", e)
+                // コルーチンを終了させ、メモリリークを防ぐ
+            }
         }
     }
 
     override fun onTerminate() {
         // This is only called in emulators, but close resources defensively
         applicationScope.cancel()
-        kotlinx.coroutines.runBlocking {
-            httpClient.close()
-        }
+        // httpClient will be closed automatically when scope is cancelled
+        // Avoid runBlocking to prevent ANR
         boardRepository.closeAsync()
         super.onTerminate()
     }

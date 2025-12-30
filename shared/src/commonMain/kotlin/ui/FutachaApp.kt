@@ -468,15 +468,22 @@ fun FutachaApp(
                     val historyThreadUrl = selectedThreadUrl ?: currentBoard.url
                     val historyReplies = selectedThreadReplies ?: 0
                     val historyThumbnail = selectedThreadThumbnailUrl.orEmpty()
-                    val existingHistoryEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
-
                     // Reduce LaunchedEffect dependencies to only essential keys to prevent excessive coroutine creation
                     // Use a key that only changes when navigating to a different thread
                     // Also use currentBoard.id to ensure we update when board context changes
                     // Include persistedHistory.size to react to history changes
                     LaunchedEffect(activeThreadId, currentBoard.id, persistedHistory.size) {
                         // FIX: デバウンス時間を60秒に増やしてDataStore書き込みを削減
-                        val existingEntry = persistedHistory.firstOrNull { it.threadId == activeThreadId }
+                        val isSameEntry: (ThreadHistoryEntry) -> Boolean = { historyEntry ->
+                            if (historyEntry.threadId != activeThreadId) {
+                                false
+                            } else if (historyEntry.boardId.isNotBlank()) {
+                                historyEntry.boardId == currentBoard.id
+                            } else {
+                                historyEntry.boardUrl == historyThreadUrl
+                            }
+                        }
+                        val existingEntry = persistedHistory.firstOrNull(isSameEntry)
                         val currentTime = Clock.System.now().toEpochMilliseconds()
 
                         // Skip update if entry exists and was updated very recently (< 60 seconds ago)
@@ -500,7 +507,7 @@ fun FutachaApp(
                         )
                         val updatedHistory = buildList {
                             add(entry)
-                            addAll(persistedHistory.filterNot { it.threadId == activeThreadId })
+                            addAll(persistedHistory.filterNot(isSameEntry))
                         }
                         stateStore.setHistory(updatedHistory)
                     }

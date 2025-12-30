@@ -62,7 +62,10 @@ class AndroidFileSystem(
                 }
             } finally {
                 if (tmpFile.exists()) {
-                    tmpFile.delete()
+                    val deleted = tmpFile.delete()
+                    if (!deleted) {
+                        Logger.w("AndroidFileSystem", "Failed to delete temp file: ${tmpFile.absolutePath}")
+                    }
                 }
             }
         }
@@ -580,26 +583,82 @@ class AndroidFileSystem(
     /**
      * FIX: 古い一時ファイルをクリーンアップ
      * アプリ起動時に呼び出して、前回のクラッシュなどで残った一時ファイルを削除
+     *
+     * 改善点:
+     * - キャッシュディレクトリだけでなく、アプリデータディレクトリも検索
+     * - 年齢ベースのクリーンアップ (1時間以上古いファイルのみ削除)
+     * - 再帰的に検索して全ての一時ファイルを見つける
      */
     fun cleanupTempFiles(): Result<Int> = runCatching {
         var deletedCount = 0
-        val cacheDir = context.cacheDir
+        val now = System.currentTimeMillis()
+        val maxAgeMs = 60 * 60 * 1000L // 1時間
 
-        // .tmpファイルを検索して削除
-        cacheDir.listFiles()?.forEach { file ->
-            if (file.isFile && file.name.endsWith(".tmp")) {
-                try {
-                    if (file.delete()) {
-                        deletedCount++
-                        Logger.d("AndroidFileSystem", "Deleted temp file: ${file.name}")
-                    }
-                } catch (e: Exception) {
-                    Logger.w("AndroidFileSystem", "Failed to delete temp file: ${file.name} - ${e.message}")
+        // FIX: 複数のディレクトリを検索対象に追加
+        val searchDirs = buildList {
+            add(context.cacheDir)
+            add(context.filesDir)
+            // 外部ストレージが利用可能な場合のみ追加
+            if (isExternalStorageWritable()) {
+                runCatching {
+                    add(File(getPublicDocumentsDirectory()))
+                    add(File(getPublicDownloadsDirectory()))
+                }.onFailure { e ->
+                    Logger.w("AndroidFileSystem", "Failed to access public directories for cleanup: ${e.message}")
                 }
             }
         }
 
+        // FIX: 各ディレクトリを再帰的に検索
+        searchDirs.forEach { dir ->
+            if (dir.exists() && dir.isDirectory) {
+                deletedCount += cleanupTempFilesRecursive(dir, now, maxAgeMs)
+            }
+        }
+
+        if (deletedCount > 0) {
+            Logger.i("AndroidFileSystem", "Cleaned up $deletedCount temp files")
+        }
         deletedCount
+    }
+
+    /**
+     * FIX: ディレクトリを再帰的に検索して古い一時ファイルを削除
+     */
+    private fun cleanupTempFilesRecursive(directory: File, now: Long, maxAgeMs: Long): Int {
+        var deletedCount = 0
+
+        runCatching {
+            directory.listFiles()?.forEach { file ->
+                try {
+                    if (file.isFile && file.name.startsWith("tmp_") && file.name.endsWith(".tmp")) {
+                        // FIX: 年齢チェック - 1時間以上古いファイルのみ削除
+                        val age = now - file.lastModified()
+                        if (age > maxAgeMs) {
+                            if (file.delete()) {
+                                deletedCount++
+                                Logger.d("AndroidFileSystem", "Deleted old temp file: ${file.absolutePath} (age: ${age / 1000}s)")
+                            } else {
+                                Logger.w("AndroidFileSystem", "Failed to delete temp file: ${file.absolutePath}")
+                            }
+                        }
+                    } else if (file.isDirectory) {
+                        // 再帰的に検索 (最大3レベルまで、無限再帰を防ぐ)
+                        val depth = file.absolutePath.count { it == '/' }
+                        val maxDepth = directory.absolutePath.count { it == '/' } + 3
+                        if (depth < maxDepth) {
+                            deletedCount += cleanupTempFilesRecursive(file, now, maxAgeMs)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.w("AndroidFileSystem", "Error processing file during cleanup: ${file.absolutePath} - ${e.message}")
+                }
+            }
+        }.onFailure { e ->
+            Logger.w("AndroidFileSystem", "Error listing files in ${directory.absolutePath}: ${e.message}")
+        }
+
+        return deletedCount
     }
 }
 

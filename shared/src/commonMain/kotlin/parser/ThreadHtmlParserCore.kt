@@ -215,6 +215,15 @@ internal object ThreadHtmlParserCore {
                         break
                     }
 
+                    // FIX: 整数オーバーフロー防止 - range.last + 1がオーバーフローしないかチェック
+                    // Int.MAX_VALUE - 1の場合も+1でInt.MAX_VALUEになり配列アクセスで問題が起きるため弾く
+                    if (tableEnd.range.last >= Int.MAX_VALUE - 1) {
+                        Logger.e(TAG, "Range end position near Int.MAX_VALUE, cannot continue")
+                        isTruncated = true
+                        truncationReason = "Parse error: range overflow"
+                        break
+                    }
+
                     val block = repliesHtml.substring(tableStart.range.first, tableEnd.range.last + 1)
 
                     // FIX: Stricter size limits to prevent ReDoS
@@ -316,12 +325,22 @@ internal object ThreadHtmlParserCore {
     }
 
     // FIX: ReDoS対策 - タイムアウト付きregex検索に変更
-    private suspend fun extractBetween(text: String, startRegex: Regex, endRegex: Regex): String? {
+    private suspend fun extractBetween(
+        text: String,
+        startRegex: Regex,
+        endRegex: Regex,
+        timeoutMillis: Long = 500L
+    ): String? {
         return try {
-            // FIX: 複雑なパターンマッチングに100msタイムアウトを設定
-            kotlinx.coroutines.withTimeoutOrNull(100) {
+            // FIX: 複雑なパターンマッチングに500msタイムアウトを設定（低速端末対応）
+            kotlinx.coroutines.withTimeoutOrNull(timeoutMillis) {
                 val start = startRegex.find(text) ?: return@withTimeoutOrNull null
                 val end = endRegex.find(text, start.range.last) ?: return@withTimeoutOrNull null
+                // FIX: 整数オーバーフロー防止 - Int.MAX_VALUE - 1も弾く
+                if (start.range.last >= Int.MAX_VALUE - 1) {
+                    Logger.w(TAG, "Range overflow in extractBetween")
+                    return@withTimeoutOrNull null
+                }
                 text.substring(start.range.last + 1, end.range.first)
             }
         } catch (e: Exception) {
@@ -355,7 +374,7 @@ internal object ThreadHtmlParserCore {
         val timestampRaw = sanitizeInlineText(block, "cnw")
         val posterId = timestampRaw?.let { posterIdRegex.find(it)?.value }
         val timestamp = timestampRaw.orEmpty()
-        val messageHtml = extractBetween(block, blockquoteRegex, blockquoteEndRegex)
+        val messageHtml = extractBetween(block, blockquoteRegex, blockquoteEndRegex, timeoutMillis = 100L)
             ?.let(::cleanMessageHtml)
             .orEmpty()
         val normalizedMessageText = normalizeMessageText(messageHtml)
@@ -391,6 +410,12 @@ internal object ThreadHtmlParserCore {
         val startPattern = "<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>"
         val startRegex = Regex(startPattern, RegexOption.IGNORE_CASE)
         val startMatch = startRegex.find(block) ?: return null
+
+        // FIX: 整数オーバーフロー防止 - Int.MAX_VALUE - 1も弾く
+        if (startMatch.range.last >= Int.MAX_VALUE - 1) {
+            Logger.w(TAG, "Range overflow in sanitizeInlineText")
+            return null
+        }
 
         val contentStartIndex = startMatch.range.last + 1
         val endPattern = "</span>"
@@ -458,12 +483,19 @@ internal object ThreadHtmlParserCore {
         val counts = mutableMapOf<String, Int>()
         val references = mutableMapOf<String, MutableList<QuoteReference>>()
 
+        // FIX: デコード/ストリップ処理をキャッシュして繰り返し処理を避ける
+        val decodedMessages = mutableMapOf<String, List<String>>()
+
         // Single pass through posts in order; only以前の投稿を参照対象とする
         posts.forEach { post: Post ->
             if (post.messageHtml.isBlank()) return@forEach
-            val lines = decodeHtmlEntities(stripTags(post.messageHtml))
-                .lines()
-                .map { it.trimStart() }
+
+            // デコード済みメッセージをキャッシュから取得または生成
+            val lines = decodedMessages.getOrPut(post.id) {
+                decodeHtmlEntities(stripTags(post.messageHtml))
+                    .lines()
+                    .map { it.trimStart() }
+            }
             if (lines.isEmpty()) return@forEach
 
             val postReferences = mutableListOf<QuoteReference>()
@@ -581,6 +613,11 @@ internal object ThreadHtmlParserCore {
     private fun extractBaseUrl(url: String): String? {
         val schemeEnd = url.indexOf("://")
         if (schemeEnd == -1) return null
+        // FIX: 整数オーバーフロー防止
+        if (schemeEnd > Int.MAX_VALUE - 3) {
+            Logger.w(TAG, "URL scheme position too large, potential overflow")
+            return null
+        }
         val hostStart = schemeEnd + 3
         val slashIndex = url.indexOf('/', startIndex = hostStart)
         return if (slashIndex == -1) url else url.substring(0, slashIndex)

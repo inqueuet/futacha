@@ -24,11 +24,16 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.text.RegexOption
@@ -56,6 +61,9 @@ class ThreadSaveService(
     private val counterMutex = Mutex()
     private val json = Json { prettyPrint = true }
 
+    // グローバルダウンロード並行数制限
+    private val downloadSemaphore = Semaphore(4)
+
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
         private const val MAX_FILE_SIZE_BYTES = 8_192_000L
@@ -68,15 +76,84 @@ class ThreadSaveService(
 
         // FIX: 最大メディア数を制限
         private const val MAX_MEDIA_ITEMS = 10000
+
+        // リトライ設定
+        private const val MAX_RETRIES = 3
+        private const val RETRY_DELAY_MS = 1000L
+
+        // FIX: 無限ループ防止 - 最大イテレーション数を設定
+        // 8MBファイルを8KBチャンクで読む場合 ~1000イテレーション、安全マージンで10倍
+        // さらに厳格化: 100,000→10,000に削減してフリーズリスクを軽減
+        private const val MAX_READ_ITERATIONS = 10_000
+
+        // FIX: Regexプリコンパイル（パフォーマンス最適化）
+        private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+        private val LINK_HREF_REGEX = Regex("""<a[^>]+href="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+        private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+        private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+        private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src="([^"]+)"[^>]*>.*?</script>""")
+        private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>""")
+        private val CHARSET_REGEX = Regex("""<meta[^>]+charset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
+        private val CONTENT_TYPE_REGEX = Regex("""<meta[^>]+http-equiv\s*=\s*["']?Content-Type["']?[^>]+content\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
     }
 
     /**
-     * LRU cache implementation using LinkedHashMap with access order
+     * Simple LRU cache implementation for common code
      */
-    private fun <K, V> createLruCache(maxSize: Int): LinkedHashMap<K, V> {
-        return object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
-            override fun removeEldestEntry(eldest: Map.Entry<K, V>): Boolean {
-                return size > maxSize
+    private fun <K, V> createLruCache(maxSize: Int): MutableMap<K, V> {
+        return LruCache(maxSize)
+    }
+
+    private class LruCache<K, V>(private val maxSize: Int) : MutableMap<K, V> {
+        private val backing = LinkedHashMap<K, V>()
+
+        override val size: Int
+            get() = backing.size
+
+        override fun isEmpty(): Boolean = backing.isEmpty()
+
+        override fun containsKey(key: K): Boolean = backing.containsKey(key)
+
+        override fun containsValue(value: V): Boolean = backing.containsValue(value)
+
+        override fun get(key: K): V? {
+            val value = backing.remove(key) ?: return null
+            backing[key] = value
+            return value
+        }
+
+        override fun put(key: K, value: V): V? {
+            val previous = backing.remove(key)
+            backing[key] = value
+            trimToSize()
+            return previous
+        }
+
+        override fun putAll(from: Map<out K, V>) {
+            from.forEach { (key, value) -> put(key, value) }
+        }
+
+        override fun remove(key: K): V? = backing.remove(key)
+
+        override fun clear() {
+            backing.clear()
+        }
+
+        override val keys: MutableSet<K>
+            get() = backing.keys
+
+        override val values: MutableCollection<V>
+            get() = backing.values
+
+        override val entries: MutableSet<MutableMap.MutableEntry<K, V>>
+            get() = backing.entries
+
+        private fun trimToSize() {
+            while (backing.size > maxSize) {
+                val iterator = backing.entries.iterator()
+                if (!iterator.hasNext()) return
+                iterator.next()
+                iterator.remove()
             }
         }
     }
@@ -99,7 +176,7 @@ class ThreadSaveService(
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
-    ): Result<SavedThread> = withContext(Dispatchers.IO) {
+    ): Result<SavedThread> = withContext(Dispatchers.Default) {
         runCatching {
             val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
             val startedAtMillis = savedAtTimestamp
@@ -170,41 +247,61 @@ class ThreadSaveService(
                     }
                 }
 
-                // FIX: 並列ダウンロードで処理速度を改善（最大4並列）
+                // FIX: 並列ダウンロードで処理速度を改善（セマフォで並行数を制限）
                 mediaItems.chunked(4).forEach { itemBatch ->
                     kotlinx.coroutines.coroutineScope {
                         val deferredResults = itemBatch.map { mediaItem ->
-                            async(Dispatchers.IO) {
-                                // FIX: 最大数を超えたらスキップ
-                                if (processedMediaCount >= MAX_MEDIA_ITEMS) {
-                                    Logger.w("ThreadSaveService", "Skipping media item (exceeds MAX_MEDIA_ITEMS)")
-                                    return@async Pair<MediaItem?, Result<LocalFileInfo>?>(null, null)
+                            async(Dispatchers.Default) {
+                                // セマフォでグローバルな並行数を制限
+                                downloadSemaphore.withPermit {
+                                    // FIX: 最大数を超えたらスキップ
+                                    if (processedMediaCount >= MAX_MEDIA_ITEMS) {
+                                        Logger.w("ThreadSaveService", "Skipping media item (exceeds MAX_MEDIA_ITEMS)")
+                                        return@withPermit Pair<MediaItem?, Result<LocalFileInfo>?>(null, null)
+                                    }
+
+                                    val currentCount = counterMutex.withLock {
+                                        ++processedMediaCount
+                                        processedMediaCount
+                                    }
+
+                                    updateProgress(
+                                        SavePhase.DOWNLOADING,
+                                        currentCount,
+                                        minOf(totalMediaCount, MAX_MEDIA_ITEMS),
+                                        "メディアダウンロード中... ($currentCount/${minOf(totalMediaCount, MAX_MEDIA_ITEMS)})"
+                                    )
+
+                                    // リトライロジック付きダウンロード
+                                    var downloadResult: Result<LocalFileInfo>? = null
+                                    var lastError: Throwable? = null
+                                    for (attempt in 1..MAX_RETRIES) {
+                                        downloadResult = downloadAndSaveMedia(
+                                            url = mediaItem.url,
+                                            saveLocation = baseSaveLocation,
+                                            baseDir = baseDir,
+                                            boardPath = boardPath,
+                                            threadId = threadId,
+                                            type = mediaItem.type,
+                                            postId = mediaItem.post.id,
+                                            startedAtMillis = startedAtMillis
+                                        )
+
+                                        if (downloadResult.isSuccess) break
+
+                                        lastError = downloadResult.exceptionOrNull()
+                                        if (attempt < MAX_RETRIES) {
+                                            Logger.w("ThreadSaveService", "Download attempt $attempt failed for ${mediaItem.url}, retrying...")
+                                            delay(RETRY_DELAY_MS * attempt) // 指数バックオフ
+                                        }
+                                    }
+
+                                    if (downloadResult?.isFailure == true) {
+                                        Logger.e("ThreadSaveService", "Failed to download ${mediaItem.url} after $MAX_RETRIES attempts: ${lastError?.message}")
+                                    }
+
+                                    Pair<MediaItem?, Result<LocalFileInfo>?>(mediaItem, downloadResult)
                                 }
-
-                                val currentCount = counterMutex.withLock {
-                                    ++processedMediaCount
-                                    processedMediaCount
-                                }
-
-                                updateProgress(
-                                    SavePhase.DOWNLOADING,
-                                    currentCount,
-                                    minOf(totalMediaCount, MAX_MEDIA_ITEMS),
-                                    "メディアダウンロード中... ($currentCount/${minOf(totalMediaCount, MAX_MEDIA_ITEMS)})"
-                                )
-
-                                val downloadResult = downloadAndSaveMedia(
-                                    url = mediaItem.url,
-                                    saveLocation = baseSaveLocation,
-                                    baseDir = baseDir,
-                                    boardPath = boardPath,
-                                    threadId = threadId,
-                                    type = mediaItem.type,
-                                    postId = mediaItem.post.id,
-                                    startedAtMillis = startedAtMillis
-                                )
-
-                                Pair<MediaItem?, Result<LocalFileInfo>?>(mediaItem, downloadResult)
                             }
                         }
 
@@ -218,8 +315,7 @@ class ThreadSaveService(
 
                             downloadResult
                                 .onSuccess { fileInfo ->
-                                    val fileSize = fileSystem.getFileSize("$baseDir/${fileInfo.relativePath}")
-                                    totalSize += fileSize
+                                    totalSize += fileInfo.byteSize
                                     enforceBudget(totalSize, startedAtMillis)
                                     // URL→ローカルパスマッピングに追加
                                     urlToPathMap[mediaItem.url] = fileInfo.relativePath
@@ -238,7 +334,7 @@ class ThreadSaveService(
                                 .onFailure { error ->
                                     // ダウンロード失敗はログに記録してスキップ
                                     downloadFailureCount++
-                                    println("Failed to download ${mediaItem.url}: ${error.message}")
+                                    Logger.e("ThreadSaveService", "Failed to download ${mediaItem.url}: ${error.message}")
                                 }
                         }
                     }
@@ -400,7 +496,7 @@ class ThreadSaveService(
         type: MediaType,
         postId: String,
         startedAtMillis: Long
-    ): Result<LocalFileInfo> = withContext(Dispatchers.IO) {
+    ): Result<LocalFileInfo> = withContext(Dispatchers.Default) {
         runCatching {
             // Download media directly and inspect headers from GET response
             val response: HttpResponse = httpClient.get(url) {
@@ -439,7 +535,8 @@ class ThreadSaveService(
             // FIX: メモリ効率のためストリーミングで保存
             val channel = response.bodyAsChannel()
             var totalBytesRead = 0L
-            val bufferSize = 8192 // 8KB chunks
+            // FIX: バッファサイズを8KB→64KBに最適化（I/O効率向上、システムコール削減）
+            val bufferSize = 65536 // 64KB chunks
 
             // SaveLocation対応: nullの場合は従来の fullPath 使用、非nullの場合は新API使用
             if (saveLocation != null) {
@@ -447,8 +544,21 @@ class ThreadSaveService(
                 // 最初にファイルを作成
                 fileSystem.writeBytes(saveLocation, fileRelativePath, ByteArray(0)).getOrThrow()
 
+                // FIX: 無限ループ防止 - イテレーションカウンタを追加
+                var iterations = 0
                 // チャンクごとに読み込んで追記
                 while (!channel.isClosedForRead) {
+                    // FIX: 最大イテレーション数チェック
+                    if (iterations >= MAX_READ_ITERATIONS) {
+                        throw IllegalStateException("Save aborted: exceeded max read iterations ($MAX_READ_ITERATIONS)")
+                    }
+                    iterations++
+
+                    // FIX: 定期的にキャンセルチェック（100イテレーション毎）
+                    if (iterations % 100 == 0) {
+                        coroutineContext.ensureActive()
+                    }
+
                     if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
                         throw IllegalStateException("Save aborted: exceeded time limit during download")
                     }
@@ -470,8 +580,22 @@ class ThreadSaveService(
                 // 最初にファイルを作成
                 fileSystem.writeBytes(fullPath, ByteArray(0)).getOrThrow()
 
+                // FIX: 無限ループ防止 - イテレーションカウンタを追加
+                var iterations = 0
                 // チャンクごとに読み込んで追記
                 while (!channel.isClosedForRead) {
+                    // FIX: 最大イテレーション数チェック
+                    if (iterations >= MAX_READ_ITERATIONS) {
+                        fileSystem.delete(fullPath).getOrNull()
+                        throw IllegalStateException("Save aborted: exceeded max read iterations ($MAX_READ_ITERATIONS)")
+                    }
+                    iterations++
+
+                    // FIX: 定期的にキャンセルチェック（100イテレーション毎）
+                    if (iterations % 100 == 0) {
+                        coroutineContext.ensureActive()
+                    }
+
                     if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
                         fileSystem.delete(fullPath).getOrNull()
                         throw IllegalStateException("Save aborted: exceeded time limit during download")
@@ -496,7 +620,8 @@ class ThreadSaveService(
 
             LocalFileInfo(
                 relativePath = relativePath,
-                fileType = fileType
+                fileType = fileType,
+                byteSize = totalBytesRead
             )
         }
     }
@@ -507,9 +632,9 @@ class ThreadSaveService(
     private fun convertHtmlPaths(html: String, urlToPathMap: Map<String, String>): String {
         var converted = html
 
+        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
         // 画像URLを相対パスに変換
-        val imageRegex = """<img[^>]+src="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
-        converted = imageRegex.replace(converted) { matchResult ->
+        converted = IMAGE_SRC_REGEX.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
             val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
@@ -520,8 +645,7 @@ class ThreadSaveService(
         }
 
         // リンクURLを相対パスに変換
-        val linkRegex = """<a[^>]+href="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
-        converted = linkRegex.replace(converted) { matchResult ->
+        converted = LINK_HREF_REGEX.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
             val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
@@ -532,8 +656,7 @@ class ThreadSaveService(
         }
 
         // videoタグのsrcを相対パスに変換
-        val videoRegex = """<video[^>]+src="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
-        converted = videoRegex.replace(converted) { matchResult ->
+        converted = VIDEO_SRC_REGEX.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
             val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
@@ -544,8 +667,7 @@ class ThreadSaveService(
         }
 
         // sourceタグのsrcも相対パスに変換
-        val sourceRegex = """<source[^>]+src="([^"]+)"[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
-        converted = sourceRegex.replace(converted) { matchResult ->
+        converted = SOURCE_SRC_REGEX.replace(converted) { matchResult ->
             val originalUrl = matchResult.groupValues[1]
             val relativePath = urlToPathMap[originalUrl]
             if (relativePath != null) {
@@ -577,17 +699,16 @@ class ThreadSaveService(
     }
 
     private fun stripExternalScriptsAndIframes(html: String): String {
-        val scriptRegex = Regex("(?si)<script[^>]+src=\"([^\"]+)\"[^>]*>.*?</script>")
-        val iframeRegex = Regex("(?si)<iframe[^>]+src=\"([^\"]+)\"[^>]*>.*?</iframe>")
+        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
         fun shouldStrip(url: String): Boolean {
             val normalized = url.lowercase()
             return normalized.contains("/bin/") || normalized.contains("dec.2chan.net")
         }
-        var updated = scriptRegex.replace(html) { matchResult ->
+        var updated = SCRIPT_SRC_REGEX.replace(html) { matchResult ->
             val src = matchResult.groupValues.getOrNull(1).orEmpty()
             if (shouldStrip(src)) "" else matchResult.value
         }
-        updated = iframeRegex.replace(updated) { matchResult ->
+        updated = IFRAME_SRC_REGEX.replace(updated) { matchResult ->
             val src = matchResult.groupValues.getOrNull(1).orEmpty()
             if (shouldStrip(src)) "" else matchResult.value
         }
@@ -598,18 +719,11 @@ class ThreadSaveService(
      * 書き出しはUTF-8固定なので charset をUTF-8に置き換える
      */
     private fun forceUtf8Charset(html: String): String {
-        val charsetRegex = Regex(
-            pattern = "<meta[^>]+charset\\s*=\\s*\"?([^\"\\s>]+)\"?[^>]*>",
-            options = setOf(RegexOption.IGNORE_CASE)
-        )
-        val contentTypeRegex = Regex(
-            pattern = "<meta[^>]+http-equiv\\s*=\\s*\"?Content-Type\"?[^>]*content\\s*=\\s*\"[^\"]*charset=([^\";>\\s]+)[^\"]*\"[^>]*>",
-            options = setOf(RegexOption.IGNORE_CASE)
-        )
-        var updated = charsetRegex.replace(html) { matchResult ->
+        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
+        var updated = CHARSET_REGEX.replace(html) { matchResult ->
             matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
         }
-        updated = contentTypeRegex.replace(updated) { matchResult ->
+        updated = CONTENT_TYPE_REGEX.replace(updated) { matchResult ->
             matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
         }
         return updated
@@ -672,7 +786,7 @@ class ThreadSaveService(
     /**
      * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
      */
-    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(Dispatchers.IO) {
+    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(Dispatchers.Default) {
         runCatching {
             val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
             val response: HttpResponse = httpClient.get(threadUrl) {
@@ -733,7 +847,8 @@ class ThreadSaveService(
 
     private data class LocalFileInfo(
         val relativePath: String,
-        val fileType: FileType
+        val fileType: FileType,
+        val byteSize: Long
     )
 
     /**

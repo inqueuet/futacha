@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -301,14 +302,15 @@ class AppStateStore internal constructor(
         }
     }
 
-    fun getPreferredFileManager(): Flow<PreferredFileManager?> = storage.preferredFileManagerPackage.map { pkg ->
-        if (pkg.isBlank()) {
-            null
-        } else {
-            val label = storage.preferredFileManagerLabel.first()
-            PreferredFileManager(pkg, label)
+    // FIX: Flow.first()をmap内で呼ばずにcombineを使用してデッドロック回避
+    fun getPreferredFileManager(): Flow<PreferredFileManager?> =
+        storage.preferredFileManagerPackage.combine(storage.preferredFileManagerLabel) { pkg, label ->
+            if (pkg.isBlank()) {
+                null
+            } else {
+                PreferredFileManager(pkg, label)
+            }
         }
-    }
 
     suspend fun setPrivacyFilterEnabled(enabled: Boolean) {
         try {
@@ -419,8 +421,9 @@ class AppStateStore internal constructor(
 
     suspend fun addSelfPostIdentifier(threadId: String, identifier: String) {
         val trimmed = identifier.trim().takeIf { it.isNotBlank() } ?: return
+        // FIX: Flow.first()をmutex外で呼び出してデッドロック回避
+        val currentMap = readSelfPostIdentifierMapSnapshot()
         selfPostIdentifiersMutex.withLock {
-            val currentMap = readSelfPostIdentifierMapSnapshot()
             val existingForThread = currentMap[threadId] ?: emptyList()
             val normalized = existingForThread
                 .map { it.trim() }
@@ -441,9 +444,10 @@ class AppStateStore internal constructor(
     }
 
     suspend fun removeSelfPostIdentifiersForThread(threadId: String) {
+        // FIX: Flow.first()をmutex外で呼び出してデッドロック回避
+        val currentMap = readSelfPostIdentifierMapSnapshot()
+        if (threadId !in currentMap) return
         selfPostIdentifiersMutex.withLock {
-            val currentMap = readSelfPostIdentifierMapSnapshot()
-            if (threadId !in currentMap) return
             val updatedMap = currentMap.toMutableMap()
             updatedMap.remove(threadId)
             persistSelfPostIdentifierMap(updatedMap)
@@ -462,12 +466,15 @@ class AppStateStore internal constructor(
      * requiring the caller to manage the whole list manually.
      */
     suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) {
+        // FIX: Flow.first()をmutex外で呼び出してデッドロック回避
+        val currentHistory = readHistorySnapshot() ?: run {
+            Logger.w(TAG, "Skipping history upsert due to missing snapshot")
+            return
+        }
         historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: run {
-                Logger.w(TAG, "Skipping history upsert due to missing snapshot")
-                return
+            val existingIndex = currentHistory.indexOfFirst {
+                matchesHistoryEntry(it, entry.threadId, entry.boardId)
             }
-            val existingIndex = currentHistory.indexOfFirst { it.threadId == entry.threadId }
             val updatedHistory = if (existingIndex >= 0) {
                 currentHistory.toMutableList().also { it[existingIndex] = entry }
             } else {
@@ -545,74 +552,71 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
-        // FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
-        scrollPositionMutex.withLock {
-            // FIX: history読み取りは最小限のロックで実行
-            val currentHistory = historyMutex.withLock {
-                readHistorySnapshotLocked()
-            } ?: run {
+        // FIX: デッドロック防止 - Flow.first()をmutex外で呼び出し
+        try {
+            val currentHistory = readHistorySnapshot() ?: run {
                 Logger.w(TAG, "Skipping scroll position update due to missing snapshot")
                 return
             }
 
-            val existingEntry = currentHistory.firstOrNull { it.threadId == threadId }
+            historyMutex.withLock {
 
-            // Skip update if scroll position hasn't changed to reduce unnecessary writes
-            if (existingEntry != null &&
-                existingEntry.lastReadItemIndex == index &&
-                existingEntry.lastReadItemOffset == offset
-            ) {
-                return
-            }
+                val existingEntry = currentHistory.firstOrNull {
+                    matchesHistoryEntry(it, threadId, boardId)
+                }
 
-            val updatedHistory = when {
-                existingEntry != null -> {
-                    // Update existing entry's scroll position while preserving other fields
-                    currentHistory.map { entry ->
-                        if (entry.threadId == threadId) {
-                            entry.copy(
-                                lastReadItemIndex = index,
-                                lastReadItemOffset = offset,
-                                // Update visit time to reflect recent activity
-                                lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
+                // Skip update if scroll position hasn't changed to reduce unnecessary writes
+                if (existingEntry != null &&
+                    existingEntry.lastReadItemIndex == index &&
+                    existingEntry.lastReadItemOffset == offset
+                ) {
+                    return
+                }
+
+                val updatedHistory = when {
+                    existingEntry != null -> {
+                        // Update existing entry's scroll position while preserving other fields
+                        currentHistory.map { entry ->
+                            if (matchesHistoryEntry(entry, threadId, boardId)) {
+                                entry.copy(
+                                    lastReadItemIndex = index,
+                                    lastReadItemOffset = offset,
+                                    // Update visit time to reflect recent activity
+                                    lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
+                                )
+                            } else {
+                                entry
+                            }
+                        }
+                    }
+
+                    else -> {
+                        // Entry doesn't exist yet - create a new one
+                        buildList {
+                            add(
+                                ThreadHistoryEntry(
+                                    threadId = threadId,
+                                    boardId = boardId,
+                                    title = title,
+                                    titleImageUrl = titleImageUrl,
+                                    boardName = boardName,
+                                    boardUrl = boardUrl,
+                                    lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                                    replyCount = replyCount,
+                                    lastReadItemIndex = index,
+                                    lastReadItemOffset = offset
+                                )
                             )
-                        } else {
-                            entry
+                            addAll(currentHistory)
                         }
                     }
                 }
 
-                else -> {
-                    // Entry doesn't exist yet - create a new one
-                    buildList {
-                        add(
-                            ThreadHistoryEntry(
-                                threadId = threadId,
-                                boardId = boardId,
-                                title = title,
-                                titleImageUrl = titleImageUrl,
-                                boardName = boardName,
-                                boardUrl = boardUrl,
-                                lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                                replyCount = replyCount,
-                                lastReadItemIndex = index,
-                                lastReadItemOffset = offset
-                            )
-                        )
-                        addAll(currentHistory)
-                    }
-                }
+                persistHistory(updatedHistory)
             }
-
-            // FIX: 書き込みのみhistoryMutexでロック
-            try {
-                historyMutex.withLock {
-                    persistHistory(updatedHistory)
-                }
-            } catch (e: Exception) {
-                Logger.e(TAG, "Failed to update scroll position for thread $threadId", e)
-                // Log error but don't crash
-            }
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to update scroll position for thread $threadId", e)
+            // Log error but don't crash
         }
     }
 
@@ -695,6 +699,14 @@ class AppStateStore internal constructor(
     }.getOrElse { e ->
         Logger.e(TAG, "Failed to decode history from JSON", e)
         emptyList()
+    }
+
+    private fun matchesHistoryEntry(entry: ThreadHistoryEntry, threadId: String, boardId: String): Boolean {
+        if (entry.threadId != threadId) return false
+        if (boardId.isNotBlank() && entry.boardId.isNotBlank()) {
+            return entry.boardId == boardId
+        }
+        return true
     }
 
     private fun decodeCatalogDisplayStyle(raw: String?): CatalogDisplayStyle {

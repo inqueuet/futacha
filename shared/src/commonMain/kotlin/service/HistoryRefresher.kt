@@ -47,7 +47,7 @@ class HistoryRefresher(
     private val maxConcurrency: Int = 4
     // Caller owns repository lifecycle
 ) {
-    private val skipThreadIds = MutableStateFlow<Set<String>>(emptySet())
+    private val skipThreadIds = MutableStateFlow<Set<HistoryKey>>(emptySet())
     private val updatesMutex = Mutex()
 
     // FIX: エラー状態を公開
@@ -66,6 +66,8 @@ class HistoryRefresher(
         val message: String
     )
 
+    private data class HistoryKey(val boardKey: String, val threadId: String)
+
     @OptIn(ExperimentalTime::class)
     suspend fun refresh(
         boardsSnapshot: List<BoardSummary>? = null,
@@ -76,21 +78,31 @@ class HistoryRefresher(
         if (history.isEmpty()) return@withContext
 
         val semaphore = Semaphore(maxConcurrency)
-        val updates = mutableMapOf<String, ThreadHistoryEntry>()
+        val updates = mutableMapOf<HistoryKey, ThreadHistoryEntry>()
         val errors = mutableListOf<ErrorDetail>()
+        // FIX: エラーリストの最大サイズを設定（メモリ使用量制限）
+        val maxErrorsToTrack = 100 // 最大100件まで記録、表示は10件
+        // FIX: updatesマップの最大サイズを設定（メモリ使用量制限）
+        val maxUpdatesToAccumulate = 1000 // 最大1000件まで蓄積したらフラッシュ
         val skipped = skipThreadIds.value
-        
+
         // FIX: Process in batches to avoid creating thousands of coroutines at once
         // This prevents memory spikes when history size is large
-        val batchSize = 50
+        // Reduced to 10 to further limit concurrent operations and memory usage
+        val batchSize = 10
 
         coroutineScope {
             history.chunked(batchSize).forEach { batch ->
                 // Process each batch
                 batch.map { entry ->
                     async {
-                        if (entry.threadId in skipped) return@async
                         val board = boards.firstOrNull { it.id == entry.boardId }
+                        val resolvedBoardId = entry.boardId.ifBlank { board?.id.orEmpty() }
+                        val key = HistoryKey(
+                            boardKey = resolvedBoardId.ifBlank { entry.boardUrl.ifBlank { board?.url.orEmpty() } },
+                            threadId = entry.threadId
+                        )
+                        if (key in skipped) return@async
                         val baseUrl = board?.url
                             ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
                                 runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
@@ -138,13 +150,13 @@ class HistoryRefresher(
                                     hasAutoSave = hasAutoSave
                                 )
                                 updatesMutex.withLock {
-                                    updates[entry.threadId] = updatedEntry
+                                    updates[key] = updatedEntry
                                 }
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Throwable) {
                                 if (isNotFound(e)) {
-                                    markSkipped(entry.threadId)
+                                    markSkipped(key)
                                     // FIX: 404/410の場合、自動保存があるかチェック
                                     val hasAutoSave = autoSavedThreadRepository?.let { repo ->
                                         runCatching {
@@ -155,7 +167,7 @@ class HistoryRefresher(
                                     if (hasAutoSave && !entry.hasAutoSave) {
                                         // 自動保存があることを履歴に反映
                                         updatesMutex.withLock {
-                                            updates[entry.threadId] = entry.copy(hasAutoSave = true)
+                                            updates[key] = entry.copy(hasAutoSave = true)
                                         }
                                         Logger.i(HISTORY_REFRESH_TAG, "Thread ${entry.threadId} not found but has auto-save")
                                     } else {
@@ -164,23 +176,39 @@ class HistoryRefresher(
                                 } else {
                                     Logger.e(HISTORY_REFRESH_TAG, "Failed to refresh ${entry.threadId}", e)
                                     updatesMutex.withLock {
-                                        errors.add(ErrorDetail(
-                                            threadId = entry.threadId,
-                                            message = e.message ?: "Unknown error"
-                                        ))
+                                        // FIX: エラーリストの上限チェック（メモリ使用量制限）
+                                        if (errors.size < maxErrorsToTrack) {
+                                            errors.add(ErrorDetail(
+                                                threadId = entry.threadId,
+                                                message = e.message ?: "Unknown error"
+                                            ))
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }.forEach { it.await() } // Wait for current batch to complete
+
+                // FIX: 定期的にupdatesをフラッシュしてメモリ使用量を制限
+                updatesMutex.withLock {
+                    if (updates.size >= maxUpdatesToAccumulate) {
+                        Logger.i(HISTORY_REFRESH_TAG, "Flushing ${updates.size} updates to prevent memory spike")
+                        val latestHistory = stateStore.history.first()
+                        val merged = latestHistory.map { entry ->
+                            updates[historyKeyForEntry(entry)] ?: entry
+                        }
+                        stateStore.setHistory(merged)
+                        updates.clear()
+                    }
+                }
             }
         }
 
         if (updates.isNotEmpty()) {
             val latestHistory = stateStore.history.first()
             val merged = latestHistory.map { entry ->
-                updates[entry.threadId] ?: entry
+                updates[historyKeyForEntry(entry)] ?: entry
             }
             stateStore.setHistory(merged)
         }
@@ -215,8 +243,13 @@ class HistoryRefresher(
         _lastRefreshError.value = null
     }
 
-    private fun markSkipped(threadId: String) {
-        skipThreadIds.update { it + threadId }
+    private fun markSkipped(key: HistoryKey) {
+        skipThreadIds.update { it + key }
+    }
+
+    private fun historyKeyForEntry(entry: ThreadHistoryEntry): HistoryKey {
+        val boardKey = entry.boardId.ifBlank { entry.boardUrl }
+        return HistoryKey(boardKey = boardKey, threadId = entry.threadId)
     }
 
     private fun isNotFound(t: Throwable): Boolean {

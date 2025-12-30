@@ -120,7 +120,7 @@ class DefaultBoardRepository(
      * This should be called before any operations that require cookies.
      */
     private suspend fun ensureCookiesInitialized(board: String) {
-        // Fix: Wrap the check-then-act in a mutex to prevent race conditions
+        var shouldInitialize = false
         boardInitMutex.withLock {
             if (!initializedBoards.contains(board)) {
                 val hasExistingCookies = cookieRepository?.let { repository ->
@@ -131,17 +131,23 @@ class DefaultBoardRepository(
                 if (hasExistingCookies) {
                     initializedBoards.add(board)
                     Logger.d(TAG, "Skipping catalog setup for board $board (existing cookies found)")
-                    return@withLock
-                }
-
-                try {
-                    api.fetchCatalogSetup(board)
-                    initializedBoards.add(board)
-                } catch (e: Exception) {
-                    Logger.e(TAG, "Failed to initialize cookies for board $board", e)
-                    // Continue anyway - the operation might still work
+                } else {
+                    shouldInitialize = true
                 }
             }
+        }
+
+        if (!shouldInitialize) return
+
+        try {
+            api.fetchCatalogSetup(board)
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to initialize cookies for board $board", e)
+            // Continue anyway - the operation might still work
+        }
+
+        boardInitMutex.withLock {
+            initializedBoards.add(board)
         }
     }
 
@@ -264,31 +270,27 @@ class DefaultBoardRepository(
         return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
-    // FIX: 同期的にクリーンアップを実行（メインスレッドからの呼び出しを想定しない）
+    // FIX: 同期的なクリーンアップ（メインスレッドから呼ばれても安全）
     @Deprecated(
-        message = "Use closeAsync() instead to avoid blocking the main thread",
+        message = "Use closeAsync() instead for proper async cleanup",
         replaceWith = ReplaceWith("closeAsync()"),
         level = DeprecationLevel.WARNING
     )
     override fun close() {
-        // FIX: 二重close防止
+        // FIX: runBlockingを削除してメインスレッドブロックを回避
+        // 非同期クリーンアップはcloseAsync()に任せ、ここではスコープキャンセルのみ
         if (isClosed) return
-
-        // Close the underlying API if it supports cleanup
-        (api as? AutoCloseable)?.close()
-
-        // FIX: キャッシュをクリア
-        // Note: close()はアプリ終了時などに呼ばれることを想定
-        // 競合の可能性があるため、closeAsync()の使用を推奨
-        try {
-            opImageCache.clear()
-        } catch (e: Exception) {
-            Logger.w("DefaultBoardRepository", "Error clearing cache during close: ${e.message}")
-        }
-
-        // スコープをキャンセル（バックグラウンドタスクを停止）
-        closeScope.cancel()
         isClosed = true
+
+        // スコープをキャンセル（進行中の非同期操作を停止）
+        closeScope.cancel()
+
+        // 同期的にクローズ可能なリソースのみ処理
+        try {
+            (api as? AutoCloseable)?.close()
+        } catch (e: Exception) {
+            Logger.e("DefaultBoardRepository", "Error closing API: ${e.message}", e)
+        }
     }
 
     // FIX: 非同期版closeAsync（必要に応じて使用）
@@ -330,49 +332,35 @@ class DefaultBoardRepository(
 
     private data class OpImageCacheEntry(val url: String?, val recordedAtMillis: Long)
 
+    // 効率的なLRU実装: LinkedHashMapのアクセス順序機能を使用（O(n)操作を回避）
+    // FIX: スレッドセーフでないため、外部でMutexによる保護が必須
+    // このクラスのすべてのメソッドは opImageCacheMutex.withLock 内から呼び出す必要がある
     private class LruCache<K, V>(private val maxEntries: Int) {
-        private val cache = mutableMapOf<K, V>()
-        private val accessOrder = mutableListOf<K>()
-
-        operator fun get(key: K): V? {
-            val value = cache[key]
-            if (value != null) {
-                accessOrder.remove(key)
-                accessOrder.add(key)
+        private val cache = object : LinkedHashMap<K, V>(maxEntries, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
+                return size > maxEntries
             }
-            return value
         }
+
+        operator fun get(key: K): V? = cache[key]
 
         operator fun set(key: K, value: V) {
-            if (cache.containsKey(key)) {
-                accessOrder.remove(key)
-            } else if (cache.size >= maxEntries) {
-                val eldest = accessOrder.removeAt(0)
-                cache.remove(eldest)
-            }
             cache[key] = value
-            accessOrder.add(key)
         }
 
-        fun remove(key: K): V? {
-            accessOrder.remove(key)
-            return cache.remove(key)
-        }
+        fun remove(key: K): V? = cache.remove(key)
 
         fun clear() {
             cache.clear()
-            accessOrder.clear()
         }
 
         fun removeIf(predicate: (K, V) -> Boolean) {
-            val keysToRemove = mutableListOf<K>()
-            for ((key, value) in cache) {
-                if (predicate(key, value)) {
-                    keysToRemove.add(key)
+            val iterator = cache.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (predicate(entry.key, entry.value)) {
+                    iterator.remove()
                 }
-            }
-            for (key in keysToRemove) {
-                remove(key)
             }
         }
 

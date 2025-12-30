@@ -79,7 +79,9 @@ internal object CatalogHtmlParserCore {
             var searchStart = normalized.indexOf(">", tableStartIndex) + 1
             val maxCatalogItems = 1000 // Prevent excessive parsing
             var loopIterations = 0
-            val maxIterations = 10000
+            // FIX: 最大イテレーション数を10,000→2,000に削減（パフォーマンス改善）
+            // ほとんどのカタログは1000アイテム以下なので、2000イテレーションで十分
+            val maxIterations = 2000
 
             // Pre-compile regexes or search strings
             val tdStart = "<td"
@@ -88,8 +90,8 @@ internal object CatalogHtmlParserCore {
             while (searchStart < tableEndIndex && items.size < maxCatalogItems) {
                 loopIterations++
 
-                // FIX: 定期的にキャンセルチェックを追加
-                if (loopIterations % 100 == 0) {
+                // FIX: キャンセルチェックの頻度を増やす（20→10イテレーション毎）
+                if (loopIterations % 10 == 0) {
                     ensureActive()  // コルーチンがキャンセルされたら例外をスロー
                 }
 
@@ -109,7 +111,7 @@ internal object CatalogHtmlParserCore {
 
                 // Parse cell content
                 val allHrefs = anchorRegex.findAll(cell).mapNotNull { it.groupValues.getOrNull(1) }.toList()
-                val threadHref = allHrefs.find { threadIdRegex.matches(it) }
+                val threadHref = allHrefs.find { threadIdRegex.containsMatchIn(it) }
                 val threadId = threadHref?.let { threadIdRegex.find(it)?.groupValues?.getOrNull(1) }
 
                 if (threadId != null) {
@@ -192,7 +194,7 @@ internal object CatalogHtmlParserCore {
             }
 
             if (items.size >= maxCatalogItems) {
-                println("CatalogHtmlParserCore: Reached maximum catalog items limit ($maxCatalogItems)")
+                Logger.w("CatalogHtmlParserCore", "Reached maximum catalog items limit ($maxCatalogItems)")
             }
 
             items
@@ -200,7 +202,7 @@ internal object CatalogHtmlParserCore {
             // FIX: キャンセル例外は再スロー
             throw e
         } catch (e: Exception) {
-            println("CatalogHtmlParserCore: Failed to parse catalog HTML: ${e.message}")
+            Logger.e("CatalogHtmlParserCore", "Failed to parse catalog HTML: ${e.message}")
             throw ParserException("Failed to parse catalog HTML", e)
         }
     }

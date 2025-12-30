@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.valoser.futacha.shared.util.Logger
 import java.io.IOException
 import java.util.Locale
 import java.util.UUID
@@ -13,6 +14,7 @@ import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -26,6 +28,11 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private val continuations = mutableMapOf<String, CancellableContinuation<Unit>>()
     private val tts: TextToSpeech
     private var closed = false
+
+    companion object {
+        private const val MAX_PENDING_UTTERANCES = 100
+        private const val SPEAK_TIMEOUT_MS = 30000L // 30秒タイムアウト
+    }
 
     init {
         tts = TextToSpeech(appContext) { status ->
@@ -69,20 +76,32 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         if (text.isBlank()) return
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
         initState.await()
-        suspendCancellableCoroutine<Unit> { continuation ->
-            val utteranceId = UUID.randomUUID().toString()
-            synchronized(lock) {
-                continuations[utteranceId] = continuation
-            }
-            continuation.invokeOnCancellation {
+
+        // タイムアウトを追加してコルーチンがハングするのを防ぐ
+        withTimeout(SPEAK_TIMEOUT_MS) {
+            suspendCancellableCoroutine<Unit> { continuation ->
+                val utteranceId = UUID.randomUUID().toString()
                 synchronized(lock) {
-                    continuations.remove(utteranceId)
+                    // 最大数チェックでメモリリークを防ぐ
+                    if (continuations.size >= MAX_PENDING_UTTERANCES) {
+                        Logger.w("TextSpeaker", "Too many pending utterances (${continuations.size}), clearing old ones")
+                        // 古いcontinuationsをキャンセル
+                        val oldContinuations = continuations.values.toList()
+                        continuations.clear()
+                        oldContinuations.forEach { it.cancel(CancellationException("Too many pending utterances")) }
+                    }
+                    continuations[utteranceId] = continuation
                 }
+                continuation.invokeOnCancellation {
+                    synchronized(lock) {
+                        continuations.remove(utteranceId)
+                    }
+                }
+                val params = Bundle().apply {
+                    putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+                }
+                tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
             }
-            val params = Bundle().apply {
-                putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
-            }
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
         }
     }
 
@@ -101,16 +120,21 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     }
 
     private fun handleUtteranceResult(utteranceId: String?, error: Throwable?) {
-        if (utteranceId == null) return
+        if (utteranceId == null) {
+            Logger.w("TextSpeaker", "Received callback with null utteranceId")
+            return
+        }
         val continuation = synchronized(lock) {
             continuations.remove(utteranceId)
         }
-        continuation?.let {
-            if (error == null) {
-                it.resume(Unit)
-            } else {
-                it.resumeWithException(error)
-            }
+        if (continuation == null) {
+            Logger.w("TextSpeaker", "Received callback for unknown utteranceId: $utteranceId (possibly cancelled or timed out)")
+            return
+        }
+        if (error == null) {
+            continuation.resume(Unit)
+        } else {
+            continuation.resumeWithException(error)
         }
     }
 
