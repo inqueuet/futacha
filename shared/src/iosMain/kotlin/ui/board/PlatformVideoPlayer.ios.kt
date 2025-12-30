@@ -150,7 +150,16 @@ private fun WebVideoPlayer(
     isMuted: Boolean
 ) {
     val delegate = remember { WebVideoNavigationDelegate() }
-    val html = remember(videoUrl) {
+    // FIX: XSS対策 - HTML属性インジェクションを防ぐ
+    // Note: &はURLのクエリパラメータで正当に使用されるためエスケープしない
+    // <, >, " をエスケープしてHTMLタグ挿入と属性脱出を防止
+    val sanitizedUrl = remember(videoUrl) {
+        videoUrl
+            .replace("<", "%3C")
+            .replace(">", "%3E")
+            .replace("\"", "%22")
+    }
+    val html = remember(sanitizedUrl, isMuted) {
         """
         <html>
         <head>
@@ -161,7 +170,7 @@ private fun WebVideoPlayer(
         </style>
         </head>
         <body>
-        <video controls playsinline autoplay src="$videoUrl" ${if (isMuted) "muted" else ""}></video>
+        <video controls playsinline autoplay src="$sanitizedUrl" ${if (isMuted) "muted" else ""}></video>
         </body>
         </html>
         """.trimIndent()

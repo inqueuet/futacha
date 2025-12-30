@@ -12,8 +12,15 @@ internal object BoardUrlResolver {
         }
 
         return try {
+            val normalized = if (!boardUrl.contains("://")) {
+                "https://$boardUrl"
+            } else {
+                boardUrl
+            }
+            val parsed = Url(normalized)
+            ensureHttpScheme(parsed)
             URLBuilder().apply {
-                takeFrom(boardUrl)
+                takeFrom(parsed)
                 parameters.remove("mode")
                 parameters.remove("sort")
                 parameters.append("mode", "cat")
@@ -82,6 +89,7 @@ internal object BoardUrlResolver {
             println("BoardUrlResolver: Failed to parse URL '$urlToParse': ${error.message}")
             throw IllegalArgumentException("Invalid board URL: $boardUrl", error)
         }
+        ensureHttpScheme(url)
 
         val segments = url.encodedPath
             .split('/')
@@ -130,10 +138,14 @@ internal object BoardUrlResolver {
                 throw IllegalArgumentException("Invalid board URL: $boardUrl", error)
             }
             val scheme = normalized.substring(0, schemeSeparator)
+            if (scheme.lowercase() != "http" && scheme.lowercase() != "https") {
+                throw IllegalArgumentException("Unsupported URL scheme: $scheme")
+            }
             val remainder = normalized.substring(schemeSeparator + 3)
             val host = remainder.substringBefore('/')
             return "$scheme://$host"
         }
+        ensureHttpScheme(url)
 
         val portSegment = when {
             url.port == url.protocol.defaultPort -> ""
@@ -153,6 +165,13 @@ internal object BoardUrlResolver {
             trimmed
         } else {
             ""
+        }
+    }
+
+    private fun ensureHttpScheme(url: Url) {
+        val scheme = url.protocol.name.lowercase()
+        if (scheme != "http" && scheme != "https") {
+            throw IllegalArgumentException("Unsupported URL scheme: $scheme")
         }
     }
 }

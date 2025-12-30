@@ -1,4 +1,4 @@
-package version
+package com.valoser.futacha.shared.version
 
 import android.content.Context
 import io.ktor.client.HttpClient
@@ -60,8 +60,17 @@ class AndroidVersionChecker(
     }
 }
 
+/**
+ * Android では Context が必要なため、この関数は使用できません。
+ * 代わりに [createVersionChecker(Context, HttpClient)] を使用してください。
+ *
+ * @throws UnsupportedOperationException 常にスローされます
+ */
 actual fun createVersionChecker(httpClient: HttpClient): VersionChecker {
-    throw IllegalStateException("Use createVersionChecker(context, httpClient) on Android")
+    throw UnsupportedOperationException(
+        "Android では createVersionChecker(context, httpClient) を使用してください。" +
+        "Context が必要なため、共通コードからは直接呼び出せません。"
+    )
 }
 
 /**

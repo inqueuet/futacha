@@ -26,7 +26,10 @@ enum class CatalogMode(
         Old -> items.sortedBy { it.numericId() }
         Many, Catalog -> items.sortedByDescending { it.replyCount }
         Few -> items.sortedBy { it.replyCount }
-        Momentum -> items.sortedByDescending { it.replyCount / ((it.numericId() % 10) + 1) }
-        So -> items.filterIndexed { index, _ -> index % 2 == 0 }
+        Momentum -> items.sortedByDescending { entry ->
+            val divisor = ((entry.numericId() % 10) + 1).toDouble()
+            entry.replyCount.toDouble() / divisor
+        }
+        So -> items
     }
 }

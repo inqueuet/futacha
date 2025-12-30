@@ -1,4 +1,4 @@
-package version
+package com.valoser.futacha.shared.version
 
 import io.ktor.client.HttpClient
 import platform.Foundation.NSBundle

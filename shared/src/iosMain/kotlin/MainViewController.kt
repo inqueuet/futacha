@@ -17,7 +17,7 @@ import com.valoser.futacha.shared.ui.FutachaApp
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.createFileSystem
 import platform.UIKit.UIViewController
-import version.createVersionChecker
+import com.valoser.futacha.shared.version.createVersionChecker
 
 fun MainViewController(): UIViewController {
     return ComposeUIViewController {
