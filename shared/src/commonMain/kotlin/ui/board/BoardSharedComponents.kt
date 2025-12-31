@@ -319,6 +319,7 @@ private fun HistoryEntryCard(
 internal fun ThreadFormDialog(
     title: String,
     subtitle: String?,
+    barColorScheme: androidx.compose.material3.ColorScheme = MaterialTheme.colorScheme,
     attachmentPickerPreference: AttachmentPickerPreference,
     preferredFileManagerPackage: String?,
     emailPresets: List<String>,
@@ -431,10 +432,10 @@ internal fun ThreadFormDialog(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = barColorScheme.primary,
+                        titleContentColor = barColorScheme.onPrimary,
+                        navigationIconContentColor = barColorScheme.onPrimary,
+                        actionIconContentColor = barColorScheme.onPrimary
                     )
                 )
                 HorizontalDivider()
@@ -580,8 +581,8 @@ internal fun ThreadFormDialog(
                 }
                 HorizontalDivider()
                 Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    color = barColorScheme.surfaceVariant,
+                    contentColor = barColorScheme.onSurfaceVariant
                 ) {
                     Row(
                         modifier = Modifier
@@ -600,28 +601,28 @@ internal fun ThreadFormDialog(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Send,
                                 contentDescription = sendDescription,
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = LocalContentColor.current
                             )
                         }
                         IconButton(onClick = { imagePickerLauncher() }) {
                             Icon(
                                 imageVector = Icons.Outlined.Image,
                                 contentDescription = "画像を選択",
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = LocalContentColor.current
                             )
                         }
                         IconButton(onClick = { videoPickerLauncher() }) {
                             Icon(
                                 imageVector = Icons.Rounded.VideoLibrary,
                                 contentDescription = "動画を選択",
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = LocalContentColor.current
                             )
                         }
                         IconButton(onClick = onClear) {
                             Icon(
                                 imageVector = Icons.Rounded.Refresh,
                                 contentDescription = "入力をクリア",
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = LocalContentColor.current
                             )
                         }
                         Spacer(modifier = Modifier.weight(1f))
@@ -629,7 +630,7 @@ internal fun ThreadFormDialog(
                             Icon(
                                 imageVector = Icons.Outlined.MoreVert,
                                 contentDescription = "その他",
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = LocalContentColor.current
                             )
                         }
                     }

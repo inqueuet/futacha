@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.state
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import platform.Foundation.NSUserDefaults
 
@@ -85,119 +87,171 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val preferredFileManagerLabel: Flow<String> = preferredFileManagerLabelState
     override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
 
+    private suspend fun update(block: () -> Unit) {
+        withContext(Dispatchers.Default) {
+            block()
+        }
+    }
+
     override suspend fun updateBoardsJson(value: String) {
-        defaults.setObject(value, forKey = BOARDS_KEY)
-        boardsState.value = value
+        update {
+            defaults.setObject(value, forKey = BOARDS_KEY)
+            boardsState.value = value
+        }
     }
 
     override suspend fun updateHistoryJson(value: String) {
-        defaults.setObject(value, forKey = HISTORY_KEY)
-        historyState.value = value
+        update {
+            defaults.setObject(value, forKey = HISTORY_KEY)
+            historyState.value = value
+        }
     }
 
     override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
-        defaults.setBool(enabled, forKey = PRIVACY_FILTER_KEY)
-        privacyFilterState.value = enabled
+        update {
+            defaults.setBool(enabled, forKey = PRIVACY_FILTER_KEY)
+            privacyFilterState.value = enabled
+        }
     }
 
     override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
-        defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
-        backgroundRefreshState.value = enabled
+        update {
+            defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
+            backgroundRefreshState.value = enabled
+        }
     }
 
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
-        defaults.setBool(enabled, forKey = LIGHTWEIGHT_MODE_KEY)
-        lightweightModeState.value = enabled
+        update {
+            defaults.setBool(enabled, forKey = LIGHTWEIGHT_MODE_KEY)
+            lightweightModeState.value = enabled
+        }
     }
 
     override suspend fun updateManualSaveDirectory(directory: String) {
-        defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
-        manualSaveDirectoryState.value = directory
+        update {
+            defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
+            manualSaveDirectoryState.value = directory
+        }
     }
 
     override suspend fun updateAttachmentPickerPreference(preference: String) {
-        defaults.setObject(preference, forKey = ATTACHMENT_PICKER_PREF_KEY)
-        attachmentPickerPreferenceState.value = preference
+        update {
+            defaults.setObject(preference, forKey = ATTACHMENT_PICKER_PREF_KEY)
+            attachmentPickerPreferenceState.value = preference
+        }
     }
 
     override suspend fun updateSaveDirectorySelection(selection: String) {
-        defaults.setObject(selection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
-        saveDirectorySelectionState.value = selection
+        update {
+            defaults.setObject(selection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
+            saveDirectorySelectionState.value = selection
+        }
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {
-        defaults.setObject(value, forKey = CATALOG_MODE_MAP_KEY)
-        catalogModeMapState.value = value
+        update {
+            defaults.setObject(value, forKey = CATALOG_MODE_MAP_KEY)
+            catalogModeMapState.value = value
+        }
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
-        defaults.setObject(style, forKey = CATALOG_DISPLAY_STYLE_KEY)
-        displayStyleState.value = style
+        update {
+            defaults.setObject(style, forKey = CATALOG_DISPLAY_STYLE_KEY)
+            displayStyleState.value = style
+        }
     }
 
     override suspend fun updateCatalogGridColumns(columns: String) {
-        defaults.setObject(columns, forKey = CATALOG_GRID_COLUMNS_KEY)
-        gridColumnsState.value = columns
+        update {
+            defaults.setObject(columns, forKey = CATALOG_GRID_COLUMNS_KEY)
+            gridColumnsState.value = columns
+        }
     }
 
     override suspend fun updateNgHeadersJson(value: String) {
-        defaults.setObject(value, forKey = NG_HEADERS_KEY)
-        ngHeadersState.value = value
+        update {
+            defaults.setObject(value, forKey = NG_HEADERS_KEY)
+            ngHeadersState.value = value
+        }
     }
 
     override suspend fun updateNgWordsJson(value: String) {
-        defaults.setObject(value, forKey = NG_WORDS_KEY)
-        ngWordsState.value = value
+        update {
+            defaults.setObject(value, forKey = NG_WORDS_KEY)
+            ngWordsState.value = value
+        }
     }
 
     override suspend fun updateCatalogNgWordsJson(value: String) {
-        defaults.setObject(value, forKey = CATALOG_NG_WORDS_KEY)
-        catalogNgWordsState.value = value
+        update {
+            defaults.setObject(value, forKey = CATALOG_NG_WORDS_KEY)
+            catalogNgWordsState.value = value
+        }
     }
 
     override suspend fun updateWatchWordsJson(value: String) {
-        defaults.setObject(value, forKey = WATCH_WORDS_KEY)
-        watchWordsState.value = value
+        update {
+            defaults.setObject(value, forKey = WATCH_WORDS_KEY)
+            watchWordsState.value = value
+        }
     }
 
     override suspend fun updateSelfPostIdentifiersJson(value: String) {
-        defaults.setObject(value, forKey = SELF_POST_IDENTIFIERS_KEY)
-        selfPostIdentifiersState.value = value
+        update {
+            defaults.setObject(value, forKey = SELF_POST_IDENTIFIERS_KEY)
+            selfPostIdentifiersState.value = value
+        }
     }
 
     override suspend fun updateThreadMenuConfigJson(value: String) {
-        defaults.setObject(value, forKey = THREAD_MENU_CONFIG_KEY)
-        threadMenuConfigState.value = value
+        update {
+            defaults.setObject(value, forKey = THREAD_MENU_CONFIG_KEY)
+            threadMenuConfigState.value = value
+        }
     }
 
     override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
-        defaults.setObject(value, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
-        threadSettingsMenuConfigState.value = value
+        update {
+            defaults.setObject(value, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
+            threadSettingsMenuConfigState.value = value
+        }
     }
 
     override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
-        defaults.setObject(value, forKey = THREAD_MENU_ENTRIES_KEY)
-        threadMenuEntriesState.value = value
+        update {
+            defaults.setObject(value, forKey = THREAD_MENU_ENTRIES_KEY)
+            threadMenuEntriesState.value = value
+        }
     }
 
     override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
-        defaults.setObject(value, forKey = CATALOG_NAV_ENTRIES_KEY)
-        catalogNavEntriesState.value = value
+        update {
+            defaults.setObject(value, forKey = CATALOG_NAV_ENTRIES_KEY)
+            catalogNavEntriesState.value = value
+        }
     }
 
     override suspend fun updatePreferredFileManagerPackage(packageName: String) {
-        defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
-        preferredFileManagerPackageState.value = packageName
+        update {
+            defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
+            preferredFileManagerPackageState.value = packageName
+        }
     }
 
     override suspend fun updatePreferredFileManagerLabel(label: String) {
-        defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
-        preferredFileManagerLabelState.value = label
+        update {
+            defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
+            preferredFileManagerLabelState.value = label
+        }
     }
 
     override suspend fun updateLastUsedDeleteKey(value: String) {
-        defaults.setObject(value, forKey = LAST_USED_DELETE_KEY)
-        lastUsedDeleteKeyState.value = value
+        update {
+            defaults.setObject(value, forKey = LAST_USED_DELETE_KEY)
+            lastUsedDeleteKeyState.value = value
+        }
     }
 
     override suspend fun seedIfEmpty(

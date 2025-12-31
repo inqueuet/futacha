@@ -892,6 +892,7 @@ private fun CreateThreadDialog(
     ThreadFormDialog(
         title = "スレ立て",
         subtitle = boardName?.takeIf { it.isNotBlank() },
+        barColorScheme = MaterialTheme.colorScheme,
         attachmentPickerPreference = attachmentPickerPreference,
         preferredFileManagerPackage = preferredFileManagerPackage,
         emailPresets = emailPresets,
@@ -2259,9 +2260,104 @@ private suspend fun fetchArchiveSearchResults(
 ): List<ArchiveSearchItem> {
     val url = buildArchiveSearchUrl(query, scope)
     val response = httpClient.get(url)
+    if (!response.status.isSuccess()) {
+        throw IllegalStateException("検索に失敗しました: ${response.status}")
+    }
     val body = response.bodyAsText()
-    val parsed = json.decodeFromString<ArchiveSearchResponse>(body)
-    return parsed.results
+    return parseArchiveSearchResults(body, scope, json)
+}
+
+private fun parseArchiveSearchResults(
+    body: String,
+    scope: ArchiveSearchScope?,
+    json: Json
+): List<ArchiveSearchItem> {
+    val element = runCatching { json.parseToJsonElement(body) }.getOrElse {
+        throw IllegalStateException("検索結果の解析に失敗しました")
+    }
+    val itemsElement = when (element) {
+        is JsonArray -> element
+        is JsonObject -> {
+            element["results"]
+                ?: element["items"]
+                ?: element["data"]
+                ?: element["threads"]
+        }
+        else -> null
+    }
+    val items = itemsElement as? JsonArray
+        ?: throw IllegalStateException("検索結果の形式が不明です")
+    return items.mapNotNull { parseArchiveSearchItem(it, scope) }
+}
+
+private fun parseArchiveSearchItem(
+    element: JsonElement,
+    scope: ArchiveSearchScope?
+): ArchiveSearchItem? {
+    val obj = element as? JsonObject ?: return null
+    val htmlUrl = obj.firstString("htmlUrl", "html_url", "url", "link", "href") ?: return null
+    val threadId = obj.firstString("threadId", "thread_id", "id", "thread")
+        ?: extractThreadIdFromUrl(htmlUrl)
+        ?: return null
+    val server = obj.firstString("server", "srv") ?: scope?.server.orEmpty()
+    val board = obj.firstString("board", "boardId", "brd") ?: scope?.board.orEmpty()
+    val title = obj.firstString("title", "subject")
+    val thumbUrl = obj.firstString("thumbUrl", "thumb_url", "thumb", "thumbnail", "image")
+    val status = obj.firstString("status", "state")
+    val createdAt = obj.firstLong("createdAt", "created_at", "created")
+    val finalizedAt = obj.firstLong("finalizedAt", "finalized_at", "finalized")
+    val uploadedAt = obj.firstLong("uploadedAt", "uploaded_at", "uploaded")
+    return ArchiveSearchItem(
+        threadId = threadId,
+        server = server,
+        board = board,
+        title = title,
+        htmlUrl = htmlUrl,
+        thumbUrl = thumbUrl,
+        status = status,
+        createdAt = createdAt,
+        finalizedAt = finalizedAt,
+        uploadedAt = uploadedAt
+    )
+}
+
+private fun JsonObject.firstString(vararg keys: String): String? {
+    keys.forEach { key ->
+        val value = this[key]?.asStringOrNull()?.trim()
+        if (!value.isNullOrEmpty()) {
+            return value
+        }
+    }
+    return null
+}
+
+private fun JsonObject.firstLong(vararg keys: String): Long? {
+    keys.forEach { key ->
+        val value = this[key]?.asLongOrNull()
+        if (value != null) {
+            return value
+        }
+    }
+    return null
+}
+
+private fun JsonElement.asStringOrNull(): String? {
+    val primitive = this as? JsonPrimitive ?: return null
+    if (this is JsonNull) return null
+    val content = primitive.content
+    return if (content == "null") null else content
+}
+
+private fun JsonElement.asLongOrNull(): Long? {
+    val primitive = this as? JsonPrimitive ?: return null
+    if (this is JsonNull) return null
+    return primitive.longOrNull ?: primitive.content.toLongOrNull()
+}
+
+private fun extractThreadIdFromUrl(url: String): String? {
+    val primary = Regex("""/res/(\d+)\.htm""").find(url)?.groupValues?.getOrNull(1)
+    if (!primary.isNullOrBlank()) return primary
+    return Regex("""(\d+)(?:\.htm)?$""").find(url)?.groupValues?.getOrNull(1)
 }
 
 // Catalog navigation helpers

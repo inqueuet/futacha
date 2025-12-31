@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.repository
 
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
@@ -23,15 +24,26 @@ class SavedThreadRepository(
     private val baseDirectory: String = MANUAL_SAVE_DIRECTORY,
     private val baseSaveLocation: SaveLocation? = null
 ) {
+    private object IndexMutexRegistry {
+        private val mapMutex = Mutex()
+        private val mutexes = mutableMapOf<String, Mutex>()
+
+        suspend fun getMutex(key: String): Mutex {
+            return mapMutex.withLock {
+                mutexes.getOrPut(key) { Mutex() }
+            }
+        }
+    }
+
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
     }
-    private val indexMutex = Mutex()
 
     private val resolvedSaveLocation = baseSaveLocation ?: SaveLocation.fromString(baseDirectory)
     private val useSaveLocationApi = resolvedSaveLocation !is SaveLocation.Path
     private val indexRelativePath = "index.json"
+    private val indexMutexKey = "saved_thread_index:${resolvedSaveLocation.toRawString()}"
 
     /**
      * インデックスを読み込み
@@ -274,7 +286,8 @@ class SavedThreadRepository(
     }
 
     private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.Default) {
-        indexMutex.withLock {
+        val mutex = IndexMutexRegistry.getMutex(indexMutexKey)
+        mutex.withLock {
             block()
         }
     }

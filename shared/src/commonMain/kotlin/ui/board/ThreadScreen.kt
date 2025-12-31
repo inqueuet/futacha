@@ -1274,88 +1274,95 @@ fun ThreadScreen(
                 resolvedThreadTitle.takeIf { it.isNotBlank() }
             ).joinToString(" · ").ifBlank { null }
         }
-        ThreadFormDialog(
-            title = "返信",
-            subtitle = subtitle,
-            attachmentPickerPreference = attachmentPickerPreference,
-            preferredFileManagerPackage = preferredFileManagerPackage,
-            emailPresets = emailPresets,
-            comment = replyComment,
-            onCommentChange = { replyComment = it },
-            name = replyName,
-            onNameChange = { replyName = it },
-            email = replyEmail,
-            onEmailChange = { replyEmail = it },
-            subject = replySubject,
-            onSubjectChange = { replySubject = it },
-            password = replyPassword,
-            onPasswordChange = { replyPassword = it },
-            selectedImage = replyImageData,
-            onImageSelected = { replyImageData = it },
-            onDismiss = { isReplyDialogVisible = false },
-            onSubmit = {
-                val trimmedPassword = replyPassword.trim()
-                if (trimmedPassword.isBlank()) {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("削除キーを入力してください") }
-                    return@ThreadFormDialog
-                }
-                if (replyComment.trim().isBlank()) {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("コメントを入力してください") }
-                    return@ThreadFormDialog
-                }
-                isReplyDialogVisible = false
-                updateLastUsedDeleteKey(trimmedPassword)
-                val name = replyName
-                val email = replyEmail
-                val subject = replySubject
-                val comment = replyComment
-                val imageData = replyImageData
-                val textOnly = imageData == null
-                launchThreadAction(
-                    successMessage = "返信を送信しました",
-                    failurePrefix = "返信の送信に失敗しました",
-                    onSuccess = { thisNo ->
-                        if (!thisNo.isNullOrBlank()) {
-                            stateStore?.let { store ->
-                                coroutineScope.launch {
-                                    store.addSelfPostIdentifier(threadId, thisNo)
+        MaterialTheme(
+            colorScheme = appColorScheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes
+        ) {
+            ThreadFormDialog(
+                title = "返信",
+                subtitle = subtitle,
+                barColorScheme = appColorScheme,
+                attachmentPickerPreference = attachmentPickerPreference,
+                preferredFileManagerPackage = preferredFileManagerPackage,
+                emailPresets = emailPresets,
+                comment = replyComment,
+                onCommentChange = { replyComment = it },
+                name = replyName,
+                onNameChange = { replyName = it },
+                email = replyEmail,
+                onEmailChange = { replyEmail = it },
+                subject = replySubject,
+                onSubjectChange = { replySubject = it },
+                password = replyPassword,
+                onPasswordChange = { replyPassword = it },
+                selectedImage = replyImageData,
+                onImageSelected = { replyImageData = it },
+                onDismiss = { isReplyDialogVisible = false },
+                onSubmit = {
+                    val trimmedPassword = replyPassword.trim()
+                    if (trimmedPassword.isBlank()) {
+                        coroutineScope.launch { snackbarHostState.showSnackbar("削除キーを入力してください") }
+                        return@ThreadFormDialog
+                    }
+                    if (replyComment.trim().isBlank()) {
+                        coroutineScope.launch { snackbarHostState.showSnackbar("コメントを入力してください") }
+                        return@ThreadFormDialog
+                    }
+                    isReplyDialogVisible = false
+                    updateLastUsedDeleteKey(trimmedPassword)
+                    val name = replyName
+                    val email = replyEmail
+                    val subject = replySubject
+                    val comment = replyComment
+                    val imageData = replyImageData
+                    val textOnly = imageData == null
+                    launchThreadAction(
+                        successMessage = "返信を送信しました",
+                        failurePrefix = "返信の送信に失敗しました",
+                        onSuccess = { thisNo ->
+                            if (!thisNo.isNullOrBlank()) {
+                                stateStore?.let { store ->
+                                    coroutineScope.launch {
+                                        store.addSelfPostIdentifier(threadId, thisNo)
+                                    }
                                 }
                             }
+                            replySubject = ""
+                            replyComment = ""
+                            replyPassword = ""
+                            replyImageData = null
+                            refreshThread()
                         }
-                        replySubject = ""
-                        replyComment = ""
-                        replyPassword = ""
-                        replyImageData = null
-                        refreshThread()
+                    ) {
+                        activeRepository.replyToThread(
+                            effectiveBoardUrl,
+                            threadId,
+                            name,
+                            email,
+                            subject,
+                            comment,
+                            trimmedPassword,
+                            imageData?.bytes,
+                            imageData?.fileName,
+                            textOnly
+                        )
                     }
-                ) {
-                    activeRepository.replyToThread(
-                        effectiveBoardUrl,
-                        threadId,
-                        name,
-                        email,
-                        subject,
-                        comment,
-                        trimmedPassword,
-                        imageData?.bytes,
-                        imageData?.fileName,
-                        textOnly
-                    )
-                }
-            },
-            onClear = {
-                replyName = ""
-                replyEmail = ""
-                replySubject = ""
-                replyComment = ""
-                replyPassword = ""
-                replyImageData = null
-            },
-            isSubmitEnabled = replyComment.trim().isNotBlank() && replyPassword.trim().isNotBlank(),
-            sendDescription = "返信",
-            showSubject = true,
-            showPassword = true
-        )
+                },
+                onClear = {
+                    replyName = ""
+                    replyEmail = ""
+                    replySubject = ""
+                    replyComment = ""
+                    replyPassword = ""
+                    replyImageData = null
+                },
+                isSubmitEnabled = replyComment.trim().isNotBlank() && replyPassword.trim().isNotBlank(),
+                sendDescription = "返信",
+                showSubject = true,
+                showPassword = true
+            )
+        }
     }
 
     val totalMediaCount = mediaPreviewEntries.size
