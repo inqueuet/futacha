@@ -15,6 +15,7 @@ import java.io.IOException
 
 /**
  * Exception thrown when DocumentFile permissions have been revoked
+ * FIX: ユーザーに適切なエラーメッセージを提供するための専用例外クラス
  */
 class PermissionRevokedException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
@@ -25,8 +26,68 @@ class AndroidFileSystem(
     private val context: Context
 ) : FileSystem {
 
+    // FIX: 安全性チェックのための定数
+    companion object {
+        // FIX: ファイルサイズ上限（100MB） - OOM防止
+        private const val MAX_FILE_SIZE = 100 * 1024 * 1024L
+        // FIX: ファイル名の最大長（Linuxの制限）
+        private const val MAX_FILENAME_LENGTH = 255
+        // FIX: パスの最大長（合理的な上限）
+        private const val MAX_PATH_LENGTH = 4096
+    }
+
+    /**
+     * FIX: 入力検証 - セキュリティとデータ整合性のための検証
+     *
+     * @throws IllegalArgumentException パスが不正な場合
+     */
+    private fun validatePath(path: String, paramName: String = "path") {
+        // FIX: 空文字列チェック
+        if (path.isEmpty()) {
+            throw IllegalArgumentException("$paramName must not be empty")
+        }
+
+        // FIX: null文字チェック（セキュリティ脆弱性防止）
+        if (path.contains('\u0000')) {
+            throw IllegalArgumentException("$paramName contains null character")
+        }
+
+        // FIX: パス長制限
+        if (path.length > MAX_PATH_LENGTH) {
+            throw IllegalArgumentException("$paramName exceeds maximum length ($MAX_PATH_LENGTH): ${path.length}")
+        }
+
+        // FIX: パストラバーサル攻撃防止
+        val normalized = path.replace('\\', '/')
+        if (normalized.contains("../") || normalized.contains("/..") || normalized == "..") {
+            throw IllegalArgumentException("$paramName contains path traversal sequence: $path")
+        }
+
+        // FIX: ファイル名の長さチェック（最後のセグメントのみ）
+        val fileName = normalized.substringAfterLast('/', normalized)
+        if (fileName.length > MAX_FILENAME_LENGTH) {
+            throw IllegalArgumentException("File name exceeds maximum length ($MAX_FILENAME_LENGTH): $fileName")
+        }
+    }
+
+    /**
+     * FIX: ファイルサイズ検証 - OOM防止
+     *
+     * @throws IllegalArgumentException サイズが上限を超える場合
+     */
+    private fun validateFileSize(size: Long, paramName: String = "file") {
+        if (size > MAX_FILE_SIZE) {
+            throw IllegalArgumentException("$paramName size ($size bytes) exceeds maximum allowed ($MAX_FILE_SIZE bytes)")
+        }
+        // FIX: 負のサイズチェック
+        if (size < 0) {
+            throw IllegalArgumentException("$paramName size cannot be negative: $size")
+        }
+    }
+
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val dir = File(resolveAbsolutePath(path))
             if (!dir.exists()) {
                 if (!dir.mkdirs() && !dir.exists()) {
@@ -38,6 +99,8 @@ class AndroidFileSystem(
 
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val file = File(resolveAbsolutePath(path))
             file.parentFile?.let { parent ->
                 if (!parent.exists()) {
@@ -46,25 +109,34 @@ class AndroidFileSystem(
                     }
                 }
             }
-            
-            // Atomic write: write to temp file then rename
+
+            // FIX: アトミック書き込み - 一時ファイルに書き込んでからrenameすることで、
+            // 書き込み中のクラッシュでファイルが破損することを防ぐ
             val tmpFile = File.createTempFile("tmp_", ".tmp", file.parentFile)
             try {
                 tmpFile.writeBytes(bytes)
                 if (!tmpFile.renameTo(file)) {
                     // renameTo can fail if target exists on some file systems, try delete + rename
+                    Logger.d("AndroidFileSystem", "First renameTo failed, trying delete + rename for ${file.name}")
                     if (file.exists() && !file.delete()) {
                          throw IOException("Failed to delete existing file for atomic write: ${file.absolutePath}")
                     }
                     if (!tmpFile.renameTo(file)) {
-                        throw IOException("Failed to rename temp file to target: ${file.absolutePath}")
+                        throw IOException("Failed to rename temp file (${tmpFile.absolutePath}) to target (${file.absolutePath})")
                     }
                 }
+            } catch (e: Exception) {
+                // FIX: エラー発生時は一時ファイルを即座にクリーンアップ
+                if (tmpFile.exists()) {
+                    tmpFile.delete()
+                }
+                throw e
             } finally {
+                // FIX: 念のため再度チェック（renameが成功していれば存在しないはず）
                 if (tmpFile.exists()) {
                     val deleted = tmpFile.delete()
                     if (!deleted) {
-                        Logger.w("AndroidFileSystem", "Failed to delete temp file: ${tmpFile.absolutePath}")
+                        Logger.w("AndroidFileSystem", "Failed to delete temp file: ${tmpFile.absolutePath}. It will be cleaned up by periodic cleanup.")
                     }
                 }
             }
@@ -73,6 +145,8 @@ class AndroidFileSystem(
 
     override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val file = File(resolveAbsolutePath(path))
             file.parentFile?.let { parent ->
                 if (!parent.exists()) {
@@ -86,26 +160,34 @@ class AndroidFileSystem(
     }
 
     override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証はwriteBytesで実行される
         // writeBytes uses atomic write, so we delegate to it
         writeBytes(path, content.toByteArray(Charsets.UTF_8))
     }
 
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
+            val size = file.length()
+            validateFileSize(size, "file") // FIX: 読み込み前にサイズチェック
             file.readBytes()
         }
     }
 
     override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
+            val size = file.length()
+            validateFileSize(size, "file") // FIX: 読み込み前にサイズチェック
             file.readText(Charsets.UTF_8)
         }
     }
 
     override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
             file.delete()
             Unit
@@ -114,6 +196,7 @@ class AndroidFileSystem(
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
             file.deleteRecursively()
             Unit
@@ -352,6 +435,12 @@ class AndroidFileSystem(
     // ========================================
 
     override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
+        if (relativePath.isNotEmpty()) {
+            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
@@ -395,6 +484,13 @@ class AndroidFileSystem(
     }
 
     override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = File(base.path, relativePath).absolutePath
@@ -429,6 +525,13 @@ class AndroidFileSystem(
     }
 
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = File(base.path, relativePath).absolutePath
@@ -463,10 +566,15 @@ class AndroidFileSystem(
     }
 
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        // FIX: 入力検証はwriteBytesで実行される
         return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
     }
 
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = File(base.path, relativePath).absolutePath
@@ -535,6 +643,12 @@ class AndroidFileSystem(
     }
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
+        if (relativePath.isNotEmpty()) {
+            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
@@ -589,13 +703,19 @@ class AndroidFileSystem(
         }
     }
 
+    // FIX: DocumentFileナビゲーションのエラーハンドリングを強化
     private fun navigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile? {
         if (relativePath.isEmpty()) return base
         val segments = relativePath.split('/').filter { it.isNotBlank() }
         var current = base
-        for (segment in segments) {
+        for ((index, segment) in segments.withIndex()) {
             val next = current.findFile(segment)
-            if (next == null || !next.isDirectory) {
+            if (next == null) {
+                Logger.d("AndroidFileSystem", "Directory not found at segment[$index]: $segment (path: $relativePath)")
+                return null
+            }
+            if (!next.isDirectory) {
+                Logger.w("AndroidFileSystem", "Path segment is not a directory at segment[$index]: $segment (path: $relativePath)")
                 return null
             }
             current = next
@@ -603,19 +723,20 @@ class AndroidFileSystem(
         return current
     }
 
+    // FIX: ディレクトリ作成時のエラーメッセージを詳細化
     private fun createOrNavigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile {
         if (relativePath.isEmpty()) return base
         val segments = relativePath.split('/').filter { it.isNotBlank() }
         var current = base
-        for (segment in segments) {
+        for ((index, segment) in segments.withIndex()) {
             val existing = current.findFile(segment)
             current = if (existing != null && existing.isDirectory) {
                 existing
             } else if (existing == null) {
                 current.createDirectory(segment)
-                    ?: throw IllegalStateException("Failed to create directory: $segment")
+                    ?: throw IllegalStateException("Failed to create directory at segment[$index]: $segment (path: $relativePath, base: ${base.uri})")
             } else {
-                throw IllegalStateException("Path segment exists but is not a directory: $segment")
+                throw IllegalStateException("Path segment exists but is not a directory at segment[$index]: $segment (path: $relativePath)")
             }
         }
         return current

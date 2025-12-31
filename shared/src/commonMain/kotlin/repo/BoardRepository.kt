@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -111,6 +112,8 @@ class DefaultBoardRepository(
         private const val OP_IMAGE_CONCURRENCY = 4
         private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
         private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
+        // FIX: Semaphoreタイムアウトを追加（永久ブロック防止）
+        private const val SEMAPHORE_TIMEOUT_MILLIS = 30_000L // 30 seconds
     }
 
     private val opImageSemaphore = Semaphore(OP_IMAGE_CONCURRENCY)
@@ -189,12 +192,19 @@ class DefaultBoardRepository(
         if (threadId.isBlank()) return null
         val key = OpImageKey(board, threadId)
         getCachedOpImageUrl(key)?.let { return it }
-        
-        // Don't wrap caching logic in retry, only the fetch part
-        val resolvedUrl = opImageSemaphore.withPermit {
-            withRetryOnAuthFailure(board) {
-                resolveOpImageUrl(board, threadId)
+
+        // FIX: タイムアウトを追加して永久ブロックを防止
+        val resolvedUrl = try {
+            withTimeout(SEMAPHORE_TIMEOUT_MILLIS) {
+                opImageSemaphore.withPermit {
+                    withRetryOnAuthFailure(board) {
+                        resolveOpImageUrl(board, threadId)
+                    }
+                }
             }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Logger.w(TAG, "Timeout waiting for image fetch permit for thread $threadId")
+            null
         }
         saveOpImageUrlToCache(key, resolvedUrl)
         return resolvedUrl

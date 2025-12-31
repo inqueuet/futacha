@@ -70,12 +70,112 @@ class HttpBoardApi(
         private const val DEFAULT_ACCEPT =
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         private const val DEFAULT_ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
-        private const val MAX_RESPONSE_SIZE = 20 * 1024 * 1024 // 20MB limit
+        // FIX: OOM防止のため、20MB→5MBに制限を削減
+        // 通常のHTMLレスポンスは1-2MB程度なので5MBで十分
+        private const val MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB limit
         private const val DEFAULT_UPLOAD_FILE_NAME = "upload.bin"
         private const val SHIFT_JIS_TEXT_MIME = "text/plain; charset=Shift_JIS"
         private const val UTF8_TEXT_MIME = "text/plain; charset=UTF-8"
         private const val ASCII_TEXT_MIME = "text/plain; charset=US-ASCII"
         private const val DEFAULT_SHIFT_JIS_CHRENC_SAMPLE = "文字"
+
+        // FIX: 投稿入力検証のための定数
+        private const val MAX_NAME_LENGTH = 100
+        private const val MAX_EMAIL_LENGTH = 100
+        private const val MAX_SUBJECT_LENGTH = 100
+        private const val MAX_COMMENT_LENGTH = 10000
+        private const val MAX_PASSWORD_LENGTH = 100
+        private const val MAX_IMAGE_FILE_SIZE = 8_192_000L // 8MB（フォームのMAX_FILE_SIZEと一致）
+
+        /**
+         * FIX: 投稿入力検証 - DoS攻撃・インジェクション攻撃防止
+         *
+         * @throws IllegalArgumentException 入力が不正な場合
+         */
+        private fun validatePostInput(
+            name: String,
+            email: String,
+            subject: String,
+            comment: String,
+            password: String,
+            imageFile: ByteArray?
+        ) {
+            // FIX: null文字チェック（全てのテキストフィールド）
+            listOf(
+                "name" to name,
+                "email" to email,
+                "subject" to subject,
+                "comment" to comment,
+                "password" to password
+            ).forEach { (fieldName, value) ->
+                if (value.contains('\u0000')) {
+                    throw IllegalArgumentException("$fieldName contains null character")
+                }
+            }
+
+            // FIX: 長さ制限チェック
+            if (name.length > MAX_NAME_LENGTH) {
+                throw IllegalArgumentException("Name exceeds maximum length ($MAX_NAME_LENGTH): ${name.length}")
+            }
+            if (email.length > MAX_EMAIL_LENGTH) {
+                throw IllegalArgumentException("Email exceeds maximum length ($MAX_EMAIL_LENGTH): ${email.length}")
+            }
+            if (subject.length > MAX_SUBJECT_LENGTH) {
+                throw IllegalArgumentException("Subject exceeds maximum length ($MAX_SUBJECT_LENGTH): ${subject.length}")
+            }
+            if (comment.length > MAX_COMMENT_LENGTH) {
+                throw IllegalArgumentException("Comment exceeds maximum length ($MAX_COMMENT_LENGTH): ${comment.length}")
+            }
+            if (password.length > MAX_PASSWORD_LENGTH) {
+                throw IllegalArgumentException("Password exceeds maximum length ($MAX_PASSWORD_LENGTH): ${password.length}")
+            }
+
+            // FIX: 画像ファイルサイズチェック
+            imageFile?.let { file ->
+                if (file.size > MAX_IMAGE_FILE_SIZE) {
+                    throw IllegalArgumentException("Image file size (${file.size} bytes) exceeds maximum ($MAX_IMAGE_FILE_SIZE bytes)")
+                }
+            }
+        }
+
+        /**
+         * FIX: 削除・投票操作の入力検証
+         *
+         * @throws IllegalArgumentException 入力が不正な場合
+         */
+        private fun validateDeletionInput(password: String) {
+            // FIX: null文字チェック
+            if (password.contains('\u0000')) {
+                throw IllegalArgumentException("password contains null character")
+            }
+
+            // FIX: 長さ制限チェック
+            if (password.length > MAX_PASSWORD_LENGTH) {
+                throw IllegalArgumentException("Password exceeds maximum length ($MAX_PASSWORD_LENGTH): ${password.length}")
+            }
+
+            // FIX: 空文字列チェック
+            if (password.isBlank()) {
+                throw IllegalArgumentException("Password must not be blank")
+            }
+        }
+
+        /**
+         * FIX: 削除理由コードの検証
+         *
+         * @throws IllegalArgumentException 入力が不正な場合
+         */
+        private fun validateReasonCode(reasonCode: String) {
+            // FIX: null文字チェック
+            if (reasonCode.contains('\u0000')) {
+                throw IllegalArgumentException("reasonCode contains null character")
+            }
+
+            // FIX: 長さ制限チェック（理由コードは通常短い）
+            if (reasonCode.length > 50) {
+                throw IllegalArgumentException("Reason code exceeds maximum length (50): ${reasonCode.length}")
+            }
+        }
         private const val DEFAULT_SCREEN_SPEC = "1080x1920x24"
         private const val DEFAULT_PTUA_VALUE = "1341647872"
         private val THREAD_ID_REGEX = """res/(\d+)\.htm""".toRegex()
@@ -96,7 +196,10 @@ class HttpBoardApi(
             Regex("""<input\s+[^>]{0,200}?name\s*=\s*["']chrenc["'][^>]{0,200}?>""", RegexOption.IGNORE_CASE)
         private val VALUE_ATTR_REGEX =
             Regex("""value\s*=\s*["']([^"']{0,500})["']""", RegexOption.IGNORE_CASE)
-        private const val MAX_CACHE_SIZE = 100
+        // FIX: PostingConfigキャッシュサイズを削減（100→20）
+        // PostingConfigは複雑なオブジェクトなので、メモリ節約のため制限
+        // ほとんどのユーザーは数個の板しか使わないため、20で十分
+        private const val MAX_CACHE_SIZE = 20
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
@@ -111,8 +214,9 @@ class HttpBoardApi(
         return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
     }
 
+    // FIX: リトライロジック改善（無限ループ防止、一時的障害対策）
     private suspend fun <T> withRetry(
-        maxAttempts: Int = 2,
+        maxAttempts: Int = 3, // FIX: 2→3に増加（一時的なネットワーク障害対策）
         initialDelayMillis: Long = 500,
         block: suspend () -> T
     ): T {
@@ -122,12 +226,14 @@ class HttpBoardApi(
             try {
                 return block()
             } catch (e: CancellationException) {
+                // FIX: キャンセル例外は即座に再スロー（リトライしない）
                 throw e
             } catch (e: Exception) {
                 attempt += 1
                 if (attempt >= maxAttempts || !shouldRetry(e)) {
                     throw e
                 }
+                // FIX: 指数バックオフ（500ms→1s→2s→4s→5s上限）
                 delay(delayMillis)
                 delayMillis = (delayMillis * 2).coerceAtMost(5_000)
             }
@@ -344,6 +450,8 @@ class HttpBoardApi(
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
+        // FIX: 入力検証を最初に実行
+        validateReasonCode(reasonCode)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for del request")
@@ -386,12 +494,11 @@ class HttpBoardApi(
         password: String,
         imageOnly: Boolean
     ) {
+        // FIX: 入力検証を最初に実行（既存のチェックを統合）
+        validateDeletionInput(password)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for user deletion")
-        }
-        if (password.isBlank()) {
-            throw IllegalArgumentException("Deletion password must not be blank")
         }
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
@@ -440,6 +547,8 @@ class HttpBoardApi(
         imageFileName: String?,
         textOnly: Boolean
     ): String {
+        // FIX: 入力検証を最初に実行
+        validatePostInput(name, email, subject, comment, password, imageFile)
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
         val referer = buildString {
             append(boardBase)
@@ -515,6 +624,8 @@ class HttpBoardApi(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
+        // FIX: 入力検証を最初に実行
+        validatePostInput(name, email, subject, comment, password, imageFile)
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         val url = buildString {

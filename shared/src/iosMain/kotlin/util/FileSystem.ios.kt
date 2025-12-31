@@ -26,8 +26,68 @@ class IosFileSystem : FileSystem {
 
     private val fileManager = NSFileManager.defaultManager
 
+    // FIX: 安全性チェックのための定数
+    companion object {
+        // FIX: ファイルサイズ上限（100MB） - OOM防止
+        private const val MAX_FILE_SIZE = 100 * 1024 * 1024L
+        // FIX: ファイル名の最大長（iOSの制限）
+        private const val MAX_FILENAME_LENGTH = 255
+        // FIX: パスの最大長（合理的な上限）
+        private const val MAX_PATH_LENGTH = 4096
+    }
+
+    /**
+     * FIX: 入力検証 - セキュリティとデータ整合性のための検証
+     *
+     * @throws IllegalArgumentException パスが不正な場合
+     */
+    private fun validatePath(path: String, paramName: String = "path") {
+        // FIX: 空文字列チェック
+        if (path.isEmpty()) {
+            throw IllegalArgumentException("$paramName must not be empty")
+        }
+
+        // FIX: null文字チェック（セキュリティ脆弱性防止）
+        if (path.contains('\u0000')) {
+            throw IllegalArgumentException("$paramName contains null character")
+        }
+
+        // FIX: パス長制限
+        if (path.length > MAX_PATH_LENGTH) {
+            throw IllegalArgumentException("$paramName exceeds maximum length ($MAX_PATH_LENGTH): ${path.length}")
+        }
+
+        // FIX: パストラバーサル攻撃防止
+        val normalized = path.replace('\\', '/')
+        if (normalized.contains("../") || normalized.contains("/..") || normalized == "..") {
+            throw IllegalArgumentException("$paramName contains path traversal sequence: $path")
+        }
+
+        // FIX: ファイル名の長さチェック（最後のセグメントのみ）
+        val fileName = normalized.substringAfterLast('/', normalized)
+        if (fileName.length > MAX_FILENAME_LENGTH) {
+            throw IllegalArgumentException("File name exceeds maximum length ($MAX_FILENAME_LENGTH): $fileName")
+        }
+    }
+
+    /**
+     * FIX: ファイルサイズ検証 - OOM防止
+     *
+     * @throws IllegalArgumentException サイズが上限を超える場合
+     */
+    private fun validateFileSize(size: Long, paramName: String = "file") {
+        if (size > MAX_FILE_SIZE) {
+            throw IllegalArgumentException("$paramName size ($size bytes) exceeds maximum allowed ($MAX_FILE_SIZE bytes)")
+        }
+        // FIX: 負のサイズチェック
+        if (size < 0) {
+            throw IllegalArgumentException("$paramName size cannot be negative: $size")
+        }
+    }
+
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
@@ -48,6 +108,8 @@ class IosFileSystem : FileSystem {
 
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
 
@@ -87,6 +149,9 @@ class IosFileSystem : FileSystem {
 
     override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            val contentBytes = content.encodeToByteArray()
+            validateFileSize(contentBytes.size.toLong(), "content") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
 
@@ -123,16 +188,19 @@ class IosFileSystem : FileSystem {
 
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             val data = NSData.dataWithContentsOfFile(absolutePath)
                 ?: throw Exception("File not found: $absolutePath")
 
-            val length = data.length.toInt()
-            if (length <= 0) {
+            val length = data.length.toLong()
+            validateFileSize(length, "file") // FIX: 読み込み前にサイズチェック
+            val lengthInt = length.toInt()
+            if (lengthInt <= 0) {
                 return@runCatching ByteArray(0)
             }
 
-            val bytes = ByteArray(length)
+            val bytes = ByteArray(lengthInt)
             bytes.usePinned { pinned ->
                 memcpy(pinned.addressOf(0), data.bytes, data.length)
             }
@@ -142,7 +210,12 @@ class IosFileSystem : FileSystem {
 
     override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
+            // FIX: サイズチェックのため、まずファイルサイズを確認
+            val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
+            val fileSize = (attributes?.get(NSFileSize) as? NSNumber)?.longValue ?: 0L
+            validateFileSize(fileSize, "file") // FIX: 読み込み前にサイズチェック
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
                 val content = NSString.stringWithContentsOfFile(
@@ -160,6 +233,7 @@ class IosFileSystem : FileSystem {
 
     override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
@@ -174,6 +248,7 @@ class IosFileSystem : FileSystem {
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
@@ -267,6 +342,8 @@ class IosFileSystem : FileSystem {
 
     override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
 
@@ -312,6 +389,12 @@ class IosFileSystem : FileSystem {
     // ========================================
 
     override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
+        if (relativePath.isNotEmpty()) {
+            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
@@ -342,6 +425,13 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = "${base.path}/$relativePath"
@@ -368,6 +458,13 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = "${base.path}/$relativePath"
@@ -394,10 +491,15 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        // FIX: 入力検証はwriteBytesで実行される
         return writeBytes(base, relativePath, content.encodeToByteArray())
     }
 
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = "${base.path}/$relativePath"
@@ -457,6 +559,12 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
+        if (relativePath.isNotEmpty()) {
+            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"

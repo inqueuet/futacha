@@ -55,6 +55,83 @@ data class StorageError(
     val timestamp: Long
 )
 
+/**
+ * FIX: アーキテクチャと依存関係について
+ *
+ * ## レイヤー構造：
+ * UI層 → Store層 → Repository層 → Service層 → Network/Storage層
+ *
+ * ## 依存方向（循環依存の防止）：
+ * - UI → AppStateStore (状態管理)
+ * - AppStateStore → PlatformStateStorage (永続化)
+ * - BoardRepository → CookieRepository (認証)
+ * - Repository → Service → API/FileSystem
+ *
+ * ## 設計原則：
+ * 1. 上位レイヤーは下位レイヤーに依存可能
+ * 2. 下位レイヤーは上位レイヤーに依存禁止（循環依存防止）
+ * 3. 同一レイヤー内の依存は最小限に
+ * 4. インターフェースによる抽象化を優先
+ *
+ * ## 既知の大規模クラス：
+ * - AppStateStore: 多くの責務を持つが、状態管理の中心として機能
+ *   将来的な分割案: UserPreferencesStore, ThreadStateStore, BoardStateStore
+ *
+ * ## エラーハンドリングのベストプラクティス：
+ *
+ * ### 1. 例外の種類と処理
+ * - **CancellationException**: 必ず再スローすること（正常なキャンセル）
+ * - **NetworkException**: ユーザーに通知してリトライを提案
+ * - **IllegalArgumentException**: 入力検証エラー、ユーザーに修正を促す
+ * - **IOException**: ファイル/ネットワークエラー、リトライ可能
+ *
+ * ### 2. Result型の使用
+ * - I/O操作は必ずResult<T>を返す（FileSystem、Repository層）
+ * - .getOrThrow()、.getOrElse()、.onFailure()で明示的に処理
+ * - Resultを無視すると、エラーが見逃され、データ破損の原因となる
+ *
+ * ### 3. ログ出力
+ * - エラーログには必ず例外オブジェクトを含める
+ * - ユーザー操作のエラーはw (Warning)レベル
+ * - システムエラーはe (Error)レベル
+ * - 個人情報・機密情報をログに出力しない
+ *
+ * ## パフォーマンスのベストプラクティス：
+ *
+ * ### 1. スレッド/Dispatcher使用
+ * - UI更新: Dispatchers.Main（自動）
+ * - CPU集約的処理: AppDispatchers.parsing または Dispatchers.Default
+ * - I/O処理: AppDispatchers.io または Dispatchers.IO
+ * - メインスレッドでの重い処理は厳禁
+ *
+ * ### 2. メモリ管理
+ * - LRUキャッシュのサイズ制限を設定（20-100エントリ）
+ * - 大量リストはLazyColumn/LazyRowを使用
+ * - 画像は適切にキャッシュしてメモリ使用を制御
+ *
+ * ### 3. リソースリーク防止
+ * - Flowのcollectは必ずLaunchedEffect/LaunchedEffectKeyで管理
+ * - CoroutineScopeは必ずライフサイクルに紐付ける
+ * - 一時ファイルは確実にクリーンアップ
+ *
+ * ## セキュリティのベストプラクティス：
+ *
+ * ### 1. 入力検証
+ * - ユーザー入力は必ず検証（長さ、null文字、パストラバーサル）
+ * - ファイルサイズは上限チェック（100MB推奨）
+ * - ReDoS攻撃防止のため、正規表現に長さ制限を追加
+ *
+ * ### 2. データ保護
+ * - パスワードは平文でログに出力しない
+ * - 一時ファイルは削除前に確実にクリーンアップ
+ * - アトミック書き込みでデータ破損を防止
+ *
+ * ### 3. 権限管理
+ * - ファイルアクセスは必要最小限に
+ * - Android 10+ではSAF（Storage Access Framework）を使用
+ * - 権限喪失時は適切なエラーメッセージを表示
+ */
+
 private const val DEFAULT_CATALOG_GRID_COLUMNS = 5
 private const val MIN_CATALOG_GRID_COLUMNS = 2
 private const val MAX_CATALOG_GRID_COLUMNS = 8
@@ -89,6 +166,15 @@ class AppStateStore internal constructor(
 ) {
     private val boardsSerializer = ListSerializer(BoardSummary.serializer())
     private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
+
+    // FIX: 複数のMutexを使用する際のデッドロック防止ガイドライン
+    // - 各Mutexは独立したデータを保護しており、ネストしたロックは避けること
+    // - もしネストが必要な場合は、常に以下の順序でロックすること:
+    //   1. boardsMutex
+    //   2. historyMutex
+    //   3. scrollPositionMutex
+    //   4. selfPostIdentifiersMutex
+    // - 現在の実装では各Mutexは独立して使用されており、デッドロックのリスクは低い
     private val boardsMutex = Mutex()
     private val historyMutex = Mutex()
     private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex

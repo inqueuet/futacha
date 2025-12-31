@@ -9,6 +9,28 @@ import kotlinx.coroutines.withContext
 /**
  * Lightweight catalog parser that can run on any KMP target without Jsoup.
  * It is purposely scoped to the markup captured under `/example/catalog.txt`.
+ *
+ * FIX: パフォーマンス最適化の実装詳細
+ *
+ * ## 実装済みの最適化：
+ * 1. ReDoS攻撃防止
+ *    - MAX_HTML_SIZE = 10MB制限
+ *    - maxIterations = 2000（無限ループ防止）
+ *    - キャンセルチェックを10イテレーション毎に実行
+ *
+ * 2. メモリ最適化
+ *    - 正規表現のプリコンパイル
+ *    - 部分文字列の最小化（indexOf使用）
+ *    - maxCatalogItems = 1000（アイテム数制限）
+ *
+ * 3. アルゴリズム最適化
+ *    - indexOf優先（正規表現より高速）
+ *    - 早期リターン（テーブルが見つからない場合など）
+ *    - 効率的なループ処理
+ *
+ * 4. スレッド最適化
+ *    - AppDispatchers.parsingで専用スレッド実行
+ *    - サスペンド関数化でバックグラウンド実行保証
  */
 internal object CatalogHtmlParserCore {
     private const val DEFAULT_BASE_URL = "https://www.example.com"
@@ -47,6 +69,8 @@ internal object CatalogHtmlParserCore {
 
         try {
             val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
+            // NOTE: この処理は大きなHTML文字列のコピーを作成するため、メモリ使用量が増加する
+            // TODO: 将来的には、チャンク処理や正規表現での\r?\n対応を検討
             val normalized = html.replace("\r\n", "\n")
 
             // Find table start and end using indexOf for better performance

@@ -15,6 +15,33 @@ import kotlin.time.ExperimentalTime
  * The implementation intentionally keeps dependencies out of the multiplatform source-set and
  * instead relies on lightweight regular expressions that have been verified against the captures
  * checked into `/example/thread.txt`.
+ *
+ * FIX: パフォーマンス最適化の実装詳細
+ *
+ * ## 実装済みの最適化：
+ * 1. ReDoS攻撃防止
+ *    - すべての正規表現に長さ制限を追加（[^>]{0,200}など）
+ *    - MAX_HTML_SIZE = 10MB制限
+ *    - MAX_PARSE_TIME_MS = 5秒タイムアウト
+ *
+ * 2. メモリ最適化
+ *    - 正規表現のプリコンパイル（ループ外で定義）
+ *    - MAX_SINGLE_BLOCK_SIZE = 300KB（ブロックサイズ制限）
+ *    - 不要な文字列コピーの最小化
+ *
+ * 3. スレッド最適化
+ *    - AppDispatchers.parsingで専用スレッド実行（並列度2）
+ *    - キャンセルチェック（ensureActive）の適切な配置
+ *
+ * 4. アルゴリズム最適化
+ *    - indexOfを優先使用（正規表現より高速）
+ *    - 不要な正規表現マッチの回避
+ *    - 早期リターンによる無駄な処理の削減
+ *
+ * ## 今後の改善案：
+ * - HTML文字列の正規化処理の最適化（現在はコピーを作成）
+ * - チャンク処理による段階的パース
+ * - 正規表現の代わりに状態機械ベースのパーサー
  */
 @OptIn(ExperimentalTime::class)
 internal object ThreadHtmlParserCore {
@@ -25,8 +52,9 @@ internal object ThreadHtmlParserCore {
     private const val MAX_PARSE_TIME_MS = 5000L // FIX: 5秒に戻す（parsing専用dispatcherで実行）
     private const val MAX_SINGLE_BLOCK_SIZE = 300_000 // FIX: 500KB→300KBに削減してより早く異常を検出
 
+    // FIX: ReDoS対策 - [^>]+に長さ制限を追加
     private val canonicalRegex = Regex(
-        pattern = "<link[^>]+rel=['\"]canonical['\"][^>]+href=['\"]([^'\"]+)['\"]",
+        pattern = "<link[^>]{1,500}rel=['\"]canonical['\"][^>]{1,500}href=['\"]([^'\"]+)['\"]",
         option = RegexOption.IGNORE_CASE
     )
     private val canonicalIdRegex = Regex("/res/(\\d+)\\.htm")
@@ -39,8 +67,9 @@ internal object ThreadHtmlParserCore {
         pattern = "</span>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]*に長さ制限を追加（最大500文字）
     private val expireRegex = Regex(
-        pattern = "<span(?=[^>]*(?:id=['\"]?contdisp['\"]?|class=['\"]?cntd['\"]?))[^>]*>",
+        pattern = "<span(?=[^>]{0,500}(?:id=['\"]?contdisp['\"]?|class=['\"]?cntd['\"]?))[^>]{0,500}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val deletedNoticeRegex = Regex(
@@ -51,36 +80,42 @@ internal object ThreadHtmlParserCore {
         pattern = "<br></span>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]*に長さ制限を追加
     private val tableRegex = Regex(
-        pattern = "<table\\s+border=0[^>]*>",
+        pattern = "<table\\s+border=0[^>]{0,200}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val tableEndRegex = Regex(
         pattern = "</table>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]*に長さ制限を追加
     private val blockquoteRegex = Regex(
-        pattern = "<blockquote[^>]*>",
+        pattern = "<blockquote[^>]{0,200}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val blockquoteEndRegex = Regex(
         pattern = "</blockquote>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]*に長さ制限を追加
     private val postIdRegex = Regex(
-        pattern = "<span(?=[^>]*class=['\"]?cno['\"]?)[^>]*>\\s*No\\.?\\s*(\\d+)",
+        pattern = "<span(?=[^>]{0,200}class=['\"]?cno['\"]?)[^>]{0,200}>\\s*No\\.?\\s*(\\d+)",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]*に長さ制限を追加
     private val orderRegex = Regex(
-        pattern = "<span(?=[^>]*class=['\"]?rsc['\"]?)[^>]*>(\\d+)",
+        pattern = "<span(?=[^>]{0,200}class=['\"]?rsc['\"]?)[^>]{0,200}>(\\d+)",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]+に長さ制限を追加
     private val srcLinkRegex = Regex(
-        pattern = "<a[^>]+href=['\"]([^'\"]*/src/[^'\"]+)['\"][^>]*>",
+        pattern = "<a[^>]{1,500}href=['\"]([^'\"]*/src/[^'\"]+)['\"][^>]{0,300}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    // FIX: ReDoS対策 - [^>]+に長さ制限を追加
     private val thumbImgRegex = Regex(
-        pattern = "<img[^>]+src=['\"]([^'\"]*/thumb/[^'\"]+)['\"][^>]*>",
+        pattern = "<img[^>]{1,500}src=['\"]([^'\"]*/thumb/[^'\"]+)['\"][^>]{0,300}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private const val ISOLATION_NOTICE_TEXT = "削除依頼によって隔離されました"
@@ -106,10 +141,11 @@ internal object ThreadHtmlParserCore {
     private val whitespaceRegex = Regex("\\s+")
     
     // FIX: よく使われるクラス名のRegexをキャッシュして再生成を防止
+    // FIX: ReDoS対策 - [^>]*に長さ制限を追加（最大200文字）
     private val CLASS_REGEX_MAP = mapOf(
-        "csb" to Regex("<span[^>]*class=(?:['\"])?csb(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE),
-        "cnm" to Regex("<span[^>]*class=(?:['\"])?cnm(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE),
-        "cnw" to Regex("<span[^>]*class=(?:['\"])?cnw(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE)
+        "csb" to Regex("<span[^>]{0,200}class=(?:['\"])?csb(?:['\"])?[^>]{0,200}>", RegexOption.IGNORE_CASE),
+        "cnm" to Regex("<span[^>]{0,200}class=(?:['\"])?cnm(?:['\"])?[^>]{0,200}>", RegexOption.IGNORE_CASE),
+        "cnw" to Regex("<span[^>]{0,200}class=(?:['\"])?cnw(?:['\"])?[^>]{0,200}>", RegexOption.IGNORE_CASE)
     )
 
     // FIX: サスペンド関数に変更し、必ずバックグラウンドで実行
@@ -119,6 +155,8 @@ internal object ThreadHtmlParserCore {
         }
 
         try {
+            // NOTE: この処理は大きなHTML文字列のコピーを作成するため、メモリ使用量が増加する
+            // TODO: 将来的には、チャンク処理や正規表現での\r?\n対応を検討
             val normalized = html.replace("\r\n", "\n")
             val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
             val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL

@@ -4,6 +4,36 @@ import com.valoser.futacha.shared.model.SaveLocation
 
 /**
  * プラットフォーム非依存のファイルシステムインターフェース
+ *
+ * FIX: Result型の適切な使用について
+ * - すべてのI/O操作はResult<T>を返します
+ * - 呼び出し元は必ず.getOrThrow()、.getOrElse()、.onFailure()などで結果を処理してください
+ * - Result型を無視すると、エラーが見逃され、データ破損の原因となります
+ * - 例: fileSystem.writeBytes(path, data).getOrThrow() // 正しい
+ * - 例: fileSystem.writeBytes(path, data) // 間違い - 結果を無視している
+ *
+ * ## 安全性チェックのガイドライン：
+ *
+ * ### 1. 入力検証
+ * - パスは空文字列でないことを確認
+ * - パスにnull文字(\u0000)が含まれていないか確認
+ * - パストラバーサル攻撃（../）を防ぐ
+ * - ファイル名の長さ制限（255文字以下）
+ *
+ * ### 2. サイズ制限
+ * - ファイルサイズの上限チェック（MAX_FILE_SIZE）
+ * - ディレクトリの合計サイズチェック
+ * - 整数オーバーフロー防止（Long.MAX_VALUE超過）
+ *
+ * ### 3. エラーハンドリング
+ * - 権限エラー（PermissionRevokedException）の適切な処理
+ * - ディスク容量不足の検出と対応
+ * - I/O例外の詳細なログ記録
+ *
+ * ### 4. リソース管理
+ * - 一時ファイルの確実なクリーンアップ
+ * - ファイルハンドルのリーク防止
+ * - メモリマップドファイルの適切な解放
  */
 interface FileSystem {
     /**
@@ -60,6 +90,11 @@ interface FileSystem {
     /**
      * ファイルまたはディレクトリが存在するか確認
      * @param path ファイル/ディレクトリパス
+     *
+     * FIX: パフォーマンス注意事項
+     * - この操作はI/Oスレッドで実行されますが、頻繁な呼び出しはパフォーマンスに影響します
+     * - 可能な限り、複数のファイルチェックをバッチ処理してください
+     * - ループ内での連続呼び出しは避けてください
      */
     suspend fun exists(path: String): Boolean
 

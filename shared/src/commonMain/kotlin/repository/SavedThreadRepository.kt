@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -24,15 +25,22 @@ class SavedThreadRepository(
     private val baseDirectory: String = MANUAL_SAVE_DIRECTORY,
     private val baseSaveLocation: SaveLocation? = null
 ) {
-    private object IndexMutexRegistry {
-        private val mapMutex = Mutex()
-        private val mutexes = mutableMapOf<String, Mutex>()
+    // FIX: メモリリーク防止 - 静的レジストリではなく、インスタンス毎のMutexを使用
+    private val indexMutex = Mutex()
 
-        suspend fun getMutex(key: String): Mutex {
-            return mapMutex.withLock {
-                mutexes.getOrPut(key) { Mutex() }
+    // FIX: 整数オーバーフロー対策 - 安全なサイズ合計計算
+    private fun List<SavedThread>.safeTotalSize(): Long {
+        var total = 0L
+        for (thread in this) {
+            val newTotal = total + thread.totalSize
+            // オーバーフローチェック（符号反転を検出）
+            if (newTotal < total) {
+                Logger.w("SavedThreadRepository", "Total size overflow detected, capping at Long.MAX_VALUE")
+                return Long.MAX_VALUE
             }
+            total = newTotal
         }
+        return total
     }
 
     private val json = Json {
@@ -43,7 +51,6 @@ class SavedThreadRepository(
     private val resolvedSaveLocation = baseSaveLocation ?: SaveLocation.fromString(baseDirectory)
     private val useSaveLocationApi = resolvedSaveLocation !is SaveLocation.Path
     private val indexRelativePath = "index.json"
-    private val indexMutexKey = "saved_thread_index:${resolvedSaveLocation.toRawString()}"
 
     /**
      * インデックスを読み込み
@@ -63,6 +70,11 @@ class SavedThreadRepository(
 
     /**
      * スレッドをインデックスに追加
+     *
+     * FIX: データ整合性保証
+     * - リトライロジックで一時的な書き込み失敗に対応
+     * - インデックス更新とファイル保存は同じトランザクション内で実行
+     * - 失敗時は古いインデックスが保持されるため、整合性が保たれる
      */
     suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = withIndexLock {
         runCatching {
@@ -74,7 +86,7 @@ class SavedThreadRepository(
 
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
-                totalSize = updatedThreads.sumOf { it.totalSize },
+                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
@@ -106,7 +118,7 @@ class SavedThreadRepository(
 
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
-                totalSize = updatedThreads.sumOf { it.totalSize },
+                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
@@ -156,7 +168,7 @@ class SavedThreadRepository(
             val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
-                totalSize = updatedThreads.sumOf { it.totalSize },
+                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
@@ -205,7 +217,7 @@ class SavedThreadRepository(
 
             val updatedIndex = SavedThreadIndex(
                 threads = remainingThreads,
-                totalSize = remainingThreads.sumOf { it.totalSize },
+                totalSize = remainingThreads.safeTotalSize(), // FIX: オーバーフロー対策
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
             saveIndexUnlocked(updatedIndex)
@@ -277,7 +289,7 @@ class SavedThreadRepository(
 
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
-                totalSize = updatedThreads.sumOf { it.totalSize },
+                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
@@ -286,8 +298,7 @@ class SavedThreadRepository(
     }
 
     private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.Default) {
-        val mutex = IndexMutexRegistry.getMutex(indexMutexKey)
-        mutex.withLock {
+        indexMutex.withLock {
             block()
         }
     }
