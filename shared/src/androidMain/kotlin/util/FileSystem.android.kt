@@ -534,6 +534,47 @@ class AndroidFileSystem(
         }
     }
 
+    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
+                delete(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runCatching {
+                    val treeUri = Uri.parse(base.uri)
+                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+
+                    if (relativePath.isEmpty()) {
+                        if (!baseDir.delete()) {
+                            throw IllegalStateException("Failed to delete base directory: ${base.uri}")
+                        }
+                        return@runCatching Unit
+                    }
+
+                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
+                    val parentDir = if (parentPath.isEmpty()) {
+                        baseDir
+                    } else {
+                        navigateToDirectory(baseDir, parentPath)
+                            ?: throw IllegalStateException("Directory not found: $parentPath")
+                    }
+
+                    val target = parentDir.findFile(fileName)
+                        ?: throw IllegalStateException("Target not found: $fileName")
+
+                    if (!target.delete()) {
+                        throw IllegalStateException("Failed to delete: $relativePath")
+                    }
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
     // ========================================
     // Helper methods for DocumentFile navigation
     // ========================================

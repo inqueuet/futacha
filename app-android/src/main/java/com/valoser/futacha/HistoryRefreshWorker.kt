@@ -37,7 +37,9 @@ class HistoryRefreshWorker(
 
         return try {
             withTimeout(REFRESH_TIMEOUT_MILLIS) {
-                app.historyRefresher.refresh()
+                app.historyRefresher.refresh(
+                    autoSaveBudgetMillis = AUTO_SAVE_BUDGET_MILLIS
+                )
             }
             Result.success()
         } catch (e: TimeoutCancellationException) {
@@ -54,6 +56,7 @@ class HistoryRefreshWorker(
         const val UNIQUE_WORK_NAME = "history_refresh_periodic"
         private const val UNIQUE_ONE_TIME_NAME = "history_refresh_once"
         private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(5)
+        private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(3)
         private const val INTERVAL_MINUTES = 15L
 
         private val constraints: Constraints = Constraints.Builder()

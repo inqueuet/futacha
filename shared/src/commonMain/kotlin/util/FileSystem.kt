@@ -134,6 +134,13 @@ interface FileSystem {
      * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を確認)
      */
     suspend fun exists(base: SaveLocation, relativePath: String = ""): Boolean
+
+    /**
+     * ファイルまたはディレクトリを削除 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を削除)
+     */
+    suspend fun delete(base: SaveLocation, relativePath: String = ""): Result<Unit>
 }
 
 /**

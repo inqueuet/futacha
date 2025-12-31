@@ -104,6 +104,13 @@ internal object ThreadHtmlParserCore {
     private val deletedRegex = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE)
     private val brTagRegex = Regex("(?i)<br\\s*/?>")
     private val whitespaceRegex = Regex("\\s+")
+    
+    // FIX: よく使われるクラス名のRegexをキャッシュして再生成を防止
+    private val CLASS_REGEX_MAP = mapOf(
+        "csb" to Regex("<span[^>]*class=(?:['\"])?csb(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE),
+        "cnm" to Regex("<span[^>]*class=(?:['\"])?cnm(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE),
+        "cnw" to Regex("<span[^>]*class=(?:['\"])?cnw(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE)
+    )
 
     // FIX: サスペンド関数に変更し、必ずバックグラウンドで実行
     suspend fun parseThread(html: String): ThreadPage = kotlinx.coroutines.withContext(AppDispatchers.parsing) {
@@ -407,8 +414,8 @@ internal object ThreadHtmlParserCore {
     }
 
     private fun sanitizeInlineText(block: String, className: String): String? {
-        val startPattern = "<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>"
-        val startRegex = Regex(startPattern, RegexOption.IGNORE_CASE)
+        // FIX: キャッシュされたRegexを使用
+        val startRegex = CLASS_REGEX_MAP[className] ?: Regex("<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE)
         val startMatch = startRegex.find(block) ?: return null
 
         // FIX: 整数オーバーフロー防止 - Int.MAX_VALUE - 1も弾く

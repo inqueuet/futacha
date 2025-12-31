@@ -410,7 +410,10 @@ class DefaultBoardRepository(
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
         return runCatching {
             val snippet = api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
-            parser.extractOpImageUrl(snippet, baseUrl)
+            // FIX: パース処理をバックグラウンドスレッドへ移動
+            kotlinx.coroutines.withContext(Dispatchers.Default) {
+                parser.extractOpImageUrl(snippet, baseUrl)
+            }
         }.getOrElse { e ->
             Logger.w(TAG, "Failed to resolve OP image for thread $threadId: ${e.message}")
             null

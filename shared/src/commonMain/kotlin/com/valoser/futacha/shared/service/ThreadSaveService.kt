@@ -541,39 +541,47 @@ class ThreadSaveService(
             // SaveLocation対応: nullの場合は従来の fullPath 使用、非nullの場合は新API使用
             if (saveLocation != null) {
                 val fileRelativePath = "$threadId/$relativePath"
-                // 最初にファイルを作成
-                fileSystem.writeBytes(saveLocation, fileRelativePath, ByteArray(0)).getOrThrow()
+                var completed = false
+                try {
+                    // 最初にファイルを作成
+                    fileSystem.writeBytes(saveLocation, fileRelativePath, ByteArray(0)).getOrThrow()
 
-                // FIX: 無限ループ防止 - イテレーションカウンタを追加
-                var iterations = 0
-                // チャンクごとに読み込んで追記
-                while (!channel.isClosedForRead) {
-                    // FIX: 最大イテレーション数チェック
-                    if (iterations >= MAX_READ_ITERATIONS) {
-                        throw IllegalStateException("Save aborted: exceeded max read iterations ($MAX_READ_ITERATIONS)")
+                    // FIX: 無限ループ防止 - イテレーションカウンタを追加
+                    var iterations = 0
+                    // チャンクごとに読み込んで追記
+                    while (!channel.isClosedForRead) {
+                        // FIX: 最大イテレーション数チェック
+                        if (iterations >= MAX_READ_ITERATIONS) {
+                            throw IllegalStateException("Save aborted: exceeded max read iterations ($MAX_READ_ITERATIONS)")
+                        }
+                        iterations++
+
+                        // FIX: 定期的にキャンセルチェック（100イテレーション毎）
+                        if (iterations % 100 == 0) {
+                            coroutineContext.ensureActive()
+                        }
+
+                        if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
+                            throw IllegalStateException("Save aborted: exceeded time limit during download")
+                        }
+                        val buffer = ByteArray(bufferSize)
+                        val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
+                        if (bytesRead <= 0) break
+
+                        val chunk = buffer.copyOf(bytesRead)
+                        totalBytesRead += chunk.size
+
+                        if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                            throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+                        }
+
+                        fileSystem.appendBytes(saveLocation, fileRelativePath, chunk).getOrThrow()
                     }
-                    iterations++
-
-                    // FIX: 定期的にキャンセルチェック（100イテレーション毎）
-                    if (iterations % 100 == 0) {
-                        coroutineContext.ensureActive()
+                    completed = true
+                } finally {
+                    if (!completed) {
+                        fileSystem.delete(saveLocation, fileRelativePath).getOrNull()
                     }
-
-                    if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
-                        throw IllegalStateException("Save aborted: exceeded time limit during download")
-                    }
-                    val buffer = ByteArray(bufferSize)
-                    val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
-                    if (bytesRead <= 0) break
-
-                    val chunk = buffer.copyOf(bytesRead)
-                    totalBytesRead += chunk.size
-
-                    if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
-                        throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
-                    }
-
-                    fileSystem.appendBytes(saveLocation, fileRelativePath, chunk).getOrThrow()
                 }
             } else {
                 val fullPath = "$baseDir/$relativePath"

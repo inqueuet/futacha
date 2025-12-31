@@ -521,12 +521,20 @@ fun CatalogScreen(
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
                 is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
                 is CatalogUiState.Success -> {
-                    val sortedItems = catalogMode.applyLocalSort(state.items)
-                    val ngFilteredItems = sortedItems.filterByCatalogNgWords(
-                        catalogNgWords = catalogNgWords,
-                        enabled = catalogNgFilteringEnabled
-                    )
-                    val visibleItems = ngFilteredItems.filterByQuery(searchQuery)
+                    // FIX: カタログのソート・フィルタリングをバックグラウンドで実行し、UIスレッドの負荷を軽減
+                    val visibleItems: List<CatalogItem> by produceState<List<CatalogItem>>(
+                        initialValue = emptyList(),
+                        key1 = state.items,
+                        key2 = listOf(catalogMode, catalogNgWords, catalogNgFilteringEnabled, searchQuery)
+                    ) {
+                        value = withContext(Dispatchers.Default) {
+                            state.items
+                                .let { catalogMode.applyLocalSort(it) }
+                                .filterByCatalogNgWords(catalogNgWords, catalogNgFilteringEnabled)
+                                .filterByQuery(searchQuery)
+                        }
+                    }
+
                     CatalogSuccessContent(
                         items = visibleItems,
                         board = board,

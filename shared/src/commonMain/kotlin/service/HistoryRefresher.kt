@@ -71,8 +71,11 @@ class HistoryRefresher(
     @OptIn(ExperimentalTime::class)
     suspend fun refresh(
         boardsSnapshot: List<BoardSummary>? = null,
-        historySnapshot: List<ThreadHistoryEntry>? = null
+        historySnapshot: List<ThreadHistoryEntry>? = null,
+        autoSaveBudgetMillis: Long? = null
     ) = withContext(dispatcher) {
+        val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
+        val autoSaveDeadline = autoSaveBudgetMillis?.let { refreshStartedAt + it }
         val boards = boardsSnapshot ?: stateStore.boards.first()
         val history = historySnapshot ?: stateStore.history.first()
         if (history.isEmpty()) return@withContext
@@ -84,7 +87,6 @@ class HistoryRefresher(
         val maxErrorsToTrack = 100 // 最大100件まで記録、表示は10件
         // FIX: updatesマップの最大サイズを設定（メモリ使用量制限）
         val maxUpdatesToAccumulate = 1000 // 最大1000件まで蓄積したらフラッシュ
-        val skipped = skipThreadIds.value
 
         // FIX: Process in batches to avoid creating thousands of coroutines at once
         // This prevents memory spikes when history size is large
@@ -102,7 +104,7 @@ class HistoryRefresher(
                             boardKey = resolvedBoardId.ifBlank { entry.boardUrl.ifBlank { board?.url.orEmpty() } },
                             threadId = entry.threadId
                         )
-                        if (key in skipped) return@async
+                        if (skipThreadIds.value.contains(key)) return@async
                         val baseUrl = board?.url
                             ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
                                 runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
@@ -120,25 +122,29 @@ class HistoryRefresher(
 
                                 // 背景更新でも本文・メディアを自動保存
                                 if (httpClient != null && fileSystem != null && autoSavedThreadRepository != null) {
-                                    val saver = ThreadSaveService(httpClient, fileSystem)
-                                    runCatching {
-                                        saver.saveThread(
-                                            threadId = entry.threadId,
-                                            boardId = entry.boardId.ifBlank { board?.id ?: "" },
-                                            boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
-                                            boardUrl = baseUrl,
-                                            title = resolvedTitle,
-                                            expiresAtLabel = page.expiresAtLabel,
-                                            posts = page.posts,
-                                            baseDirectory = AUTO_SAVE_DIRECTORY,
-                                            writeMetadata = true
-                                        ).getOrThrow()
-                                    }.onSuccess { saved ->
-                                        autoSavedThreadRepository.addThreadToIndex(saved)
-                                            .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
-                                        hasAutoSave = true
-                                    }.onFailure { error ->
-                                        Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
+                                    if (autoSaveDeadline != null && Clock.System.now().toEpochMilliseconds() > autoSaveDeadline) {
+                                        Logger.w(HISTORY_REFRESH_TAG, "Auto-save budget exceeded, skipping auto-save for ${entry.threadId}")
+                                    } else {
+                                        val saver = ThreadSaveService(httpClient, fileSystem)
+                                        runCatching {
+                                            saver.saveThread(
+                                                threadId = entry.threadId,
+                                                boardId = entry.boardId.ifBlank { board?.id ?: "" },
+                                                boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                                boardUrl = baseUrl,
+                                                title = resolvedTitle,
+                                                expiresAtLabel = page.expiresAtLabel,
+                                                posts = page.posts,
+                                                baseDirectory = AUTO_SAVE_DIRECTORY,
+                                                writeMetadata = true
+                                            ).getOrThrow()
+                                        }.onSuccess { saved ->
+                                            autoSavedThreadRepository.addThreadToIndex(saved)
+                                                .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
+                                            hasAutoSave = true
+                                        }.onFailure { error ->
+                                            Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
+                                        }
                                     }
                                 }
 

@@ -553,70 +553,62 @@ class AppStateStore internal constructor(
         replyCount: Int
     ) {
         // FIX: デッドロック防止 - Flow.first()をmutex外で呼び出し
-        try {
-            val currentHistory = readHistorySnapshot() ?: run {
-                Logger.w(TAG, "Skipping scroll position update due to missing snapshot")
+        // データストアからの読み込みをロック外で行う
+        val currentHistory = readHistorySnapshot() ?: return
+
+        historyMutex.withLock {
+            val existingEntry = currentHistory.firstOrNull {
+                matchesHistoryEntry(it, threadId, boardId)
+            }
+
+            // Skip update if scroll position hasn't changed to reduce unnecessary writes
+            if (existingEntry != null &&
+                existingEntry.lastReadItemIndex == index &&
+                existingEntry.lastReadItemOffset == offset
+            ) {
                 return
             }
 
-            historyMutex.withLock {
-
-                val existingEntry = currentHistory.firstOrNull {
-                    matchesHistoryEntry(it, threadId, boardId)
-                }
-
-                // Skip update if scroll position hasn't changed to reduce unnecessary writes
-                if (existingEntry != null &&
-                    existingEntry.lastReadItemIndex == index &&
-                    existingEntry.lastReadItemOffset == offset
-                ) {
-                    return
-                }
-
-                val updatedHistory = when {
-                    existingEntry != null -> {
-                        // Update existing entry's scroll position while preserving other fields
-                        currentHistory.map { entry ->
-                            if (matchesHistoryEntry(entry, threadId, boardId)) {
-                                entry.copy(
-                                    lastReadItemIndex = index,
-                                    lastReadItemOffset = offset,
-                                    // Update visit time to reflect recent activity
-                                    lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
-                                )
-                            } else {
-                                entry
-                            }
-                        }
-                    }
-
-                    else -> {
-                        // Entry doesn't exist yet - create a new one
-                        buildList {
-                            add(
-                                ThreadHistoryEntry(
-                                    threadId = threadId,
-                                    boardId = boardId,
-                                    title = title,
-                                    titleImageUrl = titleImageUrl,
-                                    boardName = boardName,
-                                    boardUrl = boardUrl,
-                                    lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
-                                    replyCount = replyCount,
-                                    lastReadItemIndex = index,
-                                    lastReadItemOffset = offset
-                                )
-                            )
-                            addAll(currentHistory)
-                        }
+            val updatedHistory = if (existingEntry != null) {
+                // Update existing entry's scroll position while preserving other fields
+                currentHistory.map { entry ->
+                    if (matchesHistoryEntry(entry, threadId, boardId)) {
+                        entry.copy(
+                            lastReadItemIndex = index,
+                            lastReadItemOffset = offset,
+                            // Update visit time to reflect recent activity
+                            lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds()
+                        )
+                    } else {
+                        entry
                     }
                 }
-
-                persistHistory(updatedHistory)
+            } else {
+                // Entry doesn't exist yet - create a new one
+                buildList {
+                    add(
+                        ThreadHistoryEntry(
+                            threadId = threadId,
+                            boardId = boardId,
+                            title = title,
+                            titleImageUrl = titleImageUrl,
+                            boardName = boardName,
+                            boardUrl = boardUrl,
+                            lastVisitedEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                            replyCount = replyCount,
+                            lastReadItemIndex = index,
+                            lastReadItemOffset = offset
+                        )
+                    )
+                    addAll(currentHistory)
+                }
             }
-        } catch (e: Exception) {
-            Logger.e(TAG, "Failed to update scroll position for thread $threadId", e)
-            // Log error but don't crash
+
+            try {
+                persistHistory(updatedHistory)
+            } catch (e: Exception) {
+                Logger.e(TAG, "Failed to persist updated history for thread $threadId", e)
+            }
         }
     }
 

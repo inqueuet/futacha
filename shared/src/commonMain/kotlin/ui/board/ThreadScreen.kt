@@ -214,8 +214,14 @@ fun ThreadScreen(
         }
     }
     val autoSaveRepository = autoSavedThreadRepository
-    val manualSaveRepository = remember(fileSystem, manualSaveDirectory) {
-        fileSystem?.let { fs -> SavedThreadRepository(fs, baseDirectory = manualSaveDirectory) }
+    val manualSaveRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
+        fileSystem?.let { fs ->
+            SavedThreadRepository(
+                fs,
+                baseDirectory = manualSaveDirectory,
+                baseSaveLocation = manualSaveLocation
+            )
+        }
     }
     var autoSaveJob by remember { mutableStateOf<Job?>(null) }
     val lastAutoSaveTimestamp = rememberSaveable(threadId) { mutableStateOf(0L) }
@@ -447,7 +453,8 @@ fun ThreadScreen(
                                 result.onSuccess { savedThread ->
                                     val repository = SavedThreadRepository(
                                         fileSystem,
-                                        baseDirectory = manualSaveDirectory
+                                        baseDirectory = manualSaveDirectory,
+                                        baseSaveLocation = manualSaveLocation
                                     )
                                     repository.addThreadToIndex(savedThread)
                                     saveProgress = null
@@ -979,7 +986,8 @@ fun ThreadScreen(
         }
     }
 
-    val futabaThreadColorScheme = rememberFutabaThreadColorScheme()
+    val appColorScheme = MaterialTheme.colorScheme
+    val futabaThreadColorScheme = rememberFutabaThreadColorScheme(appColorScheme)
 
     MaterialTheme(
         colorScheme = futabaThreadColorScheme,
@@ -1015,31 +1023,43 @@ fun ThreadScreen(
             modifier = modifier,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-                ThreadTopBar(
-                    boardName = board.name,
-                    threadTitle = resolvedThreadTitle,
-                    replyCount = resolvedReplyCount,
-                    statusLabel = statusLabel,
-                    isSearchActive = isSearchActive,
-                    searchQuery = searchQuery,
-                    currentSearchIndex = currentSearchResultIndex,
-                    totalSearchMatches = searchMatches.size,
-                    onSearchQueryChange = { searchQuery = it },
-                    onSearchPrev = { moveToPreviousSearchMatch() },
-                    onSearchNext = { moveToNextSearchMatch() },
-                    onSearchSubmit = { focusCurrentSearchMatch() },
-                    onSearchClose = { isSearchActive = false },
-                    onBack = onBack,
-                    onOpenHistory = { coroutineScope.launch { drawerState.open() } },
-                    onSearch = { isSearchActive = true },
-                    onMenuSettings = { isGlobalSettingsVisible = true }
-                )
+                MaterialTheme(
+                    colorScheme = appColorScheme,
+                    typography = MaterialTheme.typography,
+                    shapes = MaterialTheme.shapes
+                ) {
+                    ThreadTopBar(
+                        boardName = board.name,
+                        threadTitle = resolvedThreadTitle,
+                        replyCount = resolvedReplyCount,
+                        statusLabel = statusLabel,
+                        isSearchActive = isSearchActive,
+                        searchQuery = searchQuery,
+                        currentSearchIndex = currentSearchResultIndex,
+                        totalSearchMatches = searchMatches.size,
+                        onSearchQueryChange = { searchQuery = it },
+                        onSearchPrev = { moveToPreviousSearchMatch() },
+                        onSearchNext = { moveToNextSearchMatch() },
+                        onSearchSubmit = { focusCurrentSearchMatch() },
+                        onSearchClose = { isSearchActive = false },
+                        onBack = onBack,
+                        onOpenHistory = { coroutineScope.launch { drawerState.open() } },
+                        onSearch = { isSearchActive = true },
+                        onMenuSettings = { isGlobalSettingsVisible = true }
+                    )
+                }
             },
             bottomBar = {
-                ThreadActionBar(
-                    menuEntries = threadMenuEntries,
-                    onAction = handleMenuEntry
-                )
+                MaterialTheme(
+                    colorScheme = appColorScheme,
+                    typography = MaterialTheme.typography,
+                    shapes = MaterialTheme.shapes
+                ) {
+                    ThreadActionBar(
+                        menuEntries = threadMenuEntries,
+                        onAction = handleMenuEntry
+                    )
+                }
             }
         ) { innerPadding ->
             val contentModifier = Modifier
@@ -2314,9 +2334,18 @@ private fun ThreadMessageText(
     val highlightStyle = SpanStyle(
         background = MaterialTheme.colorScheme.secondary.copy(alpha = 0.32f)
     )
-    val annotated: AnnotatedString = remember(messageHtml, quoteReferences, highlightRanges) {
-        buildAnnotatedMessage(messageHtml, quoteReferences, highlightRanges, highlightStyle)
+    // FIX: Offload heavy text processing to background thread to prevent UI stutter
+    val annotated: AnnotatedString by produceState(
+        initialValue = AnnotatedString(""),
+        key1 = messageHtml,
+        key2 = quoteReferences,
+        key3 = highlightRanges
+    ) {
+        value = withContext(Dispatchers.Default) {
+            buildAnnotatedMessage(messageHtml, quoteReferences, highlightRanges, highlightStyle)
+        }
     }
+
     val textColor = if (isDeleted) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
@@ -2784,6 +2813,12 @@ private const val QUOTE_PREVIEW_HOLD_MS = 200L
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
+private val BR_TAG_REGEX = Regex("(?i)<br\\s*/?>")
+private val P_TAG_REGEX = Regex("(?i)</p>")
+private val HTML_TAG_REGEX = Regex("<[^>]+>")
+private val HEX_ENTITY_REGEX = Regex("&#x([0-9a-fA-F]+);")
+private val NUM_ENTITY_REGEX = Regex("&#(\\d+);")
+
 private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
 private const val DEFAULT_DEL_REASON_CODE = "110"
 private const val AUTO_SAVE_INTERVAL_MS = 60_000L
@@ -2910,9 +2945,9 @@ private fun AnnotatedString.Builder.appendWithHighlights(
 
 private fun messageHtmlToLines(html: String): List<String> {
     val normalized = html
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace(Regex("(?i)</p>"), "\n\n")
-    val withoutTags = normalized.replace(Regex("<[^>]+>"), "")
+        .replace(BR_TAG_REGEX, "\n")
+        .replace(P_TAG_REGEX, "\n\n")
+    val withoutTags = normalized.replace(HTML_TAG_REGEX, "")
     val decoded = decodeAllHtmlEntities(withoutTags)
     return decoded.lines()
 }
@@ -2928,7 +2963,7 @@ private fun decodeAllHtmlEntities(value: String): String {
         .replace("&nbsp;", " ")
 
     // Decode hexadecimal entities like &#x1F43B; (🐻)
-    result = Regex("&#x([0-9a-fA-F]+);").replace(result) { match ->
+    result = HEX_ENTITY_REGEX.replace(result) { match ->
         val hexValue = match.groupValues.getOrNull(1) ?: return@replace match.value
         val codePoint = runCatching { hexValue.toInt(16) }.getOrNull()
         if (codePoint != null && codePoint in 0x20..0x10FFFF) {
@@ -2939,7 +2974,7 @@ private fun decodeAllHtmlEntities(value: String): String {
     }
 
     // Decode numeric entities like &#128059; (🐻)
-    result = Regex("&#(\\d+);").replace(result) { match ->
+    result = NUM_ENTITY_REGEX.replace(result) { match ->
         val numValue = match.groupValues.getOrNull(1) ?: return@replace match.value
         val codePoint = runCatching { numValue.toInt() }.getOrNull()
         if (codePoint != null && codePoint in 0x20..0x10FFFF) {
@@ -3890,7 +3925,7 @@ private fun ThreadActionBar(
     }
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.primary
+        color = NavigationBarDefaults.containerColor
     ) {
         Row(
             modifier = Modifier
@@ -3906,7 +3941,7 @@ private fun ThreadActionBar(
                     Icon(
                         imageVector = meta.icon,
                         contentDescription = meta.label,
-                        tint = MaterialTheme.colorScheme.onPrimary
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

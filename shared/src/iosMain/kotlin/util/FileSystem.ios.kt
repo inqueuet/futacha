@@ -456,6 +456,36 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
+                delete(fullPath)
+            }
+            is SaveLocation.Bookmark -> {
+                runCatching {
+                    val url = resolveBookmarkUrl(base.bookmarkData)
+                    val startedAccess = url.startAccessingSecurityScopedResource()
+                    try {
+                        val fullPath = if (relativePath.isEmpty()) {
+                            url.path ?: throw IllegalStateException("URL path is null")
+                        } else {
+                            "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                        }
+                        delete(fullPath).getOrThrow()
+                    } finally {
+                        if (startedAccess) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                }
+            }
+            is SaveLocation.TreeUri -> {
+                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+            }
+        }
+    }
+
     // ========================================
     // Helper methods for secure bookmark
     // ========================================

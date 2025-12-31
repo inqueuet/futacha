@@ -11,10 +11,13 @@ import io.ktor.http.Url
 import io.ktor.util.date.GMTDate
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.math.max
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Clock
 
@@ -39,6 +42,12 @@ private data class StoredCookieFile(
     val cookies: List<StoredCookie>
 )
 
+private class CookieTransactionContext(val id: Long) : CoroutineContext.Element {
+    override val key: CoroutineContext.Key<CookieTransactionContext> = Key
+
+    companion object Key : CoroutineContext.Key<CookieTransactionContext>
+}
+
 /**
  * Persistent cookie storage for `.2chan.net` (shared across subdomains).
  * - Saves cookies to disk as JSON.
@@ -54,6 +63,9 @@ class PersistentCookieStorage(
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
     private var transactionSnapshot: Map<CookieKey, StoredCookie>? = null
+    private var activeTransactionId: Long? = null
+    private var transactionSequence = 0L
+    private var externalMutationDuringTransaction = false
     // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
     private var lastPurgeTimeMillis = 0L
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
@@ -83,8 +95,13 @@ class PersistentCookieStorage(
                 }.toMap(),
                 createdAtMillis = now
             )
+            val transactionId = coroutineContext[CookieTransactionContext]?.id
+            val isInActiveTransaction = activeTransactionId != null && transactionId == activeTransactionId
+            if (activeTransactionId != null && !isInActiveTransaction) {
+                externalMutationDuringTransaction = true
+            }
             cookies[key] = stored
-            if (transactionSnapshot == null) {
+            if (transactionSnapshot == null || !isInActiveTransaction) {
                 saveLocked()
             }
         }
@@ -157,16 +174,30 @@ class PersistentCookieStorage(
     suspend fun removeCookie(domain: String, path: String, name: String) {
         mutex.withLock {
             ensureLoadedLocked()
+            val transactionId = coroutineContext[CookieTransactionContext]?.id
+            val isInActiveTransaction = activeTransactionId != null && transactionId == activeTransactionId
+            if (activeTransactionId != null && !isInActiveTransaction) {
+                externalMutationDuringTransaction = true
+            }
             cookies.remove(CookieKey(domain.lowercase(), normalizePath(path), name))
-            saveLocked()
+            if (transactionSnapshot == null || !isInActiveTransaction) {
+                saveLocked()
+            }
         }
     }
 
     suspend fun clearAll() {
         mutex.withLock {
             ensureLoadedLocked()
+            val transactionId = coroutineContext[CookieTransactionContext]?.id
+            val isInActiveTransaction = activeTransactionId != null && transactionId == activeTransactionId
+            if (activeTransactionId != null && !isInActiveTransaction) {
+                externalMutationDuringTransaction = true
+            }
             cookies.clear()
-            saveLocked()
+            if (transactionSnapshot == null || !isInActiveTransaction) {
+                saveLocked()
+            }
         }
     }
 
@@ -174,33 +205,50 @@ class PersistentCookieStorage(
      * Run [block] while staging cookie changes; commit to disk only if it succeeds.
      */
     suspend fun <T> commitOnSuccess(block: suspend () -> T): T {
-        mutex.withLock {
+        val transactionId = mutex.withLock {
             if (transactionSnapshot == null) {
                 transactionSnapshot = HashMap(cookies)
+                externalMutationDuringTransaction = false
+                transactionSequence += 1
+                activeTransactionId = transactionSequence
             }
+            activeTransactionId
         }
-        return runCatching { block() }
-            .onSuccess { persistTransaction() }
-            .onFailure { rollbackTransaction() }
-            .getOrThrow()
+        return runCatching {
+            withContext(CookieTransactionContext(requireNotNull(transactionId))) {
+                block()
+            }
+        }.onSuccess {
+            persistTransaction(transactionId)
+        }.onFailure {
+            rollbackTransaction(transactionId)
+        }.getOrThrow()
     }
 
-    private suspend fun persistTransaction() {
+    private suspend fun persistTransaction(transactionId: Long?) {
         mutex.withLock {
-            if (transactionSnapshot != null) {
-                saveLocked()
-                transactionSnapshot = null
-            }
+            if (activeTransactionId != transactionId) return@withLock
+            saveLocked()
+            transactionSnapshot = null
+            activeTransactionId = null
+            externalMutationDuringTransaction = false
         }
     }
 
-    private suspend fun rollbackTransaction() {
+    private suspend fun rollbackTransaction(transactionId: Long?) {
         mutex.withLock {
-            transactionSnapshot?.let { snapshot ->
-                cookies.clear()
-                cookies.putAll(snapshot)
+            if (activeTransactionId != transactionId) return@withLock
+            if (!externalMutationDuringTransaction) {
+                transactionSnapshot?.let { snapshot ->
+                    cookies.clear()
+                    cookies.putAll(snapshot)
+                }
+            } else {
+                Logger.w("PersistentCookieStorage", "Skipping cookie rollback due to external mutations during transaction")
             }
             transactionSnapshot = null
+            activeTransactionId = null
+            externalMutationDuringTransaction = false
         }
     }
 

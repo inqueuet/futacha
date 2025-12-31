@@ -33,6 +33,8 @@ internal object CatalogHtmlParserCore {
     )
     private val threadIdRegex = Regex("res/(\\d+)\\.htm")
     private val htmlTagRegex = Regex("<[^>]+>")
+    private val extensionRegex = Regex("\\.[a-zA-Z0-9]+$")
+    private val trailingSRegex = Regex("(?i)s(\\.[a-zA-Z0-9]+)$")
     private val knownTitles = mapOf(
         "1364612020" to "チュートリアル",
     )
@@ -141,7 +143,8 @@ internal object CatalogHtmlParserCore {
                             withThumbDir
                         } else {
                             // Replace extension with .jpg
-                            withThumbDir.replace(Regex("\\.[a-zA-Z0-9]+$"), ".jpg")
+                            // FIX: ループ内でのRegex作成を回避
+                            withThumbDir.replace(extensionRegex, ".jpg")
                         }
                     }
 
@@ -151,14 +154,13 @@ internal object CatalogHtmlParserCore {
                     if (fullImageUrl == null && thumbnail != null && thumbnail.contains("/thumb/")) {
                         // Try to guess the source URL.
                         // Standard pattern: /thumb/123s.jpg -> /src/123.jpg
-                        // We must handle case sensitivity: 123S.JPG -> 123.JPG
-                        // Also, 123s.jpg -> 123.jpg
                         
                         // First switch directory
                         val srcBase = thumbnail.replace("/thumb/", "/src/")
                         
                         // Then strip the trailing 's' (or 'S') from the filename, preserving extension case
-                        fullImageUrl = srcBase.replace(Regex("(?i)s(\\.[a-zA-Z0-9]+)$"), "$1")
+                        // FIX: ループ内でのRegex作成を回避
+                        fullImageUrl = srcBase.replace(trailingSRegex, "$1")
                     }
 
                     val imageTag = imageMatch?.value

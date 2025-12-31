@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.repository
 
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
@@ -19,7 +20,8 @@ import kotlinx.serialization.json.Json
  */
 class SavedThreadRepository(
     private val fileSystem: FileSystem,
-    private val baseDirectory: String = MANUAL_SAVE_DIRECTORY
+    private val baseDirectory: String = MANUAL_SAVE_DIRECTORY,
+    private val baseSaveLocation: SaveLocation? = null
 ) {
     private val json = Json {
         prettyPrint = true
@@ -27,7 +29,9 @@ class SavedThreadRepository(
     }
     private val indexMutex = Mutex()
 
-    private val indexPath = "$baseDirectory/index.json"
+    private val resolvedSaveLocation = baseSaveLocation ?: SaveLocation.fromString(baseDirectory)
+    private val useSaveLocationApi = resolvedSaveLocation !is SaveLocation.Path
+    private val indexRelativePath = "index.json"
 
     /**
      * インデックスを読み込み
@@ -103,8 +107,8 @@ class SavedThreadRepository(
      */
     suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.Default) {
         runCatching {
-            val metadataPath = "$baseDirectory/$threadId/metadata.json"
-            val jsonString = fileSystem.readString(metadataPath).getOrThrow()
+            val metadataPath = "$threadId/metadata.json"
+            val jsonString = readStringAt(metadataPath).getOrThrow()
             json.decodeFromString<SavedThreadMetadata>(jsonString)
         }
     }
@@ -121,17 +125,17 @@ class SavedThreadRepository(
                 ?: return@runCatching  // 存在しない場合は正常終了
 
             // FIX: トランザクション原子性を改善 - インデックス更新失敗時の巻き戻し用にバックアップ
-            val backupIndexPath = "$indexPath.backup"
+            val backupIndexPath = "$indexRelativePath.backup"
             val currentIndexJson = json.encodeToString(currentIndex)
-            fileSystem.writeString(backupIndexPath, currentIndexJson).getOrThrow()
+            writeStringAt(backupIndexPath, currentIndexJson).getOrThrow()
 
             // ファイル削除を試行
-            val threadPath = "$baseDirectory/$threadId"
-            val deleteResult = fileSystem.deleteRecursively(threadPath)
+            val threadPath = threadId
+            val deleteResult = deletePath(threadPath)
 
             if (deleteResult.isFailure) {
                 // ファイル削除失敗時はバックアップを削除して例外をスロー
-                fileSystem.delete(backupIndexPath)
+                deletePath(backupIndexPath)
                 throw deleteResult.exceptionOrNull()
                     ?: Exception("Failed to delete thread directory: $threadPath")
             }
@@ -149,7 +153,7 @@ class SavedThreadRepository(
             try {
                 saveIndexUnlocked(updatedIndex)
                 // 成功したらバックアップを削除
-                fileSystem.delete(backupIndexPath)
+                deletePath(backupIndexPath)
             } catch (e: Exception) {
                 // インデックス保存失敗 - ファイルは削除済みだがインデックスは古いまま
                 // この状態は次回のロード時に検出・修復される
@@ -169,8 +173,8 @@ class SavedThreadRepository(
 
             // 各スレッドを削除し、失敗を記録
             currentIndex.threads.forEach { thread ->
-                val threadPath = "$baseDirectory/${thread.threadId}"
-                val result = fileSystem.deleteRecursively(threadPath)
+                val threadPath = thread.threadId
+                val result = deletePath(threadPath)
 
                 if (result.isSuccess) {
                     successfullyDeletedIds.add(thread.threadId)
@@ -215,8 +219,12 @@ class SavedThreadRepository(
      * スレッドが存在するか確認
      */
     suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.Default) {
-        val threadPath = "$baseDirectory/$threadId"
-        fileSystem.exists(threadPath)
+        val threadPath = threadId
+        if (useSaveLocationApi) {
+            fileSystem.exists(resolvedSaveLocation, threadPath)
+        } else {
+            fileSystem.exists(buildPath(threadPath))
+        }
     }
 
     /**
@@ -237,7 +245,12 @@ class SavedThreadRepository(
      * スレッドHTMLパスを取得
      */
     fun getThreadHtmlPath(threadId: String): String {
-        return fileSystem.resolveAbsolutePath("$baseDirectory/$threadId/$threadId.htm")
+        val relativePath = "$threadId/$threadId.htm"
+        return if (useSaveLocationApi) {
+            relativePath
+        } else {
+            fileSystem.resolveAbsolutePath(buildPath(relativePath))
+        }
     }
 
     /**
@@ -285,11 +298,31 @@ class SavedThreadRepository(
                 .getOrNull()
         }
 
-        val primary = readIndexFromPath(indexPath)
+        suspend fun readIndexFromLocation(relativePath: String): SavedThreadIndex? {
+            return fileSystem.readString(resolvedSaveLocation, relativePath)
+                .map { jsonString ->
+                    try {
+                        json.decodeFromString<SavedThreadIndex>(jsonString)
+                    } catch (_: SerializationException) {
+                        null
+                    }
+                }
+                .getOrNull()
+        }
+
+        val primary = if (useSaveLocationApi) {
+            readIndexFromLocation(indexRelativePath)
+        } else {
+            readIndexFromPath(buildPath(indexRelativePath))
+        }
         if (primary != null) return primary
 
-        val backupPath = "$indexPath.backup"
-        val backup = readIndexFromPath(backupPath)
+        val backupPath = "$indexRelativePath.backup"
+        val backup = if (useSaveLocationApi) {
+            readIndexFromLocation(backupPath)
+        } else {
+            readIndexFromPath(buildPath(backupPath))
+        }
         if (backup != null) {
             runCatching { saveIndexUnlocked(backup) }
             return backup
@@ -299,8 +332,46 @@ class SavedThreadRepository(
     }
 
     private suspend fun saveIndexUnlocked(index: SavedThreadIndex) {
-        fileSystem.createDirectory(baseDirectory).getOrThrow()
-        val jsonString = json.encodeToString(index)
-        fileSystem.writeString(indexPath, jsonString).getOrThrow()
+        if (useSaveLocationApi) {
+            fileSystem.createDirectory(resolvedSaveLocation).getOrThrow()
+            val jsonString = json.encodeToString(index)
+            fileSystem.writeString(resolvedSaveLocation, indexRelativePath, jsonString).getOrThrow()
+        } else {
+            fileSystem.createDirectory(baseDirectory).getOrThrow()
+            val jsonString = json.encodeToString(index)
+            fileSystem.writeString(buildPath(indexRelativePath), jsonString).getOrThrow()
+        }
+    }
+
+    private fun buildPath(relativePath: String): String {
+        return if (relativePath.isBlank()) {
+            baseDirectory
+        } else {
+            "$baseDirectory/$relativePath"
+        }
+    }
+
+    private suspend fun readStringAt(relativePath: String): Result<String> {
+        return if (useSaveLocationApi) {
+            fileSystem.readString(resolvedSaveLocation, relativePath)
+        } else {
+            fileSystem.readString(buildPath(relativePath))
+        }
+    }
+
+    private suspend fun writeStringAt(relativePath: String, content: String): Result<Unit> {
+        return if (useSaveLocationApi) {
+            fileSystem.writeString(resolvedSaveLocation, relativePath, content)
+        } else {
+            fileSystem.writeString(buildPath(relativePath), content)
+        }
+    }
+
+    private suspend fun deletePath(relativePath: String): Result<Unit> {
+        return if (useSaveLocationApi) {
+            fileSystem.delete(resolvedSaveLocation, relativePath)
+        } else {
+            fileSystem.deleteRecursively(buildPath(relativePath))
+        }
     }
 }
