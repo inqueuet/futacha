@@ -552,12 +552,11 @@ class AppStateStore internal constructor(
      * requiring the caller to manage the whole list manually.
      */
     suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) {
-        // FIX: Flow.first()をmutex外で呼び出してデッドロック回避
-        val currentHistory = readHistorySnapshot() ?: run {
-            Logger.w(TAG, "Skipping history upsert due to missing snapshot")
-            return
-        }
         historyMutex.withLock {
+            val currentHistory = readHistorySnapshotLocked() ?: run {
+                Logger.w(TAG, "Skipping history upsert due to missing snapshot")
+                return
+            }
             val existingIndex = currentHistory.indexOfFirst {
                 matchesHistoryEntry(it, entry.threadId, entry.boardId)
             }
@@ -638,11 +637,8 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
-        // FIX: デッドロック防止 - Flow.first()をmutex外で呼び出し
-        // データストアからの読み込みをロック外で行う
-        val currentHistory = readHistorySnapshot() ?: return
-
         historyMutex.withLock {
+            val currentHistory = readHistorySnapshotLocked() ?: return
             val existingEntry = currentHistory.firstOrNull {
                 matchesHistoryEntry(it, threadId, boardId)
             }

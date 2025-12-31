@@ -83,6 +83,10 @@ import coil3.request.crossfade
 import com.valoser.futacha.shared.audio.TextSpeaker
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.network.extractArchiveSearchScope
+import com.valoser.futacha.shared.network.fetchArchiveSearchResults
+import com.valoser.futacha.shared.network.selectLatestArchiveMatch
+import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -103,6 +107,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.serialization.json.Json
 import kotlin.time.Clock
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
@@ -164,12 +169,21 @@ fun ThreadScreen(
     val activeRepository = remember(repository) {
         repository ?: FakeBoardRepository()
     }
-    val effectiveBoardUrl = remember(threadUrlOverride, board.url) {
-        resolveEffectiveBoardUrl(threadUrlOverride, board.url)
+    var resolvedThreadUrlOverride by rememberSaveable(board.id, threadId) { mutableStateOf(threadUrlOverride) }
+    LaunchedEffect(threadUrlOverride) {
+        if (!threadUrlOverride.isNullOrBlank()) {
+            resolvedThreadUrlOverride = threadUrlOverride
+        }
+    }
+    val effectiveBoardUrl = remember(resolvedThreadUrlOverride, board.url) {
+        resolveEffectiveBoardUrl(resolvedThreadUrlOverride, board.url)
     }
     val uiState = remember { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val archiveSearchJson = remember {
+        Json { ignoreUnknownKeys = true }
+    }
     val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
     var fallbackDeleteKey by rememberSaveable { mutableStateOf("") }
     val lastUsedDeleteKey = lastUsedDeleteKeyState?.value ?: fallbackDeleteKey
@@ -540,14 +554,68 @@ fun ThreadScreen(
         return null
     }
 
+    fun shouldFetchByUrl(threadUrl: String?, targetThreadId: String): Boolean {
+        if (threadUrl.isNullOrBlank()) return false
+        val match = Regex("""/res/(\d+)\.htm""")
+            .find(threadUrl)
+            ?.groupValues
+            ?.getOrNull(1)
+        return match != targetThreadId
+    }
+
+    suspend fun tryArchiveFallback(): ArchiveFallbackOutcome {
+        val client = httpClient ?: return ArchiveFallbackOutcome.NoMatch
+        val scope = extractArchiveSearchScope(resolvedThreadUrlOverride ?: board.url)
+        val queryCandidates = buildList {
+            if (threadId.isNotBlank()) add(threadId)
+            if (!threadTitle.isNullOrBlank()) add(threadTitle)
+        }.distinct()
+        if (queryCandidates.isEmpty()) return ArchiveFallbackOutcome.NoMatch
+        for (query in queryCandidates) {
+            val results = runCatching {
+                fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+            }.getOrElse { error ->
+                Logger.w(THREAD_SCREEN_TAG, "Archive search failed for $threadId: ${error.message}")
+                continue
+            }
+            val match = selectLatestArchiveMatch(results, threadId) ?: continue
+            val pageResult = runCatching { activeRepository.getThreadByUrl(match.htmlUrl) }
+            val page = pageResult.getOrNull()
+            if (page != null) {
+                Logger.i(THREAD_SCREEN_TAG, "Archive refresh succeeded for $threadId")
+                return ArchiveFallbackOutcome.Success(page, match.htmlUrl)
+            }
+            val error = pageResult.exceptionOrNull()
+            val status = (error as? NetworkException)?.statusCode
+            if (status == 404 || status == 410) {
+                return ArchiveFallbackOutcome.NotFound
+            }
+        }
+        return ArchiveFallbackOutcome.NoMatch
+    }
+
     suspend fun loadThreadWithOfflineFallback(allowOfflineFallback: Boolean): Pair<ThreadPage, Boolean> {
         try {
             isShowingOfflineCopy = false
-            val page = activeRepository.getThread(effectiveBoardUrl, threadId)
+            val page = if (shouldFetchByUrl(resolvedThreadUrlOverride, threadId)) {
+                activeRepository.getThreadByUrl(resolvedThreadUrlOverride.orEmpty())
+            } else {
+                activeRepository.getThread(effectiveBoardUrl, threadId)
+            }
             return page to false
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            if (e.message?.contains("404") == true || e.message?.contains("410") == true) {
+                when (val archived = tryArchiveFallback()) {
+                    is ArchiveFallbackOutcome.Success -> {
+                        resolvedThreadUrlOverride = archived.threadUrl
+                        return archived.page to false
+                    }
+                    is ArchiveFallbackOutcome.NotFound -> throw e
+                    is ArchiveFallbackOutcome.NoMatch -> Unit
+                }
+            }
             if (!allowOfflineFallback) throw e
             val offlinePage = loadOfflineThread()
             if (offlinePage != null) {
@@ -619,7 +687,7 @@ fun ThreadScreen(
                                 threadId = threadId,
                                 threadTitle = threadTitle,
                                 board = board,
-                                overrideThreadUrl = threadUrlOverride
+                                overrideThreadUrl = resolvedThreadUrlOverride
                             )
                         )
                         if (usedOffline) {
@@ -956,7 +1024,7 @@ fun ThreadScreen(
                         threadId = threadId,
                         threadTitle = threadTitle,
                         board = board,
-                        overrideThreadUrl = threadUrlOverride
+                        overrideThreadUrl = resolvedThreadUrlOverride
                     ))
 
                     val successMessage = if (usedOffline) {
@@ -2816,6 +2884,13 @@ private fun GalleryImageItem(
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
+private const val THREAD_SCREEN_TAG = "ThreadScreen"
+
+private sealed interface ArchiveFallbackOutcome {
+    data class Success(val page: ThreadPage, val threadUrl: String?) : ArchiveFallbackOutcome
+    data object NotFound : ArchiveFallbackOutcome
+    data object NoMatch : ArchiveFallbackOutcome
+}
 private const val QUOTE_PREVIEW_HOLD_MS = 200L
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)

@@ -14,6 +14,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
+import io.ktor.http.Url
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readRemaining
 import io.ktor.utils.io.core.readBytes
@@ -241,7 +242,7 @@ class HttpBoardApi(
     }
 
     private fun shouldRetry(error: Exception): Boolean {
-        val networkError = error as? NetworkException ?: return true
+        val networkError = error as? NetworkException ?: return false
         val status = networkError.statusCode ?: return false
         return status == 429 || status >= 500
     }
@@ -415,6 +416,45 @@ class HttpBoardApi(
         }
     }
 
+    override suspend fun fetchThreadByUrl(threadUrl: String): String {
+        val url = threadUrl
+        return try {
+            withRetry {
+                val response: HttpResponse = client.get(url) {
+                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+                    headers[HttpHeaders.CacheControl] = "no-cache"
+                    headers[HttpHeaders.Pragma] = "no-cache"
+                    resolveRefererBaseFromThreadUrl(url)?.let { referer ->
+                        headers[HttpHeaders.Referrer] = referer
+                    }
+                }
+
+                if (!response.status.isSuccess()) {
+                    val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url"
+                    println("HttpBoardApi: $errorMsg")
+                    throw NetworkException(errorMsg, response.status.value)
+                }
+
+                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
+                    throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+                }
+
+                readResponseBodyAsString(response)
+            }
+        } catch (e: NetworkException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val errorMsg = "Failed to fetch thread from $url: ${e.message}"
+            println("HttpBoardApi: $errorMsg")
+            throw NetworkException(errorMsg, cause = e)
+        }
+    }
+
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
@@ -447,6 +487,26 @@ class HttpBoardApi(
         } catch (e: Exception) {
             throw NetworkException("Failed to vote saidane: ${e.message}", cause = e)
         }
+    }
+
+    private fun resolveRefererBaseFromThreadUrl(threadUrl: String): String? {
+        return runCatching {
+            val parsed = Url(threadUrl)
+            val segments = parsed.encodedPath.split('/').filter { it.isNotBlank() }
+            if (segments.isEmpty()) return null
+            val baseSegments = segments.dropLast(1)
+            val path = if (baseSegments.isEmpty()) "" else "/" + baseSegments.joinToString("/")
+            buildString {
+                append(parsed.protocol.name)
+                append("://")
+                append(parsed.host)
+                if (parsed.port != parsed.protocol.defaultPort) {
+                    append(":${parsed.port}")
+                }
+                append(path.trimEnd('/'))
+                append("/")
+            }
+        }.getOrNull()
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {

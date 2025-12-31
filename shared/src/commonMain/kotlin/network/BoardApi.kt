@@ -20,6 +20,7 @@ interface BoardApi {
     ): String
     suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int = 65): String
     suspend fun fetchThread(board: String, threadId: String): String
+    suspend fun fetchThreadByUrl(threadUrl: String): String
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
     suspend fun deleteByUser(

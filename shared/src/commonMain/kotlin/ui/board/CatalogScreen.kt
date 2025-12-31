@@ -42,7 +42,11 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.network.ArchiveSearchItem
+import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.network.extractArchiveSearchScope
+import com.valoser.futacha.shared.network.fetchArchiveSearchResults
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -53,18 +57,12 @@ import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.util.SaveDirectorySelection
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
+import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.time.Clock
-import kotlinx.serialization.*
-import kotlinx.serialization.descriptors.*
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
 sealed interface CatalogUiState {
@@ -113,7 +111,7 @@ fun CatalogScreen(
     onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
     catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
     onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {},
-    httpClient: io.ktor.client.HttpClient? = null
+    httpClient: HttpClient? = null
 ) {
     val activeRepository = remember(repository) {
         repository ?: FakeBoardRepository()
@@ -2162,202 +2160,11 @@ private fun matchesCatalogNgWords(
     return wordFilters.any { titleText.contains(it) }
 }
 
-// Archive search
-
-private data class ArchiveSearchScope(val server: String, val board: String)
-
-@Serializable
-private data class ArchiveSearchItem(
-    val threadId: String,
-    val server: String,
-    val board: String,
-    val title: String? = null,
-    val htmlUrl: String,
-    val thumbUrl: String? = null,
-    val status: String? = null,
-    @Serializable(with = ArchiveSearchTimestampSerializer::class)
-    val createdAt: Long? = null,
-    @Serializable(with = ArchiveSearchTimestampSerializer::class)
-    val finalizedAt: Long? = null,
-    @Serializable(with = ArchiveSearchTimestampSerializer::class)
-    val uploadedAt: Long? = null
-)
-
-@Serializable
-private data class ArchiveSearchResponse(
-    val query: String? = null,
-    val filter: String? = null,
-    val count: Int? = null,
-    val results: List<ArchiveSearchItem> = emptyList()
-)
-
 private sealed interface ArchiveSearchState {
     data object Idle : ArchiveSearchState
     data object Loading : ArchiveSearchState
     data class Success(val items: List<ArchiveSearchItem>) : ArchiveSearchState
     data class Error(val message: String) : ArchiveSearchState
-}
-
-private object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
-    override val descriptor: SerialDescriptor =
-        PrimitiveSerialDescriptor("ArchiveSearchTimestamp", PrimitiveKind.LONG)
-
-    override fun deserialize(decoder: Decoder): Long? {
-        val jsonDecoder = decoder as? JsonDecoder ?: return runCatching { decoder.decodeLong() }.getOrNull()
-        val element = jsonDecoder.decodeJsonElement()
-        if (element is JsonNull) return null
-        val primitive = element.jsonPrimitive
-        return primitive.longOrNull ?: primitive.content.toLongOrNull()
-    }
-
-    override fun serialize(encoder: Encoder, value: Long?) {
-        if (value == null) {
-            encoder.encodeNull()
-        } else {
-            encoder.encodeLong(value)
-        }
-    }
-}
-
-private fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
-    if (board == null) return null
-    return runCatching {
-        val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board.url)
-        val parsed = Url(baseUrl)
-        val server = parsed.host.substringBefore('.', parsed.host).ifBlank { return null }
-        val boardSlug = BoardUrlResolver.resolveBoardSlug(board.url).ifBlank { return null }
-        ArchiveSearchScope(server = server, board = boardSlug)
-    }.getOrNull()
-}
-
-private fun buildArchiveSearchUrl(
-    query: String,
-    scope: ArchiveSearchScope?
-): String {
-    val params = buildList<String> {
-        if (query.isNotBlank()) {
-            add("q=${query.encodeURLParameter()}")
-        }
-        scope?.let {
-            add("server=${it.server.encodeURLParameter()}")
-            add("board=${it.board.encodeURLParameter()}")
-        }
-    }
-    return buildString {
-        append("https://spider.serendipity01234.workers.dev/search")
-        if (params.isNotEmpty()) {
-            append("?")
-            append(params.joinToString("&"))
-        }
-    }
-}
-
-private suspend fun fetchArchiveSearchResults(
-    httpClient: io.ktor.client.HttpClient,
-    query: String,
-    scope: ArchiveSearchScope?,
-    json: Json
-): List<ArchiveSearchItem> {
-    val url = buildArchiveSearchUrl(query, scope)
-    val response = httpClient.get(url)
-    if (!response.status.isSuccess()) {
-        throw IllegalStateException("検索に失敗しました: ${response.status}")
-    }
-    val body = response.bodyAsText()
-    return parseArchiveSearchResults(body, scope, json)
-}
-
-private fun parseArchiveSearchResults(
-    body: String,
-    scope: ArchiveSearchScope?,
-    json: Json
-): List<ArchiveSearchItem> {
-    val element = runCatching { json.parseToJsonElement(body) }.getOrElse {
-        throw IllegalStateException("検索結果の解析に失敗しました")
-    }
-    val itemsElement = when (element) {
-        is JsonArray -> element
-        is JsonObject -> {
-            element["results"]
-                ?: element["items"]
-                ?: element["data"]
-                ?: element["threads"]
-        }
-        else -> null
-    }
-    val items = itemsElement as? JsonArray
-        ?: throw IllegalStateException("検索結果の形式が不明です")
-    return items.mapNotNull { parseArchiveSearchItem(it, scope) }
-}
-
-private fun parseArchiveSearchItem(
-    element: JsonElement,
-    scope: ArchiveSearchScope?
-): ArchiveSearchItem? {
-    val obj = element as? JsonObject ?: return null
-    val htmlUrl = obj.firstString("htmlUrl", "html_url", "url", "link", "href") ?: return null
-    val threadId = obj.firstString("threadId", "thread_id", "id", "thread")
-        ?: extractThreadIdFromUrl(htmlUrl)
-        ?: return null
-    val server = obj.firstString("server", "srv") ?: scope?.server.orEmpty()
-    val board = obj.firstString("board", "boardId", "brd") ?: scope?.board.orEmpty()
-    val title = obj.firstString("title", "subject")
-    val thumbUrl = obj.firstString("thumbUrl", "thumb_url", "thumb", "thumbnail", "image")
-    val status = obj.firstString("status", "state")
-    val createdAt = obj.firstLong("createdAt", "created_at", "created")
-    val finalizedAt = obj.firstLong("finalizedAt", "finalized_at", "finalized")
-    val uploadedAt = obj.firstLong("uploadedAt", "uploaded_at", "uploaded")
-    return ArchiveSearchItem(
-        threadId = threadId,
-        server = server,
-        board = board,
-        title = title,
-        htmlUrl = htmlUrl,
-        thumbUrl = thumbUrl,
-        status = status,
-        createdAt = createdAt,
-        finalizedAt = finalizedAt,
-        uploadedAt = uploadedAt
-    )
-}
-
-private fun JsonObject.firstString(vararg keys: String): String? {
-    keys.forEach { key ->
-        val value = this[key]?.asStringOrNull()?.trim()
-        if (!value.isNullOrEmpty()) {
-            return value
-        }
-    }
-    return null
-}
-
-private fun JsonObject.firstLong(vararg keys: String): Long? {
-    keys.forEach { key ->
-        val value = this[key]?.asLongOrNull()
-        if (value != null) {
-            return value
-        }
-    }
-    return null
-}
-
-private fun JsonElement.asStringOrNull(): String? {
-    val primitive = this as? JsonPrimitive ?: return null
-    if (this is JsonNull) return null
-    val content = primitive.content
-    return if (content == "null") null else content
-}
-
-private fun JsonElement.asLongOrNull(): Long? {
-    val primitive = this as? JsonPrimitive ?: return null
-    if (this is JsonNull) return null
-    return primitive.longOrNull ?: primitive.content.toLongOrNull()
-}
-
-private fun extractThreadIdFromUrl(url: String): String? {
-    val primary = Regex("""/res/(\d+)\.htm""").find(url)?.groupValues?.getOrNull(1)
-    if (!primary.isNullOrBlank()) return primary
-    return Regex("""(\d+)(?:\.htm)?$""").find(url)?.groupValues?.getOrNull(1)
 }
 
 // Catalog navigation helpers

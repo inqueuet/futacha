@@ -29,6 +29,7 @@ interface BoardRepository {
     ): List<CatalogItem>
     suspend fun fetchOpImageUrl(board: String, threadId: String): String?
     suspend fun getThread(board: String, threadId: String): ThreadPage
+    suspend fun getThreadByUrl(threadUrl: String): ThreadPage
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
     suspend fun deleteByUser(
@@ -215,6 +216,11 @@ class DefaultBoardRepository(
             val html = api.fetchThread(board, threadId)
             parser.parseThread(html)
         }
+    }
+
+    override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+        val html = api.fetchThreadByUrl(threadUrl)
+        return parser.parseThread(html)
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {

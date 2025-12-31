@@ -255,15 +255,16 @@ class ThreadSaveService(
                             async(Dispatchers.Default) {
                                 // セマフォでグローバルな並行数を制限
                                 downloadSemaphore.withPermit {
-                                    // FIX: 最大数を超えたらスキップ
-                                    if (processedMediaCount >= MAX_MEDIA_ITEMS) {
+                                    val currentCount = counterMutex.withLock {
+                                        if (processedMediaCount >= MAX_MEDIA_ITEMS) {
+                                            null
+                                        } else {
+                                            ++processedMediaCount
+                                        }
+                                    }
+                                    if (currentCount == null) {
                                         Logger.w("ThreadSaveService", "Skipping media item (exceeds MAX_MEDIA_ITEMS)")
                                         return@withPermit Pair<MediaItem?, Result<LocalFileInfo>?>(null, null)
-                                    }
-
-                                    val currentCount = counterMutex.withLock {
-                                        ++processedMediaCount
-                                        processedMediaCount
                                     }
 
                                     updateProgress(

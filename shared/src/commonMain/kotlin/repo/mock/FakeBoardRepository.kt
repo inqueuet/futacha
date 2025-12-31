@@ -43,6 +43,16 @@ class FakeBoardRepository(
         return MockBoardData.thread(threadId)
     }
 
+    override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+        onAccess()
+        val threadId = Regex("""(\d+)(?:\.htm)?$""")
+            .find(threadUrl)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: "0"
+        return MockBoardData.thread(threadId)
+    }
+
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
         onAccess()
     }

@@ -192,8 +192,8 @@ internal object ThreadHtmlParserCore {
             var truncationReason: String? = null
 
             if (firstReplyIndex != -1) {
-                val repliesHtml = normalized.substring(firstReplyIndex)
-                var searchStart = 0
+                val repliesHtml = normalized
+                var searchStart = firstReplyIndex
                 var iterationCount = 0
                 // FIX: イテレーション制限を引き上げ
                 val maxIterations = 2000
