@@ -97,7 +97,7 @@ class FakeBoardRepository(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ): String {
+    ): String? {
         onAccess()
         // Return a mock thread ID
         return "1234567890"

@@ -1,4 +1,4 @@
-package com.valoser.futacha.shared.repo
+﻿package com.valoser.futacha.shared.repo
 
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
 import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -62,7 +64,7 @@ interface BoardRepository {
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ): String
+    ): String?
 
     /**
      * Close the repository and release resources (e.g., HTTP client connections)
@@ -89,9 +91,8 @@ class DefaultBoardRepository(
     private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES,
     private val cookieRepository: CookieRepository? = null
 ) : BoardRepository {
-    // FIX: Track which boards have been initialized with cookies
-    // Note: この Set は boardInitMutex で保護されており、スレッドセーフ
-    // 単独でのアクセスは禁止し、必ず boardInitMutex.withLock 内でアクセスすること
+    // Track which boards have been initialized with cookies.
+    // Access only under boardInitMutex.withLock.
     private val initializedBoards = mutableSetOf<String>()
     // Fix: Use Mutex to prevent race condition when multiple coroutines
     // try to initialize the same board simultaneously
@@ -100,10 +101,10 @@ class DefaultBoardRepository(
     private val opImageCacheMutex = Mutex()
     private val opImageCache = createOpImageCache()
 
-    // FIX: close用のCoroutineScopeを追加
+    // Scope used by async close.
     private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    // FIX: close状態を管理（二重close防止）
+    // Protect close state and prevent duplicate close.
     private val closeMutex = Mutex()
     private var isClosed = false
 
@@ -113,7 +114,7 @@ class DefaultBoardRepository(
         private const val OP_IMAGE_CONCURRENCY = 4
         private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
         private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
-        // FIX: Semaphoreタイムアウトを追加（永久ブロック防止）
+        // Timeout for semaphore acquisition to avoid permanent wait.
         private const val SEMAPHORE_TIMEOUT_MILLIS = 30_000L // 30 seconds
     }
 
@@ -185,7 +186,9 @@ class DefaultBoardRepository(
         return withRetryOnAuthFailure(board) {
             val html = api.fetchCatalog(board, mode)
             val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-            parser.parseCatalog(html, baseUrl)
+            withContext(AppDispatchers.parsing) {
+                parser.parseCatalog(html, baseUrl)
+            }
         }
     }
 
@@ -194,7 +197,7 @@ class DefaultBoardRepository(
         val key = OpImageKey(board, threadId)
         getCachedOpImageUrl(key)?.let { return it }
 
-        // FIX: タイムアウトを追加して永久ブロックを防止
+        // Add timeout to avoid waiting forever for semaphore permit.
         val resolvedUrl = try {
             withTimeout(SEMAPHORE_TIMEOUT_MILLIS) {
                 opImageSemaphore.withPermit {
@@ -214,13 +217,17 @@ class DefaultBoardRepository(
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
         return withRetryOnAuthFailure(board) {
             val html = api.fetchThread(board, threadId)
-            parser.parseThread(html)
+            withContext(AppDispatchers.parsing) {
+                parser.parseThread(html)
+            }
         }
     }
 
     override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
         val html = api.fetchThreadByUrl(threadUrl)
-        return parser.parseThread(html)
+        return withContext(AppDispatchers.parsing) {
+            parser.parseThread(html)
+        }
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
@@ -278,30 +285,29 @@ class DefaultBoardRepository(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ): String {
+    ): String? {
         ensureCookiesInitialized(board)
-        val exec: suspend () -> String = {
+        val exec: suspend () -> String? = {
             api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
         }
         return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
-    // FIX: 同期的なクリーンアップ（メインスレッドから呼ばれても安全）
+    // Keep synchronous close lightweight and safe from main thread.
     @Deprecated(
         message = "Use closeAsync() instead for proper async cleanup",
         replaceWith = ReplaceWith("closeAsync()"),
         level = DeprecationLevel.WARNING
     )
     override fun close() {
-        // FIX: runBlockingを削除してメインスレッドブロックを回避
-        // 非同期クリーンアップはcloseAsync()に任せ、ここではスコープキャンセルのみ
+        // Avoid blocking; async cleanup should use closeAsync().
         if (isClosed) return
         isClosed = true
 
-        // スコープをキャンセル（進行中の非同期操作を停止）
+        // Cancel running async close work.
         closeScope.cancel()
 
-        // 同期的にクローズ可能なリソースのみ処理
+        // Close only synchronously closeable resources.
         try {
             (api as? AutoCloseable)?.close()
         } catch (e: Exception) {
@@ -309,7 +315,7 @@ class DefaultBoardRepository(
         }
     }
 
-    // FIX: 非同期版closeAsync（必要に応じて使用）
+    // Async close for callers that need to await cleanup.
     override fun closeAsync(): Job {
         return closeScope.launch {
             closeMutex.withLock {
@@ -348,20 +354,27 @@ class DefaultBoardRepository(
 
     private data class OpImageCacheEntry(val url: String?, val recordedAtMillis: Long)
 
-    // 効率的なLRU実装: LinkedHashMapのアクセス順序機能を使用（O(n)操作を回避）
-    // FIX: スレッドセーフでないため、外部でMutexによる保護が必須
-    // このクラスのすべてのメソッドは opImageCacheMutex.withLock 内から呼び出す必要がある
+    // Simple access-order LRU cache. Not thread-safe by itself.
+    // All access must be guarded by opImageCacheMutex.
     private class LruCache<K, V>(private val maxEntries: Int) {
-        private val cache = object : LinkedHashMap<K, V>(maxEntries, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
-                return size > maxEntries
-            }
+        private val cache = LinkedHashMap<K, V>()
+
+        operator fun get(key: K): V? {
+            val value = cache[key] ?: return null
+            // Emulate access-order in commonMain by moving key to the end.
+            cache.remove(key)
+            cache[key] = value
+            return value
         }
 
-        operator fun get(key: K): V? = cache[key]
-
         operator fun set(key: K, value: V) {
+            // Keep insertion order stable by re-inserting existing keys.
+            cache.remove(key)
             cache[key] = value
+            while (cache.size > maxEntries) {
+                val eldestKey = cache.entries.firstOrNull()?.key ?: break
+                cache.remove(eldestKey)
+            }
         }
 
         fun remove(key: K): V? = cache.remove(key)
@@ -371,7 +384,7 @@ class DefaultBoardRepository(
         }
 
         fun removeIf(predicate: (K, V) -> Boolean) {
-            val iterator = cache.iterator()
+            val iterator = cache.entries.iterator()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
                 if (predicate(entry.key, entry.value)) {
@@ -426,8 +439,8 @@ class DefaultBoardRepository(
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
         return runCatching {
             val snippet = api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
-            // FIX: パース処理をバックグラウンドスレッドへ移動
-            kotlinx.coroutines.withContext(Dispatchers.Default) {
+            // Parse on background dispatcher.
+            withContext(AppDispatchers.parsing) {
                 parser.extractOpImageUrl(snippet, baseUrl)
             }
         }.getOrElse { e ->
@@ -436,3 +449,5 @@ class DefaultBoardRepository(
         }
     }
 }
+
+

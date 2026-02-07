@@ -18,6 +18,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.createFileSystem
 import platform.UIKit.UIViewController
 import com.valoser.futacha.shared.version.createVersionChecker
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 fun MainViewController(): UIViewController {
     return ComposeUIViewController {
@@ -32,14 +33,16 @@ fun MainViewController(): UIViewController {
             }
         }
         LaunchedEffect(stateStore, httpClient, fileSystem) {
-            stateStore.isBackgroundRefreshEnabled.collect { enabled ->
+            stateStore.isBackgroundRefreshEnabled
+                .distinctUntilChanged()
+                .collect { enabled ->
                 configureIosBackgroundRefresh(
                     enabled = enabled,
                     stateStore = stateStore,
                     httpClient = httpClient,
                     fileSystem = fileSystem
                 )
-            }
+                }
         }
         val versionChecker = remember(httpClient) {
             createVersionChecker(httpClient)
@@ -79,6 +82,8 @@ private fun configureIosBackgroundRefresh(
             refresher.refresh()
         } catch (t: Throwable) {
             Logger.e("BackgroundRefresh", "Background history refresh failed", t)
+        } finally {
+            repo.closeAsync()
         }
     }
 }

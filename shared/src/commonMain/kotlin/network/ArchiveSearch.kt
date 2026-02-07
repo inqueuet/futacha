@@ -8,6 +8,7 @@ import io.ktor.http.Url
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
@@ -64,6 +65,7 @@ object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
         return primitive.content.toLongOrNull()
     }
 
+    @OptIn(ExperimentalSerializationApi::class)
     override fun serialize(encoder: Encoder, value: Long?) {
         if (value == null) {
             encoder.encodeNull()

@@ -61,6 +61,7 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
@@ -127,7 +128,7 @@ fun CatalogScreen(
                 drawerState.targetValue == DrawerValue.Open
         }
     }
-    // ボードごとにモードを覚える。キーなしだと画面を離れるたびにデフォルト(多い順)へ戻ってしまう。
+    // ボードごとにモードを覚える。キーなしだと画面を離れるたびにデフォルトへ戻ってしまう。
     val catalogModeMapState = stateStore?.catalogModes?.collectAsState(initial = emptyMap())
     var catalogMode by rememberSaveable(board?.id) {
         mutableStateOf(catalogModeMapState?.value?.get(board?.id.orEmpty()) ?: CatalogMode.default)
@@ -210,27 +211,42 @@ fun CatalogScreen(
         if (board == null || stateStore == null) return
 
         val timestamp = Clock.System.now().toEpochMilliseconds()
-
-        catalog.forEach { item ->
+        val matchedEntries = catalog.mapNotNull { item ->
             val titleText = item.title?.lowercase().orEmpty()
-            if (titleText.isEmpty()) return@forEach
-            if (normalizedFilters.any { titleText.contains(it) }) {
-                val entry = ThreadHistoryEntry(
-                    threadId = item.id,
-                    boardId = board.id,
-                    title = item.title?.takeIf { it.isNotBlank() } ?: "無題",
-                    titleImageUrl = item.thumbnailUrl ?: "",
-                    boardName = board.name,
-                    boardUrl = board.url,
-                    lastVisitedEpochMillis = timestamp,
-                    replyCount = item.replyCount
-                )
-                try {
-                    stateStore.upsertHistoryEntry(entry)
-                } catch (_: Exception) {
-                    // Ignore failures to keep catalog refresh resilient
+            if (titleText.isEmpty()) return@mapNotNull null
+            if (!normalizedFilters.any { titleText.contains(it) }) return@mapNotNull null
+            ThreadHistoryEntry(
+                threadId = item.id,
+                boardId = board.id,
+                title = item.title?.takeIf { it.isNotBlank() } ?: "無顁E",
+                titleImageUrl = item.thumbnailUrl ?: "",
+                boardName = board.name,
+                boardUrl = board.url,
+                lastVisitedEpochMillis = timestamp,
+                replyCount = item.replyCount
+            )
+        }
+        if (matchedEntries.isEmpty()) return
+
+        runCatching {
+            withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
+                val currentHistory = stateStore.history.first()
+                val updatedHistory = currentHistory.toMutableList()
+                matchedEntries.forEach { entry ->
+                    val existingIndex = updatedHistory.indexOfFirst {
+                        it.threadId == entry.threadId &&
+                            (it.boardId == entry.boardId || it.boardId.isBlank() || entry.boardId.isBlank())
+                    }
+                    if (existingIndex >= 0) {
+                        updatedHistory[existingIndex] = entry
+                    } else {
+                        updatedHistory.add(entry)
+                    }
                 }
+                stateStore.setHistory(updatedHistory)
             }
+        }.onFailure {
+            // Ignore failures to keep catalog refresh resilient
         }
     }
     val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
@@ -245,7 +261,7 @@ fun CatalogScreen(
     val addCatalogNgWordEntry: (String) -> Unit = { value ->
         val trimmed = value.trim()
         when {
-            trimmed.isEmpty() -> showNgMessage("NGワードに含める文字列を入力してください")
+            trimmed.isEmpty() -> showNgMessage("NGワードに含める文字を入力してください")
             catalogNgWords.any { it.equals(trimmed, ignoreCase = true) } -> showNgMessage("そのNGワードはすでに登録されています")
             else -> {
                 persistCatalogNgWords(catalogNgWords + trimmed)
@@ -477,7 +493,7 @@ fun CatalogScreen(
                             isGlobalSettingsVisible = true
                         } else {
                             coroutineScope.launch {
-                                snackbarHostState.showSnackbar("${action.label} はモック動作です")
+                                snackbarHostState.showSnackbar("${action.label} はモックでのみ動作です")
                             }
                         }
                     }
@@ -677,7 +693,11 @@ fun CatalogScreen(
                                 imageFileName = imageData?.fileName,
                                 textOnly = imageData == null
                             )
-                            snackbarHostState.showSnackbar("スレッドを作成しました (ID: $threadId)")
+                            if (threadId.isNullOrBlank()) {
+                                snackbarHostState.showSnackbar("スレッドを作成しました。カタログ更新で確認してください")
+                            } else {
+                                snackbarHostState.showSnackbar("スレッドを作成しました (ID: $threadId)")
+                            }
                             resetCreateThreadDraft()
                             // Refresh catalog to show the new thread
                             performRefresh()
@@ -820,6 +840,7 @@ fun CatalogScreen(
                 },
                 historyEntries = history,
                 fileSystem = fileSystem,
+                autoSavedThreadRepository = autoSavedThreadRepository,
                 threadMenuEntries = threadMenuEntries,
                 onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
                 catalogNavEntries = catalogNavEntries,
@@ -1070,6 +1091,7 @@ private fun PastSearchResultRow(
                     .build(),
                 imageLoader = imageLoader
             )
+            val painterState by painter.state.collectAsState()
             Box(
                 modifier = Modifier
                     .size(56.dp)
@@ -1077,8 +1099,8 @@ private fun PastSearchResultRow(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                when (painter.state) {
-                    is AsyncImagePainter.State.Error, AsyncImagePainter.State.Empty -> {
+                when (painterState) {
+                    is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
                         Icon(
                             imageVector = Icons.Outlined.Image,
                             contentDescription = null,
@@ -1293,7 +1315,7 @@ private fun CatalogGrid(
         }
     }
 
-    // リフレッシュ完了時にアニメーションで空間を戻す
+    // Return overscroll space with animation once refresh completes.
     LaunchedEffect(isRefreshing) {
         if (!isRefreshing) {
             overscrollOffset.animateTo(
@@ -1345,10 +1367,8 @@ private fun CatalogGrid(
                         }
                     } while (event.changes.any { it.pressed })
 
-                    // ドラッグ終了
-                    if (totalDrag > refreshTriggerPx) {
-                        coroutineScope.launch { onRefresh() }
-                    } else if (totalDrag < -refreshTriggerPx) {
+                    // Trigger refresh when drag passes threshold.
+                    if (totalDrag > refreshTriggerPx || totalDrag < -refreshTriggerPx) {
                         coroutineScope.launch { onRefresh() }
                     }
 
@@ -1434,7 +1454,7 @@ private fun CatalogList(
         }
     }
 
-    // リフレッシュ完了時にアニメーションで空間を戻す
+    // Return overscroll space with animation once refresh completes.
     LaunchedEffect(isRefreshing) {
         if (!isRefreshing) {
             overscrollOffset.animateTo(
@@ -1485,10 +1505,8 @@ private fun CatalogList(
                         }
                     } while (event.changes.any { it.pressed })
 
-                    // ドラッグ終了
-                    if (totalDrag > refreshTriggerPx) {
-                        coroutineScope.launch { onRefresh() }
-                    } else if (totalDrag < -refreshTriggerPx) {
+                    // Trigger refresh when drag passes threshold.
+                    if (totalDrag > refreshTriggerPx || totalDrag < -refreshTriggerPx) {
                         coroutineScope.launch { onRefresh() }
                     }
 
@@ -1537,8 +1555,8 @@ private fun CatalogCard(
     val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
 
-    // 4列グリッドでの推定カードサイズ(画面幅360dpの場合約75dp)
-    // 1.5倍程度の拡大率に抑えるため、50dpでリクエスト
+    // 4列グリッドでの推定カードサイズ（画面幅360dpの場合 約50dp）
+    // 拡大率を抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
 
     val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
@@ -2203,7 +2221,7 @@ private enum class CatalogSettingsMenuItem(
     val description: String?
 ) {
     WatchWords("監視ワード", Icons.Rounded.WatchLater, "監視中のワードを編集"),
-    NgManagement("NG管理", Icons.Rounded.Block, "NGワード・IDを管理"),
+    NgManagement("NG管理", Icons.Rounded.Block, "NGワードとIDを管理"),
     ExternalApp("外部アプリ", Icons.AutoMirrored.Rounded.OpenInNew, "外部アプリ連携を設定"),
     DisplayStyle("表示の切り替え", Icons.Rounded.ViewModule, "カタログ表示方法を変更"),
     ScrollToTop("一番上に行く", Icons.Rounded.VerticalAlignTop, "グリッドの先頭へ移動"),
@@ -2261,3 +2279,6 @@ internal fun rememberFutabaThreadColorScheme(
         )
     }
 }
+
+
+

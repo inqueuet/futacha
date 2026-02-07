@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
@@ -22,7 +23,6 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -177,7 +177,7 @@ class ThreadSaveService(
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
-    ): Result<SavedThread> = withContext(Dispatchers.Default) {
+    ): Result<SavedThread> = withContext(AppDispatchers.io) {
         runCatching {
             val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
             val startedAtMillis = savedAtTimestamp
@@ -252,7 +252,7 @@ class ThreadSaveService(
                 mediaItems.chunked(4).forEach { itemBatch ->
                     kotlinx.coroutines.coroutineScope {
                         val deferredResults = itemBatch.map { mediaItem ->
-                            async(Dispatchers.Default) {
+                            async(AppDispatchers.io) {
                                 // セマフォでグローバルな並行数を制限
                                 downloadSemaphore.withPermit {
                                     val currentCount = counterMutex.withLock {
@@ -498,7 +498,7 @@ class ThreadSaveService(
         type: MediaType,
         postId: String,
         startedAtMillis: Long
-    ): Result<LocalFileInfo> = withContext(Dispatchers.Default) {
+    ): Result<LocalFileInfo> = withContext(AppDispatchers.io) {
         runCatching {
             // Download media directly and inspect headers from GET response
             val response: HttpResponse = httpClient.get(url) {
@@ -802,7 +802,7 @@ class ThreadSaveService(
     /**
      * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
      */
-    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(Dispatchers.Default) {
+    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(AppDispatchers.io) {
         runCatching {
             val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
             val response: HttpResponse = httpClient.get(threadUrl) {

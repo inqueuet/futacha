@@ -23,6 +23,7 @@ import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -283,9 +285,10 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
+        val encoded = encodeBoards(boards)
         boardsMutex.withLock {
             try {
-                storage.updateBoardsJson(json.encodeToString(boardsSerializer, boards))
+                storage.updateBoardsJson(encoded)
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to save ${boards.size} boards", e)
                 _lastStorageError.value = StorageError(
@@ -299,9 +302,10 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
+        val encoded = encodeHistory(history)
         historyMutex.withLock {
             try {
-                persistHistory(history)
+                storage.updateHistoryJson(encoded)
             } catch (e: Exception) {
                 Logger.e(TAG, "Failed to save history with ${history.size} entries", e)
                 _lastStorageError.value = StorageError(
@@ -765,7 +769,19 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun persistHistory(history: List<ThreadHistoryEntry>) {
-        storage.updateHistoryJson(json.encodeToString(historySerializer, history))
+        storage.updateHistoryJson(encodeHistory(history))
+    }
+
+    private suspend fun encodeBoards(boards: List<BoardSummary>): String {
+        return withContext(AppDispatchers.parsing) {
+            json.encodeToString(boardsSerializer, boards)
+        }
+    }
+
+    private suspend fun encodeHistory(history: List<ThreadHistoryEntry>): String {
+        return withContext(AppDispatchers.parsing) {
+            json.encodeToString(historySerializer, history)
+        }
     }
 
     private fun decodeHistory(raw: String): List<ThreadHistoryEntry> = runCatching {

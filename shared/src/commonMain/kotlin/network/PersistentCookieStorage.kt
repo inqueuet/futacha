@@ -71,6 +71,7 @@ class PersistentCookieStorage(
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
+        var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
             val now = currentTimeMillis()
@@ -80,7 +81,13 @@ class PersistentCookieStorage(
                 return
             }
             val path = normalizePath(cookie.path)
-            val expiresAt = resolveExpiresAt(cookie, now) ?: return removeCookieLocked(domain, path, cookie.name)
+            val expiresAt = resolveExpiresAt(cookie, now)
+            if (expiresAt == null) {
+                if (removeCookieLocked(domain, path, cookie.name)) {
+                    savePayload = encodeSnapshotLocked()
+                }
+                return@withLock
+            }
             val key = CookieKey(domain, path, cookie.name)
             val stored = StoredCookie(
                 name = cookie.name,
@@ -102,16 +109,20 @@ class PersistentCookieStorage(
             }
             cookies[key] = stored
             if (transactionSnapshot == null || !isInActiveTransaction) {
-                saveLocked()
+                savePayload = encodeSnapshotLocked()
             }
         }
+        savePayload?.let { persistSnapshot(it) }
     }
 
     override suspend fun get(requestUrl: Url): List<Cookie> {
         val now = currentTimeMillis()
-        return mutex.withLock {
+        var savePayload: String? = null
+        val result = mutex.withLock {
             ensureLoadedLocked()
-            purgeExpiredLocked(now)
+            if (purgeExpiredLocked(now)) {
+                savePayload = encodeSnapshotLocked()
+            }
             val host = requestUrl.host.lowercase()
             val path = normalizePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
@@ -134,6 +145,8 @@ class PersistentCookieStorage(
                 )
             }
         }
+        savePayload?.let { persistSnapshot(it) }
+        return result
     }
 
     /**
@@ -142,9 +155,12 @@ class PersistentCookieStorage(
      */
     suspend fun hasValidCookieFor(requestUrl: Url, preferredNames: Set<String> = emptySet()): Boolean {
         val now = currentTimeMillis()
-        return mutex.withLock {
+        var savePayload: String? = null
+        val result = mutex.withLock {
             ensureLoadedLocked()
-            purgeExpiredLocked(now)
+            if (purgeExpiredLocked(now)) {
+                savePayload = encodeSnapshotLocked()
+            }
             val host = requestUrl.host.lowercase()
             val path = normalizePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
@@ -159,19 +175,29 @@ class PersistentCookieStorage(
                 candidates.isNotEmpty()
             }
         }
+        savePayload?.let { persistSnapshot(it) }
+        return result
     }
 
     override fun close() {
         // no-op
     }
 
-    suspend fun listCookies(): List<StoredCookie> = mutex.withLock {
-        ensureLoadedLocked()
-        purgeExpiredLocked(currentTimeMillis())
-        cookies.values.sortedWith(compareBy({ it.domain }, { it.name }))
+    suspend fun listCookies(): List<StoredCookie> {
+        var savePayload: String? = null
+        val result = mutex.withLock {
+            ensureLoadedLocked()
+            if (purgeExpiredLocked(currentTimeMillis())) {
+                savePayload = encodeSnapshotLocked()
+            }
+            cookies.values.sortedWith(compareBy({ it.domain }, { it.name }))
+        }
+        savePayload?.let { persistSnapshot(it) }
+        return result
     }
 
     suspend fun removeCookie(domain: String, path: String, name: String) {
+        var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
             val transactionId = coroutineContext[CookieTransactionContext]?.id
@@ -181,12 +207,14 @@ class PersistentCookieStorage(
             }
             cookies.remove(CookieKey(domain.lowercase(), normalizePath(path), name))
             if (transactionSnapshot == null || !isInActiveTransaction) {
-                saveLocked()
+                savePayload = encodeSnapshotLocked()
             }
         }
+        savePayload?.let { persistSnapshot(it) }
     }
 
     suspend fun clearAll() {
+        var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
             val transactionId = coroutineContext[CookieTransactionContext]?.id
@@ -196,9 +224,10 @@ class PersistentCookieStorage(
             }
             cookies.clear()
             if (transactionSnapshot == null || !isInActiveTransaction) {
-                saveLocked()
+                savePayload = encodeSnapshotLocked()
             }
         }
+        savePayload?.let { persistSnapshot(it) }
     }
 
     /**
@@ -226,13 +255,15 @@ class PersistentCookieStorage(
     }
 
     private suspend fun persistTransaction(transactionId: Long?) {
+        var savePayload: String? = null
         mutex.withLock {
             if (activeTransactionId != transactionId) return@withLock
-            saveLocked()
+            savePayload = encodeSnapshotLocked()
             transactionSnapshot = null
             activeTransactionId = null
             externalMutationDuringTransaction = false
         }
+        savePayload?.let { persistSnapshot(it) }
     }
 
     private suspend fun rollbackTransaction(transactionId: Long?) {
@@ -292,9 +323,12 @@ class PersistentCookieStorage(
         isLoaded = true
     }
 
-    private suspend fun saveLocked() {
+    private fun encodeSnapshotLocked(): String {
         val payload = StoredCookieFile(cookies = cookies.values.toList())
-        val content = json.encodeToString(payload)
+        return json.encodeToString(payload)
+    }
+
+    private suspend fun persistSnapshot(content: String) {
         val parentDir = storagePath.substringBeforeLast('/', "")
         if (parentDir.isNotEmpty()) {
             fileSystem.createDirectory(parentDir)
@@ -316,11 +350,11 @@ class PersistentCookieStorage(
             }
     }
 
-    private suspend fun purgeExpiredLocked(now: Long) {
+    private fun purgeExpiredLocked(now: Long): Boolean {
         // FIX: パフォーマンス最適化 - 一定間隔でのみパージを実行
         // 毎回のget()で全Cookie走査するのは非効率なため、5分に1回に制限
         if (now - lastPurgeTimeMillis < purgeIntervalMillis) {
-            return
+            return false
         }
         lastPurgeTimeMillis = now
 
@@ -330,10 +364,9 @@ class PersistentCookieStorage(
         }.keys
         if (expiredKeys.isNotEmpty()) {
             expiredKeys.forEach { cookies.remove(it) }
-            if (transactionSnapshot == null) {
-                saveLocked()
-            }
+            return true
         }
+        return false
     }
 
     private fun resolveExpiresAt(cookie: Cookie, now: Long): Long? {
@@ -370,11 +403,8 @@ class PersistentCookieStorage(
 
     private fun Url.isSecure(): Boolean = protocol.name.equals("https", ignoreCase = true)
 
-    private suspend fun removeCookieLocked(domain: String, path: String, name: String) {
-        cookies.remove(CookieKey(domain, path, name))
-        if (transactionSnapshot == null) {
-            saveLocked()
-        }
+    private fun removeCookieLocked(domain: String, path: String, name: String): Boolean {
+        return cookies.remove(CookieKey(domain, path, name)) != null
     }
 
     private data class CookieKey(

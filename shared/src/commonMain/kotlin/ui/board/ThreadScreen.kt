@@ -101,6 +101,7 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import kotlinx.coroutines.*
@@ -227,6 +228,7 @@ fun ThreadScreen(
             textSpeaker.close()
         }
     }
+    val isAndroidPlatform = remember { isAndroid() }
     val autoSaveRepository = autoSavedThreadRepository
     val manualSaveRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
         fileSystem?.let { fs ->
@@ -432,64 +434,75 @@ fun ThreadScreen(
                 isGalleryVisible = true
             }
             ThreadMenuEntryId.Save -> {
-                val currentStateValue = currentState
-                if (currentStateValue is ThreadUiState.Success) {
-                    if (httpClient != null && fileSystem != null) {
+                run {
+                    if (isAndroidPlatform && manualSaveLocation !is SaveLocation.TreeUri) {
                         coroutineScope.launch {
-                            try {
-                        val saveService = ThreadSaveService(
-                            httpClient = httpClient,
-                            fileSystem = fileSystem
-                        )
-                                val progressJob = launch {
-                                    saveService.saveProgress.collect { progress ->
-                                        saveProgress = progress
-                                    }
-                                }
-                                val page = currentStateValue.page
-                                val resolvedTitle = resolveThreadTitle(
-                                    page.posts.firstOrNull(),
-                                    threadTitle
-                                )
-                                val result = saveService.saveThread(
-                                    threadId = threadId,
-                                    boardId = board.id,
-                                    boardName = board.name,
-                                    boardUrl = effectiveBoardUrl,
-                                    title = resolvedTitle,
-                                    expiresAtLabel = page.expiresAtLabel,
-                                    posts = page.posts,
-                                    baseSaveLocation = manualSaveLocation,
-                                    baseDirectory = manualSaveDirectory,
-                                    writeMetadata = false
-                                )
-                                progressJob.cancel()
-                                result.onSuccess { savedThread ->
-                                    val repository = SavedThreadRepository(
-                                        fileSystem,
-                                        baseDirectory = manualSaveDirectory,
-                                        baseSaveLocation = manualSaveLocation
+                            snackbarHostState.showSnackbar("保存先が未選択です。設定からフォルダを選択してください。")
+                            onOpenSaveDirectoryPicker?.invoke()
+                        }
+                        return@run
+                    }
+
+                    val currentStateValue = currentState
+                    if (currentStateValue is ThreadUiState.Success) {
+                        if (httpClient != null && fileSystem != null) {
+                            coroutineScope.launch {
+                                var progressJob: Job? = null
+                                try {
+                                    val saveService = ThreadSaveService(
+                                        httpClient = httpClient,
+                                        fileSystem = fileSystem
                                     )
-                                    repository.addThreadToIndex(savedThread)
+                                    progressJob = launch {
+                                        saveService.saveProgress.collect { progress ->
+                                            saveProgress = progress
+                                        }
+                                    }
+                                    val page = currentStateValue.page
+                                    val resolvedTitle = resolveThreadTitle(
+                                        page.posts.firstOrNull(),
+                                        threadTitle
+                                    )
+                                    val result = saveService.saveThread(
+                                        threadId = threadId,
+                                        boardId = board.id,
+                                        boardName = board.name,
+                                        boardUrl = effectiveBoardUrl,
+                                        title = resolvedTitle,
+                                        expiresAtLabel = page.expiresAtLabel,
+                                        posts = page.posts,
+                                        baseSaveLocation = manualSaveLocation,
+                                        baseDirectory = manualSaveDirectory,
+                                        writeMetadata = false
+                                    )
+                                    result.onSuccess { savedThread ->
+                                        manualSaveRepository
+                                            ?.addThreadToIndex(savedThread)
+                                            ?.onFailure { Logger.e(THREAD_AUTO_SAVE_TAG, "Failed to index manually saved thread $threadId", it) }
+                                        saveProgress = null
+                                        snackbarHostState.showSnackbar("スレッドを保存しました")
+                                    }.onFailure { error ->
+                                        saveProgress = null
+                                        snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                                    }
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
                                     saveProgress = null
-                                    snackbarHostState.showSnackbar("スレッドを保存しました")
-                                }.onFailure { error ->
-                                    saveProgress = null
-                                    snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                                    snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                                } finally {
+                                    progressJob?.cancel()
                                 }
-                            } catch (e: Exception) {
-                                saveProgress = null
-                                snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                            }
+                        } else {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("保存機能が利用できません")
                             }
                         }
                     } else {
                         coroutineScope.launch {
-                            snackbarHostState.showSnackbar("保存機能が利用できません")
+                            snackbarHostState.showSnackbar("スレッドの読み込みが完了していません")
                         }
-                    }
-                } else {
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("スレッドの読み込みが完了していません")
                     }
                 }
             }
@@ -765,9 +778,14 @@ fun ThreadScreen(
         }
     }.ifBlank { null }
 
-    val readAloudSegments = remember(currentPosts) {
-        if (currentPosts.isNotEmpty()) {
-            buildReadAloudSegments(currentPosts)
+    val readAloudSegments by produceState<List<ReadAloudSegment>>(
+        initialValue = emptyList(),
+        key1 = currentPosts
+    ) {
+        value = if (currentPosts.isNotEmpty()) {
+            withContext(Dispatchers.Default) {
+                buildReadAloudSegments(currentPosts)
+            }
         } else {
             emptyList()
         }
@@ -854,9 +872,16 @@ fun ThreadScreen(
     var searchQuery by rememberSaveable(threadId) { mutableStateOf("") }
     var currentSearchResultIndex by remember(threadId) { mutableStateOf(0) }
     val currentPage = (currentState as? ThreadUiState.Success)?.page
-    val searchMatches = remember(isSearchActive, searchQuery, currentPage) {
-        if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
-            buildThreadSearchMatches(currentPage.posts, searchQuery)
+    val searchMatches by produceState<List<ThreadSearchMatch>>(
+        initialValue = emptyList(),
+        key1 = isSearchActive,
+        key2 = searchQuery,
+        key3 = currentPage
+    ) {
+        value = if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
+            withContext(Dispatchers.Default) {
+                buildThreadSearchMatches(currentPage.posts, searchQuery)
+            }
         } else {
             emptyList()
         }
@@ -944,6 +969,8 @@ fun ThreadScreen(
                 Logger.i(THREAD_ACTION_LOG_TAG, "Thread action succeeded: $successMessage")
                 onSuccess(result)
                 snackbarHostState.showSnackbar(successMessage)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Logger.e(THREAD_ACTION_LOG_TAG, "Thread action failed: $failurePrefix", e)
                 val detail = e.message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
@@ -1197,15 +1224,18 @@ fun ThreadScreen(
                                 sortOption = selectedThreadSortOption
                             )
                         }
-                        val filteredPage = remember(
+                        val filteredPage by produceState(
+                            state.page,
                             state.page,
                             ngHeaders,
                             ngWords,
                             ngFilteringEnabled,
                             threadFilterCriteria
                         ) {
-                            val ngFiltered = applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
-                            applyThreadFilters(ngFiltered, threadFilterCriteria)
+                            value = withContext(Dispatchers.Default) {
+                                val ngFiltered = applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
+                                applyThreadFilters(ngFiltered, threadFilterCriteria)
+                            }
                         }
                         ThreadContent(
                             page = filteredPage,
@@ -1623,6 +1653,7 @@ fun ThreadScreen(
             onClearPreferredFileManager = onClearPreferredFileManager,
             historyEntries = history,
             fileSystem = fileSystem,
+            autoSavedThreadRepository = autoSaveRepository,
             threadMenuEntries = threadMenuEntries,
             onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
             catalogNavEntries = catalogNavEntries,
@@ -2411,10 +2442,10 @@ private fun ThreadMessageText(
     )
     // FIX: Offload heavy text processing to background thread to prevent UI stutter
     val annotated: AnnotatedString by produceState(
-        initialValue = AnnotatedString(""),
-        key1 = messageHtml,
-        key2 = quoteReferences,
-        key3 = highlightRanges
+        AnnotatedString(""),
+        messageHtml,
+        quoteReferences,
+        highlightRanges
     ) {
         value = withContext(Dispatchers.Default) {
             buildAnnotatedMessage(messageHtml, quoteReferences, highlightRanges, highlightStyle)
@@ -3214,8 +3245,9 @@ private fun applyNgFilters(
     val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
     val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
     if (headerFilters.isEmpty() && wordFilters.isEmpty()) return page
+    val lowerBodyByPostId = buildLowerBodyByPostId(page.posts)
     val filteredPosts = page.posts.filterNot { post ->
-        matchesNgFilters(post, headerFilters, wordFilters)
+        matchesNgFilters(post, headerFilters, wordFilters, lowerBodyByPostId)
     }
     return page.copy(posts = filteredPosts)
 }
@@ -3225,17 +3257,22 @@ private fun applyThreadFilters(
     criteria: ThreadFilterCriteria
 ): ThreadPage {
     if (criteria.options.isEmpty()) return page
+    val lowerBodyByPostId = buildLowerBodyByPostId(page.posts)
     val filteredPosts = page.posts.filter { post ->
-        matchesThreadFilters(post, criteria)
+        matchesThreadFilters(post, criteria, lowerBodyByPostId)
     }
     val sortedPosts = sortThreadPosts(filteredPosts, criteria.sortOption)
     return page.copy(posts = sortedPosts)
 }
 
-private fun matchesThreadFilters(post: Post, criteria: ThreadFilterCriteria): Boolean {
+private fun matchesThreadFilters(
+    post: Post,
+    criteria: ThreadFilterCriteria,
+    lowerBodyByPostId: Map<String, String>
+): Boolean {
     val filterOptions = criteria.options.filter { it.sortOption == null }
     if (filterOptions.isEmpty()) return true
-    val lowerText = messageHtmlToPlainText(post.messageHtml).lowercase()
+    val lowerText = lowerBodyByPostId[post.id] ?: ""
     val headerText = buildPostHeaderText(post)
     return filterOptions.any { option ->
         when (option) {
@@ -3293,7 +3330,12 @@ private fun matchesKeyword(lowerText: String, subject: String, keywordInput: Str
 private val THREAD_FILTER_URL_REGEX =
     Regex("""https?://[^\s"'<>]+|www\.[^\s"'<>]+""", RegexOption.IGNORE_CASE)
 
-private fun matchesNgFilters(post: Post, headerFilters: List<String>, wordFilters: List<String>): Boolean {
+private fun matchesNgFilters(
+    post: Post,
+    headerFilters: List<String>,
+    wordFilters: List<String>,
+    lowerBodyByPostId: Map<String, String>
+): Boolean {
     if (headerFilters.isNotEmpty()) {
         val headerText = buildPostHeaderText(post)
         if (headerFilters.any { headerText.contains(it) }) {
@@ -3301,12 +3343,19 @@ private fun matchesNgFilters(post: Post, headerFilters: List<String>, wordFilter
         }
     }
     if (wordFilters.isNotEmpty()) {
-        val bodyText = messageHtmlToPlainText(post.messageHtml).lowercase()
+        val bodyText = lowerBodyByPostId[post.id] ?: ""
         if (wordFilters.any { bodyText.contains(it) }) {
             return true
         }
     }
     return false
+}
+
+private fun buildLowerBodyByPostId(posts: List<Post>): Map<String, String> {
+    if (posts.isEmpty()) return emptyMap()
+    return posts.associate { post ->
+        post.id to messageHtmlToPlainText(post.messageHtml).lowercase()
+    }
 }
 
 private fun buildPostHeaderText(post: Post): String {
@@ -3472,14 +3521,13 @@ private fun ImagePreviewDialog(
         model = previewRequest,
         imageLoader = imageLoader
     )
-    val painterState = painter.state
+    val painterState by painter.state.collectAsState()
     val targetContentScale by remember(previewSize, painterState) {
         derivedStateOf {
-            val imageSize = (painterState as? AsyncImagePainter.State.Success)?.painter?.intrinsicSize
+            val imageSize = painter.intrinsicSize
             val containerWidth = previewSize.width.toFloat()
             val containerHeight = previewSize.height.toFloat()
             if (
-                imageSize != null &&
                 imageSize.width > 0f &&
                 imageSize.height > 0f &&
                 containerWidth > 0f &&
@@ -3497,9 +3545,7 @@ private fun ImagePreviewDialog(
             }
         }
     }
-    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
     val isLoadingState = painterState is AsyncImagePainter.State.Loading
-    @Suppress("USELESS_IS_CHECK", "KotlinConstantConditions")
     val isErrorState = painterState is AsyncImagePainter.State.Error
 
     Dialog(
@@ -4159,7 +4205,7 @@ private fun ThreadFilterSheet(
                         supportingContent = {
                             if (isActiveSort) {
                                 Text(
-                                    text = "表示: ${option.sortOption?.displayLabel}",
+                                    text = "表示: ${option.sortOption.displayLabel}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }

@@ -35,8 +35,9 @@ import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.rememberUrlLauncher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -110,6 +111,7 @@ internal fun GlobalSettingsScreen(
     onClearPreferredFileManager: (() -> Unit)? = null,
     historyEntries: List<ThreadHistoryEntry>,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
+    autoSavedThreadRepository: SavedThreadRepository? = null,
     threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
     onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
     catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
@@ -130,15 +132,18 @@ internal fun GlobalSettingsScreen(
         mutableStateOf(normalizeCatalogNavEntries(catalogNavEntries))
     }
 
-    LaunchedEffect(fileSystem, historyEntries.size) {
-        if (fileSystem == null) {
+    val effectiveAutoSavedRepository = remember(fileSystem, autoSavedThreadRepository) {
+        autoSavedThreadRepository ?: fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
+    }
+
+    LaunchedEffect(effectiveAutoSavedRepository, historyEntries.size) {
+        if (effectiveAutoSavedRepository == null) {
             autoSavedCount = null
             autoSavedSize = null
             return@LaunchedEffect
         }
-        val repo = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
-        autoSavedCount = runCatching { repo.getThreadCount() }.getOrNull()
-        autoSavedSize = runCatching { repo.getTotalSize() }.getOrNull()
+        autoSavedCount = runCatching { effectiveAutoSavedRepository.getThreadCount() }.getOrNull()
+        autoSavedSize = runCatching { effectiveAutoSavedRepository.getTotalSize() }.getOrNull()
     }
 
     fun normalizeManualSaveInput(raw: String): String {
@@ -168,6 +173,26 @@ internal fun GlobalSettingsScreen(
             else -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$normalized"
         }
     }
+    val isAndroidPlatform = remember { isAndroid() }
+    val availableSaveDirectorySelections = remember(isAndroidPlatform) {
+        if (isAndroidPlatform) {
+            listOf(SaveDirectorySelection.PICKER)
+        } else {
+            SaveDirectorySelection.entries.toList()
+        }
+    }
+    val effectiveSaveDirectorySelection = if (isAndroidPlatform) {
+        SaveDirectorySelection.PICKER
+    } else {
+        saveDirectorySelection
+    }
+
+    LaunchedEffect(isAndroidPlatform, saveDirectorySelection) {
+        if (isAndroidPlatform && saveDirectorySelection != SaveDirectorySelection.PICKER) {
+            onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
+        }
+    }
+
     fun formatSizeMb(bytes: Long?): String {
         if (bytes == null) return "不明"
         val mbTimesTen = (bytes / (1024.0 * 1024.0)) * 10
@@ -507,7 +532,10 @@ internal fun GlobalSettingsScreen(
                 }
                 SettingsSection(
                     title = "スレッドメニュー構成",
-                    icon = Icons.Rounded.ViewList,
+                    icon = run {
+                        @Suppress("DEPRECATION")
+                        Icons.Rounded.ViewList
+                    },
                     description = "下部バーと設定シートの並びを見やすく配置できます。"
                 ) {
                     Row(
@@ -729,9 +757,9 @@ internal fun GlobalSettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    SaveDirectorySelection.entries.forEach { selection ->
+                                    availableSaveDirectorySelections.forEach { selection ->
                                         FilterChip(
-                                            selected = saveDirectorySelection == selection,
+                                            selected = effectiveSaveDirectorySelection == selection,
                                             onClick = { onSaveDirectorySelectionChanged(selection) },
                                             label = {
                                                 Text(
@@ -745,7 +773,7 @@ internal fun GlobalSettingsScreen(
                                     }
                                 }
                                 Spacer(Modifier.height(4.dp))
-                                when (saveDirectorySelection) {
+                                when (effectiveSaveDirectorySelection) {
                                     SaveDirectorySelection.MANUAL_INPUT -> {
                                         OutlinedTextField(
                                             value = manualSaveInput,
@@ -779,11 +807,23 @@ internal fun GlobalSettingsScreen(
                                         }
                                     }
                                     SaveDirectorySelection.PICKER -> {
+                                        val pickerDescription = if (isAndroidPlatform) {
+                                            "AndroidではSAFで選んだフォルダのみ使用できます。"
+                                        } else {
+                                            "ファイラーで選んだディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。"
+                                        }
                                         Text(
-                                            text = "ファイラーで選んだディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。",
+                                            text = pickerDescription,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        if (isAndroidPlatform) {
+                                            Text(
+                                                text = "AndroidではSAF経由の保存先のみ使用できます。",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                         Text(
                                             text = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
                                             style = MaterialTheme.typography.bodySmall,
@@ -801,12 +841,14 @@ internal fun GlobalSettingsScreen(
                                             ) {
                                                 Text("フォルダを選択")
                                             }
-                                            OutlinedButton(onClick = {
-                                                manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
-                                                onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
-                                                onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
-                                            }) {
-                                                Text("手入力に戻す")
+                                            if (!isAndroidPlatform) {
+                                                OutlinedButton(onClick = {
+                                                    manualSaveInput = DEFAULT_MANUAL_SAVE_ROOT
+                                                    onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                                    onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                                                }) {
+                                                    Text("手入力に戻す")
+                                                }
                                             }
                                         }
                                     }
@@ -838,7 +880,7 @@ internal fun GlobalSettingsScreen(
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar("画像キャッシュを削除中...")
                                         val result = runCatching {
-                                            withContext(Dispatchers.IO) {
+                                            withContext(AppDispatchers.io) {
                                                 imageLoader.diskCache?.clear()
                                                 imageLoader.memoryCache?.clear()
                                                 Unit
@@ -874,7 +916,7 @@ internal fun GlobalSettingsScreen(
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar("一時キャッシュを削除中...")
                                         val result = runCatching {
-                                            withContext(Dispatchers.IO) {
+                                            withContext(AppDispatchers.io) {
                                                 val fs = fileSystem
                                                 if (fs != null) {
                                                     resolveImageCacheDirectory()

@@ -46,12 +46,13 @@ import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
+import com.valoser.futacha.shared.util.isAndroid
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import io.ktor.http.encodedPath
@@ -131,7 +132,7 @@ fun FutachaApp(
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
-                    dispatcher = Dispatchers.IO,
+                    dispatcher = AppDispatchers.io,
                     autoSavedThreadRepository = autoSavedThreadRepository,  // FIX: 自動保存チェック用
                     httpClient = httpClient,
                     fileSystem = fileSystem,
@@ -196,9 +197,25 @@ fun FutachaApp(
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
             }
-            val resolvedManualSaveDirectory = remember(manualSaveDirectory, fileSystem) {
-                runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
-                    .getOrNull()
+            val isAndroidPlatform = remember { isAndroid() }
+            val resolvedManualSaveDirectory = remember(manualSaveDirectory, manualSaveLocation, fileSystem, isAndroidPlatform) {
+                val currentLocation = manualSaveLocation
+                when (currentLocation) {
+                    is com.valoser.futacha.shared.model.SaveLocation.TreeUri ->
+                        "SAF: ${currentLocation.uri}"
+                    is com.valoser.futacha.shared.model.SaveLocation.Bookmark ->
+                        "Bookmark: 保存先が選択済みです"
+                    is com.valoser.futacha.shared.model.SaveLocation.Path -> {
+                        runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
+                            .getOrNull()
+                    }
+                }
+            }
+
+            LaunchedEffect(isAndroidPlatform, saveDirectorySelection) {
+                if (isAndroidPlatform && saveDirectorySelection != SaveDirectorySelection.PICKER) {
+                    stateStore.setSaveDirectorySelection(SaveDirectorySelection.PICKER)
+                }
             }
 
             var selectedBoardId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -353,6 +370,7 @@ fun FutachaApp(
                             directoryPickerLauncher()
                         },
                         fileSystem = fileSystem,
+                        autoSavedThreadRepository = autoSavedThreadRepository,
                         preferredFileManagerPackage = preferredFileManager?.packageName,
                         preferredFileManagerLabel = preferredFileManager?.label,
                         onFileManagerSelected = { packageName, label ->
@@ -389,7 +407,7 @@ fun FutachaApp(
                 selectedThreadId == null -> {
                     // FIX: repositoryHolder.repositoryを使用
                     val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { repositoryHolder.repository }
-                    saveableStateHolder.SaveableStateProvider("catalog-${selectedBoard?.id.orEmpty()}") {
+                    saveableStateHolder.SaveableStateProvider("catalog-${selectedBoard.id}") {
                         CatalogScreen(
                             board = selectedBoard,
                             history = persistedHistory,
@@ -415,6 +433,7 @@ fun FutachaApp(
                             onHistoryCleared = clearHistory,
                             repository = boardRepository,
                             stateStore = stateStore,
+                            autoSavedThreadRepository = autoSavedThreadRepository,
                             appVersion = appVersion,
                             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
@@ -463,7 +482,7 @@ fun FutachaApp(
                     val activeThreadId = selectedThreadId ?: return@Surface
                     // selectedBoard should be non-null at this point due to when block structure
                     // but add explicit check for safety
-                    val currentBoard = selectedBoard ?: return@Surface
+                    val currentBoard = selectedBoard
                     val historyTitle = selectedThreadTitle ?: "無題"
                     val historyThreadUrl = selectedThreadUrl ?: currentBoard.url
                     val historyReplies = selectedThreadReplies ?: 0

@@ -6,9 +6,9 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import io.ktor.http.Url
 import kotlin.time.Clock
-import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Instant
 import kotlin.time.ExperimentalTime
 
 /**

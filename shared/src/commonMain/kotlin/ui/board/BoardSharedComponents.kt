@@ -23,6 +23,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -450,7 +452,14 @@ internal fun ThreadFormDialog(
                         TextField(
                             value = comment,
                             onValueChange = onCommentChange,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusProperties {
+                                    up = FocusRequester.Cancel
+                                    down = FocusRequester.Cancel
+                                    left = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                },
                             label = { Text("コメント") },
                             minLines = 2,
                             maxLines = 5,
@@ -458,7 +467,9 @@ internal fun ThreadFormDialog(
                             colors = textFieldColors,
                             trailingIcon = {
                                 if (comment.isNotBlank()) {
-                                    IconButton(onClick = { onCommentChange("") }) {
+                                    IconButton(onClick = {
+                                        onCommentChange("")
+                                    }) {
                                         Icon(
                                             imageVector = Icons.Rounded.Close,
                                             contentDescription = "コメントをクリア"
@@ -467,7 +478,10 @@ internal fun ThreadFormDialog(
                                 }
                             },
                             keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Default),
-                            keyboardActions = KeyboardActions.Default
+                            keyboardActions = KeyboardActions(
+                                onNext = {},
+                                onPrevious = {}
+                            )
                         )
                         Text(
                             text = "${commentLineCount}行 ${commentByteCount}バイト",

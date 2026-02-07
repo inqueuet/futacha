@@ -34,9 +34,9 @@ import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlin.math.pow
-import kotlinx.datetime.Instant as KotlinxInstant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Instant
 
 /**
  * 保存済みスレッド一覧画面
@@ -372,7 +372,8 @@ private fun formatDecimal(value: Double, decimals: Int): String {
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
 private fun formatDate(epochMillis: Long): String {
-    val instant = KotlinxInstant.fromEpochMilliseconds(epochMillis)
+    val instant = Instant.fromEpochMilliseconds(epochMillis)
     val dateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+    @Suppress("DEPRECATION")
     return "${dateTime.year}/${dateTime.monthNumber.toString().padStart(2, '0')}/${dateTime.dayOfMonth.toString().padStart(2, '0')} ${dateTime.hour.toString().padStart(2, '0')}:${dateTime.minute.toString().padStart(2, '0')}"
 }

@@ -52,5 +52,5 @@ interface BoardApi {
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ): String
+    ): String?
 }

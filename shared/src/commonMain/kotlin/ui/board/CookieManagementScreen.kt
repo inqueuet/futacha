@@ -40,10 +40,10 @@ import com.valoser.futacha.shared.network.StoredCookie
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Instant as KotlinxInstant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -174,8 +174,9 @@ private fun CookieRow(
     onDelete: () -> Unit
 ) {
     val expiresLabel = cookie.expiresAtMillis?.let {
-        val instant = KotlinxInstant.fromEpochMilliseconds(it)
+        val instant = Instant.fromEpochMilliseconds(it)
         val local = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+        @Suppress("DEPRECATION")
         "${local.year}/${local.monthNumber.toString().padStart(2, '0')}/${local.dayOfMonth.toString().padStart(2, '0')} ${local.hour.toString().padStart(2, '0')}:${local.minute.toString().padStart(2, '0')}"
     } ?: "セッション"
 

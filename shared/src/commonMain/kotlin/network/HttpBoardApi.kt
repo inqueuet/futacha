@@ -67,7 +67,7 @@ class HttpBoardApi(
 ) : BoardApi, AutoCloseable {
     companion object {
         private const val DEFAULT_USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 14; FutachaApp) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Mobile Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
         private const val DEFAULT_ACCEPT =
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         private const val DEFAULT_ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
@@ -179,7 +179,8 @@ class HttpBoardApi(
         }
         private const val DEFAULT_SCREEN_SPEC = "1080x1920x24"
         private const val DEFAULT_PTUA_VALUE = "1341647872"
-        private val THREAD_ID_REGEX = """res/(\d+)\.htm""".toRegex()
+        private val THREAD_ID_REGEX = """res/(\d+)\.html?""".toRegex(RegexOption.IGNORE_CASE)
+        private val RES_QUERY_ID_REGEX = """\bres=(\d+)\b""".toRegex(RegexOption.IGNORE_CASE)
         private val SUCCESS_KEYWORDS = listOf("書き込みました", "書き込みました。", "書き込みが完了", "書きこみました")
         private val ERROR_KEYWORDS = listOf("エラー", "error", "荒らし", "規制", "拒否", "連続投稿", "大きすぎ", "時間を置いて")
         private val WEBP_CONTENT_TYPE = ContentType.parse("image/webp")
@@ -207,6 +208,7 @@ class HttpBoardApi(
         val channel = response.bodyAsChannel()
         val limit = MAX_RESPONSE_SIZE + 1
         val packet = channel.readRemaining(limit.toLong())
+        @Suppress("DEPRECATION")
         val bytes = packet.readBytes()
         if (bytes.size > MAX_RESPONSE_SIZE || !channel.isClosedForRead) {
             channel.cancel(CancellationException("Response size exceeds maximum allowed"))
@@ -606,7 +608,7 @@ class HttpBoardApi(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean
-    ): String {
+    ): String? {
         // FIX: 入力検証を最初に実行
         validatePostInput(name, email, subject, comment, password, imageFile)
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
@@ -631,7 +633,8 @@ class HttpBoardApi(
             imageFile = imageFile,
             imageFileName = imageFileName,
             textOnly = textOnly,
-            postingConfig = postingConfig
+            postingConfig = postingConfig,
+            forceAjaxResponse = true
         )
         val response = try {
             client.submitFormWithBinaryData(
@@ -656,9 +659,9 @@ class HttpBoardApi(
 
         // Parse response to extract thread ID
         val responseBody = readResponseBodyAsString(response)
-        val match = THREAD_ID_REGEX.find(responseBody)
-        if (match != null) {
-            return match.groupValues[1]
+        val extractedThreadId = tryExtractThreadId(responseBody)
+        if (!extractedThreadId.isNullOrBlank()) {
+            return extractedThreadId
         }
         val jsonThreadId = tryParseThreadIdFromJson(responseBody)
         if (jsonThreadId != null) {
@@ -668,6 +671,10 @@ class HttpBoardApi(
         val summary = summarizeResponse(responseBody)
         if (errorDetail != null) {
             throw NetworkException("スレッド作成に失敗しました: $errorDetail")
+        }
+        if (isSuccessfulPostResponse(responseBody)) {
+            com.valoser.futacha.shared.util.Logger.w("HttpBoardApi", "Thread created but thread ID was not found in response")
+            return null
         }
         throw NetworkException("スレッドIDの取得に失敗しました: $summary")
     }
@@ -752,7 +759,8 @@ class HttpBoardApi(
         imageFile: ByteArray?,
         imageFileName: String?,
         textOnly: Boolean,
-        postingConfig: PostingConfig
+        postingConfig: PostingConfig,
+        forceAjaxResponse: Boolean = false
     ) = formData {
         appendAsciiField("guid", "on")
         appendAsciiField("mode", "regist")
@@ -774,6 +782,10 @@ class HttpBoardApi(
         threadId?.let {
             appendAsciiField("resto", it)
             appendAsciiField("responsemode", "ajax")
+        } ?: run {
+            if (forceAjaxResponse) {
+                appendAsciiField("responsemode", "ajax")
+            }
         }
 
         val attachImage = shouldAttachImage(imageFile, textOnly)
@@ -853,7 +865,7 @@ class HttpBoardApi(
         if (looksLikeJson(trimmed) && isJsonStatusOk(trimmed)) {
             return true
         }
-        if (THREAD_ID_REGEX.containsMatchIn(trimmed)) {
+        if (containsThreadId(trimmed)) {
             return true
         }
         return SUCCESS_KEYWORDS.any { keyword -> trimmed.contains(keyword) }
@@ -914,6 +926,16 @@ class HttpBoardApi(
             return thisNo
         }
         return null
+    }
+
+    private fun tryExtractThreadId(body: String): String? {
+        THREAD_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.let { return it }
+        RES_QUERY_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.let { return it }
+        return null
+    }
+
+    private fun containsThreadId(body: String): Boolean {
+        return THREAD_ID_REGEX.containsMatchIn(body) || RES_QUERY_ID_REGEX.containsMatchIn(body)
     }
 
     private fun tryExtractThisNo(body: String): String? {
