@@ -3764,7 +3764,7 @@ private fun VideoPreviewDialog(
         ) {
             PlatformVideoPlayer(
                 videoUrl = entry.url,
-                modifier = videoContentModifier,
+                modifier = videoContentModifier.align(Alignment.Center),
                 onStateChanged = { playbackState = it },
                 onVideoSizeKnown = { width, height ->
                     videoSize = if (width > 0 && height > 0) IntSize(width, height) else null
@@ -3798,52 +3798,24 @@ private fun VideoPreviewDialog(
                     }
                 }
             }
-            Surface(
-                color = Color.Black.copy(alpha = 0.6f),
-                shape = MaterialTheme.shapes.small,
-                tonalElevation = 6.dp,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(top = 32.dp, start = 16.dp, end = 16.dp)
-                    .fillMaxWidth()
-            ) {
-                Row(
+            val showCloseButton = playbackState != VideoPlayerState.Ready
+            if (showCloseButton) {
+                IconButton(
+                    onClick = onDismiss,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = entry.title,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .size(40.dp),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     )
-                    Text(
-                        text = "${currentIndex + 1}/${totalCount}",
-                        color = Color.White.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodySmall
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "プレビューを閉じる"
                     )
                 }
-            }
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp)
-                    .size(40.dp),
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
-                    contentColor = MaterialTheme.colorScheme.onSurface
-                )
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "プレビューを閉じる"
-                )
             }
             Surface(
                 color = Color.Black.copy(alpha = 0.65f),

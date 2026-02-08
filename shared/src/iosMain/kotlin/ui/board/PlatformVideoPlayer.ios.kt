@@ -5,7 +5,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.interop.UIKitView
@@ -78,6 +80,7 @@ private fun AvKitVideoPlayer(
     val player = remember(videoUrl) {
         NSURL.URLWithString(videoUrl)?.let { AVPlayer(uRL = it) }
     }
+    var lastPlaybackActive by remember(player) { mutableStateOf<Boolean?>(null) }
     val controller = remember(player) {
         AVPlayerViewController().apply {
             showsPlaybackControls = true
@@ -114,6 +117,17 @@ private fun AvKitVideoPlayer(
         }
         if (ready == null) {
             onStateChanged(VideoPlayerState.Error)
+        }
+    }
+    LaunchedEffect(player) {
+        while (isActive) {
+            val currentPlayer = player ?: break
+            val isPlayingNow = currentPlayer.rate > 0f
+            if (lastPlaybackActive != isPlayingNow) {
+                onStateChanged(if (isPlayingNow) VideoPlayerState.Ready else VideoPlayerState.Idle)
+                lastPlaybackActive = isPlayingNow
+            }
+            delay(200)
         }
     }
     LaunchedEffect(volume, isMuted, player) {

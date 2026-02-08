@@ -70,9 +70,19 @@ actual fun PlatformVideoPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> currentCallback(VideoPlayerState.Buffering)
-                    Player.STATE_READY -> currentCallback(VideoPlayerState.Ready)
-                    Player.STATE_ENDED -> currentCallback(VideoPlayerState.Ready)
+                    Player.STATE_READY -> {
+                        if (player.isPlaying) {
+                            currentCallback(VideoPlayerState.Ready)
+                        } else {
+                            currentCallback(VideoPlayerState.Idle)
+                        }
+                    }
+                    Player.STATE_ENDED -> currentCallback(VideoPlayerState.Idle)
                 }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                currentCallback(if (isPlaying) VideoPlayerState.Ready else VideoPlayerState.Idle)
             }
 
             override fun onPlayerError(error: PlaybackException) {
