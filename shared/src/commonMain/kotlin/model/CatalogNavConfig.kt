@@ -18,7 +18,10 @@ enum class CatalogNavEntryId {
     Settings;
 
     val defaultPlacement: CatalogNavEntryPlacement
-        get() = CatalogNavEntryPlacement.BAR
+        get() = when (this) {
+            PastThreadSearch -> CatalogNavEntryPlacement.HIDDEN
+            else -> CatalogNavEntryPlacement.BAR
+        }
 
     val defaultOrder: Int
         get() = when (this) {
@@ -68,6 +71,11 @@ fun normalizeCatalogNavEntries(
                 merged[idx] = config.copy(order = index)
             }
         }
+    }
+
+    // Keep this feature implemented, but do not expose it from menu UI.
+    merged.indexOfFirst { it.id == CatalogNavEntryId.PastThreadSearch }.takeIf { it >= 0 }?.let { idx ->
+        merged[idx] = merged[idx].copy(placement = CatalogNavEntryPlacement.HIDDEN)
     }
 
     val barItems = merged.filter { it.placement == CatalogNavEntryPlacement.BAR }
