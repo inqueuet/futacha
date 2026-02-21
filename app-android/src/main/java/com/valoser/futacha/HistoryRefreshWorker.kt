@@ -13,10 +13,13 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class HistoryRefreshWorker(
@@ -28,8 +31,19 @@ class HistoryRefreshWorker(
         val app = applicationContext.applicationContext as? FutachaApplication
             ?: return Result.failure()
 
-        val isEnabled = runCatching { app.appStateStore.isBackgroundRefreshEnabled.first() }
-            .getOrDefault(false)
+        val isEnabled = try {
+            app.appStateStore.isBackgroundRefreshEnabled.first()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "Failed to read background refresh setting", e)
+            return if (runAttemptCount < MAX_SETTING_READ_RETRIES) {
+                Result.retry()
+            } else {
+                Logger.e(TAG, "Aborting after repeated setting read failures (attempt=$runAttemptCount)")
+                Result.failure()
+            }
+        }
         if (!isEnabled) {
             Logger.d(TAG, "Background refresh disabled; skipping work")
             return Result.success()
@@ -44,10 +58,30 @@ class HistoryRefreshWorker(
             Result.success()
         } catch (e: TimeoutCancellationException) {
             Logger.w(TAG, "Background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
-            Result.retry()
+            if (runAttemptCount < MAX_TIMEOUT_RETRIES) {
+                Result.retry()
+            } else {
+                Logger.w(TAG, "Timeout retry limit reached; completing without retry (attempt=$runAttemptCount)")
+                Result.success()
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
             Logger.e(TAG, "Background history refresh failed", t)
-            Result.retry()
+            if (isRetriable(t) && runAttemptCount < MAX_RETRY_ATTEMPTS) {
+                Result.retry()
+            } else {
+                Result.failure()
+            }
+        }
+    }
+
+    private fun isRetriable(t: Throwable): Boolean {
+        return when (t) {
+            is IOException,
+            is NetworkException,
+            is TimeoutCancellationException -> true
+            else -> false
         }
     }
 
@@ -58,6 +92,9 @@ class HistoryRefreshWorker(
         private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(5)
         private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(3)
         private const val INTERVAL_MINUTES = 15L
+        private const val MAX_SETTING_READ_RETRIES = 3
+        private const val MAX_TIMEOUT_RETRIES = 2
+        private const val MAX_RETRY_ATTEMPTS = 3
 
         private val constraints: Constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)

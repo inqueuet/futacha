@@ -68,6 +68,8 @@ fun SavedThreadsScreen(
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             loadError = "読み込みがタイムアウトしました"
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             loadError = "読み込みエラー: ${e.message}"
         } finally {
@@ -145,6 +147,8 @@ fun SavedThreadsScreen(
                                     }
                                 } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                                     loadError = "読み込みがタイムアウトしました"
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     loadError = "読み込みエラー: ${e.message}"
                                 } finally {
@@ -169,7 +173,7 @@ fun SavedThreadsScreen(
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(threads, key = { it.threadId }) { thread ->
+                        items(threads, key = { it.storageId ?: "${it.boardId}:${it.threadId}" }) { thread ->
                             SavedThreadCard(
                                 thread = thread,
                                 onClick = { onThreadClick(thread) },
@@ -193,7 +197,10 @@ fun SavedThreadsScreen(
                     TextButton(
                         onClick = {
                             coroutineScope.launch {
-                                repository.deleteThread(thread.threadId)
+                                repository.deleteThread(
+                                    threadId = thread.threadId,
+                                    boardId = thread.boardId.ifBlank { null }
+                                )
                                     .onSuccess {
                                         snackbarHostState.showSnackbar("削除しました")
                                         refreshList()

@@ -1,11 +1,14 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.util.Logger
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import io.ktor.http.takeFrom
 
 internal object BoardUrlResolver {
+    private const val TAG = "BoardUrlResolver"
+
     fun resolveCatalogUrl(boardUrl: String, mode: CatalogMode): String {
         if (boardUrl.isBlank()) {
             throw IllegalArgumentException("Board URL cannot be blank")
@@ -27,7 +30,7 @@ internal object BoardUrlResolver {
                 mode.sortParam?.let { parameters.append("sort", it) }
             }.buildString()
         } catch (e: Exception) {
-            println("BoardUrlResolver: Failed to resolve catalog URL for '$boardUrl': ${e.message}")
+            Logger.e(TAG, "Failed to resolve catalog URL for '$boardUrl': ${e.message}", e)
             throw IllegalArgumentException("Invalid board URL: $boardUrl", e)
         }
     }
@@ -57,7 +60,7 @@ internal object BoardUrlResolver {
                 append(".htm")
             }
         } catch (e: Exception) {
-            println("BoardUrlResolver: Failed to resolve thread URL for board='$boardUrl', thread='$threadId': ${e.message}")
+            Logger.e(TAG, "Failed to resolve thread URL for board='$boardUrl', thread='$threadId': ${e.message}", e)
             throw IllegalArgumentException("Invalid board URL or thread ID", e)
         }
     }
@@ -86,7 +89,7 @@ internal object BoardUrlResolver {
         }
 
         val url = runCatching { Url(urlToParse) }.getOrElse { error ->
-            println("BoardUrlResolver: Failed to parse URL '$urlToParse': ${error.message}")
+            Logger.e(TAG, "Failed to parse URL '$urlToParse': ${error.message}", error)
             throw IllegalArgumentException("Invalid board URL: $boardUrl", error)
         }
         ensureHttpScheme(url)

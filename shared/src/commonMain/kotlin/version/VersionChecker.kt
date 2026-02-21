@@ -1,10 +1,12 @@
 package com.valoser.futacha.shared.version
 
+import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * バージョン更新チェック機能
@@ -45,6 +47,7 @@ data class GitHubRelease(
 private val json = Json {
     ignoreUnknownKeys = true
 }
+private const val TAG = "VersionChecker"
 
 /**
  * バージョン文字列を比較
@@ -131,8 +134,10 @@ suspend fun fetchLatestVersionFromGitHub(
         val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
         val response = httpClient.get(url).bodyAsText()
         json.decodeFromString<GitHubRelease>(response)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
-        println("Failed to fetch latest version from GitHub: ${e.message}")
+        Logger.w(TAG, "Failed to fetch latest version from GitHub: ${e.message}")
         null
     }
 }

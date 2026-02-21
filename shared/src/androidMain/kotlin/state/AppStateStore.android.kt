@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -8,9 +9,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
 private const val DATASTORE_NAME = "futacha_state"
 private val Context.dataStore by preferencesDataStore(name = DATASTORE_NAME)
@@ -47,125 +50,91 @@ private class AndroidPlatformStateStorage(
     private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
     private val threadSettingsMenuConfigKey = stringPreferencesKey("thread_settings_menu_config_json")
     private val lastUsedDeleteKeyPreferencesKey = stringPreferencesKey("last_used_delete_key")
+    private val safeData: Flow<Preferences> =
+        context.dataStore.data.catch { e ->
+            when (e) {
+                is CancellationException -> throw e
+                is IOException -> {
+                    Logger.e("AndroidPlatformStateStorage", "Recovering from DataStore read failure: ${e.message}", e)
+                    emit(emptyPreferences())
+                }
+                else -> throw e
+            }
+        }
 
     override val boardsJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[boardsKey] }
+        safeData.map { prefs -> prefs[boardsKey] }
 
     override val historyJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[historyKey] }
+        safeData.map { prefs -> prefs[historyKey] }
 
     override val privacyFilterEnabled: Flow<Boolean> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[privacyFilterKey] ?: false }
+        safeData.map { prefs -> prefs[privacyFilterKey] ?: false }
 
     override val backgroundRefreshEnabled: Flow<Boolean> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[backgroundRefreshKey] ?: false }
+        safeData.map { prefs -> prefs[backgroundRefreshKey] ?: false }
 
     override val lightweightModeEnabled: Flow<Boolean> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[lightweightModeKey] ?: false }
+        safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
 
     override val manualSaveDirectory: Flow<String> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
+        safeData.map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
 
     override val attachmentPickerPreference: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[attachmentPickerPreferenceKey] }
+        safeData.map { prefs -> prefs[attachmentPickerPreferenceKey] }
 
     override val saveDirectorySelection: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[saveDirectorySelectionKey] }
+        safeData.map { prefs -> prefs[saveDirectorySelectionKey] }
 
     override val catalogModeMapJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[catalogModeMapKey] }
+        safeData.map { prefs -> prefs[catalogModeMapKey] }
 
     override val catalogDisplayStyle: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[displayStyleKey] }
+        safeData.map { prefs -> prefs[displayStyleKey] }
     override val catalogGridColumns: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[gridColumnsKey] }
+        safeData.map { prefs -> prefs[gridColumnsKey] }
 
     override val ngHeadersJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[ngHeadersKey] }
+        safeData.map { prefs -> prefs[ngHeadersKey] }
 
     override val ngWordsJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[ngWordsKey] }
+        safeData.map { prefs -> prefs[ngWordsKey] }
 
     override val catalogNgWordsJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[catalogNgWordsKey] }
+        safeData.map { prefs -> prefs[catalogNgWordsKey] }
 
     override val watchWordsJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[watchWordsKey] }
+        safeData.map { prefs -> prefs[watchWordsKey] }
 
     override val selfPostIdentifiersJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[selfPostIdentifiersKey] }
+        safeData.map { prefs -> prefs[selfPostIdentifiersKey] }
 
     override val threadMenuConfigJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[threadMenuConfigKey] }
+        safeData.map { prefs -> prefs[threadMenuConfigKey] }
 
     override val threadMenuEntriesConfigJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[threadMenuEntriesKey] }
+        safeData.map { prefs -> prefs[threadMenuEntriesKey] }
 
     override val catalogNavEntriesConfigJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[catalogNavEntriesKey] }
+        safeData.map { prefs -> prefs[catalogNavEntriesKey] }
 
     override val threadSettingsMenuConfigJson: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[threadSettingsMenuConfigKey] }
+        safeData.map { prefs -> prefs[threadSettingsMenuConfigKey] }
 
     override val preferredFileManagerPackage: Flow<String> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[preferredFileManagerPackageKey] ?: "" }
+        safeData.map { prefs -> prefs[preferredFileManagerPackageKey] ?: "" }
 
     override val preferredFileManagerLabel: Flow<String> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[preferredFileManagerLabelKey] ?: "" }
+        safeData.map { prefs -> prefs[preferredFileManagerLabelKey] ?: "" }
 
     override val lastUsedDeleteKey: Flow<String?> =
-        context.dataStore.data
-            .catch { emit(emptyPreferences()) }
-            .map { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] }
+        safeData.map { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] }
 
     override suspend fun updateBoardsJson(value: String) {
         try {
             context.dataStore.edit { prefs -> prefs[boardsKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update boards: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to save boards data", e)
@@ -176,6 +145,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[historyKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update history: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to save history data", e)
@@ -186,6 +156,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[backgroundRefreshKey] = enabled }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update background refresh: ${e.message}")
             throw StorageException("Failed to save background refresh state", e)
         }
@@ -195,6 +166,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[lightweightModeKey] = enabled }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update lightweight mode: ${e.message}")
             throw StorageException("Failed to save lightweight mode state", e)
         }
@@ -204,6 +176,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[manualSaveDirectoryKey] = directory }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update manual save directory: ${e.message}")
             throw StorageException("Failed to save manual save directory", e)
         }
@@ -213,6 +186,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[attachmentPickerPreferenceKey] = preference }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update attachment picker preference: ${e.message}")
             throw StorageException("Failed to save attachment picker preference", e)
         }
@@ -222,6 +196,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[saveDirectorySelectionKey] = selection }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update save directory selection: ${e.message}")
             throw StorageException("Failed to save save directory selection", e)
         }
@@ -231,6 +206,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[catalogModeMapKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update catalog mode map: ${e.message}")
             throw StorageException("Failed to save catalog mode map", e)
         }
@@ -240,6 +216,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[privacyFilterKey] = enabled }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update privacy filter: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to save privacy filter state", e)
@@ -250,6 +227,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[displayStyleKey] = style }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update catalog display style: ${e.message}")
             throw StorageException("Failed to save catalog display style", e)
         }
@@ -259,6 +237,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[gridColumnsKey] = columns }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update catalog grid columns: ${e.message}")
             throw StorageException("Failed to save catalog grid columns", e)
         }
@@ -268,6 +247,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[ngHeadersKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update NG headers: ${e.message}")
             throw StorageException("Failed to save NG headers", e)
         }
@@ -277,6 +257,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[ngWordsKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update NG words: ${e.message}")
             throw StorageException("Failed to save NG words", e)
         }
@@ -286,6 +267,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[catalogNgWordsKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update catalog NG words: ${e.message}")
             throw StorageException("Failed to save catalog NG words", e)
         }
@@ -295,6 +277,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[watchWordsKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update watch words: ${e.message}")
             throw StorageException("Failed to save watch words", e)
         }
@@ -304,6 +287,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[selfPostIdentifiersKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update self post identifiers: ${e.message}")
             throw StorageException("Failed to save self post identifiers", e)
         }
@@ -313,6 +297,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[threadMenuConfigKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update thread menu config: ${e.message}")
             throw StorageException("Failed to save thread menu config", e)
         }
@@ -322,6 +307,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[threadMenuEntriesKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update thread menu entries: ${e.message}")
             throw StorageException("Failed to save thread menu entries", e)
         }
@@ -331,6 +317,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[catalogNavEntriesKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update catalog nav entries: ${e.message}")
             throw StorageException("Failed to save catalog nav entries", e)
         }
@@ -340,6 +327,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[threadSettingsMenuConfigKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update thread settings menu config: ${e.message}")
             throw StorageException("Failed to save thread settings menu config", e)
         }
@@ -349,6 +337,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[preferredFileManagerPackageKey] = packageName }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager package: ${e.message}")
             throw StorageException("Failed to save preferred file manager package", e)
         }
@@ -358,6 +347,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[preferredFileManagerLabelKey] = label }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager label: ${e.message}")
             throw StorageException("Failed to save preferred file manager label", e)
         }
@@ -367,6 +357,7 @@ private class AndroidPlatformStateStorage(
         try {
             context.dataStore.edit { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] = value }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update last used delete key: ${e.message}")
             throw StorageException("Failed to save last used delete key", e)
         }
@@ -441,6 +432,7 @@ private class AndroidPlatformStateStorage(
                 }
             }
         } catch (e: Exception) {
+            rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to seed data: ${e.message}")
             // Re-throw as a more specific exception for caller to handle
             throw StorageException("Failed to initialize default data", e)
@@ -452,6 +444,10 @@ private class AndroidPlatformStateStorage(
         if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
         if (trimmed == com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
         return trimmed
+    }
+
+    private fun rethrowIfCancellation(error: Throwable) {
+        if (error is CancellationException) throw error
     }
 }
 

@@ -81,13 +81,13 @@ class PersistentCookieStorage(
                 return
             }
             val path = normalizePath(cookie.path)
-            val expiresAt = resolveExpiresAt(cookie, now)
-            if (expiresAt == null) {
+            if (shouldDeleteCookie(cookie, now)) {
                 if (removeCookieLocked(domain, path, cookie.name)) {
                     savePayload = encodeSnapshotLocked()
                 }
                 return@withLock
             }
+            val expiresAt = resolveExpiresAt(cookie, now)
             val key = CookieKey(domain, path, cookie.name)
             val stored = StoredCookie(
                 name = cookie.name,
@@ -127,6 +127,7 @@ class PersistentCookieStorage(
             val path = normalizePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
             cookies.values.filter { stored ->
+                !isExpiredAt(now, stored) &&
                 domainMatches(host, stored.domain) &&
                     pathMatches(path, stored.path) &&
                     (!stored.secure || isSecure)
@@ -135,7 +136,7 @@ class PersistentCookieStorage(
                     name = stored.name,
                     value = stored.value,
                     encoding = CookieEncoding.RAW,
-                    maxAge = stored.expiresAtMillis?.let { max(((it - now) / 1000).toInt(), 0) } ?: 0,
+                    maxAge = stored.expiresAtMillis?.let { max(((it - now) / 1000).toInt(), 0) },
                     expires = stored.expiresAtMillis?.let { GMTDate(it) },
                     domain = stored.domain,
                     path = stored.path,
@@ -165,6 +166,7 @@ class PersistentCookieStorage(
             val path = normalizePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
             val candidates = cookies.values.filter { stored ->
+                !isExpiredAt(now, stored) &&
                 domainMatches(host, stored.domain) &&
                     pathMatches(path, stored.path) &&
                     (!stored.secure || isSecure)
@@ -235,6 +237,7 @@ class PersistentCookieStorage(
      */
     suspend fun <T> commitOnSuccess(block: suspend () -> T): T {
         val transactionId = mutex.withLock {
+            ensureLoadedLocked()
             if (transactionSnapshot == null) {
                 transactionSnapshot = HashMap(cookies)
                 externalMutationDuringTransaction = false
@@ -348,6 +351,7 @@ class PersistentCookieStorage(
             .onFailure { error ->
                 Logger.e("PersistentCookieStorage", "Failed to save cookie file: ${error.message}", error)
             }
+            .getOrThrow()
     }
 
     private fun purgeExpiredLocked(now: Long): Boolean {
@@ -369,20 +373,42 @@ class PersistentCookieStorage(
         return false
     }
 
+    private fun shouldDeleteCookie(cookie: Cookie, now: Long): Boolean {
+        val maxAgeSeconds = cookie.maxAge
+        if (maxAgeSeconds == 0) return true
+        val expiresAt = cookie.expires?.timestamp
+        return expiresAt != null && expiresAt <= now
+    }
+
     private fun resolveExpiresAt(cookie: Cookie, now: Long): Long? {
         val maxAgeSeconds = cookie.maxAge
         if (maxAgeSeconds != null) {
-            if (maxAgeSeconds == 0) return null
             if (maxAgeSeconds > 0) {
                 return now + maxAgeSeconds.seconds.inWholeMilliseconds
+            }
+            if (maxAgeSeconds < 0) {
+                return null
             }
         }
         return cookie.expires?.timestamp
     }
 
+    private fun isExpiredAt(now: Long, cookie: StoredCookie): Boolean {
+        val expires = cookie.expiresAtMillis ?: return false
+        return expires <= now
+    }
+
     private fun resolveDomain(setCookieDomain: String?, requestHost: String): String? {
-        val candidate = setCookieDomain?.ifBlank { null } ?: requestHost
-        return candidate.lowercase()
+        val request = requestHost.lowercase()
+        val candidate = setCookieDomain
+            ?.ifBlank { null }
+            ?.trim()
+            ?.trimStart('.')
+            ?.lowercase()
+            ?: request
+        val isSameHost = request == candidate
+        val isParentDomain = request.endsWith(".$candidate")
+        return if (isSameHost || isParentDomain) candidate else null
     }
 
     private fun normalizePath(path: String?): String {
@@ -398,7 +424,11 @@ class PersistentCookieStorage(
     }
 
     private fun pathMatches(requestPath: String, cookiePath: String): Boolean {
-        return requestPath == cookiePath || requestPath.startsWith(cookiePath)
+        if (requestPath == cookiePath) return true
+        if (!requestPath.startsWith(cookiePath)) return false
+        if (cookiePath.endsWith("/")) return true
+        val boundaryIndex = cookiePath.length
+        return requestPath.getOrNull(boundaryIndex) == '/'
     }
 
     private fun Url.isSecure(): Boolean = protocol.name.equals("https", ignoreCase = true)

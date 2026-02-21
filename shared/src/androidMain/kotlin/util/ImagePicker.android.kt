@@ -32,8 +32,18 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
             val chunk = ByteArray(8192)
             var bytesRead: Int
             var totalRead = 0L
+            var zeroReadCount = 0
 
             while (inputStream.read(chunk).also { bytesRead = it } != -1) {
+                if (bytesRead == 0) {
+                    zeroReadCount += 1
+                    if (zeroReadCount >= 100) {
+                        Logger.w("ImagePicker", "Aborting read due to repeated zero-byte reads: $uri")
+                        return null
+                    }
+                    continue
+                }
+                zeroReadCount = 0
                 totalRead += bytesRead
 
                 // FIX: 読み込み中にサイズ超過をチェック

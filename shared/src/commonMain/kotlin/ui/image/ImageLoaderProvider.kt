@@ -17,8 +17,11 @@ import com.valoser.futacha.shared.util.DevicePerformanceProfile
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okio.FileSystem
 import okio.Path
+import okio.Path.Companion.toPath
 
 private const val DEFAULT_MAX_PARALLELISM = 3
 private const val DEFAULT_IMAGE_MEMORY_CACHE_BYTES = 32L * 1024L * 1024L
@@ -39,6 +42,7 @@ val LocalFutachaImageLoader = staticCompositionLocalOf<ImageLoader> {
 }
 
 expect fun getPlatformDecoders(): List<Decoder.Factory>
+expect fun getPlatformDiskCacheDirectory(platformContext: Any?): String?
 
 @Composable
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -60,8 +64,8 @@ fun rememberFutachaImageLoader(
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
             .build()
     }
-    val diskCache = remember(cacheConfig) {
-        createImageDiskCache(cacheConfig.diskCacheBytes)
+    val diskCache = remember(platformContext, cacheConfig) {
+        createImageDiskCache(platformContext, cacheConfig.diskCacheBytes)
     }
     return remember(platformContext, fetcherDispatcher, memoryCache, diskCache) {
         ImageLoader.Builder(platformContext)
@@ -83,40 +87,98 @@ fun rememberFutachaImageLoader(
 
 /**
  * Interceptor that attempts to find the correct file extension for Futaba images.
- * Since the catalog parser guesses .jpg for full images, this interceptor handles
- * cases where the actual file is .gif, .png, .webm, or .mp4.
+ * Some boards still expose `.jpg` links for source media that are actually other formats,
+ * so this interceptor retries likely alternatives.
  */
 private class FutabaExtensionFallbackInterceptor : Interceptor {
+    private val sourceExtensionRegex = Regex("(?i)\\.([a-z0-9]{3,4})(?=([?#].*)?$)")
+    private val exhaustedUrlsMutex = Mutex()
+    private val exhaustedUrls = LinkedHashSet<String>()
+    private val exhaustedUrlMaxEntries = 256
+
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
         val initialRequest = chain.request
         val initialResult = chain.proceed()
 
-        // Only retry if we got an error and the URL looks like a Futaba source URL ending in .jpg
+        // Retry with alternative extensions for Futaba source media URLs.
         if (initialResult is ErrorResult) {
             val url = initialRequest.data.toString()
-            if (url.contains("/src/") && url.endsWith(".jpg", ignoreCase = true)) {
-                // Try extensions in order of likelihood for "playable" or static content
-                val extensions = listOf(".webp", ".gif", ".png", ".mp4", ".webm")
-                
-                for (ext in extensions) {
-                    val newUrl = url.replace(Regex("(?i)\\.jpg$"), ext)
+            if (url.contains("/src/")) {
+                if (isExhausted(url)) {
+                    return initialResult
+                }
+                val normalizedUrl = url.substringBefore('#').substringBefore('?')
+                val currentExtension = sourceExtensionRegex
+                    .find(normalizedUrl)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.lowercase()
+                val fallbackExtensions = fallbackExtensionsFor(currentExtension)
+                for (ext in fallbackExtensions) {
+                    val newUrl = replaceOrAppendExtension(url, ext)
+                    if (newUrl == url) continue
                     val newRequest = initialRequest.newBuilder().data(newUrl).build()
                     val newResult = chain.withRequest(newRequest).proceed()
-                    
+
                     if (newResult is SuccessResult) {
+                        markRecovered(url)
                         return newResult
                     }
                 }
+                rememberExhaustedUrl(url)
             }
         }
         return initialResult
     }
+
+    private fun fallbackExtensionsFor(currentExtension: String?): List<String> {
+        val candidates = when (currentExtension) {
+            "jpg", "jpeg" -> listOf("webm", "mp4", "gif", "png")
+            "webm", "mp4" -> listOf("jpg", "jpeg", "png")
+            "gif", "png", "webp" -> listOf("jpg", "jpeg")
+            else -> listOf("jpg", "jpeg", "webm", "mp4")
+        }
+        return candidates
+            .filterNot { it == currentExtension }
+            .take(2)
+    }
+
+    private suspend fun isExhausted(url: String): Boolean {
+        return exhaustedUrlsMutex.withLock { url in exhaustedUrls }
+    }
+
+    private suspend fun markRecovered(url: String) {
+        exhaustedUrlsMutex.withLock {
+            exhaustedUrls.remove(url)
+        }
+    }
+
+    private suspend fun rememberExhaustedUrl(url: String) {
+        exhaustedUrlsMutex.withLock {
+            exhaustedUrls.remove(url)
+            exhaustedUrls.add(url)
+            while (exhaustedUrls.size > exhaustedUrlMaxEntries) {
+                val eldest = exhaustedUrls.firstOrNull() ?: break
+                exhaustedUrls.remove(eldest)
+            }
+        }
+    }
+
+    private fun replaceOrAppendExtension(url: String, extension: String): String {
+        return if (sourceExtensionRegex.containsMatchIn(url)) {
+            url.replace(sourceExtensionRegex, ".$extension")
+        } else {
+            "$url.$extension"
+        }
+    }
 }
 
-fun resolveImageCacheDirectory(): Path? = runCatching { ensureCacheDirectory() }.getOrNull()
+fun resolveImageCacheDirectory(platformContext: Any?): Path? = runCatching {
+    ensureCacheDirectory(platformContext)
+}.getOrNull()
 
-private fun createImageDiskCache(maxBytes: Long): DiskCache? {
-    val directory = resolveImageCacheDirectory() ?: return null
+private fun createImageDiskCache(platformContext: Any?, maxBytes: Long): DiskCache? {
+    val directory = resolveImageCacheDirectory(platformContext) ?: return null
     return runCatching {
         DiskCache.Builder()
             .directory(directory)
@@ -125,8 +187,12 @@ private fun createImageDiskCache(maxBytes: Long): DiskCache? {
     }.getOrNull()
 }
 
-private fun ensureCacheDirectory(): Path {
-    return FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(IMAGE_DISK_CACHE_DIR)
+private fun ensureCacheDirectory(platformContext: Any?): Path {
+    val platformDirectory = getPlatformDiskCacheDirectory(platformContext)
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.toPath()
+    return platformDirectory ?: FileSystem.SYSTEM_TEMPORARY_DIRECTORY.resolve(IMAGE_DISK_CACHE_DIR)
 }
 
 private fun resolveCacheConfig(

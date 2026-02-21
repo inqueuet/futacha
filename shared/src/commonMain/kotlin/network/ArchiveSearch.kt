@@ -7,6 +7,8 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.Url
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -52,6 +54,8 @@ data class ArchiveSearchResponse(
 )
 
 private const val MAX_ARCHIVE_RESPONSE_SIZE = 2 * 1024 * 1024 // 2MB
+private const val ARCHIVE_READ_IDLE_TIMEOUT_MILLIS = 15_000L
+private const val ARCHIVE_REQUEST_TIMEOUT_MILLIS = 20_000L
 
 object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
     override val descriptor: SerialDescriptor =
@@ -119,20 +123,24 @@ suspend fun fetchArchiveSearchResults(
     scope: ArchiveSearchScope?,
     json: Json
 ): List<ArchiveSearchItem> {
-    val url = buildArchiveSearchUrl(query, scope)
-    val response = httpClient.get(url)
-    if (!response.status.isSuccess()) {
-        throw IllegalStateException("検索に失敗しました: ${response.status}")
+    return withTimeout(ARCHIVE_REQUEST_TIMEOUT_MILLIS) {
+        val url = buildArchiveSearchUrl(query, scope)
+        val response = httpClient.get(url)
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("検索に失敗しました: ${response.status}")
+        }
+        val contentLength = response.headers["Content-Length"]?.toLongOrNull()
+        if (contentLength != null && contentLength > MAX_ARCHIVE_RESPONSE_SIZE) {
+            throw IllegalStateException("検索結果が大きすぎます")
+        }
+        val body = withTimeoutOrNull(ARCHIVE_READ_IDLE_TIMEOUT_MILLIS) {
+            response.bodyAsText()
+        } ?: throw IllegalStateException("検索結果の取得がタイムアウトしました")
+        if (body.encodeToByteArray().size > MAX_ARCHIVE_RESPONSE_SIZE) {
+            throw IllegalStateException("検索結果が大きすぎます")
+        }
+        parseArchiveSearchResults(body, scope, json)
     }
-    val contentLength = response.headers["Content-Length"]?.toLongOrNull()
-    if (contentLength != null && contentLength > MAX_ARCHIVE_RESPONSE_SIZE) {
-        throw IllegalStateException("検索結果が大きすぎます")
-    }
-    val body = response.bodyAsText()
-    if (body.length > MAX_ARCHIVE_RESPONSE_SIZE) {
-        throw IllegalStateException("検索結果が大きすぎます")
-    }
-    return parseArchiveSearchResults(body, scope, json)
 }
 
 fun parseArchiveSearchResults(
@@ -235,9 +243,9 @@ private fun JsonElement.asLongOrNull(): Long? {
 }
 
 private fun extractThreadIdFromUrl(url: String): String? {
-    val primary = Regex("""/res/(\d+)\.htm""").find(url)?.groupValues?.getOrNull(1)
+    val primary = Regex("""/res/(\d+)\.html?""").find(url)?.groupValues?.getOrNull(1)
     if (!primary.isNullOrBlank()) return primary
-    return Regex("""(\d+)(?:\.htm)?$""").find(url)?.groupValues?.getOrNull(1)
+    return Regex("""(\d+)(?:\.html?)?$""").find(url)?.groupValues?.getOrNull(1)
 }
 
 private fun resolveBaseUrlFromThreadUrl(threadUrl: String): String? {

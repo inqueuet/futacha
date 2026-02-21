@@ -17,6 +17,7 @@ import platform.Foundation.*
 import platform.posix.memcpy
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * iOS版FileSystem実装
@@ -34,6 +35,16 @@ class IosFileSystem : FileSystem {
         private const val MAX_FILENAME_LENGTH = 255
         // FIX: パスの最大長（合理的な上限）
         private const val MAX_PATH_LENGTH = 4096
+    }
+
+    private inline fun <T> runFsCatching(block: () -> T): Result<T> {
+        return try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
     }
 
     /**
@@ -85,8 +96,13 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    private fun isNoSuchFileError(error: NSError?): Boolean {
+        // NSFileNoSuchFileError
+        return error?.code == 4L
+    }
+
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             memScoped {
@@ -107,7 +123,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
@@ -148,7 +164,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val contentBytes = content.encodeToByteArray()
             validateFileSize(contentBytes.size.toLong(), "content") // FIX: サイズ検証
@@ -187,7 +203,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             val data = NSData.dataWithContentsOfFile(absolutePath)
@@ -197,7 +213,7 @@ class IosFileSystem : FileSystem {
             validateFileSize(length, "file") // FIX: 読み込み前にサイズチェック
             val lengthInt = length.toInt()
             if (lengthInt <= 0) {
-                return@runCatching ByteArray(0)
+                return@runFsCatching ByteArray(0)
             }
 
             val bytes = ByteArray(lengthInt)
@@ -209,7 +225,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             // FIX: サイズチェックのため、まずファイルサイズを確認
@@ -232,14 +248,18 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
                 val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
                 if (!success) {
-                    throw Exception("Failed to delete file: ${error.value?.localizedDescription ?: "Unknown error"}")
+                    val nsError = error.value
+                    if (isNoSuchFileError(nsError)) {
+                        return@runFsCatching Unit
+                    }
+                    throw Exception("Failed to delete file: ${nsError?.localizedDescription ?: "Unknown error"}")
                 }
             }
             Unit
@@ -247,7 +267,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
             memScoped {
@@ -256,8 +276,8 @@ class IosFileSystem : FileSystem {
                 if (!success) {
                     val nsError = error.value
                     // If file doesn't exist, consider it a success (already deleted)
-                    if (nsError?.code == 4L) { // NSFileNoSuchFileError
-                        return@runCatching Unit
+                    if (isNoSuchFileError(nsError)) {
+                        return@runFsCatching Unit
                     }
                     throw Exception("Failed to delete recursively: ${nsError?.localizedDescription ?: "Unknown error"}")
                 }
@@ -341,7 +361,7 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
@@ -360,25 +380,32 @@ class IosFileSystem : FileSystem {
                 }
             }
 
-            val existingData = if (fileManager.fileExistsAtPath(absolutePath)) {
-                NSData.dataWithContentsOfFile(absolutePath) ?: NSData()
+            val existingSize = if (fileManager.fileExistsAtPath(absolutePath)) {
+                val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
+                (attributes?.get(NSFileSize) as? NSNumber)?.longValue ?: 0L
             } else {
-                NSData()
+                0L
             }
+            validateFileSize(existingSize + bytes.size.toLong(), "file")
 
-            val combinedData = NSMutableData()
-            combinedData.appendData(existingData)
-            bytes.usePinned { pinned ->
-                val newData = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
-                combinedData.appendData(newData)
-            }
-
-            memScoped {
-                val error = alloc<ObjCObjectVar<NSError?>>()
-                val writeSuccess = combinedData.writeToFile(absolutePath, options = NSDataWritingAtomic, error = error.ptr)
-                if (!writeSuccess) {
-                    throw Exception("Failed to append to file: ${error.value?.localizedDescription ?: "Unknown error"}")
+            if (!fileManager.fileExistsAtPath(absolutePath)) {
+                val created = fileManager.createFileAtPath(absolutePath, contents = null, attributes = null)
+                if (!created) {
+                    throw Exception("Failed to create file for append: $absolutePath")
                 }
+            }
+
+            val fileHandle = NSFileHandle.fileHandleForWritingAtPath(absolutePath)
+                ?: throw Exception("Failed to open file for append: $absolutePath")
+
+            try {
+                fileHandle.seekToEndOfFile()
+                bytes.usePinned { pinned ->
+                    val chunk = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+                    fileHandle.writeData(chunk)
+                }
+            } finally {
+                fileHandle.closeFile()
             }
             Unit
         }
@@ -391,7 +418,7 @@ class IosFileSystem : FileSystem {
     override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
         if (relativePath.isNotEmpty()) {
-            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
                 return@withContext Result.failure(it)
             }
         }
@@ -401,7 +428,7 @@ class IosFileSystem : FileSystem {
                 createDirectory(fullPath)
             }
             is SaveLocation.Bookmark -> {
-                runCatching {
+                runFsCatching {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
@@ -426,7 +453,7 @@ class IosFileSystem : FileSystem {
 
     override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
-        runCatching {
+        runFsCatching {
             validatePath(relativePath, "relativePath")
             validateFileSize(bytes.size.toLong(), "bytes")
         }.getOrElse {
@@ -438,7 +465,7 @@ class IosFileSystem : FileSystem {
                 writeBytes(fullPath, bytes)
             }
             is SaveLocation.Bookmark -> {
-                runCatching {
+                runFsCatching {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
@@ -459,7 +486,7 @@ class IosFileSystem : FileSystem {
 
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
-        runCatching {
+        runFsCatching {
             validatePath(relativePath, "relativePath")
             validateFileSize(bytes.size.toLong(), "bytes")
         }.getOrElse {
@@ -471,7 +498,7 @@ class IosFileSystem : FileSystem {
                 appendBytes(fullPath, bytes)
             }
             is SaveLocation.Bookmark -> {
-                runCatching {
+                runFsCatching {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
@@ -497,7 +524,7 @@ class IosFileSystem : FileSystem {
 
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
-        runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
             return@withContext Result.failure(it)
         }
         when (base) {
@@ -506,7 +533,7 @@ class IosFileSystem : FileSystem {
                 readString(fullPath)
             }
             is SaveLocation.Bookmark -> {
-                runCatching {
+                runFsCatching {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
@@ -547,6 +574,8 @@ class IosFileSystem : FileSystem {
                             url.stopAccessingSecurityScopedResource()
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Logger.e("IosFileSystem", "Error checking existence for Bookmark, path: $relativePath", e)
                     false
@@ -561,7 +590,7 @@ class IosFileSystem : FileSystem {
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
         if (relativePath.isNotEmpty()) {
-            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
                 return@withContext Result.failure(it)
             }
         }
@@ -571,7 +600,7 @@ class IosFileSystem : FileSystem {
                 delete(fullPath)
             }
             is SaveLocation.Bookmark -> {
-                runCatching {
+                runFsCatching {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {

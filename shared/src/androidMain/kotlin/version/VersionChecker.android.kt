@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.version
 
 import android.content.Context
+import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 
 /**
@@ -10,13 +11,16 @@ class AndroidVersionChecker(
     private val context: Context,
     private val httpClient: HttpClient
 ) : VersionChecker {
+    companion object {
+        private const val TAG = "AndroidVersionChecker"
+    }
 
     override fun getCurrentVersion(): String {
         return try {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             packageInfo.versionName ?: "1.0"
         } catch (e: Exception) {
-            println("Failed to get version name: ${e.message}")
+            Logger.w(TAG, "Failed to get version name: ${e.message}")
             "1.0"
         }
     }

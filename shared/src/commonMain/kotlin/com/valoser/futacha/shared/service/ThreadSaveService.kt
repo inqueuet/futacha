@@ -21,11 +21,10 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -33,7 +32,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -63,11 +62,12 @@ class ThreadSaveService(
     private val json = Json { prettyPrint = true }
 
     // グローバルダウンロード並行数制限
-    private val downloadSemaphore = Semaphore(4)
+    private val downloadSemaphore = Semaphore(MAX_PARALLEL_DOWNLOADS)
 
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
         private const val MAX_FILE_SIZE_BYTES = 8_192_000L
+        private const val MAX_THREAD_HTML_BYTES = 5 * 1024 * 1024L
         private const val MAX_TOTAL_SIZE_BYTES = 8L * 1024 * 1024 * 1024 // 約8GBまで
         private const val MAX_SAVE_DURATION_MS = 5 * 60 * 1000L // 5分上限
 
@@ -82,16 +82,17 @@ class ThreadSaveService(
         private const val MAX_RETRIES = 3
         private const val RETRY_DELAY_MS = 1000L
 
-        // FIX: 無限ループ防止 - 最大イテレーション数を設定
-        // 8MBファイルを8KBチャンクで読む場合 ~1000イテレーション、安全マージンで10倍
-        // さらに厳格化: 100,000→10,000に削減してフリーズリスクを軽減
-        private const val MAX_READ_ITERATIONS = 10_000
+        // Timeout for media body retrieval.
+        private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
+        private const val STREAM_READ_BUFFER_BYTES = 16 * 1024
+        private const val MAX_ZERO_READ_RETRIES = 100
+        private const val MAX_PARALLEL_DOWNLOADS = 2
 
         // FIX: Regexプリコンパイル（パフォーマンス最適化）
-        private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
-        private val LINK_HREF_REGEX = Regex("""<a[^>]+href="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
-        private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
-        private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+        private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
+        private val LINK_HREF_REGEX = Regex("""<a[^>]+href\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
+        private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
+        private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
         private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src="([^"]+)"[^>]*>.*?</script>""")
         private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>""")
         private val CHARSET_REGEX = Regex("""<meta[^>]+charset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
@@ -178,7 +179,8 @@ class ThreadSaveService(
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
-        runCatching {
+        try {
+            Result.success(run {
             val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
             val startedAtMillis = savedAtTimestamp
             // 準備フェーズ
@@ -186,13 +188,15 @@ class ThreadSaveService(
 
             // SaveLocation対応: nullの場合は従来のパスベース、非nullの場合は新API使用
             val useSaveLocation = baseSaveLocation != null
-            val baseDir = "$baseDirectory/$threadId"
+            val storageId = buildThreadStorageId(boardId, threadId)
+            val baseDir = "$baseDirectory/$storageId"
             val boardPath = extractBoardPath(boardUrl, boardId)
+            val opPostId = posts.firstOrNull()?.id
 
             if (useSaveLocation) {
                 val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
-                fileSystem.createDirectory(location, threadId).getOrThrow()
-                val boardMediaPath = if (boardPath.isNotBlank()) "$threadId/$boardPath" else threadId
+                fileSystem.createDirectory(location, storageId).getOrThrow()
+                val boardMediaPath = if (boardPath.isNotBlank()) "$storageId/$boardPath" else storageId
                 fileSystem.createDirectory(location, "$boardMediaPath/src").getOrThrow()
                 fileSystem.createDirectory(location, "$boardMediaPath/thumb").getOrThrow()
             } else {
@@ -249,7 +253,7 @@ class ThreadSaveService(
                 }
 
                 // FIX: 並列ダウンロードで処理速度を改善（セマフォで並行数を制限）
-                mediaItems.chunked(4).forEach { itemBatch ->
+                mediaItems.chunked(MAX_PARALLEL_DOWNLOADS).forEach { itemBatch ->
                     kotlinx.coroutines.coroutineScope {
                         val deferredResults = itemBatch.map { mediaItem ->
                             async(AppDispatchers.io) {
@@ -283,7 +287,7 @@ class ThreadSaveService(
                                             saveLocation = baseSaveLocation,
                                             baseDir = baseDir,
                                             boardPath = boardPath,
-                                            threadId = threadId,
+                                            storageId = storageId,
                                             type = mediaItem.type,
                                             postId = mediaItem.post.id,
                                             startedAtMillis = startedAtMillis
@@ -325,7 +329,7 @@ class ThreadSaveService(
 
                                     when (fileInfo.fileType) {
                                         FileType.THUMBNAIL -> {
-                                            if (thumbnailPath == null && mediaItem.post.id == "1") {
+                                            if (thumbnailPath == null && mediaItem.post.id == opPostId) {
                                                 thumbnailPath = fileInfo.relativePath
                                             }
                                         }
@@ -355,7 +359,7 @@ class ThreadSaveService(
                         )
                         val fileName = "$threadId.htm"
                         if (baseSaveLocation != null) {
-                            fileSystem.writeString(baseSaveLocation, "$threadId/$fileName", rewritten).getOrThrow()
+                            fileSystem.writeString(baseSaveLocation, "$storageId/$fileName", rewritten).getOrThrow()
                             // SaveLocation版ではファイルサイズ取得は省略（getFileSize未実装のため）
                             totalSize += rewritten.encodeToByteArray().size
                         } else {
@@ -438,6 +442,7 @@ class ThreadSaveService(
                     boardName = boardName,
                     boardUrl = boardUrl,
                     title = title,
+                    storageId = storageId,
                     savedAt = savedAtTimestamp,
                     expiresAtLabel = expiresAtLabel,
                     posts = savedPosts,
@@ -449,7 +454,7 @@ class ThreadSaveService(
                 val metadataJson = json.encodeToString(metadata)
 
                 if (baseSaveLocation != null) {
-                    val metadataRelativePath = "$threadId/metadata.json"
+                    val metadataRelativePath = "$storageId/metadata.json"
                     fileSystem.writeString(baseSaveLocation, metadataRelativePath, metadataJson).getOrThrow()
                     val size = metadataJson.encodeToByteArray().size.toLong()
                     val metadataWithSize = metadata.copy(totalSize = totalSize + size)
@@ -469,11 +474,12 @@ class ThreadSaveService(
             val finalTotalSize = totalSize + metadataSize
             enforceBudget(finalTotalSize, startedAtMillis)
 
-            SavedThread(
+                SavedThread(
                 threadId = threadId,
                 boardId = boardId,
                 boardName = boardName,
                 title = title,
+                storageId = storageId,
                 thumbnailPath = thumbnailPath,
                 savedAt = savedAtTimestamp,
                 postCount = posts.size,
@@ -481,7 +487,12 @@ class ThreadSaveService(
                 videoCount = videoCount,
                 totalSize = finalTotalSize,
                 status = status
-            )
+                )
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
     }
 
@@ -494,152 +505,162 @@ class ThreadSaveService(
         saveLocation: SaveLocation?,
         baseDir: String,
         boardPath: String,
-        threadId: String,
+        storageId: String,
         type: MediaType,
         postId: String,
         startedAtMillis: Long
     ): Result<LocalFileInfo> = withContext(AppDispatchers.io) {
-        runCatching {
-            // Download media directly and inspect headers from GET response
-            val response: HttpResponse = httpClient.get(url) {
-                headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+        try {
+            Result.success(run {
+                // Download media directly and inspect headers from GET response
+                val response: HttpResponse = httpClient.get(url) {
+                    headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+                }
+                try {
+                    if (!response.status.isSuccess()) {
+                        throw Exception("Download failed: ${response.status}")
+                    }
+
+                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
+                    if (contentLength > MAX_FILE_SIZE_BYTES) {
+                        throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
+                    }
+
+                    val extension = (getExtensionFromUrl(url)
+                        ?: getExtensionFromContentType(response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }))
+                        .lowercase()
+                    val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
+                    if (!isSupported) {
+                        throw Exception("Unsupported file type: $extension")
+                    }
+
+                    val fileType = when {
+                        type == MediaType.THUMBNAIL -> FileType.THUMBNAIL
+                        extension in SUPPORTED_VIDEO_EXTENSIONS -> FileType.VIDEO
+                        else -> FileType.FULL_IMAGE
+                    }
+                    val fileName = extractFileName(url, extension, postId)
+                    val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
+                    val subDir = when (fileType) {
+                        FileType.THUMBNAIL -> "${boardPrefix}thumb"
+                        FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
+                    }
+                    val relativePath = "$subDir/$fileName"
+
+                    if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
+                        throw IllegalStateException("Save aborted: exceeded time limit during download")
+                    }
+
+                    val totalBytesRead = if (saveLocation != null) {
+                        val fileRelativePath = "$storageId/$relativePath"
+                        var completed = false
+                        try {
+                            val writtenBytes = streamResponseToStorage(
+                                response = response,
+                                saveLocation = saveLocation,
+                                saveLocationPath = fileRelativePath,
+                                absolutePath = null,
+                                startedAtMillis = startedAtMillis
+                            )
+                            completed = true
+                            writtenBytes
+                        } finally {
+                            if (!completed) {
+                                fileSystem.delete(saveLocation, fileRelativePath).getOrNull()
+                            }
+                        }
+                    } else {
+                        val fullPath = "$baseDir/$relativePath"
+                        var completed = false
+                        try {
+                            val writtenBytes = streamResponseToStorage(
+                                response = response,
+                                saveLocation = null,
+                                saveLocationPath = null,
+                                absolutePath = fullPath,
+                                startedAtMillis = startedAtMillis
+                            )
+                            completed = true
+                            writtenBytes
+                        } finally {
+                            if (!completed) {
+                                fileSystem.delete(fullPath).getOrNull()
+                            }
+                        }
+                    }
+
+                    LocalFileInfo(
+                        relativePath = relativePath,
+                        fileType = fileType,
+                        byteSize = totalBytesRead
+                    )
+                } finally {
+                    runCatching { response.bodyAsChannel().cancel() }
+                }
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun streamResponseToStorage(
+        response: HttpResponse,
+        saveLocation: SaveLocation?,
+        saveLocationPath: String?,
+        absolutePath: String?,
+        startedAtMillis: Long
+    ): Long {
+        val channel = response.bodyAsChannel()
+        val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
+        var totalBytesRead = 0L
+        var zeroReadCount = 0
+
+        if (saveLocation != null && saveLocationPath != null) {
+            fileSystem.delete(saveLocation, saveLocationPath).getOrNull()
+        } else if (absolutePath != null) {
+            fileSystem.delete(absolutePath).getOrNull()
+        }
+
+        while (true) {
+            val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
+                channel.readAvailable(buffer, 0, buffer.size)
+            } ?: throw IllegalStateException("Save aborted: timed out waiting for media stream data")
+
+            if (read == -1) break
+            if (read == 0) {
+                zeroReadCount += 1
+                if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
+                    throw IllegalStateException("Save aborted: media stream stalled")
+                }
+                continue
             }
 
-            var channel: ByteReadChannel? = null
-            try {
-                if (!response.status.isSuccess()) {
-                    throw Exception("Download failed: ${response.status}")
-                }
+            zeroReadCount = 0
+            totalBytesRead += read
+            if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+            }
+            if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
+                throw IllegalStateException("Save aborted: exceeded time limit during download")
+            }
 
-                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
-                if (contentLength > MAX_FILE_SIZE_BYTES) {
-                    throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
-                }
-
-                val extension = (getExtensionFromUrl(url)
-                    ?: getExtensionFromContentType(response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }))
-                    .lowercase()
-                val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
-                if (!isSupported) {
-                    throw Exception("Unsupported file type: $extension")
-                }
-
-                val fileType = when {
-                    type == MediaType.THUMBNAIL -> FileType.THUMBNAIL
-                    extension in SUPPORTED_VIDEO_EXTENSIONS -> FileType.VIDEO
-                    else -> FileType.FULL_IMAGE
-                }
-                val fileName = extractFileName(url, extension, postId)
-                val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
-                val subDir = when (fileType) {
-                    FileType.THUMBNAIL -> "${boardPrefix}thumb"
-                    FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
-                }
-                val relativePath = "$subDir/$fileName"
-
-                // FIX: メモリ効率のためストリーミングで保存
-                channel = response.bodyAsChannel()
-                var totalBytesRead = 0L
-                // FIX: バッファサイズを8KB→64KBに最適化（I/O効率向上、システムコール削減）
-                val bufferSize = 65536 // 64KB chunks
-
-                // SaveLocation対応: nullの場合は従来の fullPath 使用、非nullの場合は新API使用
-                if (saveLocation != null) {
-                    val fileRelativePath = "$threadId/$relativePath"
-                    var completed = false
-                    try {
-                        // 最初にファイルを作成
-                        fileSystem.writeBytes(saveLocation, fileRelativePath, ByteArray(0)).getOrThrow()
-
-                        // FIX: 無限ループ防止 - イテレーションカウンタを追加
-                        var iterations = 0
-                        // チャンクごとに読み込んで追記
-                        while (!channel.isClosedForRead) {
-                            // FIX: 最大イテレーション数チェック
-                            if (iterations >= MAX_READ_ITERATIONS) {
-                                throw IllegalStateException("Save aborted: exceeded max read iterations ($MAX_READ_ITERATIONS)")
-                            }
-                            iterations++
-
-                            // FIX: 定期的にキャンセルチェック（100イテレーション毎）
-                            if (iterations % 100 == 0) {
-                                coroutineContext.ensureActive()
-                            }
-
-                            if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
-                                throw IllegalStateException("Save aborted: exceeded time limit during download")
-                            }
-                            val buffer = ByteArray(bufferSize)
-                            val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
-                            if (bytesRead <= 0) break
-
-                            val chunk = buffer.copyOf(bytesRead)
-                            totalBytesRead += chunk.size
-
-                            if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
-                                throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
-                            }
-
-                            fileSystem.appendBytes(saveLocation, fileRelativePath, chunk).getOrThrow()
-                        }
-                        completed = true
-                    } finally {
-                        if (!completed) {
-                            fileSystem.delete(saveLocation, fileRelativePath).getOrNull()
-                        }
-                    }
-                } else {
-                    val fullPath = "$baseDir/$relativePath"
-                    // 最初にファイルを作成
-                    fileSystem.writeBytes(fullPath, ByteArray(0)).getOrThrow()
-
-                    // FIX: 無限ループ防止 - イテレーションカウンタを追加
-                    var iterations = 0
-                    // チャンクごとに読み込んで追記
-                    while (!channel.isClosedForRead) {
-                        // FIX: 最大イテレーション数チェック
-                        if (iterations >= MAX_READ_ITERATIONS) {
-                            fileSystem.delete(fullPath).getOrNull()
-                            throw IllegalStateException("Save aborted: exceeded max read iterations ($MAX_READ_ITERATIONS)")
-                        }
-                        iterations++
-
-                        // FIX: 定期的にキャンセルチェック（100イテレーション毎）
-                        if (iterations % 100 == 0) {
-                            coroutineContext.ensureActive()
-                        }
-
-                        if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
-                            fileSystem.delete(fullPath).getOrNull()
-                            throw IllegalStateException("Save aborted: exceeded time limit during download")
-                        }
-                        val buffer = ByteArray(bufferSize)
-                        val bytesRead = channel.readAvailable(buffer, 0, bufferSize)
-                        if (bytesRead <= 0) break
-
-                        val chunk = buffer.copyOf(bytesRead)
-                        totalBytesRead += chunk.size
-
-                        if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
-                            // サイズ超過時はファイルを削除
-                            fileSystem.delete(fullPath).getOrNull()
-                            throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
-                        }
-
-                        // FIX: appendBytesを使用してメモリ効率的に追記
-                        fileSystem.appendBytes(fullPath, chunk).getOrThrow()
-                    }
-                }
-
-                return@runCatching LocalFileInfo(
-                    relativePath = relativePath,
-                    fileType = fileType,
-                    byteSize = totalBytesRead
-                )
-            } finally {
-                channel?.cancel(CancellationException("Download cancelled"))
+            val chunk = if (read == buffer.size) {
+                buffer.copyOf()
+            } else {
+                buffer.copyOf(read)
+            }
+            if (saveLocation != null && saveLocationPath != null) {
+                fileSystem.appendBytes(saveLocation, saveLocationPath, chunk).getOrThrow()
+            } else if (absolutePath != null) {
+                fileSystem.appendBytes(absolutePath, chunk).getOrThrow()
+            } else {
+                throw IllegalStateException("No target path specified for media stream")
             }
         }
+
+        return totalBytesRead
     }
 
     /**
@@ -803,7 +824,8 @@ class ThreadSaveService(
      * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
      */
     private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(AppDispatchers.io) {
-        runCatching {
+        try {
+            Result.success(run {
             val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
             val response: HttpResponse = httpClient.get(threadUrl) {
                 headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
@@ -811,7 +833,20 @@ class ThreadSaveService(
             if (!response.status.isSuccess()) {
                 throw Exception("Fetch thread HTML failed: ${response.status}")
             }
-            response.bodyAsText()
+            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+            if (contentLength != null && contentLength > MAX_THREAD_HTML_BYTES) {
+                throw IllegalStateException("Thread HTML is too large: ${contentLength / 1024}KB")
+            }
+            val html = response.bodyAsText()
+            if (html.encodeToByteArray().size > MAX_THREAD_HTML_BYTES) {
+                throw IllegalStateException("Thread HTML is too large")
+            }
+            html
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
     }
 
@@ -819,7 +854,10 @@ class ThreadSaveService(
      * URLから拡張子を取得
      */
     private fun getExtensionFromUrl(url: String): String? {
-        return url.substringAfterLast('.', "").takeIf { it.length in 3..4 }
+        val sanitized = url
+            .substringBefore('#')
+            .substringBefore('?')
+        return sanitized.substringAfterLast('.', "").takeIf { it.length in 3..4 }
     }
 
     /**

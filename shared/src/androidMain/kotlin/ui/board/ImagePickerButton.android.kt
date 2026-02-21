@@ -12,11 +12,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import android.content.Intent
+import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
 import com.valoser.futacha.shared.model.SaveLocation
@@ -26,6 +28,9 @@ import com.valoser.futacha.shared.util.readImageDataFromUri
 import com.valoser.futacha.shared.util.Logger
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 actual fun rememberAttachmentPickerLauncher(
@@ -35,35 +40,40 @@ actual fun rememberAttachmentPickerLauncher(
     preferredFileManagerPackage: String?
 ): () -> Unit {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    fun handleImageUri(uri: Uri) {
+        coroutineScope.launch {
+            val imageData = withContext(Dispatchers.IO) {
+                readImageDataFromUri(context, uri)
+            }
+            imageData?.let(onImageSelected)
+        }
+    }
     val getContentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
-            val imageData = readImageDataFromUri(context, it)
-            imageData?.let(onImageSelected)
+            handleImageUri(it)
         }
     }
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let {
-            val imageData = readImageDataFromUri(context, it)
-            imageData?.let(onImageSelected)
+            handleImageUri(it)
         }
     }
     val chooserLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val uri = result.data?.data ?: return@rememberLauncherForActivityResult
-        val imageData = readImageDataFromUri(context, uri)
-        imageData?.let(onImageSelected)
+        handleImageUri(uri)
     }
     val packageAwareLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val uri = result.data?.data ?: return@rememberLauncherForActivityResult
-        val imageData = readImageDataFromUri(context, uri)
-        imageData?.let(onImageSelected)
+        handleImageUri(uri)
     }
 
     return {
@@ -169,6 +179,7 @@ actual fun rememberDirectoryPickerLauncher(
     preferredFileManagerPackage: String?
 ): () -> Unit {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     val customLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -189,22 +200,22 @@ actual fun rememberDirectoryPickerLauncher(
             ).show()
             return@rememberLauncherForActivityResult
         }
-
-        // 書き込みテスト
-        if (!canWriteToDocumentTree(context, uri)) {
-            Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
-            // FIX: ユーザーにエラーフィードバックを表示
-            android.widget.Toast.makeText(
-                context,
-                "選択したフォルダに書き込み権限がありません",
-                android.widget.Toast.LENGTH_LONG
-            ).show()
-            return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val canWrite = withContext(Dispatchers.IO) {
+                canWriteToDocumentTree(context, uri)
+            }
+            if (!canWrite) {
+                Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                android.widget.Toast.makeText(
+                    context,
+                    "選択したフォルダに書き込み権限がありません",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
+            val treeUri = SaveLocation.TreeUri(uri.toString())
+            onDirectorySelected(treeUri)
         }
-
-        // TreeUri として SaveLocation に変換
-        val treeUri = SaveLocation.TreeUri(uri.toString())
-        onDirectorySelected(treeUri)
     }
 
     val defaultLauncher = rememberLauncherForActivityResult(OpenDocumentTree()) { uri ->
@@ -218,16 +229,17 @@ actual fun rememberDirectoryPickerLauncher(
                 Logger.e("DirectoryPicker", "Failed to persist URI permission for $uri", e)
                 return@rememberLauncherForActivityResult
             }
-
-            // 書き込みテスト
-            if (!canWriteToDocumentTree(context, uri)) {
-                Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
-                return@rememberLauncherForActivityResult
+            coroutineScope.launch {
+                val canWrite = withContext(Dispatchers.IO) {
+                    canWriteToDocumentTree(context, uri)
+                }
+                if (!canWrite) {
+                    Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                    return@launch
+                }
+                val treeUri = SaveLocation.TreeUri(uri.toString())
+                onDirectorySelected(treeUri)
             }
-
-            // TreeUri として SaveLocation に変換
-            val treeUri = SaveLocation.TreeUri(uri.toString())
-            onDirectorySelected(treeUri)
         }
     }
 
@@ -280,7 +292,16 @@ private fun canWriteToDocumentTree(context: android.content.Context, treeUri: an
     return try {
         val docFile = DocumentFile.fromTreeUri(context, treeUri) ?: return false
         val probe = docFile.createFile("text/plain", ".futacha_write_probe") ?: return false
-        context.contentResolver.openOutputStream(probe.uri)?.use { it.write("ok".toByteArray()) }
+        val output = context.contentResolver.openOutputStream(probe.uri)
+        if (output == null) {
+            probe.delete()
+            Logger.w("DirectoryPicker", "Failed to open output stream for DocumentTree probe: $treeUri")
+            return false
+        }
+        output.use {
+            it.write("ok".toByteArray())
+            it.flush()
+        }
         // FIX: テストファイル削除の結果を確認してログに記録
         val deleted = probe.delete()
         if (!deleted) {

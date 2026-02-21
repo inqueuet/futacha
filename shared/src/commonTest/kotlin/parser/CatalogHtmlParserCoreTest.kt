@@ -58,4 +58,30 @@ class CatalogHtmlParserCoreTest {
         assertEquals(1, items.size)
         assertEquals(expected, items[0].title)
     }
+
+    @Test
+    fun parseCatalog_preservesNonJpgMediaUrls() {
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='res/5000000000.htm'>thread</a>
+                        <a href='/t/src/5000000000.webm'>media</a>
+                        <img src='/t/cat/5000000000s.gif'>
+                        <br><font size=2>2</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(1, items.size)
+        assertEquals("https://www.example.com/t/thumb/5000000000s.gif", items[0].thumbnailUrl)
+        assertEquals("https://www.example.com/t/src/5000000000.webm", items[0].fullImageUrl)
+    }
 }

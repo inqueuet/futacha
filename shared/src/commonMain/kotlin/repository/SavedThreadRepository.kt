@@ -1,17 +1,19 @@
 package com.valoser.futacha.shared.repository
 
 import com.valoser.futacha.shared.model.SaveLocation
-import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
+import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
@@ -62,8 +64,8 @@ class SavedThreadRepository(
     /**
      * インデックスを保存
      */
-    suspend fun saveIndex(index: SavedThreadIndex): Result<Unit> = withIndexLock {
-        runCatching {
+    suspend fun saveIndex(index: SavedThreadIndex): Result<Unit> = runSuspendCatchingNonCancellation {
+        withIndexLock {
             saveIndexUnlocked(index)
         }
     }
@@ -76,45 +78,45 @@ class SavedThreadRepository(
      * - インデックス更新とファイル保存は同じトランザクション内で実行
      * - 失敗時は古いインデックスが保持されるため、整合性が保たれる
      */
-    suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = withIndexLock {
-        runCatching {
-            val currentIndex = readIndexUnlocked()
-            val updatedThreads = currentIndex.threads
-                .filterNot { it.threadId == thread.threadId }
-                .plus(thread)
-                .sortedByDescending { it.savedAt }
+    suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = runSuspendCatchingNonCancellation {
+        var lastException: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                withIndexLock {
+                    val currentIndex = readIndexUnlocked()
+                    val updatedThreads = currentIndex.threads
+                        .filterNot { isSameThreadIdentity(it, thread.threadId, thread.boardId) }
+                        .plus(thread)
+                        .sortedByDescending { it.savedAt }
 
-            val updatedIndex = SavedThreadIndex(
-                threads = updatedThreads,
-                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
-                lastUpdated = Clock.System.now().toEpochMilliseconds()
-            )
-
-            // FIX: 保存失敗時のリトライロジック（最大3回）
-            var lastException: Exception? = null
-            repeat(3) { attempt ->
-                try {
+                    val updatedIndex = SavedThreadIndex(
+                        threads = updatedThreads,
+                        totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
+                        lastUpdated = Clock.System.now().toEpochMilliseconds()
+                    )
                     saveIndexUnlocked(updatedIndex)
-                    return@runCatching // 成功したら即座に終了
-                } catch (e: Exception) {
-                    lastException = e
-                    if (attempt < 2) { // 最後の試行でなければ少し待つ
-                        kotlinx.coroutines.delay(100L * (attempt + 1))
-                    }
+                }
+                return@runSuspendCatchingNonCancellation
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                lastException = e
+                if (attempt < 2) {
+                    delay(100L * (attempt + 1))
                 }
             }
-            // 3回とも失敗したら例外をスロー
-            throw lastException ?: Exception("Failed to save index after adding thread ${thread.threadId}")
         }
+        throw lastException ?: Exception("Failed to save index after adding thread ${thread.threadId}")
     }
 
     /**
      * スレッドをインデックスから削除
      */
-    suspend fun removeThreadFromIndex(threadId: String): Result<Unit> = withIndexLock {
-        runCatching {
+    suspend fun removeThreadFromIndex(threadId: String, boardId: String? = null): Result<Unit> = runSuspendCatchingNonCancellation {
+        withIndexLock {
             val currentIndex = readIndexUnlocked()
-            val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
+            val updatedThreads = currentIndex.threads.filterNot {
+                isSameThreadIdentity(it, threadId, boardId)
+            }
 
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
@@ -129,90 +131,129 @@ class SavedThreadRepository(
     /**
      * スレッドメタデータを読み込み
      */
-    suspend fun loadThreadMetadata(threadId: String): Result<SavedThreadMetadata> = withContext(Dispatchers.Default) {
-        runCatching {
-            val metadataPath = "$threadId/metadata.json"
-            val jsonString = readStringAt(metadataPath).getOrThrow()
-            json.decodeFromString<SavedThreadMetadata>(jsonString)
+    suspend fun loadThreadMetadata(threadId: String, boardId: String? = null): Result<SavedThreadMetadata> = runSuspendCatchingNonCancellation {
+        withContext(Dispatchers.Default) {
+            val metadataCandidates = withIndexLock {
+                resolveMetadataCandidatesUnlocked(threadId, boardId)
+            }.distinct()
+            var lastError: Throwable? = null
+            for (metadataPath in metadataCandidates) {
+                val jsonString = readStringAt(metadataPath).getOrElse { error ->
+                    lastError = error
+                    continue
+                }
+                val metadata = runCatching {
+                    json.decodeFromString<SavedThreadMetadata>(jsonString)
+                }.getOrElse { error ->
+                    lastError = error
+                    continue
+                }
+                return@withContext metadata
+            }
+            throw lastError ?: IllegalStateException("Metadata not found for threadId=$threadId boardId=${boardId.orEmpty()}")
         }
     }
 
     /**
      * スレッドを削除
      */
-    suspend fun deleteThread(threadId: String): Result<Unit> = withIndexLock {
-        runCatching {
+    suspend fun deleteThread(threadId: String, boardId: String? = null): Result<Unit> = runSuspendCatchingNonCancellation {
+        data class DeletePlan(
+            val backupIndexPath: String,
+            val targetStorageIds: List<String>
+        )
+
+        val plan = withIndexLock {
             val currentIndex = readIndexUnlocked()
 
             // 削除対象が存在するか確認
-            val threadToDelete = currentIndex.threads.find { it.threadId == threadId }
-                ?: return@runCatching  // 存在しない場合は正常終了
+            val threadsToDelete = currentIndex.threads
+                .filter { isSameThreadIdentity(it, threadId, boardId) }
+                .sortedByDescending { it.savedAt }
+            if (threadsToDelete.isEmpty()) {
+                return@withIndexLock null // 存在しない場合は正常終了
+            }
 
-            // FIX: トランザクション原子性を改善 - インデックス更新失敗時の巻き戻し用にバックアップ
+            // バックアップ作成は短時間で済むためロック内で実施する
             val backupIndexPath = "$indexRelativePath.backup"
             val currentIndexJson = json.encodeToString(currentIndex)
             writeStringAt(backupIndexPath, currentIndexJson).getOrThrow()
 
-            // ファイル削除を試行
-            val threadPath = threadId
-            val deleteResult = deletePath(threadPath)
+            val targetStorageIds = threadsToDelete
+                .map { resolveStorageId(it) }
+                .distinct()
+            DeletePlan(
+                backupIndexPath = backupIndexPath,
+                targetStorageIds = targetStorageIds
+            )
+        } ?: return@runSuspendCatchingNonCancellation
 
-            if (deleteResult.isFailure) {
-                // ファイル削除失敗時はバックアップを削除して例外をスロー
-                deletePath(backupIndexPath)
-                throw deleteResult.exceptionOrNull()
-                    ?: Exception("Failed to delete thread directory: $threadPath")
+        // 重いファイル削除はロック外で実行して他操作をブロックしない
+        plan.targetStorageIds.forEach { threadPath ->
+            try {
+                val deleteResult = deletePath(threadPath)
+                if (deleteResult.isFailure) {
+                    deletePath(plan.backupIndexPath)
+                    throw deleteResult.exceptionOrNull()
+                        ?: Exception("Failed to delete thread directory: $threadPath")
+                }
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                throw e
             }
+        }
 
-            // 削除成功後のみインデックスを更新
-            val updatedThreads = currentIndex.threads.filterNot { it.threadId == threadId }
+        withIndexLock {
+            val latestIndex = readIndexUnlocked()
+            val deletedStorageIds = plan.targetStorageIds.toSet()
+            val updatedThreads = latestIndex.threads.filterNot {
+                resolveStorageId(it) in deletedStorageIds
+            }
             val updatedIndex = SavedThreadIndex(
                 threads = updatedThreads,
                 totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
 
-            // FIX: インデックス更新失敗時はエラーログを残すが、ファイルは既に削除済み
-            // バックアップは次回の操作時に自動復元される可能性があるため残しておく
             try {
                 saveIndexUnlocked(updatedIndex)
-                // 成功したらバックアップを削除
-                deletePath(backupIndexPath)
-            } catch (e: Exception) {
-                // インデックス保存失敗 - ファイルは削除済みだがインデックスは古いまま
-                // この状態は次回のロード時に検出・修復される
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 throw Exception("Failed to update index after deleting thread $threadId. Index may be inconsistent.", e)
             }
         }
+
+        deletePath(plan.backupIndexPath).getOrNull()
     }
 
     /**
      * すべてのスレッドを削除
      */
-    suspend fun deleteAllThreads(): Result<Unit> = withIndexLock {
-        runCatching {
+    suspend fun deleteAllThreads(): Result<Unit> = runSuspendCatchingNonCancellation {
+        val storageIds = withIndexLock {
             val currentIndex = readIndexUnlocked()
-            val deletionErrors = mutableListOf<Pair<String, Throwable>>()
-            val successfullyDeletedIds = mutableSetOf<String>()
+            currentIndex.threads.map { resolveStorageId(it) }.distinct()
+        }
 
-            // 各スレッドを削除し、失敗を記録
-            currentIndex.threads.forEach { thread ->
-                val threadPath = thread.threadId
-                val result = deletePath(threadPath)
-
-                if (result.isSuccess) {
-                    successfullyDeletedIds.add(thread.threadId)
-                } else {
-                    deletionErrors.add(
-                        thread.threadId to (result.exceptionOrNull()
-                            ?: Exception("Unknown error deleting $threadPath"))
-                    )
-                }
+        val deletionErrors = mutableListOf<Pair<String, Throwable>>()
+        val successfullyDeletedKeys = mutableSetOf<String>()
+        storageIds.forEach { threadPath ->
+            val result = deletePath(threadPath)
+            if (result.isSuccess) {
+                successfullyDeletedKeys.add(threadPath)
+            } else {
+                deletionErrors.add(
+                    threadPath to (result.exceptionOrNull()
+                        ?: Exception("Unknown error deleting $threadPath"))
+                )
             }
+        }
 
+        withIndexLock {
+            val currentIndex = readIndexUnlocked()
             // 成功したもののみインデックスから削除
             val remainingThreads = currentIndex.threads.filterNot {
-                it.threadId in successfullyDeletedIds
+                resolveStorageId(it) in successfullyDeletedKeys
             }
 
             val updatedIndex = SavedThreadIndex(
@@ -221,14 +262,14 @@ class SavedThreadRepository(
                 lastUpdated = Clock.System.now().toEpochMilliseconds()
             )
             saveIndexUnlocked(updatedIndex)
+        }
 
-            // エラーがあった場合は例外をスロー
-            if (deletionErrors.isNotEmpty()) {
-                val errorMessage = deletionErrors.joinToString("\n") { (id, error) ->
-                    "Thread $id: ${error.message}"
-                }
-                throw Exception("Failed to delete ${deletionErrors.size} thread(s):\n$errorMessage")
+        // エラーがあった場合は例外をスロー
+        if (deletionErrors.isNotEmpty()) {
+            val errorMessage = deletionErrors.joinToString("\n") { (storageId, error) ->
+                "$storageId: ${error.message}"
             }
+            throw Exception("Failed to delete ${deletionErrors.size} thread(s):\n$errorMessage")
         }
     }
 
@@ -242,8 +283,15 @@ class SavedThreadRepository(
     /**
      * スレッドが存在するか確認
      */
-    suspend fun threadExists(threadId: String): Boolean = withContext(Dispatchers.Default) {
-        val threadPath = threadId
+    suspend fun threadExists(threadId: String, boardId: String? = null): Boolean = withContext(Dispatchers.Default) {
+        val threadPath = withIndexLock {
+            val currentIndex = readIndexUnlocked()
+            currentIndex.threads
+                .filter { isSameThreadIdentity(it, threadId, boardId) }
+                .maxByOrNull { it.savedAt }
+                ?.let { resolveStorageId(it) }
+                ?: resolveStorageId(threadId = threadId, boardId = boardId)
+        }
         if (useSaveLocationApi) {
             fileSystem.exists(resolvedSaveLocation, threadPath)
         } else {
@@ -268,8 +316,9 @@ class SavedThreadRepository(
     /**
      * スレッドHTMLパスを取得
      */
-    fun getThreadHtmlPath(threadId: String): String {
-        val relativePath = "$threadId/$threadId.htm"
+    fun getThreadHtmlPath(threadId: String, boardId: String? = null): String {
+        val storageId = resolveStorageId(threadId = threadId, boardId = boardId)
+        val relativePath = "$storageId/$threadId.htm"
         return if (useSaveLocationApi) {
             relativePath
         } else {
@@ -280,11 +329,11 @@ class SavedThreadRepository(
     /**
      * スレッド情報を更新
      */
-    suspend fun updateThread(thread: SavedThread): Result<Unit> = withIndexLock {
-        runCatching {
+    suspend fun updateThread(thread: SavedThread): Result<Unit> = runSuspendCatchingNonCancellation {
+        withIndexLock {
             val currentIndex = readIndexUnlocked()
             val updatedThreads = currentIndex.threads.map {
-                if (it.threadId == thread.threadId) thread else it
+                if (isSameThreadIdentity(it, thread.threadId, thread.boardId)) thread else it
             }
 
             val updatedIndex = SavedThreadIndex(
@@ -339,7 +388,9 @@ class SavedThreadRepository(
         } else {
             readIndexFromPath(buildPath(indexRelativePath))
         }
-        if (primary != null) return primary
+        if (primary != null) {
+            return sanitizeAndRepairIndexUnlocked(primary)
+        }
 
         val backupPath = "$indexRelativePath.backup"
         val backup = if (useSaveLocationApi) {
@@ -348,11 +399,79 @@ class SavedThreadRepository(
             readIndexFromPath(buildPath(backupPath))
         }
         if (backup != null) {
-            runCatching { saveIndexUnlocked(backup) }
-            return backup
+            val repairedBackup = sanitizeAndRepairIndexUnlocked(backup)
+            try {
+                saveIndexUnlocked(repairedBackup)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Logger.e("SavedThreadRepository", "Failed to restore index from backup", e)
+            }
+            return repairedBackup
         }
 
         return emptyIndex()
+    }
+
+    private suspend fun sanitizeAndRepairIndexUnlocked(index: SavedThreadIndex): SavedThreadIndex {
+        if (index.threads.isEmpty()) {
+            if (index.totalSize != 0L) {
+                val repaired = index.copy(
+                    totalSize = 0L,
+                    lastUpdated = Clock.System.now().toEpochMilliseconds()
+                )
+                try {
+                    saveIndexUnlocked(repaired)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (error: Throwable) {
+                    Logger.e("SavedThreadRepository", "Failed to normalize empty index totalSize", error)
+                }
+                return repaired
+            }
+            return index
+        }
+
+        // インデックス読み込み中に重いファイル存在チェックを行うとロック競合が増えるため、
+        // ここではメモリ上で正規化できる項目（重複・totalSize）のみ修復する。
+        val dedupedByStorageId = linkedMapOf<String, SavedThread>()
+        index.threads.forEach { thread ->
+            val storageId = resolveStorageId(thread)
+            val current = dedupedByStorageId[storageId]
+            if (current == null || thread.savedAt > current.savedAt) {
+                dedupedByStorageId[storageId] = thread
+            }
+        }
+        val normalizedThreads = dedupedByStorageId.values.toList()
+
+        val recalculatedSize = normalizedThreads.safeTotalSize()
+        val needsRepair =
+            normalizedThreads.size != index.threads.size ||
+            recalculatedSize != index.totalSize
+        if (!needsRepair) {
+            return index
+        }
+
+        val repaired = SavedThreadIndex(
+            threads = normalizedThreads,
+            totalSize = recalculatedSize,
+            lastUpdated = Clock.System.now().toEpochMilliseconds()
+        )
+        val droppedCount = index.threads.size - normalizedThreads.size
+        if (droppedCount > 0) {
+            Logger.w(
+                "SavedThreadRepository",
+                "Repaired index by dropping $droppedCount duplicate thread entries"
+            )
+        }
+        try {
+            saveIndexUnlocked(repaired)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Throwable) {
+            Logger.e("SavedThreadRepository", "Failed to persist repaired index", error)
+        }
+        return repaired
     }
 
     private suspend fun saveIndexUnlocked(index: SavedThreadIndex) {
@@ -364,6 +483,42 @@ class SavedThreadRepository(
             fileSystem.createDirectory(baseDirectory).getOrThrow()
             val jsonString = json.encodeToString(index)
             fileSystem.writeString(buildPath(indexRelativePath), jsonString).getOrThrow()
+        }
+    }
+
+    private fun isSameThreadIdentity(thread: SavedThread, threadId: String, boardId: String?): Boolean {
+        if (thread.threadId != threadId) return false
+        val normalizedBoardId = boardId?.trim().orEmpty()
+        if (normalizedBoardId.isBlank()) return true
+        val candidateBoardId = thread.boardId.trim()
+        return candidateBoardId.equals(normalizedBoardId, ignoreCase = true)
+    }
+
+    private fun resolveStorageId(thread: SavedThread): String {
+        return thread.storageId
+            ?.takeIf { it.isNotBlank() }
+            ?: resolveStorageId(thread.threadId, thread.boardId)
+    }
+
+    private fun resolveStorageId(threadId: String, boardId: String?): String {
+        return buildThreadStorageId(boardId, threadId)
+    }
+
+    private suspend fun resolveMetadataCandidatesUnlocked(threadId: String, boardId: String?): List<String> {
+        val currentIndex = readIndexUnlocked()
+        val fromIndex = currentIndex.threads
+            .asSequence()
+            .filter { isSameThreadIdentity(it, threadId, boardId) }
+            .sortedByDescending { it.savedAt }
+            .map { thread -> "${resolveStorageId(thread)}/metadata.json" }
+            .toList()
+
+        val fallbackCurrent = "${resolveStorageId(threadId, boardId)}/metadata.json"
+        val fallbackLegacy = "$threadId/metadata.json"
+        return buildList {
+            addAll(fromIndex)
+            add(fallbackCurrent)
+            add(fallbackLegacy)
         }
     }
 
@@ -396,6 +551,18 @@ class SavedThreadRepository(
             fileSystem.delete(resolvedSaveLocation, relativePath)
         } else {
             fileSystem.deleteRecursively(buildPath(relativePath))
+        }
+    }
+
+    private suspend inline fun <T> runSuspendCatchingNonCancellation(
+        crossinline block: suspend () -> T
+    ): Result<T> {
+        return try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
         }
     }
 }

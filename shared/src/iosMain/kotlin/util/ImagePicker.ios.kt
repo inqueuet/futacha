@@ -25,12 +25,18 @@ import platform.UIKit.UIViewController
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.darwin.NSObject
+import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_global_queue
+import platform.darwin.dispatch_get_main_queue
 import platform.posix.memcpy
 import kotlin.concurrent.AtomicReference
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+
+private const val MAX_PICKED_IMAGE_BYTES = 10L * 1024L * 1024L
 
 /**
  * セキュリティスコープリソースの管理
@@ -70,21 +76,41 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
                 continuation.resume(null)
                 return
             }
-
-            val data = NSData.dataWithContentsOfURL(url)
-            if (data == null) {
-                Logger.w("ImagePicker.ios", "Failed to load image from ${url.path}")
-                continuation.resume(null)
-                return
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                val knownFileSize = resolveFileSizeBytes(url)
+                val selected = if (knownFileSize != null && knownFileSize > MAX_PICKED_IMAGE_BYTES) {
+                    Logger.w(
+                        "ImagePicker.ios",
+                        "Selected image is too large: ${knownFileSize / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                    )
+                    null
+                } else {
+                    val data = NSData.dataWithContentsOfURL(url)
+                    if (data == null) {
+                        Logger.w("ImagePicker.ios", "Failed to load image from ${url.path}")
+                        null
+                    } else {
+                        val dataLength = data.length.toLong()
+                        if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                            Logger.w(
+                                "ImagePicker.ios",
+                                "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                            )
+                            null
+                        } else {
+                            val bytes = ByteArray(dataLength.toInt())
+                            bytes.usePinned { pinned ->
+                                memcpy(pinned.addressOf(0), data.bytes, data.length)
+                            }
+                            val fileName = url.lastPathComponent ?: "image.jpg"
+                            ImageData(bytes, fileName)
+                        }
+                    }
+                }
+                dispatch_async(dispatch_get_main_queue()) {
+                    continuation.resume(selected)
+                }
             }
-
-            val bytes = ByteArray(data.length.toInt())
-            bytes.usePinned { pinned ->
-                memcpy(pinned.addressOf(0), data.bytes, data.length)
-            }
-
-            val fileName = url.lastPathComponent ?: "image.jpg"
-            continuation.resume(ImageData(bytes, fileName))
         }
 
         override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
@@ -124,8 +150,17 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                     continuation.resume(null)
                     return@loadDataRepresentationForTypeIdentifier
                 }
+                val dataLength = data.length.toLong()
+                if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                    Logger.w(
+                        "ImagePicker.ios",
+                        "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                    )
+                    continuation.resume(null)
+                    return@loadDataRepresentationForTypeIdentifier
+                }
 
-                val bytes = ByteArray(data.length.toInt())
+                val bytes = ByteArray(dataLength.toInt())
                 bytes.usePinned { pinned ->
                     memcpy(pinned.addressOf(0), data.bytes, data.length)
                 }
@@ -170,18 +205,30 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
             // Security-scoped resourceへのアクセスを開始
             val started = url.startAccessingSecurityScopedResource()
             val path = url.path
-            if (path != null && canWriteTestFile(path)) {
-                // 成功時はURLを保持（次回呼び出し時またはreleaseSecurityScopedResource()で解放）
-                if (started) {
-                    currentSecurityScopedUrl.value = url
-                }
-                continuation.resume(path)
-            } else {
-                // 失敗時は即座に解放
+            if (path == null) {
                 if (started) {
                     url.stopAccessingSecurityScopedResource()
                 }
                 continuation.resume(null)
+                return
+            }
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                val canWrite = canWriteTestFile(path)
+                dispatch_async(dispatch_get_main_queue()) {
+                    if (canWrite) {
+                        // 成功時はURLを保持（次回呼び出し時またはreleaseSecurityScopedResource()で解放）
+                        if (started) {
+                            currentSecurityScopedUrl.value = url
+                        }
+                        continuation.resume(path)
+                    } else {
+                        // 失敗時は即座に解放
+                        if (started) {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                        continuation.resume(null)
+                    }
+                }
             }
         }
 
@@ -211,14 +258,17 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
                 continuation.resume(null)
                 return
             }
-
-            // セキュアブックマークを作成
-            val bookmarkLocation = createSecureBookmark(url)
-            if (bookmarkLocation != null && canWriteToSaveLocation(bookmarkLocation)) {
-                continuation.resume(bookmarkLocation)
-            } else {
-                Logger.w("ImagePicker.ios", "Failed to create secure bookmark or cannot write to ${url.path}")
-                continuation.resume(null)
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
+                val bookmarkLocation = createSecureBookmark(url)
+                val selected = if (bookmarkLocation != null && canWriteToSaveLocation(bookmarkLocation)) {
+                    bookmarkLocation
+                } else {
+                    Logger.w("ImagePicker.ios", "Failed to create secure bookmark or cannot write to ${url.path}")
+                    null
+                }
+                dispatch_async(dispatch_get_main_queue()) {
+                    continuation.resume(selected)
+                }
             }
         }
 
@@ -260,6 +310,13 @@ private fun getRootViewController(): UIViewController? {
     val application = UIApplication.sharedApplication
     val keyWindow = application.windows.firstOrNull { it.isKeyWindow } ?: application.windows.firstOrNull()
     return keyWindow?.rootViewController
+}
+
+private fun resolveFileSizeBytes(url: NSURL): Long? {
+    val path = url.path ?: return null
+    val attributes = NSFileManager.defaultManager.attributesOfItemAtPath(path, error = null) ?: return null
+    val fileSize = attributes[NSFileSize] as? NSNumber ?: return null
+    return fileSize.longLongValue
 }
 
 /**

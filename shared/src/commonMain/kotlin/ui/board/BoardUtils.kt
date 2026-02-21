@@ -35,15 +35,24 @@ fun buildHistoryEntryFromPage(
     board: BoardSummary,
     overrideThreadUrl: String? = null
 ): ThreadHistoryEntry {
-    val existingEntry = history.firstOrNull { it.threadId == threadId }
+    val existingEntry = history.firstOrNull {
+        isSameHistoryContext(it, threadId, board)
+    }
     val firstPost = page.posts.firstOrNull()
     val candidateTitle = resolveThreadTitle(firstPost, threadTitle, existingEntry?.title)
     val resolvedImageUrl = existingEntry?.titleImageUrl?.takeIf { it.isNotBlank() }
         ?: page.posts.firstOrNull()?.thumbnailUrl.orEmpty()
+    val resolvedBoardUrl = when {
+        overrideThreadUrl.isNullOrBlank() -> board.url
+        else -> overrideThreadUrl
+    }
     val timestamp = Clock.System.now().toEpochMilliseconds()
     return existingEntry?.copy(
         title = candidateTitle,
         titleImageUrl = resolvedImageUrl,
+        boardId = board.id,
+        boardName = board.name,
+        boardUrl = resolvedBoardUrl,
         replyCount = page.posts.size,
         lastVisitedEpochMillis = timestamp
     ) ?: ThreadHistoryEntry(
@@ -52,10 +61,26 @@ fun buildHistoryEntryFromPage(
         title = candidateTitle,
         titleImageUrl = resolvedImageUrl,
         boardName = board.name,
-        boardUrl = overrideThreadUrl ?: board.url,
+        boardUrl = resolvedBoardUrl,
         lastVisitedEpochMillis = timestamp,
         replyCount = page.posts.size
     )
+}
+
+private fun isSameHistoryContext(entry: ThreadHistoryEntry, threadId: String, board: BoardSummary): Boolean {
+    if (entry.threadId != threadId) return false
+    if (entry.boardId.isNotBlank() && board.id.isNotBlank()) {
+        return entry.boardId == board.id
+    }
+    return normalizeBoardUrlForIdentity(entry.boardUrl) == normalizeBoardUrlForIdentity(board.url)
+}
+
+private fun normalizeBoardUrlForIdentity(value: String): String {
+    return value
+        .trim()
+        .substringBefore('?')
+        .trimEnd('/')
+        .lowercase()
 }
 
 /**

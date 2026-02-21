@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlin.text.concatToString
 import kotlin.time.ExperimentalTime
@@ -168,7 +169,7 @@ internal object ThreadHtmlParserCore {
                     ?: postIdRegex.find(normalized)?.groupValues?.getOrNull(1)
                     ?: ""
             }.getOrElse {
-                println("ThreadHtmlParserCore: Failed to extract threadId: ${it.message}")
+                Logger.w(TAG, "Failed to extract threadId: ${it.message}")
                 ""
             }
 
@@ -209,18 +210,14 @@ internal object ThreadHtmlParserCore {
                        posts.size < maxPosts) {
                     iterationCount++
 
-                    // FIX: タイムアウトとキャンセルチェックを100回ごとに実行
-                    if (iterationCount % 100 == 0) {
-                        // キャンセルチェック
-                        ensureActive()
-
-                        val elapsed = kotlin.time.Clock.System.now().toEpochMilliseconds() - parseStartTime
-                        if (elapsed > MAX_PARSE_TIME_MS) {
-                            Logger.e(TAG, "Parse timeout exceeded ($elapsed ms), stopping parse")
-                            isTruncated = true
-                            truncationReason = "Parse timeout exceeded (${elapsed}ms > ${MAX_PARSE_TIME_MS}ms)"
-                            break
-                        }
+                    // キャンセルとタイムアウトは毎イテレーションで判定して暴走を防ぐ
+                    ensureActive()
+                    val elapsed = kotlin.time.Clock.System.now().toEpochMilliseconds() - parseStartTime
+                    if (elapsed > MAX_PARSE_TIME_MS) {
+                        Logger.e(TAG, "Parse timeout exceeded ($elapsed ms), stopping parse")
+                        isTruncated = true
+                        truncationReason = "Parse timeout exceeded (${elapsed}ms > ${MAX_PARSE_TIME_MS}ms)"
+                        break
                     }
 
                     // Safety check: detect if searchStart hasn't moved
@@ -388,6 +385,8 @@ internal object ThreadHtmlParserCore {
                 }
                 text.substring(start.range.last + 1, end.range.first)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Logger.w("ThreadHtmlParserCore", "extractBetween timeout or error: ${e.message}")
             null

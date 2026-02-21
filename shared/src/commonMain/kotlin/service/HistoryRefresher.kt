@@ -32,12 +32,16 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.ExperimentalTime
 import kotlin.time.Clock
 
 private const val HISTORY_REFRESH_TAG = "HistoryRefresher"
+private const val SKIP_THREAD_TTL_MILLIS = 12 * 60 * 60 * 1000L
+private const val DEFAULT_THREAD_FETCH_TIMEOUT_MILLIS = 30_000L
+private const val DEFAULT_MAX_AUTO_SAVES_PER_REFRESH = 5
 
 /**
  * Headless use case to refresh history entries without tying to Compose/UI.
@@ -51,10 +55,14 @@ class HistoryRefresher(
     private val autoSavedThreadRepository: SavedThreadRepository? = null,  // FIX: 自動保存チェック用
     private val httpClient: HttpClient? = null,
     private val fileSystem: FileSystem? = null,
-    private val maxConcurrency: Int = 4
+    private val maxConcurrency: Int = 4,
+    private val autoSaveMaxConcurrency: Int = 1,
+    private val threadFetchTimeoutMillis: Long = DEFAULT_THREAD_FETCH_TIMEOUT_MILLIS,
+    private val maxAutoSavesPerRefresh: Int = DEFAULT_MAX_AUTO_SAVES_PER_REFRESH
     // Caller owns repository lifecycle
 ) {
-    private val skipThreadIds = MutableStateFlow<Set<HistoryKey>>(emptySet())
+    private val skipThreadIds = MutableStateFlow<Map<HistoryKey, Long>>(emptyMap())
+    private val refreshMutex = Mutex()
     private val updatesMutex = Mutex()
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
 
@@ -88,37 +96,70 @@ class HistoryRefresher(
         historySnapshot: List<ThreadHistoryEntry>? = null,
         autoSaveBudgetMillis: Long? = null
     ) = withContext(dispatcher) {
-        val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
-        val autoSaveDeadline = autoSaveBudgetMillis?.let { refreshStartedAt + it }
-        val boards = boardsSnapshot ?: stateStore.boards.first()
-        val history = historySnapshot ?: stateStore.history.first()
-        if (history.isEmpty()) return@withContext
+        val locked = refreshMutex.tryLock()
+        if (!locked) {
+            Logger.w(HISTORY_REFRESH_TAG, "Refresh skipped: another refresh is already running")
+            return@withContext
+        }
+        try {
+            val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
+            val autoSaveDeadline = autoSaveBudgetMillis?.let { refreshStartedAt + it }
+            val boards = boardsSnapshot ?: stateStore.boards.first()
+            val history = historySnapshot ?: stateStore.history.first()
+            if (history.isEmpty()) return@withContext
+            val boardById = boards.associateBy { it.id }
+            val boardByBaseUrl = boards
+                .mapNotNull { board ->
+                    normalizeBoardKey(board.url)?.let { key -> key to board }
+                }
+                .toMap()
+            val activeHistoryKeys = history
+                .mapTo(mutableSetOf()) { entry ->
+                    historyKeyForEntry(entry, boardById, boardByBaseUrl)
+                }
+            skipThreadIds.update { existing ->
+                existing.filter { (key, skippedAtMillis) ->
+                    key in activeHistoryKeys &&
+                        (refreshStartedAt - skippedAtMillis) < SKIP_THREAD_TTL_MILLIS
+                }
+            }
 
-        val semaphore = Semaphore(maxConcurrency)
-        val updates = mutableMapOf<HistoryKey, ThreadHistoryEntry>()
-        val errors = mutableListOf<ErrorDetail>()
-        // FIX: エラーリストの最大サイズを設定（メモリ使用量制限）
-        val maxErrorsToTrack = 100 // 最大100件まで記録、表示は10件
-        // FIX: updatesマップの最大サイズを設定（メモリ使用量制限）
-        val maxUpdatesToAccumulate = 1000 // 最大1000件まで蓄積したらフラッシュ
+            val semaphore = Semaphore(maxConcurrency)
+            val autoSaveSemaphore = Semaphore(autoSaveMaxConcurrency.coerceAtLeast(1))
+            val autoSaveService = if (
+                httpClient != null &&
+                fileSystem != null &&
+                autoSavedThreadRepository != null
+            ) {
+                ThreadSaveService(httpClient, fileSystem)
+            } else {
+                null
+            }
+            val updates = mutableMapOf<HistoryKey, ThreadHistoryEntry>()
+            val errors = mutableListOf<ErrorDetail>()
+            var attemptedCount = 0
+            var successfulCount = 0
+            var hardFailureCount = 0
+            var autoSaveCount = 0
+            val statsMutex = Mutex()
+            // FIX: エラーリストの最大サイズを設定（メモリ使用量制限）
+            val maxErrorsToTrack = 100 // 最大100件まで記録、表示は10件
+            // FIX: updatesマップの最大サイズを設定（メモリ使用量制限）
+            val maxUpdatesToAccumulate = 1000 // 最大1000件まで蓄積したらフラッシュ
 
-        // FIX: Process in batches to avoid creating thousands of coroutines at once
-        // This prevents memory spikes when history size is large
-        // Reduced to 10 to further limit concurrent operations and memory usage
-        val batchSize = 10
+            // FIX: Process in batches to avoid creating thousands of coroutines at once
+            // This prevents memory spikes when history size is large
+            // Reduced to 10 to further limit concurrent operations and memory usage
+            val batchSize = 10
 
-        coroutineScope {
-            history.chunked(batchSize).forEach { batch ->
-                // Process each batch
-                batch.map { entry ->
-                    async {
-                        val board = boards.firstOrNull { it.id == entry.boardId }
-                        val resolvedBoardId = entry.boardId.ifBlank { board?.id.orEmpty() }
-                        val key = HistoryKey(
-                            boardKey = resolvedBoardId.ifBlank { entry.boardUrl.ifBlank { board?.url.orEmpty() } },
-                            threadId = entry.threadId
-                        )
-                        if (skipThreadIds.value.contains(key)) return@async
+            coroutineScope {
+                history.chunked(batchSize).forEach { batch ->
+                    // Process each batch
+                    batch.map { entry ->
+                        async {
+                        val board = resolveBoardForEntry(entry, boardById, boardByBaseUrl)
+                        val key = historyKeyForEntry(entry, boardById, boardByBaseUrl)
+                        if (isThreadSkipped(key, refreshStartedAt)) return@async
                         val baseUrl = board?.url
                             ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
                                 runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
@@ -129,34 +170,65 @@ class HistoryRefresher(
 
                         semaphore.withPermit {
                             try {
-                                val page = repository.getThread(baseUrl, entry.threadId)
+                                statsMutex.withLock {
+                                    attemptedCount += 1
+                                }
+                                val page = withTimeout(threadFetchTimeoutMillis) {
+                                    repository.getThread(baseUrl, entry.threadId)
+                                }
                                 val opPost = page.posts.firstOrNull()
                                 val resolvedTitle = resolveThreadTitle(opPost, entry.title)
                                 var hasAutoSave = entry.hasAutoSave
+                                statsMutex.withLock {
+                                    successfulCount += 1
+                                }
 
                                 // 背景更新でも本文・メディアを自動保存
-                                if (httpClient != null && fileSystem != null && autoSavedThreadRepository != null) {
-                                    if (autoSaveDeadline != null && Clock.System.now().toEpochMilliseconds() > autoSaveDeadline) {
+                                // FIX: 既に自動保存済みかつレス数が変わらない場合は保存を省略してI/O負荷を抑える
+                                val shouldAutoSave = !entry.hasAutoSave || page.posts.size != entry.replyCount
+                                if (shouldAutoSave && autoSaveService != null && autoSavedThreadRepository != null) {
+                                    val allowAutoSave = statsMutex.withLock {
+                                        if (autoSaveCount >= maxAutoSavesPerRefresh) {
+                                            false
+                                        } else {
+                                            autoSaveCount += 1
+                                            true
+                                        }
+                                    }
+                                    if (!allowAutoSave) {
+                                        Logger.d(
+                                            HISTORY_REFRESH_TAG,
+                                            "Auto-save limit reached ($maxAutoSavesPerRefresh), skipping ${entry.threadId}"
+                                        )
+                                    } else if (autoSaveDeadline != null && Clock.System.now().toEpochMilliseconds() > autoSaveDeadline) {
                                         Logger.w(HISTORY_REFRESH_TAG, "Auto-save budget exceeded, skipping auto-save for ${entry.threadId}")
                                     } else {
-                                        val saver = ThreadSaveService(httpClient, fileSystem)
-                                        runCatching {
-                                            saver.saveThread(
-                                                threadId = entry.threadId,
-                                                boardId = entry.boardId.ifBlank { board?.id ?: "" },
-                                                boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
-                                                boardUrl = baseUrl,
-                                                title = resolvedTitle,
-                                                expiresAtLabel = page.expiresAtLabel,
-                                                posts = page.posts,
-                                                baseDirectory = AUTO_SAVE_DIRECTORY,
-                                                writeMetadata = true
-                                            ).getOrThrow()
-                                        }.onSuccess { saved ->
-                                            autoSavedThreadRepository.addThreadToIndex(saved)
-                                                .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
-                                            hasAutoSave = true
-                                        }.onFailure { error ->
+                                        try {
+                                            val saved = autoSaveSemaphore.withPermit {
+                                                if (autoSaveDeadline != null && Clock.System.now().toEpochMilliseconds() > autoSaveDeadline) {
+                                                    Logger.w(HISTORY_REFRESH_TAG, "Auto-save budget exceeded while waiting permit, skipping ${entry.threadId}")
+                                                    return@withPermit null
+                                                }
+                                                autoSaveService.saveThread(
+                                                    threadId = entry.threadId,
+                                                    boardId = entry.boardId.ifBlank { board?.id ?: "" },
+                                                    boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                                    boardUrl = baseUrl,
+                                                    title = resolvedTitle,
+                                                    expiresAtLabel = page.expiresAtLabel,
+                                                    posts = page.posts,
+                                                    baseDirectory = AUTO_SAVE_DIRECTORY,
+                                                    writeMetadata = true
+                                                ).getOrThrow()
+                                            }
+                                            if (saved != null) {
+                                                autoSavedThreadRepository.addThreadToIndex(saved)
+                                                    .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
+                                                hasAutoSave = true
+                                            }
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (error: Throwable) {
                                             Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
                                         }
                                     }
@@ -178,6 +250,9 @@ class HistoryRefresher(
                                 if (isNotFound(e)) {
                                     when (val archiveResult = tryRefreshFromArchive(entry, board)) {
                                         is ArchiveRefreshResult.Success -> {
+                                            statsMutex.withLock {
+                                                successfulCount += 1
+                                            }
                                             updatesMutex.withLock {
                                                 updates[key] = archiveResult.entry
                                             }
@@ -193,9 +268,16 @@ class HistoryRefresher(
                                     }
                                     // FIX: 404/410の場合、自動保存があるかチェック
                                     val hasAutoSave = autoSavedThreadRepository?.let { repo ->
-                                        runCatching {
-                                            repo.loadThreadMetadata(entry.threadId).isSuccess
-                                        }.getOrDefault(false)
+                                        try {
+                                            repo.loadThreadMetadata(
+                                                threadId = entry.threadId,
+                                                boardId = entry.boardId.ifBlank { board?.id }
+                                            ).isSuccess
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Throwable) {
+                                            false
+                                        }
                                     } ?: false
 
                                     if (hasAutoSave && !entry.hasAutoSave) {
@@ -218,59 +300,81 @@ class HistoryRefresher(
                                             ))
                                         }
                                     }
+                                    statsMutex.withLock {
+                                        hardFailureCount += 1
+                                    }
                                 }
                             }
                         }
-                    }
-                }.forEach { it.await() } // Wait for current batch to complete
-
-                // FIX: 定期的にupdatesをフラッシュしてメモリ使用量を制限
-                updatesMutex.withLock {
-                    if (updates.size >= maxUpdatesToAccumulate) {
-                        Logger.i(HISTORY_REFRESH_TAG, "Flushing ${updates.size} updates to prevent memory spike")
-                        val latestHistory = stateStore.history.first()
-                        val merged = latestHistory.map { entry ->
-                            updates[historyKeyForEntry(entry)] ?: entry
                         }
-                        stateStore.setHistory(merged)
-                        updates.clear()
+                    }.forEach { it.await() } // Wait for current batch to complete
+
+                    // FIX: 定期的にupdatesをフラッシュしてメモリ使用量を制限
+                    val flushSnapshot = updatesMutex.withLock {
+                        if (updates.size >= maxUpdatesToAccumulate) {
+                            Logger.i(HISTORY_REFRESH_TAG, "Flushing ${updates.size} updates to prevent memory spike")
+                            val snapshot = updates.toMap()
+                            updates.clear()
+                            snapshot
+                        } else {
+                            null
+                        }
+                    }
+                    if (flushSnapshot != null) {
+                        stateStore.mergeHistoryEntries(flushSnapshot.values)
                     }
                 }
             }
-        }
 
-        if (updates.isNotEmpty()) {
-            val latestHistory = stateStore.history.first()
-            val merged = latestHistory.map { entry ->
-                updates[historyKeyForEntry(entry)] ?: entry
+            val remainingUpdates = updatesMutex.withLock {
+                if (updates.isEmpty()) {
+                    null
+                } else {
+                    val snapshot = updates.toMap()
+                    updates.clear()
+                    snapshot
+                }
             }
-            stateStore.setHistory(merged)
-        }
+            if (remainingUpdates != null) {
+                stateStore.mergeHistoryEntries(remainingUpdates.values)
+            }
 
-        // FIX: エラー情報をより詳細に記録
-        if (errors.isNotEmpty()) {
-            val errorRate = (errors.size.toFloat() / history.size * 100).toInt()
-            _lastRefreshError.value = RefreshError(
-                errorCount = errors.size,
-                totalThreads = history.size,
-                timestamp = Clock.System.now().toEpochMilliseconds(),
-                errors = errors.take(10) // FIX: 最初の10件のエラーのみ保存してメモリ節約
-            )
+            // FIX: エラー情報をより詳細に記録
+            if (errors.isNotEmpty()) {
+                val errorRate = (errors.size.toFloat() / history.size * 100).toInt()
+                _lastRefreshError.value = RefreshError(
+                    errorCount = errors.size,
+                    totalThreads = history.size,
+                    timestamp = Clock.System.now().toEpochMilliseconds(),
+                    errors = errors.take(10) // FIX: 最初の10件のエラーのみ保存してメモリ節約
+                )
 
-            // FIX: エラー率が高い場合は警告レベルを上げる
-            if (errorRate > 50) {
-                Logger.e(HISTORY_REFRESH_TAG, "History refresh completed with HIGH error rate: ${errors.size}/${history.size} ($errorRate%)")
+                // FIX: エラー率が高い場合は警告レベルを上げる
+                if (errorRate > 50) {
+                    Logger.e(HISTORY_REFRESH_TAG, "History refresh completed with HIGH error rate: ${errors.size}/${history.size} ($errorRate%)")
+                } else {
+                    Logger.w(HISTORY_REFRESH_TAG, "History refresh completed with ${errors.size}/${history.size} errors ($errorRate%)")
+                }
             } else {
-                Logger.w(HISTORY_REFRESH_TAG, "History refresh completed with ${errors.size}/${history.size} errors ($errorRate%)")
+                _lastRefreshError.value = null
+                Logger.i(HISTORY_REFRESH_TAG, "History refresh completed successfully for ${history.size} threads")
             }
-        } else {
-            _lastRefreshError.value = null
-            Logger.i(HISTORY_REFRESH_TAG, "History refresh completed successfully for ${history.size} threads")
+
+            val (attempted, successful, hardFailures) = statsMutex.withLock {
+                Triple(attemptedCount, successfulCount, hardFailureCount)
+            }
+            if (attempted > 0 && successful == 0 && hardFailures > 0) {
+                throw NetworkException("History refresh failed for all $attempted attempted threads")
+            }
+        } finally {
+            if (locked) {
+                refreshMutex.unlock()
+            }
         }
     }
 
     fun clearSkippedThreads() {
-        skipThreadIds.value = emptySet()
+        skipThreadIds.value = emptyMap()
     }
 
     fun clearLastError() {
@@ -278,12 +382,44 @@ class HistoryRefresher(
     }
 
     private fun markSkipped(key: HistoryKey) {
-        skipThreadIds.update { it + key }
+        val nowMillis = Clock.System.now().toEpochMilliseconds()
+        skipThreadIds.update { it + (key to nowMillis) }
     }
 
-    private fun historyKeyForEntry(entry: ThreadHistoryEntry): HistoryKey {
-        val boardKey = entry.boardId.ifBlank { entry.boardUrl }
+    private fun isThreadSkipped(key: HistoryKey, nowMillis: Long): Boolean {
+        val skippedAtMillis = skipThreadIds.value[key] ?: return false
+        return (nowMillis - skippedAtMillis) < SKIP_THREAD_TTL_MILLIS
+    }
+
+    private fun historyKeyForEntry(
+        entry: ThreadHistoryEntry,
+        boardById: Map<String, BoardSummary>,
+        boardByBaseUrl: Map<String, BoardSummary>
+    ): HistoryKey {
+        val board = resolveBoardForEntry(entry, boardById, boardByBaseUrl)
+        val boardKey = entry.boardId
+            .takeIf { it.isNotBlank() }
+            ?: board?.id?.takeIf { it.isNotBlank() }
+            ?: entry.boardUrl.ifBlank { board?.url.orEmpty() }
         return HistoryKey(boardKey = boardKey, threadId = entry.threadId)
+    }
+
+    private fun resolveBoardForEntry(
+        entry: ThreadHistoryEntry,
+        boardById: Map<String, BoardSummary>,
+        boardByBaseUrl: Map<String, BoardSummary>
+    ): BoardSummary? {
+        entry.boardId.takeIf { it.isNotBlank() }?.let { boardId ->
+            boardById[boardId]?.let { return it }
+        }
+        val key = normalizeBoardKey(entry.boardUrl) ?: return null
+        return boardByBaseUrl[key]
+    }
+
+    private fun normalizeBoardKey(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        val resolved = runCatching { BoardUrlResolver.resolveBoardBaseUrl(url) }.getOrDefault(url)
+        return resolved.trimEnd('/').lowercase().ifBlank { null }
     }
 
     private suspend fun tryRefreshFromArchive(
@@ -299,9 +435,13 @@ class HistoryRefresher(
         if (queryCandidates.isEmpty()) return ArchiveRefreshResult.NoMatch
 
         queryCandidates.forEach { query ->
-            val results = runCatching {
-                fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
-            }.getOrElse { error ->
+            val results = try {
+                withTimeout(threadFetchTimeoutMillis) {
+                    fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (error: Throwable) {
                 Logger.w(HISTORY_REFRESH_TAG, "Archive search failed for ${entry.threadId}: ${error.message}")
                 return ArchiveRefreshResult.Error
             }
@@ -318,12 +458,20 @@ class HistoryRefresher(
     ): ArchiveRefreshResult {
         val baseUrl = resolveArchiveBaseUrl(match.htmlUrl, board?.url ?: entry.boardUrl)
         val boardName = entry.boardName.ifBlank { board?.name.orEmpty() }
-        val pageResult = runCatching {
-            if (match.htmlUrl.isNotBlank()) {
-                repository.getThreadByUrl(match.htmlUrl)
-            } else {
-                baseUrl?.let { repository.getThread(it, entry.threadId) }
-            }
+        val pageResult = try {
+            Result.success(
+                withTimeout(threadFetchTimeoutMillis) {
+                    if (match.htmlUrl.isNotBlank()) {
+                        repository.getThreadByUrl(match.htmlUrl)
+                    } else {
+                        baseUrl?.let { repository.getThread(it, entry.threadId) }
+                    }
+                }
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
         val page = pageResult.getOrNull()
         val pageError = pageResult.exceptionOrNull()
@@ -340,7 +488,7 @@ class HistoryRefresher(
                 title = resolvedTitle,
                 titleImageUrl = resolvedImage,
                 boardName = page.boardTitle ?: boardName,
-                boardUrl = match.htmlUrl,
+                boardUrl = baseUrl ?: entry.boardUrl,
                 replyCount = page.posts.size
             ))
         } else {

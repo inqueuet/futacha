@@ -55,8 +55,11 @@ internal object CatalogHtmlParserCore {
     )
     private val threadIdRegex = Regex("res/(\\d+)\\.htm")
     private val htmlTagRegex = Regex("<[^>]+>")
-    private val extensionRegex = Regex("\\.[a-zA-Z0-9]+$")
     private val trailingSRegex = Regex("(?i)s(\\.[a-zA-Z0-9]+)$")
+    private val supportedMediaExtensions = setOf(
+        "jpg", "jpeg", "png", "gif", "webp", "bmp",
+        "mp4", "webm", "m4v"
+    )
     private val knownTitles = mapOf(
         "1364612020" to "チュートリアル",
     )
@@ -142,12 +145,7 @@ internal object CatalogHtmlParserCore {
 
                 if (threadId != null) {
                     val fullImageUrlHref = allHrefs.find {
-                        it != threadHref && (
-                            it.endsWith(".jpg", ignoreCase = true) || it.endsWith(".jpeg", ignoreCase = true) ||
-                                it.endsWith(".png", ignoreCase = true) || it.endsWith(".gif", ignoreCase = true) ||
-                                it.endsWith(".webp", ignoreCase = true) || it.endsWith(".mp4", ignoreCase = true) ||
-                                it.endsWith(".webm", ignoreCase = true)
-                            )
+                        it != threadHref && isSupportedMediaHref(it)
                     }
 
                     val imageMatch = imageRegex.find(cell)
@@ -157,19 +155,9 @@ internal object CatalogHtmlParserCore {
                         ?.let { resolveUrl(it, resolvedBaseUrl) }
                     
                     // Use /thumb/ instead of /cat/ for higher quality thumbnails.
-                    // Futaba thumbnails in /thumb/ are standardized to .jpg.
-                    // We enforce .jpg extension to avoid issues if /cat/ had a different extension (e.g. .gif)
-                    // but the high-res thumb is .jpg.
+                    // Keep original extension to avoid breaking non-jpg media.
                     val thumbnail = rawThumbnail?.let { raw ->
-                        val withThumbDir = raw.replace("/cat/", "/thumb/")
-                        // Ensure extension is .jpg (case-insensitive replace)
-                        if (withThumbDir.endsWith(".jpg", ignoreCase = true)) {
-                            withThumbDir
-                        } else {
-                            // Replace extension with .jpg
-                            // FIX: ループ内でのRegex作成を回避
-                            withThumbDir.replace(extensionRegex, ".jpg")
-                        }
+                        raw.replace("/cat/", "/thumb/")
                     }
 
                     var fullImageUrl = fullImageUrlHref?.let { resolveUrl(it, resolvedBaseUrl) }
@@ -177,7 +165,7 @@ internal object CatalogHtmlParserCore {
                     // If full image is missing, try to guess from thumbnail
                     if (fullImageUrl == null && thumbnail != null && thumbnail.contains("/thumb/")) {
                         // Try to guess the source URL.
-                        // Standard pattern: /thumb/123s.jpg -> /src/123.jpg
+                        // Standard pattern: /thumb/123s.gif -> /src/123.gif
                         
                         // First switch directory
                         val srcBase = thumbnail.replace("/thumb/", "/src/")
@@ -242,6 +230,15 @@ internal object CatalogHtmlParserCore {
         if (endIndex == -1) return null
         if (contentStart > endIndex) return null
         return text.substring(contentStart, endIndex)
+    }
+
+    private fun isSupportedMediaHref(href: String): Boolean {
+        val extension = href
+            .substringBefore('#')
+            .substringBefore('?')
+            .substringAfterLast('.', "")
+            .lowercase()
+        return extension in supportedMediaExtensions
     }
 
     private fun resolveUrl(path: String, baseUrl: String): String = when {

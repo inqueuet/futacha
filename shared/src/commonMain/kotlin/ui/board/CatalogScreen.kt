@@ -1,7 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.*
@@ -55,13 +55,14 @@ import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
+import kotlin.math.abs
 import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
@@ -218,7 +219,7 @@ fun CatalogScreen(
             ThreadHistoryEntry(
                 threadId = item.id,
                 boardId = board.id,
-                title = item.title?.takeIf { it.isNotBlank() } ?: "無顁E",
+                title = item.title?.takeIf { it.isNotBlank() } ?: "無題",
                 titleImageUrl = item.thumbnailUrl ?: "",
                 boardName = board.name,
                 boardUrl = board.url,
@@ -228,25 +229,12 @@ fun CatalogScreen(
         }
         if (matchedEntries.isEmpty()) return
 
-        runCatching {
-            withContext(com.valoser.futacha.shared.util.AppDispatchers.parsing) {
-                val currentHistory = stateStore.history.first()
-                val updatedHistory = currentHistory.toMutableList()
-                matchedEntries.forEach { entry ->
-                    val existingIndex = updatedHistory.indexOfFirst {
-                        it.threadId == entry.threadId &&
-                            (it.boardId == entry.boardId || it.boardId.isBlank() || entry.boardId.isBlank())
-                    }
-                    if (existingIndex >= 0) {
-                        updatedHistory[existingIndex] = entry
-                    } else {
-                        updatedHistory.add(entry)
-                    }
-                }
-                stateStore.setHistory(updatedHistory)
-            }
-        }.onFailure {
-            // Ignore failures to keep catalog refresh resilient
+        try {
+            stateStore.prependOrReplaceHistoryEntries(matchedEntries)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(CATALOG_SCREEN_TAG, "Failed to append watch-word matched threads to history", e)
         }
     }
     val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
@@ -335,12 +323,14 @@ fun CatalogScreen(
     }
     val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
         if (isHistoryRefreshing) return@handleHistoryRefresh
+        isHistoryRefreshing = true
         coroutineScope.launch {
-            isHistoryRefreshing = true
             snackbarHostState.showSnackbar("履歴を更新中...")
             try {
                 onHistoryRefresh()
                 snackbarHostState.showSnackbar("履歴を更新しました")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
             } finally {
@@ -349,23 +339,23 @@ fun CatalogScreen(
         }
     }
 
-    val performRefresh: () -> Unit = {
-        if (!isRefreshing && board != null) {
-            coroutineScope.launch {
-                isRefreshing = true
-                try {
-                    val catalog = activeRepository.getCatalog(board.url, catalogMode)
-                    uiState.value = CatalogUiState.Success(catalog)
-                    lastCatalogItems = catalog
-                    handleWatchWordMatches(catalog)
-                    snackbarHostState.showSnackbar("カタログを更新しました")
-                } catch (e: Exception) {
-                    if (e !is kotlinx.coroutines.CancellationException) {
-                        snackbarHostState.showSnackbar("更新に失敗しました")
-                    }
-                } finally {
-                    isRefreshing = false
-                }
+    val performRefresh: () -> Unit = refresh@{
+        val currentBoard = board ?: return@refresh
+        if (isRefreshing) return@refresh
+        isRefreshing = true
+        coroutineScope.launch {
+            try {
+                val catalog = activeRepository.getCatalog(currentBoard.url, catalogMode)
+                uiState.value = CatalogUiState.Success(catalog)
+                lastCatalogItems = catalog
+                handleWatchWordMatches(catalog)
+                snackbarHostState.showSnackbar("カタログを更新しました")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("更新に失敗しました")
+            } finally {
+                isRefreshing = false
             }
         }
     }
@@ -701,6 +691,8 @@ fun CatalogScreen(
                             resetCreateThreadDraft()
                             // Refresh catalog to show the new thread
                             performRefresh()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             snackbarHostState.showSnackbar("スレッド作成に失敗しました: ${e.message ?: "不明なエラー"}")
                         }
@@ -732,14 +724,15 @@ fun CatalogScreen(
                     isPastSearchSheetVisible = true
                     pastSearchState = ArchiveSearchState.Loading
                     coroutineScope.launch {
-                        pastSearchState = runCatching {
-                            fetchArchiveSearchResults(client, trimmed, appliedScope, archiveSearchJson)
-                        }.fold(
-                            onSuccess = { ArchiveSearchState.Success(it) },
-                            onFailure = { error ->
-                                ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
-                            }
-                        )
+                        pastSearchState = try {
+                            ArchiveSearchState.Success(
+                                fetchArchiveSearchResults(client, trimmed, appliedScope, archiveSearchJson)
+                            )
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (error: Throwable) {
+                            ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
+                        }
                     }
                 }
             )
@@ -759,14 +752,15 @@ fun CatalogScreen(
                     }
                     pastSearchState = ArchiveSearchState.Loading
                     coroutineScope.launch {
-                        pastSearchState = runCatching {
-                            fetchArchiveSearchResults(client, archiveSearchQuery, lastArchiveSearchScope, archiveSearchJson)
-                        }.fold(
-                            onSuccess = { ArchiveSearchState.Success(it) },
-                            onFailure = { error ->
-                                ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
-                            }
-                        )
+                        pastSearchState = try {
+                            ArchiveSearchState.Success(
+                                fetchArchiveSearchResults(client, archiveSearchQuery, lastArchiveSearchScope, archiveSearchJson)
+                            )
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (error: Throwable) {
+                            ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
+                        }
                     }
                 },
                 onItemSelected = { item ->
@@ -1281,14 +1275,20 @@ private fun CatalogGrid(
     gridState: LazyGridState,
     modifier: Modifier = Modifier
 ) {
-    val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
     val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
     val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
 
-    // アニメーション用のオフセット
-    val overscrollOffset = remember { Animatable(0f) }
+    var overscrollTarget by remember { mutableFloatStateOf(0f) }
+    val overscrollOffset by animateFloatAsState(
+        targetValue = overscrollTarget,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "catalogGridOverscroll"
+    )
 
     val isAtTop by remember {
         derivedStateOf {
@@ -1315,16 +1315,10 @@ private fun CatalogGrid(
         }
     }
 
-    // Return overscroll space with animation once refresh completes.
+    // Return overscroll space once refresh completes.
     LaunchedEffect(isRefreshing) {
         if (!isRefreshing) {
-            overscrollOffset.animateTo(
-                targetValue = 0f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMedium
-                )
-            )
+            overscrollTarget = 0f
         }
     }
 
@@ -1333,56 +1327,41 @@ private fun CatalogGrid(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 8.dp)
-            .offset { IntOffset(0, overscrollOffset.value.toInt()) }
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    var totalDrag = 0f
-
-                    do {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val dragEvent = event.changes.firstOrNull()
-
-                        if (dragEvent != null && dragEvent.pressed) {
-                            val delta = dragEvent.positionChangeIgnoreConsumed().y
-
-                            // 上端で下向きにドラッグ
-                            if (isAtTop && delta > 0 && !isRefreshing) {
-                                totalDrag += delta
-                                val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
-                                coroutineScope.launch {
-                                    overscrollOffset.snapTo(newOffset)
-                                }
-                                dragEvent.consume()
+            .offset { IntOffset(0, overscrollOffset.toInt()) }
+            .pointerInput(isRefreshing, isAtTop, isAtBottom, refreshTriggerPx, maxOverscrollPx) {
+                var totalDrag = 0f
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        totalDrag = 0f
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        if (isRefreshing) return@detectVerticalDragGestures
+                        when {
+                            isAtTop && dragAmount > 0f -> {
+                                totalDrag += dragAmount
+                                overscrollTarget = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                change.consume()
                             }
-                            // 下端で上向きにドラッグ
-                            else if (isAtBottom && delta < 0 && !isRefreshing) {
-                                totalDrag += delta
-                                val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
-                                coroutineScope.launch {
-                                    overscrollOffset.snapTo(newOffset)
-                                }
-                                dragEvent.consume()
+
+                            isAtBottom && dragAmount < 0f -> {
+                                totalDrag += dragAmount
+                                overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                change.consume()
                             }
                         }
-                    } while (event.changes.any { it.pressed })
-
-                    // Trigger refresh when drag passes threshold.
-                    if (totalDrag > refreshTriggerPx || totalDrag < -refreshTriggerPx) {
-                        coroutineScope.launch { onRefresh() }
+                    },
+                    onDragEnd = {
+                        if (abs(totalDrag) > refreshTriggerPx) {
+                            onRefresh()
+                        }
+                        totalDrag = 0f
+                        overscrollTarget = 0f
+                    },
+                    onDragCancel = {
+                        totalDrag = 0f
+                        overscrollTarget = 0f
                     }
-
-                    totalDrag = 0f
-                    coroutineScope.launch {
-                        overscrollOffset.animateTo(
-                            targetValue = 0f,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = Spring.StiffnessMedium
-                            )
-                        )
-                    }
-                }
+                )
             },
         columns = GridCells.Fixed(gridColumns.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1420,14 +1399,20 @@ private fun CatalogList(
     listState: LazyListState,
     modifier: Modifier = Modifier
 ) {
-    val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
     val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
     val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
 
-    // アニメーション用のオフセット
-    val overscrollOffset = remember { Animatable(0f) }
+    var overscrollTarget by remember { mutableFloatStateOf(0f) }
+    val overscrollOffset by animateFloatAsState(
+        targetValue = overscrollTarget,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "catalogListOverscroll"
+    )
 
     val isAtTop by remember {
         derivedStateOf {
@@ -1454,16 +1439,10 @@ private fun CatalogList(
         }
     }
 
-    // Return overscroll space with animation once refresh completes.
+    // Return overscroll space once refresh completes.
     LaunchedEffect(isRefreshing) {
         if (!isRefreshing) {
-            overscrollOffset.animateTo(
-                targetValue = 0f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMedium
-                )
-            )
+            overscrollTarget = 0f
         }
     }
 
@@ -1471,56 +1450,41 @@ private fun CatalogList(
         state = listState,
         modifier = modifier
             .fillMaxSize()
-            .offset { IntOffset(0, overscrollOffset.value.toInt()) }
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    var totalDrag = 0f
-
-                    do {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val dragEvent = event.changes.firstOrNull()
-
-                        if (dragEvent != null && dragEvent.pressed) {
-                            val delta = dragEvent.positionChangeIgnoreConsumed().y
-
-                            // 上端で下向きにドラッグ
-                            if (isAtTop && delta > 0 && !isRefreshing) {
-                                totalDrag += delta
-                                val newOffset = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
-                                coroutineScope.launch {
-                                    overscrollOffset.snapTo(newOffset)
-                                }
-                                dragEvent.consume()
+            .offset { IntOffset(0, overscrollOffset.toInt()) }
+            .pointerInput(isRefreshing, isAtTop, isAtBottom, refreshTriggerPx, maxOverscrollPx) {
+                var totalDrag = 0f
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        totalDrag = 0f
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        if (isRefreshing) return@detectVerticalDragGestures
+                        when {
+                            isAtTop && dragAmount > 0f -> {
+                                totalDrag += dragAmount
+                                overscrollTarget = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                change.consume()
                             }
-                            // 下端で上向きにドラッグ
-                            else if (isAtBottom && delta < 0 && !isRefreshing) {
-                                totalDrag += delta
-                                val newOffset = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
-                                coroutineScope.launch {
-                                    overscrollOffset.snapTo(newOffset)
-                                }
-                                dragEvent.consume()
+
+                            isAtBottom && dragAmount < 0f -> {
+                                totalDrag += dragAmount
+                                overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                change.consume()
                             }
                         }
-                    } while (event.changes.any { it.pressed })
-
-                    // Trigger refresh when drag passes threshold.
-                    if (totalDrag > refreshTriggerPx || totalDrag < -refreshTriggerPx) {
-                        coroutineScope.launch { onRefresh() }
+                    },
+                    onDragEnd = {
+                        if (abs(totalDrag) > refreshTriggerPx) {
+                            onRefresh()
+                        }
+                        totalDrag = 0f
+                        overscrollTarget = 0f
+                    },
+                    onDragCancel = {
+                        totalDrag = 0f
+                        overscrollTarget = 0f
                     }
-
-                    totalDrag = 0f
-                    coroutineScope.launch {
-                        overscrollOffset.animateTo(
-                            targetValue = 0f,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = Spring.StiffnessMedium
-                            )
-                        )
-                    }
-                }
+                )
             },
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(
@@ -1552,32 +1516,9 @@ private fun CatalogCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
-
-    // 4列グリッドでの推定カードサイズ（画面幅360dpの場合 約50dp）
-    // 拡大率を抑えるため、50dpでリクエスト
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
-
-    val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
-    val thumbnailUrl = item.thumbnailUrl
-
-    // 画像リクエストを作成
-    val imageRequest = remember(imageUrl, thumbnailUrl, targetSizePx) {
-        ImageRequest.Builder(platformContext)
-            .data(imageUrl)
-            .crossfade(true)
-            .size(targetSizePx, targetSizePx)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .build()
-    }
-
-    val imageLoader = LocalFutachaImageLoader.current
-    val imagePainter = rememberAsyncImagePainter(
-        model = imageRequest,
-        imageLoader = imageLoader
-    )
+    val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
 
     ElevatedCard(
         modifier = modifier
@@ -1602,18 +1543,20 @@ private fun CatalogCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUrl.isNullOrBlank()) {
+                if (!hasPreviewImage) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    Image(
-                        painter = imagePainter,
+                    CatalogPreviewImage(
+                        thumbnailUrl = item.thumbnailUrl,
+                        fullImageUrl = item.fullImageUrl,
+                        targetSizePx = targetSizePx,
                         contentDescription = item.title ?: "サムネイル",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 if (item.replyCount > 0) {
@@ -1659,29 +1602,9 @@ private fun CatalogListItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val platformContext = LocalPlatformContext.current
     val density = LocalDensity.current
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
-
-    val imageUrl = item.fullImageUrl ?: item.thumbnailUrl
-    val thumbnailUrl = item.thumbnailUrl
-
-    // 画像リクエストを作成
-    val imageRequest = remember(imageUrl, thumbnailUrl, targetSizePx) {
-        ImageRequest.Builder(platformContext)
-            .data(imageUrl)
-            .crossfade(true)
-            .size(targetSizePx, targetSizePx)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .build()
-    }
-
-    val imageLoader = LocalFutachaImageLoader.current
-    val imagePainter = rememberAsyncImagePainter(
-        model = imageRequest,
-        imageLoader = imageLoader
-    )
+    val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
 
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
@@ -1703,18 +1626,20 @@ private fun CatalogListItem(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageUrl.isNullOrBlank()) {
+                if (!hasPreviewImage) {
                     Icon(
                         imageVector = Icons.Outlined.Image,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    Image(
-                        painter = imagePainter,
+                    CatalogPreviewImage(
+                        thumbnailUrl = item.thumbnailUrl,
+                        fullImageUrl = item.fullImageUrl,
+                        targetSizePx = targetSizePx,
                         contentDescription = item.title ?: "サムネイル",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1747,6 +1672,70 @@ private fun CatalogListItem(
                 )
             }
         }
+    }
+}
+
+private const val CATALOG_SCREEN_TAG = "CatalogScreen"
+
+@Composable
+private fun CatalogPreviewImage(
+    thumbnailUrl: String?,
+    fullImageUrl: String?,
+    targetSizePx: Int,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    fallbackTint: Color = Color.Gray
+) {
+    val platformContext = LocalPlatformContext.current
+    val imageLoader = LocalFutachaImageLoader.current
+    val candidates = remember(thumbnailUrl, fullImageUrl) {
+        buildList {
+            thumbnailUrl?.takeIf { it.isNotBlank() }?.let(::add)
+            fullImageUrl
+                ?.takeIf { it.isNotBlank() && it != thumbnailUrl }
+                ?.let(::add)
+        }
+    }
+    var candidateIndex by remember(candidates) { mutableIntStateOf(0) }
+    val activeUrl = candidates.getOrNull(candidateIndex)
+    val imageRequest = remember(activeUrl, targetSizePx) {
+        ImageRequest.Builder(platformContext)
+            .data(activeUrl)
+            .crossfade(true)
+            .size(targetSizePx, targetSizePx)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
+    val imagePainter = rememberAsyncImagePainter(
+        model = imageRequest,
+        imageLoader = imageLoader
+    )
+    val painterState by imagePainter.state.collectAsState()
+
+    LaunchedEffect(painterState, candidateIndex, candidates.size) {
+        if (painterState is AsyncImagePainter.State.Error && candidateIndex < candidates.lastIndex) {
+            candidateIndex += 1
+        }
+    }
+
+    val shouldShowFallback = activeUrl.isNullOrBlank() ||
+        ((painterState is AsyncImagePainter.State.Error || painterState is AsyncImagePainter.State.Empty) &&
+            candidateIndex >= candidates.lastIndex)
+
+    if (shouldShowFallback) {
+        Icon(
+            imageVector = Icons.Outlined.Image,
+            contentDescription = null,
+            tint = fallbackTint
+        )
+    } else {
+        Image(
+            painter = imagePainter,
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
     }
 }
 

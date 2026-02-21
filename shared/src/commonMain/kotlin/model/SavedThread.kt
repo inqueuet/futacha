@@ -11,6 +11,7 @@ data class SavedThread(
     val boardId: String,
     val boardName: String,
     val title: String,
+    val storageId: String? = null,      // 保存ディレクトリ名（board/thread衝突回避）
     val thumbnailPath: String?,        // OPのサムネイル（相対パス）
     val savedAt: Long,                 // 保存日時（Epoch millis）
     val postCount: Int,                // 投稿数
@@ -41,6 +42,7 @@ data class SavedThreadMetadata(
     val boardName: String,
     val boardUrl: String,
     val title: String,
+    val storageId: String? = null,
     val savedAt: Long,
     val expiresAtLabel: String?,
     val posts: List<SavedPost>,

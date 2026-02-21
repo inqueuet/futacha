@@ -1,9 +1,10 @@
-﻿package com.valoser.futacha.shared.repo
+package com.valoser.futacha.shared.repo
 
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.BoardApi
+import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.parser.HtmlParser
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -144,15 +145,28 @@ class DefaultBoardRepository(
 
         if (!shouldInitialize) return
 
+        var fetchedSetup = false
         try {
             api.fetchCatalogSetup(board)
+            fetchedSetup = true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to initialize cookies for board $board", e)
             // Continue anyway - the operation might still work
         }
 
-        boardInitMutex.withLock {
-            initializedBoards.add(board)
+        val hasCookies = cookieRepository?.let { repository ->
+            repository.hasValidCookieFor(board, preferredNames = setOf("posttime", "cxyl")) ||
+                repository.hasValidCookieFor(board)
+        } ?: false
+
+        if (fetchedSetup || hasCookies) {
+            boardInitMutex.withLock {
+                initializedBoards.add(board)
+            }
+        } else {
+            Logger.w(TAG, "Cookie initialization incomplete for board $board; will retry on next request")
         }
     }
 
@@ -168,15 +182,33 @@ class DefaultBoardRepository(
             return block()
         } catch (e: Exception) {
             // If it looks like an auth/cookie issue (e.g. 403 or redirect loop), retry once
-            // Futaba doesn't strictly return 403 for cookie issues, often just HTML errors
-            // We'll aggressively retry once on any non-cancellation error
             if (e is kotlinx.coroutines.CancellationException) throw e
-            
+            if (!isLikelyCookieAuthFailure(e)) throw e
+
             Logger.w(TAG, "Operation failed for board $board, retrying with fresh cookies: ${e.message}")
             invalidateCookies(board)
             ensureCookiesInitialized(board)
             return block()
         }
+    }
+
+    private fun isLikelyCookieAuthFailure(error: Exception): Boolean {
+        val statusCode = (error as? NetworkException)?.statusCode
+        if (statusCode == 401 || statusCode == 403) return true
+        val message = error.message?.lowercase().orEmpty()
+        return message.contains("cookie") ||
+            message.contains("forbidden") ||
+            message.contains("auth") ||
+            message.contains("認証")
+    }
+
+    private suspend fun runWithInitializedCookies(
+        board: String,
+        block: suspend () -> Unit
+    ) {
+        ensureCookiesInitialized(board)
+        val exec: suspend () -> Unit = { block() }
+        cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
     override suspend fun getCatalog(
@@ -231,13 +263,13 @@ class DefaultBoardRepository(
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
-        withRetryOnAuthFailure(board) {
+        runWithInitializedCookies(board) {
             api.voteSaidane(board, threadId, postId)
         }
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
-        withRetryOnAuthFailure(board) {
+        runWithInitializedCookies(board) {
             api.requestDeletion(board, threadId, postId, reasonCode)
         }
     }
@@ -249,7 +281,7 @@ class DefaultBoardRepository(
         password: String,
         imageOnly: Boolean
     ) {
-        withRetryOnAuthFailure(board) {
+        runWithInitializedCookies(board) {
             api.deleteByUser(board, threadId, postId, password, imageOnly)
         }
     }
@@ -323,11 +355,14 @@ class DefaultBoardRepository(
                 if (isClosed) return@launch
                 isClosed = true
             }
-
-            (api as? AutoCloseable)?.close()
-
-            opImageCacheMutex.withLock {
-                opImageCache.clear()
+            try {
+                (api as? AutoCloseable)?.close()
+            } catch (e: Exception) {
+                Logger.e("DefaultBoardRepository", "Error closing API asynchronously: ${e.message}", e)
+            } finally {
+                opImageCacheMutex.withLock {
+                    opImageCache.clear()
+                }
             }
         }.also {
             it.invokeOnCompletion {
@@ -437,13 +472,15 @@ class DefaultBoardRepository(
         threadId: String
     ): String? {
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-        return runCatching {
+        return try {
             val snippet = api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
             // Parse on background dispatcher.
             withContext(AppDispatchers.parsing) {
                 parser.extractOpImageUrl(snippet, baseUrl)
             }
-        }.getOrElse { e ->
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
             Logger.w(TAG, "Failed to resolve OP image for thread $threadId: ${e.message}")
             null
         }

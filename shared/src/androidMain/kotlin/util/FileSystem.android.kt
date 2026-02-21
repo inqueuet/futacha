@@ -10,8 +10,10 @@ import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Exception thrown when DocumentFile permissions have been revoked
@@ -34,6 +36,16 @@ class AndroidFileSystem(
         private const val MAX_FILENAME_LENGTH = 255
         // FIX: パスの最大長（合理的な上限）
         private const val MAX_PATH_LENGTH = 4096
+    }
+
+    private inline fun <T> runFsCatching(block: () -> T): Result<T> {
+        return try {
+            Result.success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
     }
 
     /**
@@ -86,7 +98,7 @@ class AndroidFileSystem(
     }
 
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val dir = File(resolveAbsolutePath(path))
             if (!dir.exists()) {
@@ -98,7 +110,7 @@ class AndroidFileSystem(
     }
 
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val file = File(resolveAbsolutePath(path))
@@ -144,7 +156,7 @@ class AndroidFileSystem(
     }
 
     override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val file = File(resolveAbsolutePath(path))
@@ -166,7 +178,7 @@ class AndroidFileSystem(
     }
 
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
             val size = file.length()
@@ -176,7 +188,7 @@ class AndroidFileSystem(
     }
 
     override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
             val size = file.length()
@@ -186,19 +198,29 @@ class AndroidFileSystem(
     }
 
     override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
-            file.delete()
+            if (!file.exists()) {
+                return@runFsCatching Unit
+            }
+            if (!file.delete() && file.exists()) {
+                throw IllegalStateException("Failed to delete: ${file.absolutePath}")
+            }
             Unit
         }
     }
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
-            file.deleteRecursively()
+            if (!file.exists()) {
+                return@runFsCatching Unit
+            }
+            if (!file.deleteRecursively() && file.exists()) {
+                throw IllegalStateException("Failed to delete recursively: ${file.absolutePath}")
+            }
             Unit
         }
     }
@@ -437,7 +459,7 @@ class AndroidFileSystem(
     override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
         if (relativePath.isNotEmpty()) {
-            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
                 return@withContext Result.failure(it)
             }
         }
@@ -447,7 +469,7 @@ class AndroidFileSystem(
                 createDirectory(fullPath)
             }
             is SaveLocation.TreeUri -> {
-                runCatching {
+                runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
                         ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}. Permission may have been revoked.")
@@ -459,7 +481,7 @@ class AndroidFileSystem(
 
                     if (relativePath.isEmpty()) {
                         // Base directory already exists if we can resolve it
-                        return@runCatching Unit
+                        return@runFsCatching Unit
                     }
 
                     val segments = relativePath.split('/').filter { it.isNotBlank() }
@@ -485,7 +507,7 @@ class AndroidFileSystem(
 
     override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
-        runCatching {
+        runFsCatching {
             validatePath(relativePath, "relativePath")
             validateFileSize(bytes.size.toLong(), "bytes")
         }.getOrElse {
@@ -497,7 +519,7 @@ class AndroidFileSystem(
                 writeBytes(fullPath, bytes)
             }
             is SaveLocation.TreeUri -> {
-                runCatching {
+                runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
                         ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
@@ -526,7 +548,7 @@ class AndroidFileSystem(
 
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
-        runCatching {
+        runFsCatching {
             validatePath(relativePath, "relativePath")
             validateFileSize(bytes.size.toLong(), "bytes")
         }.getOrElse {
@@ -538,7 +560,7 @@ class AndroidFileSystem(
                 appendBytes(fullPath, bytes)
             }
             is SaveLocation.TreeUri -> {
-                runCatching {
+                runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
                         ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
@@ -572,7 +594,7 @@ class AndroidFileSystem(
 
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
-        runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
             return@withContext Result.failure(it)
         }
         when (base) {
@@ -581,7 +603,7 @@ class AndroidFileSystem(
                 readString(fullPath)
             }
             is SaveLocation.TreeUri -> {
-                runCatching {
+                runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
                         ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
@@ -598,7 +620,30 @@ class AndroidFileSystem(
                         ?: throw IllegalStateException("File not found: $fileName")
 
                     context.contentResolver.openInputStream(file.uri)?.use { input ->
-                        input.readBytes().toString(Charsets.UTF_8)
+                        val output = ByteArrayOutputStream()
+                        val buffer = ByteArray(8192)
+                        var totalRead = 0L
+                        var zeroReadCount = 0
+                        while (true) {
+                            val read = input.read(buffer)
+                            when {
+                                read < 0 -> break
+                                read == 0 -> {
+                                    zeroReadCount += 1
+                                    if (zeroReadCount >= 100) {
+                                        throw IllegalStateException("Read stalled while loading file: $fileName")
+                                    }
+                                    continue
+                                }
+                                else -> {
+                                    zeroReadCount = 0
+                                }
+                            }
+                            totalRead += read
+                            validateFileSize(totalRead, "file")
+                            output.write(buffer, 0, read)
+                        }
+                        output.toString(Charsets.UTF_8.name())
                     } ?: throw IllegalStateException("Failed to open input stream for ${file.uri}")
                 }
             }
@@ -645,7 +690,7 @@ class AndroidFileSystem(
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
         // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
         if (relativePath.isNotEmpty()) {
-            runCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
                 return@withContext Result.failure(it)
             }
         }
@@ -655,28 +700,28 @@ class AndroidFileSystem(
                 delete(fullPath)
             }
             is SaveLocation.TreeUri -> {
-                runCatching {
+                runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
                         ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
 
                     if (relativePath.isEmpty()) {
-                        if (!baseDir.delete()) {
-                            throw IllegalStateException("Failed to delete base directory: ${base.uri}")
-                        }
-                        return@runCatching Unit
+                        // Safety guard: never delete the user-selected TreeUri root from app code.
+                        Logger.w(
+                            "AndroidFileSystem",
+                            "Refusing to delete TreeUri base directory directly: ${base.uri}"
+                        )
+                        return@runFsCatching Unit
                     }
 
                     val (parentPath, fileName) = splitParentAndFileName(relativePath)
                     val parentDir = if (parentPath.isEmpty()) {
                         baseDir
                     } else {
-                        navigateToDirectory(baseDir, parentPath)
-                            ?: throw IllegalStateException("Directory not found: $parentPath")
+                        navigateToDirectory(baseDir, parentPath) ?: return@runFsCatching Unit
                     }
 
-                    val target = parentDir.findFile(fileName)
-                        ?: throw IllegalStateException("Target not found: $fileName")
+                    val target = parentDir.findFile(fileName) ?: return@runFsCatching Unit
 
                     if (!target.delete()) {
                         throw IllegalStateException("Failed to delete: $relativePath")
@@ -774,7 +819,13 @@ class AndroidFileSystem(
         // FIX: 各ディレクトリを再帰的に検索
         searchDirs.forEach { dir ->
             if (dir.exists() && dir.isDirectory) {
-                deletedCount += cleanupTempFilesRecursive(dir, now, maxAgeMs)
+                deletedCount += cleanupTempFilesRecursive(
+                    directory = dir,
+                    now = now,
+                    maxAgeMs = maxAgeMs,
+                    currentDepth = 0,
+                    maxDepth = 3
+                )
             }
         }
 
@@ -787,7 +838,13 @@ class AndroidFileSystem(
     /**
      * FIX: ディレクトリを再帰的に検索して古い一時ファイルを削除
      */
-    private fun cleanupTempFilesRecursive(directory: File, now: Long, maxAgeMs: Long): Int {
+    private fun cleanupTempFilesRecursive(
+        directory: File,
+        now: Long,
+        maxAgeMs: Long,
+        currentDepth: Int,
+        maxDepth: Int
+    ): Int {
         var deletedCount = 0
 
         runCatching {
@@ -806,10 +863,14 @@ class AndroidFileSystem(
                         }
                     } else if (file.isDirectory) {
                         // 再帰的に検索 (最大3レベルまで、無限再帰を防ぐ)
-                        val depth = file.absolutePath.count { it == '/' }
-                        val maxDepth = directory.absolutePath.count { it == '/' } + 3
-                        if (depth < maxDepth) {
-                            deletedCount += cleanupTempFilesRecursive(file, now, maxAgeMs)
+                        if (currentDepth < maxDepth) {
+                            deletedCount += cleanupTempFilesRecursive(
+                                directory = file,
+                                now = now,
+                                maxAgeMs = maxAgeMs,
+                                currentDepth = currentDepth + 1,
+                                maxDepth = maxDepth
+                            )
                         }
                     }
                 } catch (e: Exception) {

@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
@@ -122,6 +123,7 @@ internal fun GlobalSettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val imageLoader = LocalFutachaImageLoader.current
+    val platformContext = LocalPlatformContext.current
     val historyCount = historyEntries.size
     var autoSavedCount by remember { mutableStateOf<Int?>(null) }
     var autoSavedSize by remember { mutableStateOf<Long?>(null) }
@@ -136,7 +138,7 @@ internal fun GlobalSettingsScreen(
         autoSavedThreadRepository ?: fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
     }
 
-    LaunchedEffect(effectiveAutoSavedRepository, historyEntries.size) {
+    LaunchedEffect(effectiveAutoSavedRepository) {
         if (effectiveAutoSavedRepository == null) {
             autoSavedCount = null
             autoSavedSize = null
@@ -919,10 +921,10 @@ internal fun GlobalSettingsScreen(
                                             withContext(AppDispatchers.io) {
                                                 val fs = fileSystem
                                                 if (fs != null) {
-                                                    resolveImageCacheDirectory()
+                                                    resolveImageCacheDirectory(platformContext)
                                                         ?.toString()
                                                         ?.let { pathString ->
-                                                            fs.deleteRecursively(pathString)
+                                                            fs.deleteRecursively(pathString).getOrThrow()
                                                         }
                                                 }
                                                 Unit

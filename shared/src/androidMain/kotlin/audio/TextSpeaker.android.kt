@@ -100,7 +100,11 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                 val params = Bundle().apply {
                     putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
                 }
-                tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+                val speakResult = tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+                if (speakResult == TextToSpeech.ERROR) {
+                    val pending = synchronized(lock) { continuations.remove(utteranceId) }
+                    pending?.resumeWithException(IOException("読み上げの開始に失敗しました"))
+                }
             }
         }
     }

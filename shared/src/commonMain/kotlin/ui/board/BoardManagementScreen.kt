@@ -176,6 +176,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -373,33 +374,44 @@ fun BoardManagementScreen(
                 drawerState.targetValue == DrawerValue.Open
         }
     }
-    val handleHistorySelection: (ThreadHistoryEntry) -> Unit = { entry ->
-        scope.launch { drawerState.close() }
-        onHistoryEntrySelected(entry)
+    val onHistoryEntrySelectedState = rememberUpdatedState(onHistoryEntrySelected)
+    val onHistoryRefreshState = rememberUpdatedState(onHistoryRefresh)
+    val onHistoryClearedState = rememberUpdatedState(onHistoryCleared)
+    val handleHistorySelection: (ThreadHistoryEntry) -> Unit = remember(drawerState, scope) {
+        { entry ->
+            scope.launch { drawerState.close() }
+            onHistoryEntrySelectedState.value(entry)
+        }
     }
 
     var isHistoryRefreshing by remember { mutableStateOf(false) }
-    val handleHistoryRefresh: () -> Unit = handleHistoryRefresh@{
-        if (isHistoryRefreshing) return@handleHistoryRefresh
-        scope.launch {
-            isHistoryRefreshing = true
-            snackbarHostState.showSnackbar("履歴を更新中...")
-            try {
-                onHistoryRefresh()
-                snackbarHostState.showSnackbar("履歴を更新しました")
-            } catch (e: Exception) {
-                snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
-            } finally {
-            isHistoryRefreshing = false
+    val handleHistoryRefresh: () -> Unit = remember(scope, snackbarHostState) {
+        handleHistoryRefresh@{
+            if (isHistoryRefreshing) return@handleHistoryRefresh
+            scope.launch {
+                isHistoryRefreshing = true
+                snackbarHostState.showSnackbar("履歴を更新中...")
+                try {
+                    onHistoryRefreshState.value()
+                    snackbarHostState.showSnackbar("履歴を更新しました")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
+                } finally {
+                    isHistoryRefreshing = false
+                }
             }
         }
     }
 
-    val handleBatchDelete: () -> Unit = {
-        scope.launch {
-            onHistoryCleared()
-            snackbarHostState.showSnackbar("履歴を一括削除しました")
-            drawerState.close()
+    val handleBatchDelete: () -> Unit = remember(scope, snackbarHostState, drawerState) {
+        {
+            scope.launch {
+                onHistoryClearedState.value()
+                snackbarHostState.showSnackbar("履歴を一括削除しました")
+                drawerState.close()
+            }
         }
     }
 
@@ -654,8 +666,13 @@ private fun AddBoardDialog(
     val normalizedInputUrl = remember(trimmedUrl) {
         runCatching { normalizeBoardUrl(trimmedUrl) }.getOrDefault(trimmedUrl)
     }
-    val normalizedExistingUrls = remember(existingBoards) {
-        existingBoards.map { runCatching { normalizeBoardUrl(it.url) }.getOrDefault(it.url) }
+    val existingBoardUrls = remember(existingBoards) {
+        existingBoards.map { it.url.trim() }
+    }
+    val normalizedExistingUrls = remember(existingBoardUrls) {
+        existingBoardUrls.map { urlValue ->
+            runCatching { normalizeBoardUrl(urlValue) }.getOrDefault(urlValue)
+        }
     }
 
     // Enhanced URL validation

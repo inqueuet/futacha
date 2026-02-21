@@ -145,7 +145,11 @@ fun FutachaApp(
                 onDispose {
                     if (repositoryHolder.ownsRepository) {
                         runCatching {
-                            repositoryHolder.repository.closeAsync()
+                            repositoryHolder.repository.closeAsync().invokeOnCompletion { error ->
+                                if (error != null && error !is kotlinx.coroutines.CancellationException) {
+                                    Logger.e("FutachaApp", "Repository async close failed", error)
+                                }
+                            }
                         }.onFailure { e ->
                             Logger.e("FutachaApp", "Failed to close repository", e)
                         }
@@ -170,6 +174,8 @@ fun FutachaApp(
                     try {
                         val info = checker.checkForUpdate()
                         updateInfo = info
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Logger.e(TAG, "Version check failed", e)
                     }
@@ -190,10 +196,13 @@ fun FutachaApp(
             val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
             val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
             val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
-            val manualSaveLocation by stateStore.manualSaveLocation.collectAsState(initial = com.valoser.futacha.shared.model.SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT))
+            val manualSaveLocation = remember(manualSaveDirectory) {
+                com.valoser.futacha.shared.model.SaveLocation.fromString(manualSaveDirectory)
+            }
             val attachmentPickerPreference by stateStore.attachmentPickerPreference.collectAsState(initial = AttachmentPickerPreference.MEDIA)
             val saveDirectorySelection by stateStore.saveDirectorySelection.collectAsState(initial = SaveDirectorySelection.MANUAL_INPUT)
-            val preferredFileManager by stateStore.getPreferredFileManager().collectAsState(initial = null)
+            val preferredFileManagerFlow = remember(stateStore) { stateStore.getPreferredFileManager() }
+            val preferredFileManager by preferredFileManagerFlow.collectAsState(initial = null)
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
             }
@@ -209,12 +218,6 @@ fun FutachaApp(
                         runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
                             .getOrNull()
                     }
-                }
-            }
-
-            LaunchedEffect(isAndroidPlatform, saveDirectorySelection) {
-                if (isAndroidPlatform && saveDirectorySelection != SaveDirectorySelection.PICKER) {
-                    stateStore.setSaveDirectorySelection(SaveDirectorySelection.PICKER)
                 }
             }
 
@@ -257,11 +260,16 @@ fun FutachaApp(
                 }
             }
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
-                val updatedHistory = persistedHistory.filterNot { it.threadId == entry.threadId }
                 coroutineScope.launch {
-                    stateStore.removeSelfPostIdentifiersForThread(entry.threadId)
-                    stateStore.setHistory(updatedHistory)
-                    autoSavedThreadRepository?.deleteThread(entry.threadId)
+                    stateStore.removeSelfPostIdentifiersForThread(
+                        threadId = entry.threadId,
+                        boardId = entry.boardId.ifBlank { null }
+                    )
+                    stateStore.removeHistoryEntry(entry)
+                    autoSavedThreadRepository?.deleteThread(
+                        threadId = entry.threadId,
+                        boardId = entry.boardId.ifBlank { null }
+                    )
                         ?.onFailure {
                             Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
                         }
@@ -297,7 +305,15 @@ fun FutachaApp(
                 )
             }
             val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
+                val entryBoardUrlKey = entry.boardUrl
+                    .trim()
+                    .substringBefore('?')
+                    .trimEnd('/')
+                    .lowercase()
                 val targetBoard = persistedBoards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
+                    ?: persistedBoards.firstOrNull {
+                        it.url.trim().substringBefore('?').trimEnd('/').lowercase() == entryBoardUrlKey
+                    }
                     ?: persistedBoards.firstOrNull { it.name == entry.boardName }
                 targetBoard?.let { board ->
                     selectedBoardId = board.id
@@ -305,7 +321,9 @@ fun FutachaApp(
                     selectedThreadTitle = entry.title
                     selectedThreadReplies = entry.replyCount
                     selectedThreadThumbnailUrl = entry.titleImageUrl
-                    selectedThreadUrl = entry.boardUrl
+                    selectedThreadUrl = entry.boardUrl.takeIf { url ->
+                        Regex("""/res/\d+\.html?""", RegexOption.IGNORE_CASE).containsMatchIn(url)
+                    }
                 }
             }
 
@@ -428,9 +446,9 @@ fun FutachaApp(
                             },
                             onHistoryEntrySelected = openHistoryEntry,
                             onHistoryEntryDismissed = dismissHistoryEntry,
+                            onHistoryCleared = clearHistory,
                             onHistoryEntryUpdated = updateHistoryEntry,
                             onHistoryRefresh = refreshHistoryEntries,
-                            onHistoryCleared = clearHistory,
                             repository = boardRepository,
                             stateStore = stateStore,
                             autoSavedThreadRepository = autoSavedThreadRepository,
@@ -524,11 +542,7 @@ fun FutachaApp(
                             lastReadItemIndex = existingEntry?.lastReadItemIndex ?: 0,
                             lastReadItemOffset = existingEntry?.lastReadItemOffset ?: 0
                         )
-                        val updatedHistory = buildList {
-                            add(entry)
-                            addAll(persistedHistory.filterNot(isSameEntry))
-                        }
-                        stateStore.setHistory(updatedHistory)
+                        stateStore.prependOrReplaceHistoryEntry(entry)
                     }
 
                     val persistScrollPosition: (String, Int, Int) -> Unit = { targetThreadId, index, offset ->
@@ -566,6 +580,7 @@ fun FutachaApp(
                             },
                             onHistoryEntrySelected = openHistoryEntry,
                             onHistoryEntryDismissed = dismissHistoryEntry,
+                            onHistoryCleared = clearHistory,
                             onHistoryEntryUpdated = updateHistoryEntry,
                             onHistoryRefresh = refreshHistoryEntries,
                             onScrollPositionPersist = persistScrollPosition,

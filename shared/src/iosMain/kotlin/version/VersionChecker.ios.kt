@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.version
 
+import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import platform.Foundation.NSBundle
 
@@ -9,6 +10,9 @@ import platform.Foundation.NSBundle
 class IosVersionChecker(
     private val httpClient: HttpClient
 ) : VersionChecker {
+    companion object {
+        private const val TAG = "IosVersionChecker"
+    }
 
     override fun getCurrentVersion(): String {
         return try {
@@ -16,7 +20,7 @@ class IosVersionChecker(
             val version = bundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String
             version ?: "1.0.0"
         } catch (e: Exception) {
-            println("Failed to get iOS version: ${e.message}")
+            Logger.w(TAG, "Failed to get iOS version: ${e.message}")
             "1.0.0"
         }
     }

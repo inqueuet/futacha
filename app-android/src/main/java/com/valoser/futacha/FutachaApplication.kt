@@ -20,8 +20,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 
 class FutachaApplication : Application() {
     lateinit var appStateStore: AppStateStore
@@ -48,13 +53,15 @@ class FutachaApplication : Application() {
         appStateStore = createAppStateStore(applicationContext)
         fileSystem = createFileSystem(applicationContext)
 
-        // FIX: クラッシュなどで残った古い一時ファイルをクリーンアップ
-        (fileSystem as? com.valoser.futacha.shared.util.AndroidFileSystem)?.cleanupTempFiles()
-            ?.onSuccess { count ->
-                if (count > 0) {
-                    com.valoser.futacha.shared.util.Logger.i("FutachaApplication", "Cleaned up $count temp files")
+        // FIX: 起動時ANR防止 - 一時ファイルクリーンアップはバックグラウンドで実行
+        applicationScope.launch {
+            (fileSystem as? com.valoser.futacha.shared.util.AndroidFileSystem)?.cleanupTempFiles()
+                ?.onSuccess { count ->
+                    if (count > 0) {
+                        com.valoser.futacha.shared.util.Logger.i("FutachaApplication", "Cleaned up $count temp files")
+                    }
                 }
-            }
+        }
 
         autoSavedThreadRepository = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
         cookieStorage = PersistentCookieStorage(fileSystem)
@@ -77,20 +84,45 @@ class FutachaApplication : Application() {
         // Initialize WorkManager for background refresh
         val workManager = WorkManager.getInstance(applicationContext)
         applicationScope.launch {
-            try {
-                appStateStore.isBackgroundRefreshEnabled
-                    .distinctUntilChanged()
-                    .collect { enabled ->
+            appStateStore.isBackgroundRefreshEnabled
+                .distinctUntilChanged()
+                .retryWhen { cause, attempt ->
+                    if (cause is CancellationException) throw cause
+                    val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
+                    com.valoser.futacha.shared.util.Logger.e(
+                        "FutachaApplication",
+                        "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
+                        cause
+                    )
+                    delay(backoffMillis)
+                    true
+                }
+                .catch { e ->
+                    if (e is CancellationException) throw e
+                    com.valoser.futacha.shared.util.Logger.e(
+                        "FutachaApplication",
+                        "Background refresh flow collection terminated unexpectedly",
+                        e
+                    )
+                }
+                .collect { enabled ->
+                    try {
                         if (enabled) {
                             HistoryRefreshWorker.enqueuePeriodic(workManager)
+                            HistoryRefreshWorker.enqueueImmediate(workManager)
                         } else {
                             HistoryRefreshWorker.cancel(workManager)
                         }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        com.valoser.futacha.shared.util.Logger.e(
+                            "FutachaApplication",
+                            "Failed to apply background refresh work state (enabled=$enabled)",
+                            e
+                        )
                     }
-            } catch (e: Exception) {
-                com.valoser.futacha.shared.util.Logger.e("FutachaApplication", "Background refresh flow collection failed", e)
-                // コルーチンを終了させ、メモリリークを防ぐ
-            }
+                }
         }
     }
 

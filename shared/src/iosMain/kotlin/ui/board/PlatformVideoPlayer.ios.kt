@@ -127,7 +127,7 @@ private fun AvKitVideoPlayer(
                 onStateChanged(if (isPlayingNow) VideoPlayerState.Ready else VideoPlayerState.Idle)
                 lastPlaybackActive = isPlayingNow
             }
-            delay(200)
+            delay(500)
         }
     }
     LaunchedEffect(volume, isMuted, player) {
