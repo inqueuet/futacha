@@ -21,7 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.retryWhen
@@ -84,45 +83,51 @@ class FutachaApplication : Application() {
         // Initialize WorkManager for background refresh
         val workManager = WorkManager.getInstance(applicationContext)
         applicationScope.launch {
-            appStateStore.isBackgroundRefreshEnabled
-                .distinctUntilChanged()
-                .retryWhen { cause, attempt ->
-                    if (cause is CancellationException) throw cause
-                    val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
-                    com.valoser.futacha.shared.util.Logger.e(
-                        "FutachaApplication",
-                        "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
-                        cause
-                    )
-                    delay(backoffMillis)
-                    true
-                }
-                .catch { e ->
-                    if (e is CancellationException) throw e
-                    com.valoser.futacha.shared.util.Logger.e(
-                        "FutachaApplication",
-                        "Background refresh flow collection terminated unexpectedly",
-                        e
-                    )
-                }
-                .collect { enabled ->
-                    try {
-                        if (enabled) {
-                            HistoryRefreshWorker.enqueuePeriodic(workManager)
-                            HistoryRefreshWorker.enqueueImmediate(workManager)
-                        } else {
-                            HistoryRefreshWorker.cancel(workManager)
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
+            try {
+                appStateStore.isBackgroundRefreshEnabled
+                    .distinctUntilChanged()
+                    .retryWhen { cause, attempt ->
+                        if (cause is CancellationException) throw cause
+                        val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
                         com.valoser.futacha.shared.util.Logger.e(
                             "FutachaApplication",
-                            "Failed to apply background refresh work state (enabled=$enabled)",
-                            e
+                            "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
+                            cause
                         )
+                        delay(backoffMillis)
+                        true
                     }
-                }
+                    .collect { enabled ->
+                        try {
+                            if (enabled) {
+                                HistoryRefreshWorker.enqueuePeriodic(workManager)
+                                HistoryRefreshWorker.enqueueImmediate(workManager)
+                            } else {
+                                HistoryRefreshWorker.cancel(workManager)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            com.valoser.futacha.shared.util.Logger.e(
+                                "FutachaApplication",
+                                "Failed to apply background refresh work state (enabled=$enabled)",
+                                e
+                            )
+                        }
+                    }
+                com.valoser.futacha.shared.util.Logger.w(
+                    "FutachaApplication",
+                    "Background refresh flow completed unexpectedly"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                com.valoser.futacha.shared.util.Logger.e(
+                    "FutachaApplication",
+                    "Background refresh flow collection terminated unexpectedly",
+                    e
+                )
+            }
         }
     }
 

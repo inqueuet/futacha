@@ -22,6 +22,8 @@ import platform.PhotosUI.PHPickerViewController
 import platform.PhotosUI.PHPickerViewControllerDelegateProtocol
 import platform.UIKit.UIApplication
 import platform.UIKit.UIViewController
+import platform.UIKit.UIWindow
+import platform.UIKit.UIWindowScene
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.darwin.NSObject
@@ -44,6 +46,16 @@ private const val MAX_PICKED_IMAGE_BYTES = 10L * 1024L * 1024L
  * 次回呼び出し時または明示的なリリース時に解放する
  */
 private val currentSecurityScopedUrl = AtomicReference<NSURL?>(null)
+private val activePickerDelegate = AtomicReference<NSObject?>(null)
+
+private fun retainPickerDelegate(delegate: NSObject) {
+    activePickerDelegate.value = delegate
+}
+
+private fun releasePickerDelegate(delegate: NSObject?) {
+    delegate ?: return
+    activePickerDelegate.compareAndSet(delegate, null)
+}
 
 /**
  * 現在保持しているセキュリティスコープリソースへのアクセスを解放する
@@ -56,6 +68,20 @@ fun releaseSecurityScopedResource() {
  * UIDocumentPicker で Files.app 経由の画像を選択
  */
 suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuation ->
+    val rootViewController = getRootViewController()
+    if (rootViewController == null) {
+        Logger.w("ImagePicker.ios", "Cannot present document image picker: root view controller is unavailable")
+        continuation.resume(null)
+        return@suspendCoroutine
+    }
+    val hasResumed = AtomicReference(false)
+    var delegateRef: NSObject? = null
+    fun complete(value: ImageData?) {
+        if (!hasResumed.compareAndSet(false, true)) return
+        releasePickerDelegate(delegateRef)
+        continuation.resume(value)
+    }
+
     val imageTypes = listOf(
         platform.UniformTypeIdentifiers.UTTypeImage,
         platform.UniformTypeIdentifiers.UTTypeJPEG,
@@ -73,7 +99,7 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
             controller.dismissViewControllerAnimated(true, null)
             val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
             if (url == null) {
-                continuation.resume(null)
+                complete(null)
                 return
             }
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
@@ -108,22 +134,43 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
                     }
                 }
                 dispatch_async(dispatch_get_main_queue()) {
-                    continuation.resume(selected)
+                    complete(selected)
                 }
             }
         }
 
         override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
             controller.dismissViewControllerAnimated(true, null)
-            continuation.resume(null)
+            complete(null)
         }
     }
 
+    delegateRef = delegate
+    retainPickerDelegate(delegate)
     picker.delegate = delegate
-    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
+    runCatching {
+        rootViewController.presentViewController(picker, animated = true, completion = null)
+    }.onFailure { error ->
+        Logger.e("ImagePicker.ios", "Failed to present document image picker", error)
+        complete(null)
+    }
 }
 
 actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
+    val rootViewController = getRootViewController()
+    if (rootViewController == null) {
+        Logger.w("ImagePicker.ios", "Cannot present photo picker: root view controller is unavailable")
+        continuation.resume(null)
+        return@suspendCoroutine
+    }
+    val hasResumed = AtomicReference(false)
+    var delegateRef: NSObject? = null
+    fun complete(value: ImageData?) {
+        if (!hasResumed.compareAndSet(false, true)) return
+        releasePickerDelegate(delegateRef)
+        continuation.resume(value)
+    }
+
     val config = PHPickerConfiguration().apply {
         selectionLimit = 1
         filter = PHPickerFilter.imagesFilter
@@ -137,7 +184,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
 
             val results = didFinishPicking.filterIsInstance<PHPickerResult>()
             if (results.isEmpty()) {
-                continuation.resume(null)
+                complete(null)
                 return
             }
 
@@ -147,7 +194,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
             // UTType.imageを使って画像を読み込む
             itemProvider.loadDataRepresentationForTypeIdentifier("public.image") { data, error ->
                 if (error != null || data == null) {
-                    continuation.resume(null)
+                    complete(null)
                     return@loadDataRepresentationForTypeIdentifier
                 }
                 val dataLength = data.length.toLong()
@@ -156,7 +203,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                         "ImagePicker.ios",
                         "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
                     )
-                    continuation.resume(null)
+                    complete(null)
                     return@loadDataRepresentationForTypeIdentifier
                 }
 
@@ -165,14 +212,21 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                     memcpy(pinned.addressOf(0), data.bytes, data.length)
                 }
 
-                continuation.resume(ImageData(bytes, "image.jpg"))
+                complete(ImageData(bytes, "image.jpg"))
             }
         }
     }
 
+    delegateRef = delegate
+    retainPickerDelegate(delegate)
     picker.delegate = delegate
 
-    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
+    runCatching {
+        rootViewController.presentViewController(picker, animated = true, completion = null)
+    }.onFailure { error ->
+        Logger.e("ImagePicker.ios", "Failed to present photo picker", error)
+        complete(null)
+    }
 }
 
 /**
@@ -186,6 +240,20 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
  * 明示的に解放する場合は [releaseSecurityScopedResource] を呼び出してください。
  */
 actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuation ->
+    val rootViewController = getRootViewController()
+    if (rootViewController == null) {
+        Logger.w("ImagePicker.ios", "Cannot present directory picker: root view controller is unavailable")
+        continuation.resume(null)
+        return@suspendCoroutine
+    }
+    val hasResumed = AtomicReference(false)
+    var delegateRef: NSObject? = null
+    fun complete(value: String?) {
+        if (!hasResumed.compareAndSet(false, true)) return
+        releasePickerDelegate(delegateRef)
+        continuation.resume(value)
+    }
+
     val picker = UIDocumentPickerViewController(
         forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
         asCopy = false
@@ -195,7 +263,7 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
             controller.dismissViewControllerAnimated(true, null)
             val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
             if (url == null) {
-                continuation.resume(null)
+                complete(null)
                 return
             }
 
@@ -209,7 +277,7 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
                 if (started) {
                     url.stopAccessingSecurityScopedResource()
                 }
-                continuation.resume(null)
+                complete(null)
                 return
             }
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
@@ -220,13 +288,13 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
                         if (started) {
                             currentSecurityScopedUrl.value = url
                         }
-                        continuation.resume(path)
+                        complete(path)
                     } else {
                         // 失敗時は即座に解放
                         if (started) {
                             url.stopAccessingSecurityScopedResource()
                         }
-                        continuation.resume(null)
+                        complete(null)
                     }
                 }
             }
@@ -234,11 +302,18 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
 
         override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
             controller.dismissViewControllerAnimated(true, null)
-            continuation.resume(null)
+            complete(null)
         }
     }
+    delegateRef = delegate
+    retainPickerDelegate(delegate)
     picker.delegate = delegate
-    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
+    runCatching {
+        rootViewController.presentViewController(picker, animated = true, completion = null)
+    }.onFailure { error ->
+        Logger.e("ImagePicker.ios", "Failed to present directory picker", error)
+        complete(null)
+    }
 }
 
 /**
@@ -246,6 +321,20 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
  * セキュアブックマークを作成して永続化可能にする
  */
 actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine { continuation ->
+    val rootViewController = getRootViewController()
+    if (rootViewController == null) {
+        Logger.w("ImagePicker.ios", "Cannot present save-location picker: root view controller is unavailable")
+        continuation.resume(null)
+        return@suspendCoroutine
+    }
+    val hasResumed = AtomicReference(false)
+    var delegateRef: NSObject? = null
+    fun complete(value: SaveLocation?) {
+        if (!hasResumed.compareAndSet(false, true)) return
+        releasePickerDelegate(delegateRef)
+        continuation.resume(value)
+    }
+
     val picker = UIDocumentPickerViewController(
         forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
         asCopy = false
@@ -255,7 +344,7 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
             controller.dismissViewControllerAnimated(true, null)
             val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
             if (url == null) {
-                continuation.resume(null)
+                complete(null)
                 return
             }
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
@@ -267,18 +356,25 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
                     null
                 }
                 dispatch_async(dispatch_get_main_queue()) {
-                    continuation.resume(selected)
+                    complete(selected)
                 }
             }
         }
 
         override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
             controller.dismissViewControllerAnimated(true, null)
-            continuation.resume(null)
+            complete(null)
         }
     }
+    delegateRef = delegate
+    retainPickerDelegate(delegate)
     picker.delegate = delegate
-    getRootViewController()?.presentViewController(picker, animated = true, completion = null)
+    runCatching {
+        rootViewController.presentViewController(picker, animated = true, completion = null)
+    }.onFailure { error ->
+        Logger.e("ImagePicker.ios", "Failed to present save-location picker", error)
+        complete(null)
+    }
 }
 
 /**
@@ -288,7 +384,7 @@ private fun createSecureBookmark(url: NSURL): SaveLocation.Bookmark? {
     return memScoped {
         val error = alloc<ObjCObjectVar<platform.Foundation.NSError?>>()
         val bookmarkData = url.bookmarkDataWithOptions(
-            options = 0u,
+            options = NSURLBookmarkCreationWithSecurityScope,
             includingResourceValuesForKeys = null,
             relativeToURL = null,
             error = error.ptr
@@ -308,6 +404,14 @@ private fun createSecureBookmark(url: NSURL): SaveLocation.Bookmark? {
 
 private fun getRootViewController(): UIViewController? {
     val application = UIApplication.sharedApplication
+    val sceneWindows = application.connectedScenes.allObjects
+        .mapNotNull { it as? UIWindowScene }
+        .flatMap { scene ->
+            scene.windows.mapNotNull { it as? UIWindow }
+        }
+    val sceneKeyWindow = sceneWindows.firstOrNull { it.isKeyWindow } ?: sceneWindows.firstOrNull()
+    sceneKeyWindow?.rootViewController?.let { return it }
+
     val keyWindow = application.windows.firstOrNull { it.isKeyWindow } ?: application.windows.firstOrNull()
     return keyWindow?.rootViewController
 }
@@ -333,7 +437,7 @@ private fun canWriteToSaveLocation(location: SaveLocation): Boolean {
                     val isStale = alloc<BooleanVar>()
                     val url = NSURL.URLByResolvingBookmarkData(
                         bookmarkNSData,
-                        options = 0u,
+                        options = NSURLBookmarkResolutionWithSecurityScope,
                         relativeToURL = null,
                         bookmarkDataIsStale = isStale.ptr,
                         error = error.ptr

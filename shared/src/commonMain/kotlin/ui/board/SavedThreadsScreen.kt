@@ -57,30 +57,53 @@ fun SavedThreadsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    // FIX: データ読み込みにタイムアウトとエラーハンドリングを追加
-    LaunchedEffect(Unit) {
-        isLoading = true
-        loadError = null
+    suspend fun reloadSavedThreads(showLoadingState: Boolean, showAsScreenError: Boolean): Boolean {
+        if (showLoadingState) {
+            isLoading = true
+        }
+        if (showAsScreenError) {
+            loadError = null
+        }
         try {
             withTimeout(15_000L) { // 15秒のタイムアウト
-                threads = repository.getAllThreads()
-                totalSize = repository.getTotalSize()
+                val index = repository.loadIndex()
+                threads = index.threads
+                totalSize = index.totalSize
             }
+            return true
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            loadError = "読み込みがタイムアウトしました"
+            val message = "読み込みがタイムアウトしました"
+            if (showAsScreenError) {
+                loadError = message
+            } else {
+                snackbarHostState.showSnackbar(message)
+            }
+            return false
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            loadError = "読み込みエラー: ${e.message}"
+            val message = "読み込みエラー: ${e.message}"
+            if (showAsScreenError) {
+                loadError = message
+            } else {
+                snackbarHostState.showSnackbar(message)
+            }
+            return false
         } finally {
-            isLoading = false
+            if (showLoadingState) {
+                isLoading = false
+            }
         }
+    }
+
+    // FIX: データ読み込みにタイムアウトとエラーハンドリングを追加
+    LaunchedEffect(Unit) {
+        reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
     }
 
     val refreshList: () -> Unit = {
         coroutineScope.launch {
-            threads = repository.getAllThreads()
-            totalSize = repository.getTotalSize()
+            reloadSavedThreads(showLoadingState = false, showAsScreenError = false)
         }
     }
 
@@ -138,22 +161,7 @@ fun SavedThreadsScreen(
                         }
                         Button(onClick = {
                             coroutineScope.launch {
-                                isLoading = true
-                                loadError = null
-                                try {
-                                    withTimeout(15_000L) {
-                                        threads = repository.getAllThreads()
-                                        totalSize = repository.getTotalSize()
-                                    }
-                                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                                    loadError = "読み込みがタイムアウトしました"
-                                } catch (e: kotlinx.coroutines.CancellationException) {
-                                    throw e
-                                } catch (e: Exception) {
-                                    loadError = "読み込みエラー: ${e.message}"
-                                } finally {
-                                    isLoading = false
-                                }
+                                reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
                             }
                         }) {
                             Text("再試行")

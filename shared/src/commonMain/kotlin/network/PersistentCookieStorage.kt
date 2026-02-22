@@ -60,6 +60,7 @@ class PersistentCookieStorage(
 ) : CookiesStorage {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val mutex = Mutex()
+    private val transactionMutex = Mutex()
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
     private var transactionSnapshot: Map<CookieKey, StoredCookie>? = null
@@ -236,25 +237,29 @@ class PersistentCookieStorage(
      * Run [block] while staging cookie changes; commit to disk only if it succeeds.
      */
     suspend fun <T> commitOnSuccess(block: suspend () -> T): T {
-        val transactionId = mutex.withLock {
-            ensureLoadedLocked()
-            if (transactionSnapshot == null) {
+        val inheritedTransactionId = coroutineContext[CookieTransactionContext]?.id
+        if (inheritedTransactionId != null) {
+            return block()
+        }
+        return transactionMutex.withLock {
+            val transactionId = mutex.withLock {
+                ensureLoadedLocked()
                 transactionSnapshot = HashMap(cookies)
                 externalMutationDuringTransaction = false
                 transactionSequence += 1
                 activeTransactionId = transactionSequence
+                transactionSequence
             }
-            activeTransactionId
+            runCatching {
+                withContext(CookieTransactionContext(transactionId)) {
+                    block()
+                }
+            }.onSuccess {
+                persistTransaction(transactionId)
+            }.onFailure {
+                rollbackTransaction(transactionId)
+            }.getOrThrow()
         }
-        return runCatching {
-            withContext(CookieTransactionContext(requireNotNull(transactionId))) {
-                block()
-            }
-        }.onSuccess {
-            persistTransaction(transactionId)
-        }.onFailure {
-            rollbackTransaction(transactionId)
-        }.getOrThrow()
     }
 
     private suspend fun persistTransaction(transactionId: Long?) {
@@ -270,20 +275,25 @@ class PersistentCookieStorage(
     }
 
     private suspend fun rollbackTransaction(transactionId: Long?) {
+        var savePayload: String? = null
         mutex.withLock {
             if (activeTransactionId != transactionId) return@withLock
-            if (!externalMutationDuringTransaction) {
-                transactionSnapshot?.let { snapshot ->
-                    cookies.clear()
-                    cookies.putAll(snapshot)
-                }
-            } else {
-                Logger.w("PersistentCookieStorage", "Skipping cookie rollback due to external mutations during transaction")
+            if (externalMutationDuringTransaction) {
+                Logger.w(
+                    "PersistentCookieStorage",
+                    "Rolling back transaction while discarding external cookie mutations"
+                )
+            }
+            transactionSnapshot?.let { snapshot ->
+                cookies.clear()
+                cookies.putAll(snapshot)
+                savePayload = encodeSnapshotLocked()
             }
             transactionSnapshot = null
             activeTransactionId = null
             externalMutationDuringTransaction = false
         }
+        savePayload?.let { persistSnapshot(it) }
     }
 
     private suspend fun ensureLoadedLocked() {

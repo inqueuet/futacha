@@ -634,7 +634,7 @@ class IosFileSystem : FileSystem {
             val isStale = alloc<BooleanVar>()
             val url = NSURL.URLByResolvingBookmarkData(
                 data,
-                options = 0u,
+                options = NSURLBookmarkResolutionWithSecurityScope,
                 relativeToURL = null,
                 bookmarkDataIsStale = isStale.ptr,
                 error = error.ptr

@@ -39,8 +39,14 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.rememberUrlLauncher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+private const val AUTO_SAVE_STATS_REFRESH_INTERVAL_MS = 5_000L
+private const val AUTO_SAVE_STATS_FETCH_TIMEOUT_MS = 4_000L
 
 private data class GlobalSettingsEntry(
     val label: String,
@@ -139,13 +145,24 @@ internal fun GlobalSettingsScreen(
     }
 
     LaunchedEffect(effectiveAutoSavedRepository) {
-        if (effectiveAutoSavedRepository == null) {
+        val repository = effectiveAutoSavedRepository
+        if (repository == null) {
             autoSavedCount = null
             autoSavedSize = null
             return@LaunchedEffect
         }
-        autoSavedCount = runCatching { effectiveAutoSavedRepository.getThreadCount() }.getOrNull()
-        autoSavedSize = runCatching { effectiveAutoSavedRepository.getTotalSize() }.getOrNull()
+        while (isActive) {
+            val stats = runCatching {
+                withTimeoutOrNull(AUTO_SAVE_STATS_FETCH_TIMEOUT_MS) {
+                    repository.getStats()
+                }
+            }.getOrNull()
+            if (stats != null) {
+                autoSavedCount = stats.threadCount
+                autoSavedSize = stats.totalSize
+            }
+            delay(AUTO_SAVE_STATS_REFRESH_INTERVAL_MS)
+        }
     }
 
     fun normalizeManualSaveInput(raw: String): String {
@@ -880,7 +897,6 @@ internal fun GlobalSettingsScreen(
                             Button(
                                 onClick = {
                                     coroutineScope.launch {
-                                        snackbarHostState.showSnackbar("画像キャッシュを削除中...")
                                         val result = runCatching {
                                             withContext(AppDispatchers.io) {
                                                 imageLoader.diskCache?.clear()
@@ -916,7 +932,6 @@ internal fun GlobalSettingsScreen(
                             OutlinedButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        snackbarHostState.showSnackbar("一時キャッシュを削除中...")
                                         val result = runCatching {
                                             withContext(AppDispatchers.io) {
                                                 val fs = fileSystem

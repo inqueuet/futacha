@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.util.AppDispatchers
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
@@ -9,6 +10,7 @@ import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -56,6 +58,7 @@ data class ArchiveSearchResponse(
 private const val MAX_ARCHIVE_RESPONSE_SIZE = 2 * 1024 * 1024 // 2MB
 private const val ARCHIVE_READ_IDLE_TIMEOUT_MILLIS = 15_000L
 private const val ARCHIVE_REQUEST_TIMEOUT_MILLIS = 20_000L
+private const val MAX_ARCHIVE_RESULT_ITEMS = 1_500
 
 object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
     override val descriptor: SerialDescriptor =
@@ -136,10 +139,12 @@ suspend fun fetchArchiveSearchResults(
         val body = withTimeoutOrNull(ARCHIVE_READ_IDLE_TIMEOUT_MILLIS) {
             response.bodyAsText()
         } ?: throw IllegalStateException("検索結果の取得がタイムアウトしました")
-        if (body.encodeToByteArray().size > MAX_ARCHIVE_RESPONSE_SIZE) {
+        if (utf8ByteLength(body) > MAX_ARCHIVE_RESPONSE_SIZE.toLong()) {
             throw IllegalStateException("検索結果が大きすぎます")
         }
-        parseArchiveSearchResults(body, scope, json)
+        withContext(AppDispatchers.parsing) {
+            parseArchiveSearchResults(body, scope, json)
+        }
     }
 }
 
@@ -163,7 +168,11 @@ fun parseArchiveSearchResults(
     }
     val items = itemsElement as? JsonArray
         ?: throw IllegalStateException("検索結果の形式が不明です")
-    return items.mapNotNull { parseArchiveSearchItem(it, scope) }
+    return items
+        .asSequence()
+        .take(MAX_ARCHIVE_RESULT_ITEMS)
+        .mapNotNull { parseArchiveSearchItem(it, scope) }
+        .toList()
 }
 
 fun parseArchiveSearchItem(
@@ -240,6 +249,30 @@ private fun JsonElement.asLongOrNull(): Long? {
     val primitive = this as? JsonPrimitive ?: return null
     if (this is JsonNull) return null
     return primitive.content.toLongOrNull()
+}
+
+private fun utf8ByteLength(value: String): Long {
+    var total = 0L
+    var index = 0
+    while (index < value.length) {
+        val code = value[index].code
+        val nextCode = value.getOrNull(index + 1)?.code
+        val hasSurrogatePair =
+            code in 0xD800..0xDBFF &&
+                nextCode != null &&
+                nextCode in 0xDC00..0xDFFF
+        total += when {
+            code <= 0x7F -> 1L
+            code <= 0x7FF -> 2L
+            hasSurrogatePair -> {
+                index += 1
+                4L
+            }
+            else -> 3L
+        }
+        index += 1
+    }
+    return total
 }
 
 private fun extractThreadIdFromUrl(url: String): String? {

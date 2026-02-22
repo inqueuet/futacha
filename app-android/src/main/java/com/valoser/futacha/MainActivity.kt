@@ -19,12 +19,14 @@ class MainActivity : ComponentActivity() {
             val cookieRepository = remember { app.cookieRepository }
             val versionChecker = remember { createVersionChecker(applicationContext, httpClient) }
             val fileSystem = remember { app.fileSystem }
+            val autoSavedThreadRepository = remember { app.autoSavedThreadRepository }
             FutachaApp(
                 stateStore = stateStore,
                 versionChecker = versionChecker,
                 httpClient = httpClient,
                 fileSystem = fileSystem,
-                cookieRepository = cookieRepository
+                cookieRepository = cookieRepository,
+                autoSavedThreadRepository = autoSavedThreadRepository
             )
         }
     }

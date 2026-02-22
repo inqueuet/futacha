@@ -13,11 +13,11 @@ import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.TextEncoding
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
@@ -25,6 +25,7 @@ import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -33,7 +34,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.text.RegexOption
@@ -84,8 +87,11 @@ class ThreadSaveService(
 
         // Timeout for media body retrieval.
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
-        private const val STREAM_READ_BUFFER_BYTES = 16 * 1024
+        private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
+        private const val THREAD_HTML_FETCH_TIMEOUT_MILLIS = 30_000L
+        private const val STREAM_READ_BUFFER_BYTES = 64 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
+        private const val ZERO_READ_BACKOFF_MILLIS = 8L
         private const val MAX_PARALLEL_DOWNLOADS = 2
 
         // FIX: Regexプリコンパイル（パフォーマンス最適化）
@@ -244,6 +250,8 @@ class ThreadSaveService(
             var processedMediaCount = 0
 
             posts.chunked(chunkSize).forEach { postChunk ->
+                coroutineContext.ensureActive()
+                yield()
                 enforceBudget(totalSize, startedAtMillis)
                 val mediaItems = postChunk.flatMap { post ->
                     buildList {
@@ -254,11 +262,14 @@ class ThreadSaveService(
 
                 // FIX: 並列ダウンロードで処理速度を改善（セマフォで並行数を制限）
                 mediaItems.chunked(MAX_PARALLEL_DOWNLOADS).forEach { itemBatch ->
+                    coroutineContext.ensureActive()
                     kotlinx.coroutines.coroutineScope {
                         val deferredResults = itemBatch.map { mediaItem ->
                             async(AppDispatchers.io) {
+                                coroutineContext.ensureActive()
                                 // セマフォでグローバルな並行数を制限
                                 downloadSemaphore.withPermit {
+                                    coroutineContext.ensureActive()
                                     val currentCount = counterMutex.withLock {
                                         if (processedMediaCount >= MAX_MEDIA_ITEMS) {
                                             null
@@ -282,6 +293,7 @@ class ThreadSaveService(
                                     var downloadResult: Result<LocalFileInfo>? = null
                                     var lastError: Throwable? = null
                                     for (attempt in 1..MAX_RETRIES) {
+                                        coroutineContext.ensureActive()
                                         downloadResult = downloadAndSaveMedia(
                                             url = mediaItem.url,
                                             saveLocation = baseSaveLocation,
@@ -313,6 +325,7 @@ class ThreadSaveService(
 
                         // すべての並列ダウンロードの完了を待つ
                         deferredResults.forEach { deferred ->
+                            coroutineContext.ensureActive()
                             val (mediaItem, downloadResult) = deferred.await()
                             if (mediaItem == null || downloadResult == null) {
                                 downloadFailureCount++
@@ -361,7 +374,7 @@ class ThreadSaveService(
                         if (baseSaveLocation != null) {
                             fileSystem.writeString(baseSaveLocation, "$storageId/$fileName", rewritten).getOrThrow()
                             // SaveLocation版ではファイルサイズ取得は省略（getFileSize未実装のため）
-                            totalSize += rewritten.encodeToByteArray().size
+                            totalSize += utf8ByteLength(rewritten)
                         } else {
                             val fullPath = "$baseDir/$fileName"
                             fileSystem.writeString(fullPath, rewritten).getOrThrow()
@@ -378,6 +391,10 @@ class ThreadSaveService(
             updateProgress(SavePhase.CONVERTING, 0, posts.size, "HTML変換中...")
 
             posts.forEachIndexed { index, post ->
+                coroutineContext.ensureActive()
+                if (index % 32 == 0) {
+                    yield()
+                }
                 updateProgress(
                     SavePhase.CONVERTING,
                     index + 1,
@@ -451,22 +468,19 @@ class ThreadSaveService(
                     strippedExternalResources = rawHtmlOptions.stripExternalResources,
                     version = 1
                 )
-                val metadataJson = json.encodeToString(metadata)
+                val (metadataPayload, payloadSize) = buildMetadataPayloadWithStableSize(
+                    metadata = metadata,
+                    baseTotalSize = totalSize
+                )
 
                 if (baseSaveLocation != null) {
                     val metadataRelativePath = "$storageId/metadata.json"
-                    fileSystem.writeString(baseSaveLocation, metadataRelativePath, metadataJson).getOrThrow()
-                    val size = metadataJson.encodeToByteArray().size.toLong()
-                    val metadataWithSize = metadata.copy(totalSize = totalSize + size)
-                    fileSystem.writeString(baseSaveLocation, metadataRelativePath, json.encodeToString(metadataWithSize)).getOrThrow()
-                    size
+                    fileSystem.writeString(baseSaveLocation, metadataRelativePath, metadataPayload).getOrThrow()
+                    payloadSize
                 } else {
                     val metadataPath = "$baseDir/metadata.json"
-                    fileSystem.writeString(metadataPath, metadataJson).getOrThrow()
-                    val size = fileSystem.getFileSize(metadataPath)
-                    val metadataWithSize = metadata.copy(totalSize = totalSize + size)
-                    fileSystem.writeString(metadataPath, json.encodeToString(metadataWithSize)).getOrThrow()
-                    size
+                    fileSystem.writeString(metadataPath, metadataPayload).getOrThrow()
+                    payloadSize
                 }
             } else {
                 0L
@@ -513,9 +527,11 @@ class ThreadSaveService(
         try {
             Result.success(run {
                 // Download media directly and inspect headers from GET response
-                val response: HttpResponse = httpClient.get(url) {
-                    headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
-                }
+                val response: HttpResponse = withTimeoutOrNull(MEDIA_REQUEST_TIMEOUT_MILLIS) {
+                    httpClient.get(url) {
+                        headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+                    }
+                } ?: throw IllegalStateException("Download request timed out after ${MEDIA_REQUEST_TIMEOUT_MILLIS}ms: $url")
                 try {
                     if (!response.status.isSuccess()) {
                         throw Exception("Download failed: ${response.status}")
@@ -616,6 +632,7 @@ class ThreadSaveService(
         val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
         var totalBytesRead = 0L
         var zeroReadCount = 0
+        var readLoopCount = 0L
 
         if (saveLocation != null && saveLocationPath != null) {
             fileSystem.delete(saveLocation, saveLocationPath).getOrNull()
@@ -624,6 +641,7 @@ class ThreadSaveService(
         }
 
         while (true) {
+            coroutineContext.ensureActive()
             val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
                 channel.readAvailable(buffer, 0, buffer.size)
             } ?: throw IllegalStateException("Save aborted: timed out waiting for media stream data")
@@ -634,6 +652,7 @@ class ThreadSaveService(
                 if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
                     throw IllegalStateException("Save aborted: media stream stalled")
                 }
+                delay(ZERO_READ_BACKOFF_MILLIS)
                 continue
             }
 
@@ -647,7 +666,7 @@ class ThreadSaveService(
             }
 
             val chunk = if (read == buffer.size) {
-                buffer.copyOf()
+                buffer
             } else {
                 buffer.copyOf(read)
             }
@@ -657,6 +676,10 @@ class ThreadSaveService(
                 fileSystem.appendBytes(absolutePath, chunk).getOrThrow()
             } else {
                 throw IllegalStateException("No target path specified for media stream")
+            }
+            readLoopCount += 1
+            if (readLoopCount % 32L == 0L) {
+                yield()
             }
         }
 
@@ -820,33 +843,142 @@ class ThreadSaveService(
         }.getOrElse { fallback }
     }
 
+    private fun buildMetadataPayloadWithStableSize(
+        metadata: SavedThreadMetadata,
+        baseTotalSize: Long
+    ): Pair<String, Long> {
+        var estimatedSize = 0L
+        var payload = json.encodeToString(metadata.copy(totalSize = baseTotalSize))
+        repeat(8) {
+            val size = utf8ByteLength(payload)
+            if (size == estimatedSize) {
+                return payload to size
+            }
+            estimatedSize = size
+            payload = json.encodeToString(metadata.copy(totalSize = baseTotalSize + size))
+        }
+        val finalSize = utf8ByteLength(payload)
+        return payload to finalSize
+    }
+
+    private fun utf8ByteLength(value: String): Long {
+        var total = 0L
+        var index = 0
+        while (index < value.length) {
+            val code = value[index].code
+            val nextCode = value.getOrNull(index + 1)?.code
+            val hasSurrogatePair =
+                code in 0xD800..0xDBFF &&
+                    nextCode != null &&
+                    nextCode in 0xDC00..0xDFFF
+            total += when {
+                code <= 0x7F -> 1L
+                code <= 0x7FF -> 2L
+                hasSurrogatePair -> {
+                    index += 1
+                    4L
+                }
+                else -> 3L
+            }
+            index += 1
+        }
+        return total
+    }
+
     /**
      * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
      */
     private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(AppDispatchers.io) {
         try {
-            Result.success(run {
-            val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
-            val response: HttpResponse = httpClient.get(threadUrl) {
-                headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
-            }
-            if (!response.status.isSuccess()) {
-                throw Exception("Fetch thread HTML failed: ${response.status}")
-            }
-            val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-            if (contentLength != null && contentLength > MAX_THREAD_HTML_BYTES) {
-                throw IllegalStateException("Thread HTML is too large: ${contentLength / 1024}KB")
-            }
-            val html = response.bodyAsText()
-            if (html.encodeToByteArray().size > MAX_THREAD_HTML_BYTES) {
-                throw IllegalStateException("Thread HTML is too large")
-            }
-            html
-            })
+            val html = withTimeoutOrNull(THREAD_HTML_FETCH_TIMEOUT_MILLIS) {
+                val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
+                val response: HttpResponse = httpClient.get(threadUrl) {
+                    headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
+                }
+                try {
+                    if (!response.status.isSuccess()) {
+                        throw Exception("Fetch thread HTML failed: ${response.status}")
+                    }
+                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                    if (contentLength != null && contentLength > MAX_THREAD_HTML_BYTES) {
+                        throw IllegalStateException("Thread HTML is too large: ${contentLength / 1024}KB")
+                    }
+                    val bodyBytes = readResponseBytesWithLimit(
+                        response = response,
+                        maxBytes = MAX_THREAD_HTML_BYTES.toInt()
+                    )
+                    TextEncoding.decodeToString(bodyBytes, response.headers[HttpHeaders.ContentType])
+                } finally {
+                    runCatching { response.bodyAsChannel().cancel() }
+                }
+            } ?: throw IllegalStateException("Fetch thread HTML timed out after ${THREAD_HTML_FETCH_TIMEOUT_MILLIS}ms")
+            Result.success(html)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             Result.failure(t)
+        }
+    }
+
+    private suspend fun readResponseBytesWithLimit(
+        response: HttpResponse,
+        maxBytes: Int
+    ): ByteArray {
+        val channel = response.bodyAsChannel()
+        val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
+        var output = ByteArray(minOf(STREAM_READ_BUFFER_BYTES, maxBytes.coerceAtLeast(1)))
+        var totalBytes = 0
+        var zeroReadCount = 0
+        var readLoopCount = 0L
+
+        try {
+            while (true) {
+                coroutineContext.ensureActive()
+                val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
+                    channel.readAvailable(buffer, 0, buffer.size)
+                } ?: throw IllegalStateException("Thread HTML read stalled")
+
+                if (read == -1) break
+                if (read == 0) {
+                    zeroReadCount += 1
+                    if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
+                        throw IllegalStateException("Thread HTML read stalled")
+                    }
+                    delay(ZERO_READ_BACKOFF_MILLIS)
+                    continue
+                }
+
+                zeroReadCount = 0
+                val requiredSize = totalBytes + read
+                if (requiredSize > maxBytes) {
+                    throw IllegalStateException("Thread HTML is too large")
+                }
+                if (requiredSize > output.size) {
+                    var newSize = output.size
+                    while (newSize < requiredSize) {
+                        newSize = (newSize * 2).coerceAtMost(maxBytes)
+                        if (newSize == output.size) break
+                    }
+                    if (newSize < requiredSize) {
+                        throw IllegalStateException("Failed to expand thread HTML buffer safely")
+                    }
+                    output = output.copyOf(newSize)
+                }
+                buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
+                totalBytes = requiredSize
+                readLoopCount += 1
+                if (readLoopCount % 32L == 0L) {
+                    yield()
+                }
+            }
+        } finally {
+            runCatching { channel.cancel() }
+        }
+
+        return if (totalBytes == output.size) {
+            output
+        } else {
+            output.copyOf(totalBytes)
         }
     }
 

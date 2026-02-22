@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -11,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -36,7 +38,9 @@ import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
+import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.CatalogScreen
+import com.valoser.futacha.shared.ui.board.SavedThreadsScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
 import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
@@ -50,9 +54,10 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
-import com.valoser.futacha.shared.util.isAndroid
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import io.ktor.http.encodedPath
@@ -79,7 +84,8 @@ fun FutachaApp(
     versionChecker: VersionChecker? = null,
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
-    cookieRepository: CookieRepository? = null
+    cookieRepository: CookieRepository? = null,
+    autoSavedThreadRepository: SavedThreadRepository? = null
 ) {
     FutachaTheme {
         val devicePerformanceProfile = remember {
@@ -124,16 +130,21 @@ fun FutachaApp(
                 }
             }
 
-            val autoSavedThreadRepository = remember(fileSystem) {
-                fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
+            val effectiveAutoSavedThreadRepository = remember(fileSystem, autoSavedThreadRepository) {
+                autoSavedThreadRepository ?: fileSystem?.let {
+                    SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY)
+                }
+            }
+            val manualSavedThreadRepository = remember(fileSystem) {
+                fileSystem?.let { SavedThreadRepository(it, baseDirectory = MANUAL_SAVE_DIRECTORY) }
             }
 
-            val historyRefresher = remember(repositoryHolder.repository, autoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
+            val historyRefresher = remember(repositoryHolder.repository, effectiveAutoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
                 HistoryRefresher(
                     stateStore = stateStore,
                     repository = repositoryHolder.repository,
                     dispatcher = AppDispatchers.io,
-                    autoSavedThreadRepository = autoSavedThreadRepository,  // FIX: 自動保存チェック用
+                    autoSavedThreadRepository = effectiveAutoSavedThreadRepository,  // FIX: 自動保存チェック用
                     httpClient = httpClient,
                     fileSystem = fileSystem,
                     maxConcurrency = if (shouldUseLightweightMode) 2 else 4
@@ -206,17 +217,22 @@ fun FutachaApp(
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
             }
-            val isAndroidPlatform = remember { isAndroid() }
-            val resolvedManualSaveDirectory = remember(manualSaveDirectory, manualSaveLocation, fileSystem, isAndroidPlatform) {
-                val currentLocation = manualSaveLocation
-                when (currentLocation) {
+            val resolvedManualSaveDirectory by produceState<String?>(
+                initialValue = null,
+                key1 = manualSaveDirectory,
+                key2 = manualSaveLocation,
+                key3 = fileSystem
+            ) {
+                value = when (val currentLocation = manualSaveLocation) {
                     is com.valoser.futacha.shared.model.SaveLocation.TreeUri ->
                         "SAF: ${currentLocation.uri}"
                     is com.valoser.futacha.shared.model.SaveLocation.Bookmark ->
                         "Bookmark: 保存先が選択済みです"
                     is com.valoser.futacha.shared.model.SaveLocation.Path -> {
-                        runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
-                            .getOrNull()
+                        withContext(AppDispatchers.io) {
+                            runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
+                                .getOrNull()
+                        }
                     }
                 }
             }
@@ -227,6 +243,16 @@ fun FutachaApp(
             var selectedThreadReplies by rememberSaveable { mutableStateOf<Int?>(null) }
             var selectedThreadThumbnailUrl by rememberSaveable { mutableStateOf<String?>(null) }
             var selectedThreadUrl by rememberSaveable { mutableStateOf<String?>(null) }
+            var isSavedThreadsVisible by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(selectedBoardId) {
+                if (selectedBoardId == null) {
+                    selectedThreadId = null
+                    selectedThreadTitle = null
+                    selectedThreadReplies = null
+                    selectedThreadThumbnailUrl = null
+                    selectedThreadUrl = null
+                }
+            }
 
             val selectedBoard = persistedBoards.firstOrNull { it.id == selectedBoardId }
             val onBackgroundRefreshChanged: (Boolean) -> Unit = { enabled ->
@@ -266,7 +292,7 @@ fun FutachaApp(
                         boardId = entry.boardId.ifBlank { null }
                     )
                     stateStore.removeHistoryEntry(entry)
-                    autoSavedThreadRepository?.deleteThread(
+                    effectiveAutoSavedThreadRepository?.deleteThread(
                         threadId = entry.threadId,
                         boardId = entry.boardId.ifBlank { null }
                     )
@@ -285,7 +311,7 @@ fun FutachaApp(
                     stateStore.clearSelfPostIdentifiers()
                     stateStore.setHistory(emptyList())
                     historyRefresher.clearSkippedThreads()
-                    autoSavedThreadRepository?.deleteAllThreads()
+                    effectiveAutoSavedThreadRepository?.deleteAllThreads()
                         ?.onFailure {
                             Logger.e(TAG, "Failed to clear auto saved threads", it)
                         }
@@ -328,12 +354,40 @@ fun FutachaApp(
             }
 
             when {
+                selectedBoardId == null && isSavedThreadsVisible -> {
+                    val manualRepository = manualSavedThreadRepository
+                    if (manualRepository != null) {
+                        SavedThreadsScreen(
+                            repository = manualRepository,
+                            onThreadClick = { savedThread ->
+                                val targetBoard = persistedBoards.firstOrNull { it.id == savedThread.boardId }
+                                    ?: persistedBoards.firstOrNull { it.name == savedThread.boardName }
+                                if (targetBoard != null) {
+                                    selectedBoardId = targetBoard.id
+                                    selectedThreadId = savedThread.threadId
+                                    selectedThreadTitle = savedThread.title
+                                    selectedThreadReplies = savedThread.postCount
+                                    selectedThreadThumbnailUrl = null
+                                    selectedThreadUrl = null
+                                    isSavedThreadsVisible = false
+                                }
+                            },
+                            onBack = { isSavedThreadsVisible = false }
+                        )
+                    } else {
+                        LaunchedEffect(Unit) {
+                            isSavedThreadsVisible = false
+                        }
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("保存済みスレッドは利用できません")
+                        }
+                    }
+                }
+
                 selectedBoardId == null -> {
-                    selectedThreadId = null
-                    selectedThreadTitle = null
-                    selectedThreadReplies = null
-                    selectedThreadThumbnailUrl = null
-                    selectedThreadUrl = null
                     BoardManagementScreen(
                         boards = persistedBoards,
                         history = persistedHistory,
@@ -355,7 +409,11 @@ fun FutachaApp(
                                 }
                             }
                         },
-                        onMenuAction = { },
+                        onMenuAction = { action ->
+                            if (action == BoardManagementMenuAction.SAVED_THREADS) {
+                                isSavedThreadsVisible = true
+                            }
+                        },
                         onHistoryEntrySelected = openHistoryEntry,
                         onHistoryEntryDismissed = dismissHistoryEntry,
                         onHistoryCleared = clearHistory,
@@ -388,7 +446,7 @@ fun FutachaApp(
                             directoryPickerLauncher()
                         },
                         fileSystem = fileSystem,
-                        autoSavedThreadRepository = autoSavedThreadRepository,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
                         preferredFileManagerPackage = preferredFileManager?.packageName,
                         preferredFileManagerLabel = preferredFileManager?.label,
                         onFileManagerSelected = { packageName, label ->
@@ -413,7 +471,21 @@ fun FutachaApp(
                 }
 
                 selectedBoard == null -> {
-                    // 板データ復元待ち: 選択状態は保持しスレ画面へ復帰させる
+                    // 板削除などで選択中の板が消えた場合、無限ローディングを避けて復帰する
+                    LaunchedEffect(selectedBoardId, selectedThreadId, persistedBoards) {
+                        val missingBoardId = selectedBoardId ?: return@LaunchedEffect
+                        delay(2_000L)
+                        val stillMissing = selectedBoardId == missingBoardId &&
+                            persistedBoards.none { it.id == missingBoardId }
+                        if (stillMissing) {
+                            selectedThreadId = null
+                            selectedThreadTitle = null
+                            selectedThreadReplies = null
+                            selectedThreadThumbnailUrl = null
+                            selectedThreadUrl = null
+                            selectedBoardId = null
+                        }
+                    }
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -451,7 +523,7 @@ fun FutachaApp(
                             onHistoryRefresh = refreshHistoryEntries,
                             repository = boardRepository,
                             stateStore = stateStore,
-                            autoSavedThreadRepository = autoSavedThreadRepository,
+                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
                             appVersion = appVersion,
                             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,
@@ -589,7 +661,7 @@ fun FutachaApp(
                             fileSystem = fileSystem,
                             cookieRepository = cookieRepository,
                             stateStore = stateStore,
-                            autoSavedThreadRepository = autoSavedThreadRepository,
+                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
                             appVersion = appVersion,
                             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
                             onBackgroundRefreshChanged = onBackgroundRefreshChanged,

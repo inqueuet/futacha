@@ -24,7 +24,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -33,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.valoser.futacha.shared.util.FileManagerApp
 import com.valoser.futacha.shared.util.getAvailableFileManagers
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 actual fun FileManagerPickerDialog(
@@ -41,28 +44,37 @@ actual fun FileManagerPickerDialog(
 ) {
     val context = LocalContext.current
     val packageManager = context.packageManager
-    val fileManagers = remember {
-        getAvailableFileManagers(packageManager)
+    val fileManagers by produceState<List<FileManagerApp>?>(initialValue = null, key1 = packageManager) {
+        value = withContext(Dispatchers.Default) {
+            getAvailableFileManagers(packageManager)
+        }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("ファイラーアプリを選択") },
         text = {
-            if (fileManagers.isEmpty()) {
-                Text("利用可能なファイラーアプリが見つかりませんでした。")
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(fileManagers) { fileManager ->
-                        FileManagerItem(
-                            fileManager = fileManager,
-                            onClick = {
-                                onFileManagerSelected(fileManager.packageName, fileManager.label)
-                                onDismiss()
-                            }
-                        )
+            val resolvedFileManagers = fileManagers
+            when {
+                resolvedFileManagers == null -> {
+                    Text("ファイラーアプリを読み込み中...")
+                }
+                resolvedFileManagers.isEmpty() -> {
+                    Text("利用可能なファイラーアプリが見つかりませんでした。")
+                }
+                else -> {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(resolvedFileManagers) { fileManager ->
+                            FileManagerItem(
+                                fileManager = fileManager,
+                                onClick = {
+                                    onFileManagerSelected(fileManager.packageName, fileManager.label)
+                                    onDismiss()
+                                }
+                            )
+                        }
                     }
                 }
             }

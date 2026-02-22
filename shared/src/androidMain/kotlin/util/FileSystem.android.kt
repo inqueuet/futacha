@@ -9,10 +9,15 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -36,6 +41,8 @@ class AndroidFileSystem(
         private const val MAX_FILENAME_LENGTH = 255
         // FIX: パスの最大長（合理的な上限）
         private const val MAX_PATH_LENGTH = 4096
+        private const val ZERO_READ_BACKOFF_MILLIS = 8L
+        private const val SAF_READ_IDLE_TIMEOUT_MILLIS = 15_000L
     }
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> {
@@ -95,6 +102,11 @@ class AndroidFileSystem(
         if (size < 0) {
             throw IllegalArgumentException("$paramName size cannot be negative: $size")
         }
+    }
+
+    private suspend fun backoffAfterZeroRead() {
+        coroutineContext.ensureActive()
+        delay(ZERO_READ_BACKOFF_MILLIS)
     }
 
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -472,7 +484,7 @@ class AndroidFileSystem(
                 runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}. Permission may have been revoked.")
+                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
 
                     // Verify we still have permission
                     if (!baseDir.canWrite()) {
@@ -522,7 +534,7 @@ class AndroidFileSystem(
                 runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
 
                     val (parentPath, fileName) = splitParentAndFileName(relativePath)
                     val parentDir = if (parentPath.isEmpty()) {
@@ -563,7 +575,7 @@ class AndroidFileSystem(
                 runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
 
                     val (parentPath, fileName) = splitParentAndFileName(relativePath)
                     val parentDir = if (parentPath.isEmpty()) {
@@ -606,7 +618,7 @@ class AndroidFileSystem(
                 runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
 
                     val (parentPath, fileName) = splitParentAndFileName(relativePath)
                     val parentDir = if (parentPath.isEmpty()) {
@@ -625,7 +637,12 @@ class AndroidFileSystem(
                         var totalRead = 0L
                         var zeroReadCount = 0
                         while (true) {
-                            val read = input.read(buffer)
+                            coroutineContext.ensureActive()
+                            val read = withTimeoutOrNull(SAF_READ_IDLE_TIMEOUT_MILLIS) {
+                                runInterruptible {
+                                    input.read(buffer)
+                                }
+                            } ?: throw IllegalStateException("Read timed out while loading file: $fileName")
                             when {
                                 read < 0 -> break
                                 read == 0 -> {
@@ -633,6 +650,7 @@ class AndroidFileSystem(
                                     if (zeroReadCount >= 100) {
                                         throw IllegalStateException("Read stalled while loading file: $fileName")
                                     }
+                                    backoffAfterZeroRead()
                                     continue
                                 }
                                 else -> {
@@ -703,7 +721,7 @@ class AndroidFileSystem(
                 runFsCatching {
                     val treeUri = Uri.parse(base.uri)
                     val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw IllegalStateException("Cannot resolve tree URI: ${base.uri}")
+                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
 
                     if (relativePath.isEmpty()) {
                         // Safety guard: never delete the user-selected TreeUri root from app code.

@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import platform.BackgroundTasks.BGAppRefreshTask
 import platform.BackgroundTasks.BGAppRefreshTaskRequest
@@ -13,6 +14,8 @@ import platform.BackgroundTasks.BGTaskScheduler
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSLog
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 
 /**
  * Minimal BGTask scheduler helper. Note: actual execution timing is controlled by iOS.
@@ -25,7 +28,17 @@ object BackgroundRefreshManager {
     @Volatile private var isEnabled = false
     @Volatile private var executeBlock: (suspend () -> Unit)? = null
     @Volatile private var activeTaskJob: Job? = null
+    @Volatile private var retryScheduleJob: Job? = null
     @Volatile private var nextScheduleAllowedAtMillis: Long = 0L
+
+    fun registerAtLaunch() {
+        if (!isSupported()) return
+        if (!isTaskIdentifierPermitted()) {
+            NSLog("Skipping BGTask registration: '$TASK_ID' is not listed in BGTaskSchedulerPermittedIdentifiers")
+            return
+        }
+        registerIfNeeded()
+    }
 
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
         isEnabled = enabled
@@ -65,17 +78,19 @@ object BackgroundRefreshManager {
     }
 
     private fun handleTask(task: BGTask) {
-        if (!isEnabled) {
-            task.setTaskCompletedWithSuccess(false)
-            cancel()
-            return
-        }
         var taskCompleted = false
         val completeTask: (Boolean) -> Unit = { success ->
-            if (!taskCompleted) {
-                taskCompleted = true
-                task.setTaskCompletedWithSuccess(success)
+            dispatch_async(dispatch_get_main_queue()) {
+                if (!taskCompleted) {
+                    taskCompleted = true
+                    task.setTaskCompletedWithSuccess(success)
+                }
             }
+        }
+        if (!isEnabled) {
+            completeTask(false)
+            cancel()
+            return
         }
         val runningJob = activeTaskJob
         if (runningJob?.isActive == true) {
@@ -124,16 +139,39 @@ object BackgroundRefreshManager {
     private fun scheduleRefresh() {
         if (!isEnabled) return
         val now = currentEpochMillis()
-        if (now < nextScheduleAllowedAtMillis) {
+        val remainingBackoff = nextScheduleAllowedAtMillis - now
+        if (remainingBackoff > 0L) {
+            scheduleRetryAttempt(remainingBackoff)
             return
         }
-        val request = BGAppRefreshTaskRequest(TASK_ID)
-        runCatching {
-            BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
-            nextScheduleAllowedAtMillis = 0L
-        }.onFailure {
-            NSLog("BGTask schedule failed: ${it.message}")
-            nextScheduleAllowedAtMillis = now + SCHEDULE_BACKOFF_MILLIS
+        dispatch_async(dispatch_get_main_queue()) {
+            if (!isEnabled) return@dispatch_async
+            val request = BGAppRefreshTaskRequest(TASK_ID)
+            runCatching {
+                BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
+                nextScheduleAllowedAtMillis = 0L
+                retryScheduleJob?.cancel()
+                retryScheduleJob = null
+            }.onFailure {
+                NSLog("BGTask schedule failed: ${it.message}")
+                val failureNow = currentEpochMillis()
+                nextScheduleAllowedAtMillis = failureNow + SCHEDULE_BACKOFF_MILLIS
+                scheduleRetryAttempt(SCHEDULE_BACKOFF_MILLIS)
+            }
+        }
+    }
+
+    private fun scheduleRetryAttempt(delayMillis: Long) {
+        if (!isEnabled) return
+        val activeRetry = retryScheduleJob
+        if (activeRetry?.isActive == true) return
+        val safeDelay = delayMillis.coerceAtLeast(1L)
+        retryScheduleJob = scope.launch {
+            delay(safeDelay)
+            retryScheduleJob = null
+            if (isEnabled) {
+                scheduleRefresh()
+            }
         }
     }
 
@@ -142,9 +180,13 @@ object BackgroundRefreshManager {
         executeBlock = null
         activeTaskJob?.cancel(CancellationException("Background refresh disabled"))
         activeTaskJob = null
+        retryScheduleJob?.cancel(CancellationException("Background refresh retry disabled"))
+        retryScheduleJob = null
         nextScheduleAllowedAtMillis = 0L
         if (!isSupported()) return
-        BGTaskScheduler.sharedScheduler().cancel(taskRequestWithIdentifier = TASK_ID)
+        dispatch_async(dispatch_get_main_queue()) {
+            BGTaskScheduler.sharedScheduler().cancel(taskRequestWithIdentifier = TASK_ID)
+        }
     }
 
     private fun isSupported(): Boolean {

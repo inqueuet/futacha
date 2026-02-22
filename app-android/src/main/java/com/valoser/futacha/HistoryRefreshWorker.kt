@@ -89,11 +89,11 @@ class HistoryRefreshWorker(
         private const val TAG = "HistoryRefreshWorker"
         const val UNIQUE_WORK_NAME = "history_refresh_periodic"
         private const val UNIQUE_ONE_TIME_NAME = "history_refresh_once"
-        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(5)
+        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(10)
         private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(3)
         private const val INTERVAL_MINUTES = 15L
         private const val MAX_SETTING_READ_RETRIES = 3
-        private const val MAX_TIMEOUT_RETRIES = 2
+        private const val MAX_TIMEOUT_RETRIES = 0
         private const val MAX_RETRY_ATTEMPTS = 3
 
         private val constraints: Constraints = Constraints.Builder()
@@ -124,11 +124,16 @@ class HistoryRefreshWorker(
         fun enqueueImmediate(workManager: WorkManager) {
             val request: OneTimeWorkRequest = OneTimeWorkRequestBuilder<HistoryRefreshWorker>()
                 .setConstraints(constraints)
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    1,
+                    TimeUnit.MINUTES
+                )
                 .build()
 
             workManager.enqueueUniqueWork(
                 UNIQUE_ONE_TIME_NAME,
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.REPLACE,
                 request
             )
         }

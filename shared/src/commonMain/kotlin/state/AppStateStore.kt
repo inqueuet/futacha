@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -210,17 +211,35 @@ class AppStateStore internal constructor(
         private const val SELF_POST_KEY_DELIMITER = "::"
     }
 
-    fun setScrollDebounceScope(scope: CoroutineScope) {
-        scrollDebounceScope = scope
+    suspend fun setScrollDebounceScope(scope: CoroutineScope) {
+        scrollPositionMutex.withLock {
+            scrollDebounceScope = scope
+        }
     }
 
-    val boards: Flow<List<BoardSummary>> = storage.boardsJson.map { stored ->
-        stored?.let { decodeBoards(it) } ?: emptyList()
-    }
+    val boards: Flow<List<BoardSummary>> = storage.boardsJson
+        .distinctUntilChanged()
+        .map { stored ->
+            if (stored == null) {
+                emptyList()
+            } else {
+                withContext(AppDispatchers.parsing) {
+                    decodeBoards(stored)
+                }
+            }
+        }
 
-    val history: Flow<List<ThreadHistoryEntry>> = storage.historyJson.map { stored ->
-        stored?.let { decodeHistory(it) } ?: emptyList()
-    }
+    val history: Flow<List<ThreadHistoryEntry>> = storage.historyJson
+        .distinctUntilChanged()
+        .map { stored ->
+            if (stored == null) {
+                emptyList()
+            } else {
+                withContext(AppDispatchers.parsing) {
+                    decodeHistory(stored)
+                }
+            }
+        }
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
@@ -233,51 +252,82 @@ class AppStateStore internal constructor(
         .map { manualPath ->
             sanitizeManualSaveDirectory(manualPath)
         }
+        .distinctUntilChanged()
 
     /**
      * Manual save location as SaveLocation (supports paths, content URIs, and bookmarks).
      * Legacy string paths are automatically converted via SaveLocation.fromString().
      */
-    val manualSaveLocation: Flow<SaveLocation> = storage.manualSaveDirectory
-        .map { raw ->
-            val sanitized = sanitizeManualSaveDirectory(raw)
-            SaveLocation.fromString(sanitized)
-        }
+    val manualSaveLocation: Flow<SaveLocation> = manualSaveDirectory
+        .map(SaveLocation::fromString)
+        .distinctUntilChanged()
 
     val attachmentPickerPreference: Flow<AttachmentPickerPreference> = storage.attachmentPickerPreference
         .map { raw -> decodeAttachmentPickerPreference(raw) }
+        .distinctUntilChanged()
     val saveDirectorySelection: Flow<SaveDirectorySelection> = storage.saveDirectorySelection
         .map { raw -> decodeSaveDirectorySelection(raw) }
+        .distinctUntilChanged()
     val lastUsedDeleteKey: Flow<String> = storage.lastUsedDeleteKey
         .map { raw -> raw?.take(8).orEmpty() }
+        .distinctUntilChanged()
 
-    val catalogModes: Flow<Map<String, CatalogMode>> = storage.catalogModeMapJson.map { raw ->
-        decodeCatalogModeMap(raw)
-    }
-    val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle.map { raw ->
-        decodeCatalogDisplayStyle(raw)
-    }
-    val catalogGridColumns: Flow<Int> = storage.catalogGridColumns.map { raw ->
-        decodeCatalogGridColumns(raw)
-    }
-    val ngHeaders: Flow<List<String>> = storage.ngHeadersJson.map { raw ->
-        decodeStringList(raw)
-    }
-    val ngWords: Flow<List<String>> = storage.ngWordsJson.map { raw ->
-        decodeStringList(raw)
-    }
-    val catalogNgWords: Flow<List<String>> = storage.catalogNgWordsJson.map { raw ->
-        decodeStringList(raw)
-    }
-    val watchWords: Flow<List<String>> = storage.watchWordsJson.map { raw ->
-        decodeStringList(raw)
-    }
-    val selfPostIdentifiersByThread: Flow<Map<String, List<String>>> = storage.selfPostIdentifiersJson.map { raw ->
-        decodeSelfPostIdentifierMap(raw)
-    }
-    val selfPostIdentifiers: Flow<List<String>> = storage.selfPostIdentifiersJson.map { raw ->
-        aggregateIdentifiers(decodeSelfPostIdentifierMap(raw))
-    }
+    val catalogModes: Flow<Map<String, CatalogMode>> = storage.catalogModeMapJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeCatalogModeMap(raw)
+            }
+        }
+    val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle
+        .map { raw ->
+            decodeCatalogDisplayStyle(raw)
+        }
+        .distinctUntilChanged()
+    val catalogGridColumns: Flow<Int> = storage.catalogGridColumns
+        .map { raw ->
+            decodeCatalogGridColumns(raw)
+        }
+        .distinctUntilChanged()
+    val ngHeaders: Flow<List<String>> = storage.ngHeadersJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeStringList(raw)
+            }
+        }
+    val ngWords: Flow<List<String>> = storage.ngWordsJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeStringList(raw)
+            }
+        }
+    val catalogNgWords: Flow<List<String>> = storage.catalogNgWordsJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeStringList(raw)
+            }
+        }
+    val watchWords: Flow<List<String>> = storage.watchWordsJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeStringList(raw)
+            }
+        }
+    private val selfPostIdentifierMapFlow: Flow<Map<String, List<String>>> = storage.selfPostIdentifiersJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeSelfPostIdentifierMap(raw)
+            }
+        }
+    val selfPostIdentifiersByThread: Flow<Map<String, List<String>>> = selfPostIdentifierMapFlow
+    val selfPostIdentifiers: Flow<List<String>> = selfPostIdentifierMapFlow
+        .map { decoded -> aggregateIdentifiers(decoded) }
+        .distinctUntilChanged()
     private val preferredFileManagerFlow: Flow<PreferredFileManager?> =
         storage.preferredFileManagerPackage.combine(storage.preferredFileManagerLabel) { pkg, label ->
             if (pkg.isBlank()) {
@@ -285,19 +335,35 @@ class AppStateStore internal constructor(
             } else {
                 PreferredFileManager(pkg, label)
             }
+        }.distinctUntilChanged()
+    val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = storage.threadMenuConfigJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeThreadMenuConfig(raw)
+            }
         }
-    val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = storage.threadMenuConfigJson.map { raw ->
-        decodeThreadMenuConfig(raw)
-    }
-    val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = storage.threadSettingsMenuConfigJson.map { raw ->
-        decodeThreadSettingsMenuConfig(raw)
-    }
-    val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = storage.threadMenuEntriesConfigJson.map { raw ->
-        decodeThreadMenuEntries(raw)
-    }
-    val catalogNavEntries: Flow<List<CatalogNavEntryConfig>> = storage.catalogNavEntriesConfigJson.map { raw ->
-        decodeCatalogNavEntries(raw)
-    }
+    val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = storage.threadSettingsMenuConfigJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeThreadSettingsMenuConfig(raw)
+            }
+        }
+    val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = storage.threadMenuEntriesConfigJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeThreadMenuEntries(raw)
+            }
+        }
+    val catalogNavEntries: Flow<List<CatalogNavEntryConfig>> = storage.catalogNavEntriesConfigJson
+        .distinctUntilChanged()
+        .map { raw ->
+            withContext(AppDispatchers.parsing) {
+                decodeCatalogNavEntries(raw)
+            }
+        }
 
     suspend fun setBoards(boards: List<BoardSummary>) {
         val encoded = encodeBoards(boards)
@@ -451,24 +517,38 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) {
+        val normalizedBoardId = boardId.trim()
+        if (normalizedBoardId.isBlank()) {
+            Logger.w(TAG, "Ignoring catalog mode update with blank boardId")
+            return
+        }
         catalogModeMutex.withLock {
             try {
                 val currentRaw = storage.catalogModeMapJson.first()
-                val current = decodeCatalogModeMap(currentRaw)
-                val updated = current + (boardId to mode)
-                storage.updateCatalogModeMapJson(
+                val current = withContext(AppDispatchers.parsing) {
+                    decodeCatalogModeMap(currentRaw)
+                }
+                if (current[normalizedBoardId] == mode) {
+                    return@withLock
+                }
+                val updated = current + (normalizedBoardId to mode)
+                val encoded = withContext(AppDispatchers.parsing) {
                     json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
-                )
+                }
+                storage.updateCatalogModeMapJson(encoded)
             } catch (e: Exception) {
                 rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to save catalog mode for $boardId: ${mode.name}", e)
+                Logger.e(TAG, "Failed to save catalog mode for $normalizedBoardId: ${mode.name}", e)
             }
         }
     }
 
     suspend fun setNgHeaders(headers: List<String>) {
         try {
-            storage.updateNgHeadersJson(json.encodeToString(stringListSerializer, headers))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(stringListSerializer, headers)
+            }
+            storage.updateNgHeadersJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save NG headers (${headers.size})", e)
@@ -477,7 +557,10 @@ class AppStateStore internal constructor(
 
     suspend fun setNgWords(words: List<String>) {
         try {
-            storage.updateNgWordsJson(json.encodeToString(stringListSerializer, words))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(stringListSerializer, words)
+            }
+            storage.updateNgWordsJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save NG words (${words.size})", e)
@@ -486,7 +569,10 @@ class AppStateStore internal constructor(
 
     suspend fun setCatalogNgWords(words: List<String>) {
         try {
-            storage.updateCatalogNgWordsJson(json.encodeToString(stringListSerializer, words))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(stringListSerializer, words)
+            }
+            storage.updateCatalogNgWordsJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save catalog NG words (${words.size})", e)
@@ -495,7 +581,10 @@ class AppStateStore internal constructor(
 
     suspend fun setWatchWords(words: List<String>) {
         try {
-            storage.updateWatchWordsJson(json.encodeToString(stringListSerializer, words))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(stringListSerializer, words)
+            }
+            storage.updateWatchWordsJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save watch words (${words.size})", e)
@@ -505,7 +594,10 @@ class AppStateStore internal constructor(
     suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) {
         val normalized = normalizeThreadMenuConfig(config)
         try {
-            storage.updateThreadMenuConfigJson(json.encodeToString(threadMenuConfigSerializer, normalized))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(threadMenuConfigSerializer, normalized)
+            }
+            storage.updateThreadMenuConfigJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save thread menu config (${normalized.size} items)", e)
@@ -515,7 +607,10 @@ class AppStateStore internal constructor(
     suspend fun setThreadSettingsMenuConfig(config: List<ThreadSettingsMenuItemConfig>) {
         val normalized = normalizeThreadSettingsMenuConfig(config)
         try {
-            storage.updateThreadSettingsMenuConfigJson(json.encodeToString(threadSettingsMenuConfigSerializer, normalized))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(threadSettingsMenuConfigSerializer, normalized)
+            }
+            storage.updateThreadSettingsMenuConfigJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save thread settings menu config (${normalized.size} items)", e)
@@ -525,7 +620,10 @@ class AppStateStore internal constructor(
     suspend fun setThreadMenuEntries(config: List<ThreadMenuEntryConfig>) {
         val normalized = normalizeThreadMenuEntries(config)
         try {
-            storage.updateThreadMenuEntriesConfigJson(json.encodeToString(threadMenuEntriesSerializer, normalized))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(threadMenuEntriesSerializer, normalized)
+            }
+            storage.updateThreadMenuEntriesConfigJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save thread menu entries (${normalized.size} items)", e)
@@ -535,7 +633,10 @@ class AppStateStore internal constructor(
     suspend fun setCatalogNavEntries(config: List<CatalogNavEntryConfig>) {
         val normalized = normalizeCatalogNavEntries(config)
         try {
-            storage.updateCatalogNavEntriesConfigJson(json.encodeToString(catalogNavEntriesSerializer, normalized))
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(catalogNavEntriesSerializer, normalized)
+            }
+            storage.updateCatalogNavEntriesConfigJson(encoded)
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save catalog nav entries (${normalized.size} items)", e)
@@ -789,7 +890,12 @@ class AppStateStore internal constructor(
         var oldJob: Job? = null
         scrollPositionMutex.withLock {
             val scope = scrollDebounceScope
-            if (scope == null) {
+            val scopeJob = scope?.coroutineContext?.get(Job)
+            val isScopeInactive = scopeJob != null && !scopeJob.isActive
+            if (scope == null || isScopeInactive) {
+                if (isScopeInactive) {
+                    scrollDebounceScope = null
+                }
                 runImmediate = true
                 return@withLock
             }
@@ -806,6 +912,10 @@ class AppStateStore internal constructor(
                 } finally {
                     scrollPositionJobs.removeIfSame(scrollKey, this.coroutineContext[Job])
                 }
+            }
+            if (!newJob.isActive) {
+                runImmediate = true
+                return@withLock
             }
 
             oldJob = scrollPositionJobs.putAndCancelOld(scrollKey, newJob)
@@ -955,7 +1065,13 @@ class AppStateStore internal constructor(
         }
         val decoded = try {
             val raw = storage.historyJson.first()
-            raw?.let { decodeHistory(it) } ?: emptyList()
+            if (raw == null) {
+                emptyList()
+            } else {
+                withContext(AppDispatchers.parsing) {
+                    decodeHistory(raw)
+                }
+            }
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to read history state", e)
@@ -1140,7 +1256,9 @@ class AppStateStore internal constructor(
     private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {
         return try {
             val raw = storage.selfPostIdentifiersJson.first()
-            decodeSelfPostIdentifierMap(raw)
+            withContext(AppDispatchers.parsing) {
+                decodeSelfPostIdentifierMap(raw)
+            }
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to read self post identifier map", e)
@@ -1149,7 +1267,10 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun persistSelfPostIdentifierMap(map: Map<String, List<String>>) {
-        storage.updateSelfPostIdentifiersJson(json.encodeToString(selfPostIdentifierMapSerializer, map))
+        val encoded = withContext(AppDispatchers.parsing) {
+            json.encodeToString(selfPostIdentifierMapSerializer, map)
+        }
+        storage.updateSelfPostIdentifiersJson(encoded)
     }
 
     private fun buildSelfPostKey(threadId: String, boardId: String?): String {

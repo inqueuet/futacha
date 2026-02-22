@@ -41,7 +41,9 @@ import coil3.request.crossfade
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.take
 import androidx.compose.runtime.snapshotFlow
 
 /**
@@ -55,7 +57,6 @@ internal fun HistoryDrawerContent(
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
     onBoardClick: () -> Unit = {},
     onRefreshClick: () -> Unit = {},
-    onThreadRefreshClick: (() -> Unit)? = null,
     onBatchDeleteClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
@@ -78,7 +79,15 @@ internal fun HistoryDrawerContent(
                 item { HistoryListHeader() }
                 items(
                     items = history,
-                    key = { it.threadId }
+                    key = {
+                        buildString {
+                            append(it.boardId)
+                            append('|')
+                            append(it.threadId)
+                            append('|')
+                            append(it.boardUrl)
+                        }
+                    }
                 ) { entry ->
                     DismissibleHistoryEntry(
                         entry = entry,
@@ -90,7 +99,6 @@ internal fun HistoryDrawerContent(
             HistoryBottomBar(
                 onBoardClick = onBoardClick,
                 onRefreshClick = onRefreshClick,
-                onThreadRefreshClick = onThreadRefreshClick,
                 onBatchDeleteClick = onBatchDeleteClick,
                 onSettingsClick = onSettingsClick
             )
@@ -118,7 +126,6 @@ private fun HistoryListHeader() {
 private fun HistoryBottomBar(
     onBoardClick: () -> Unit = {},
     onRefreshClick: () -> Unit = {},
-    onThreadRefreshClick: (() -> Unit)? = null,
     onBatchDeleteClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
@@ -136,7 +143,6 @@ private fun HistoryBottomBar(
                 label = "更新"
             ) {
                 onRefreshClick()
-                onThreadRefreshClick?.invoke()
             }
             HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick)
             HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick)
@@ -177,7 +183,9 @@ private fun DismissibleHistoryEntry(
     val dismissState = rememberSwipeToDismissBoxState()
     LaunchedEffect(entry, dismissState) {
         snapshotFlow { dismissState.currentValue }
+            .distinctUntilChanged()
             .filter { it == SwipeToDismissBoxValue.StartToEnd }
+            .take(1)
             .collect {
                 onDismissed(entry)
             }
@@ -348,7 +356,7 @@ internal fun ThreadFormDialog(
     val commentLineCount = remember(comment) {
         if (comment.isBlank()) 0 else comment.count { it == '\n' } + 1
     }
-    val commentByteCount = remember(comment) { comment.encodeToByteArray().size }
+    val commentByteCount = remember(comment) { utf8ByteLength(comment) }
     val scrollState = rememberScrollState()
     val textFieldColors = TextFieldDefaults.colors(
         focusedContainerColor = Color.Transparent,
@@ -874,6 +882,30 @@ internal fun incrementSaidaneLabel(current: String?): String {
     } ?: 0
     val next = (existing + 1).coerceAtLeast(1)
     return "そうだねx$next"
+}
+
+private fun utf8ByteLength(value: String): Int {
+    var total = 0
+    var index = 0
+    while (index < value.length) {
+        val code = value[index].code
+        val nextCode = value.getOrNull(index + 1)?.code
+        val hasSurrogatePair =
+            code in 0xD800..0xDBFF &&
+                nextCode != null &&
+                nextCode in 0xDC00..0xDFFF
+        total += when {
+            code <= 0x7F -> 1
+            code <= 0x7FF -> 2
+            hasSurrogatePair -> {
+                index += 1
+                4
+            }
+            else -> 3
+        }
+        index += 1
+    }
+    return total
 }
 
 /**

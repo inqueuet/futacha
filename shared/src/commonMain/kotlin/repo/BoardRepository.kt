@@ -11,7 +11,6 @@ import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -103,7 +102,7 @@ class DefaultBoardRepository(
     private val opImageCache = createOpImageCache()
 
     // Scope used by async close.
-    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val closeScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
 
     // Protect close state and prevent duplicate close.
     private val closeMutex = Mutex()
@@ -332,29 +331,22 @@ class DefaultBoardRepository(
         level = DeprecationLevel.WARNING
     )
     override fun close() {
-        // Avoid blocking; async cleanup should use closeAsync().
-        if (isClosed) return
-        isClosed = true
-
-        // Cancel running async close work.
-        closeScope.cancel()
-
-        // Close only synchronously closeable resources.
-        try {
-            (api as? AutoCloseable)?.close()
-        } catch (e: Exception) {
-            Logger.e("DefaultBoardRepository", "Error closing API: ${e.message}", e)
-        }
+        // Keep close() non-blocking for callers on UI thread.
+        closeAsync()
     }
 
     // Async close for callers that need to await cleanup.
     override fun closeAsync(): Job {
         return closeScope.launch {
-            closeMutex.withLock {
-                // FIX: 二重close防止
-                if (isClosed) return@launch
-                isClosed = true
+            val shouldClose = closeMutex.withLock {
+                if (isClosed) {
+                    false
+                } else {
+                    isClosed = true
+                    true
+                }
             }
+            if (!shouldClose) return@launch
             try {
                 (api as? AutoCloseable)?.close()
             } catch (e: Exception) {
@@ -363,9 +355,6 @@ class DefaultBoardRepository(
                 opImageCacheMutex.withLock {
                     opImageCache.clear()
                 }
-            }
-        }.also {
-            it.invokeOnCompletion {
                 closeScope.cancel()
             }
         }

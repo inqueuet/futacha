@@ -185,10 +185,11 @@ actual fun rememberDirectoryPickerLauncher(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val uri = result.data?.data ?: return@rememberLauncherForActivityResult
+        val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         try {
             context.contentResolver.takePersistableUriPermission(
                 uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                permissionFlags
             )
         } catch (e: Exception) {
             Logger.e("DirectoryPicker", "Failed to persist URI permission for $uri", e)
@@ -206,12 +207,18 @@ actual fun rememberDirectoryPickerLauncher(
             }
             if (!canWrite) {
                 Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                withContext(Dispatchers.IO) {
+                    releasePersistedUriPermission(context, uri, permissionFlags)
+                }
                 android.widget.Toast.makeText(
                     context,
                     "選択したフォルダに書き込み権限がありません",
                     android.widget.Toast.LENGTH_LONG
                 ).show()
                 return@launch
+            }
+            withContext(Dispatchers.IO) {
+                releaseStalePersistedUriPermissions(context, keepUri = uri, permissionFlags = permissionFlags)
             }
             val treeUri = SaveLocation.TreeUri(uri.toString())
             onDirectorySelected(treeUri)
@@ -220,10 +227,11 @@ actual fun rememberDirectoryPickerLauncher(
 
     val defaultLauncher = rememberLauncherForActivityResult(OpenDocumentTree()) { uri ->
         if (uri != null) {
+            val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    permissionFlags
                 )
             } catch (e: Exception) {
                 Logger.e("DirectoryPicker", "Failed to persist URI permission for $uri", e)
@@ -235,7 +243,13 @@ actual fun rememberDirectoryPickerLauncher(
                 }
                 if (!canWrite) {
                     Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                    withContext(Dispatchers.IO) {
+                        releasePersistedUriPermission(context, uri, permissionFlags)
+                    }
                     return@launch
+                }
+                withContext(Dispatchers.IO) {
+                    releaseStalePersistedUriPermissions(context, keepUri = uri, permissionFlags = permissionFlags)
                 }
                 val treeUri = SaveLocation.TreeUri(uri.toString())
                 onDirectorySelected(treeUri)
@@ -312,6 +326,32 @@ private fun canWriteToDocumentTree(context: android.content.Context, treeUri: an
         Logger.e("DirectoryPicker", "Failed to write test file to DocumentTree $treeUri", e)
         false
     }
+}
+
+private fun releasePersistedUriPermission(
+    context: android.content.Context,
+    uri: android.net.Uri,
+    permissionFlags: Int
+) {
+    runCatching {
+        context.contentResolver.releasePersistableUriPermission(uri, permissionFlags)
+    }.onFailure { e ->
+        Logger.w("DirectoryPicker", "Failed to release persisted URI permission for $uri: ${e.message}")
+    }
+}
+
+private fun releaseStalePersistedUriPermissions(
+    context: android.content.Context,
+    keepUri: android.net.Uri,
+    permissionFlags: Int
+) {
+    val keep = keepUri.toString()
+    context.contentResolver.persistedUriPermissions
+        .mapNotNull { it.uri }
+        .filter { it.toString() != keep }
+        .forEach { staleUri ->
+            releasePersistedUriPermission(context, staleUri, permissionFlags)
+        }
 }
 
 private fun resolveDocumentTreeToPath(uri: android.net.Uri): String? {

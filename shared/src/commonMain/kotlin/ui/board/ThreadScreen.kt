@@ -50,10 +50,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.input.pointer.*
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
-import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -83,6 +79,7 @@ import coil3.request.crossfade
 import com.valoser.futacha.shared.audio.TextSpeaker
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.extractArchiveSearchScope
 import com.valoser.futacha.shared.network.fetchArchiveSearchResults
 import com.valoser.futacha.shared.network.selectLatestArchiveMatch
@@ -93,12 +90,14 @@ import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -121,6 +120,13 @@ sealed interface ThreadUiState {
     data object Loading : ThreadUiState
     data class Error(val message: String = "スレッドを読み込めませんでした") : ThreadUiState
     data class Success(val page: ThreadPage) : ThreadUiState
+}
+
+private fun isSaveLocationPermissionIssue(error: Throwable): Boolean {
+    val message = error.message?.lowercase().orEmpty()
+    return message.contains("cannot resolve tree uri") ||
+        message.contains("write permission lost for tree uri") ||
+        message.contains("please select the folder again")
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
@@ -245,12 +251,24 @@ fun ThreadScreen(
     }
     var autoSaveJob by remember { mutableStateOf<Job?>(null) }
     var manualSaveJob by remember { mutableStateOf<Job?>(null) }
+    var refreshThreadJob by remember { mutableStateOf<Job?>(null) }
     val lastAutoSaveTimestamp = rememberSaveable(threadId) { mutableStateOf(0L) }
     var isShowingOfflineCopy by rememberSaveable(threadId) { mutableStateOf(false) }
+    LaunchedEffect(threadId) {
+        stopReadAloud()
+        isReadAloudControlsVisible = false
+        autoSaveJob?.cancel()
+        manualSaveJob?.cancel()
+        refreshThreadJob?.cancel()
+        autoSaveJob = null
+        manualSaveJob = null
+        refreshThreadJob = null
+    }
     DisposableEffect(Unit) {
         onDispose {
             autoSaveJob?.cancel()
             manualSaveJob?.cancel()
+            refreshThreadJob?.cancel()
         }
     }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -261,6 +279,7 @@ fun ThreadScreen(
         }
     }
     var actionInProgress by remember { mutableStateOf(false) }
+    var lastBusyActionNoticeAtMillis by remember { mutableStateOf(0L) }
     val saidaneOverrides = remember(threadId) { mutableStateMapOf<String, String>() }
     var actionTargetPost by remember { mutableStateOf<Post?>(null) }
     var deleteDialogTarget by remember { mutableStateOf<Post?>(null) }
@@ -393,6 +412,7 @@ fun ThreadScreen(
     }
     var isGalleryVisible by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var manualRefreshGeneration by remember { mutableStateOf(0L) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
     var saveProgress by remember { mutableStateOf<SaveProgress?>(null) }
     var isManualSaveInProgress by remember { mutableStateOf(false) }
@@ -435,24 +455,51 @@ fun ThreadScreen(
 
     suspend fun loadOfflineThread(): ThreadPage? {
         val localFileSystem = fileSystem ?: return null
+        val boardIdCandidates = buildList {
+            add(board.id.ifBlank { null })
+            add(initialHistoryEntry?.boardId?.ifBlank { null })
+            add(null)
+        }.distinct()
+        val expectedBoardKeys = buildSet<String> {
+            normalizeBoardUrlForOfflineLookup(effectiveBoardUrl)?.let(::add)
+            normalizeBoardUrlForOfflineLookup(board.url)?.let(::add)
+            normalizeBoardUrlForOfflineLookup(initialHistoryEntry?.boardUrl)?.let(::add)
+        }
 
-        autoSaveRepository
-            ?.loadThreadMetadata(threadId, board.id.ifBlank { null })
-            ?.getOrNull()
-            ?.let { metadata ->
-                return metadata.toThreadPage(localFileSystem, AUTO_SAVE_DIRECTORY)
+        suspend fun loadMetadata(repository: SavedThreadRepository?): SavedThreadMetadata? {
+            repository ?: return null
+            for (candidateBoardId in boardIdCandidates) {
+                val metadata = repository.loadThreadMetadata(threadId, candidateBoardId).getOrNull() ?: continue
+                if (candidateBoardId == null && !metadata.matchesBoardForOfflineFallback(expectedBoardKeys)) {
+                    Logger.w(
+                        THREAD_SCREEN_TAG,
+                        "Skip offline metadata due to board mismatch: threadId=$threadId boardUrl=${metadata.boardUrl}"
+                    )
+                    continue
+                }
+                return metadata
             }
+            return null
+        }
 
-        manualSaveRepository
-            ?.loadThreadMetadata(threadId, board.id.ifBlank { null })
-            ?.getOrNull()
-            ?.let { metadata ->
-                return metadata.toThreadPage(
-                    fileSystem = localFileSystem,
-                    baseDirectory = manualSaveDirectory,
-                    baseSaveLocation = manualSaveLocation
-                )
-            }
+        loadMetadata(autoSaveRepository)?.let { metadata ->
+            return metadata.toThreadPage(localFileSystem, AUTO_SAVE_DIRECTORY)
+        }
+
+        loadMetadata(manualSaveRepository)?.let { metadata ->
+            return metadata.toThreadPage(
+                fileSystem = localFileSystem,
+                baseDirectory = manualSaveDirectory,
+                baseSaveLocation = manualSaveLocation
+            )
+        }
+
+        if (autoSaveRepository != null || manualSaveRepository != null) {
+            Logger.i(
+                THREAD_SCREEN_TAG,
+                "Offline metadata not found for threadId=$threadId boardIdCandidates=$boardIdCandidates"
+            )
+        }
 
         return null
     }
@@ -471,8 +518,12 @@ fun ThreadScreen(
         val client = httpClient ?: return ArchiveFallbackOutcome.NoMatch
         val scope = extractArchiveSearchScope(resolvedThreadUrlOverride ?: board.url)
         val queryCandidates = buildList {
-            if (threadId.isNotBlank()) add(threadId)
-            if (!threadTitle.isNullOrBlank()) add(threadTitle)
+            normalizeArchiveQuery(threadId, maxLength = 64)
+                .takeIf { it.isNotBlank() }
+                ?.let { add(it) }
+            normalizeArchiveQuery(threadTitle, maxLength = 120)
+                .takeIf { it.isNotBlank() }
+                ?.let { add(it) }
         }.distinct()
         if (queryCandidates.isEmpty()) return ArchiveFallbackOutcome.NoMatch
         for (query in queryCandidates) {
@@ -520,17 +571,30 @@ fun ThreadScreen(
         } catch (e: Exception) {
             val statusCode = e.statusCodeOrNull()
             if (statusCode == 404 || statusCode == 410) {
-                when (val archived = tryArchiveFallback()) {
+                val archived = withTimeoutOrNull(ARCHIVE_FALLBACK_TIMEOUT_MS) {
+                    tryArchiveFallback()
+                } ?: run {
+                    Logger.w(
+                        THREAD_SCREEN_TAG,
+                        "Archive fallback timed out for threadId=$threadId after ${ARCHIVE_FALLBACK_TIMEOUT_MS}ms"
+                    )
+                    ArchiveFallbackOutcome.NoMatch
+                }
+                when (archived) {
                     is ArchiveFallbackOutcome.Success -> {
                         resolvedThreadUrlOverride = archived.threadUrl
                         return archived.page to false
                     }
-                    is ArchiveFallbackOutcome.NotFound -> throw e
+                    is ArchiveFallbackOutcome.NotFound -> if (!allowOfflineFallback) throw e
                     is ArchiveFallbackOutcome.NoMatch -> Unit
                 }
             }
             if (!allowOfflineFallback) throw e
-            val offlinePage = loadOfflineThread()
+            val offlinePage = withContext(Dispatchers.IO) {
+                withTimeoutOrNull(OFFLINE_FALLBACK_TIMEOUT_MS) {
+                    loadOfflineThread()
+                }
+            }
             if (offlinePage != null) {
                 isShowingOfflineCopy = true
                 return offlinePage to true
@@ -567,10 +631,14 @@ fun ThreadScreen(
                         snackbarHostState.showSnackbar("更新中です…")
                     }
                 } else {
-                    isRefreshing = true
                     val savedIndex = lazyListState.firstVisibleItemIndex
                     val savedOffset = lazyListState.firstVisibleItemScrollOffset
-                    coroutineScope.launch {
+                    val requestGeneration = manualRefreshGeneration + 1L
+                    manualRefreshGeneration = requestGeneration
+                    isRefreshing = true
+                    refreshThreadJob?.cancel()
+                    refreshThreadJob = coroutineScope.launch {
+                        val runningJob = coroutineContext[Job]
                         try {
                             val (page, usedOffline) = loadThreadWithOfflineFallback(allowOfflineFallback = true)
                             if (isActive) {
@@ -604,7 +672,12 @@ fun ThreadScreen(
                             }
                             snackbarHostState.showSnackbar(failureMessage)
                         } finally {
-                            isRefreshing = false
+                            if (manualRefreshGeneration == requestGeneration) {
+                                isRefreshing = false
+                            }
+                            if (runningJob != null && refreshThreadJob == runningJob) {
+                                refreshThreadJob = null
+                            }
                         }
                     }
                 }
@@ -633,11 +706,11 @@ fun ThreadScreen(
                         return@run
                     }
 
-                    val currentStateValue = currentState
+                    val currentStateValue = uiState.value
                     if (currentStateValue is ThreadUiState.Success) {
                         if (httpClient != null && fileSystem != null) {
                             isManualSaveInProgress = true
-                            val launchedJob = coroutineScope.launch {
+                            manualSaveJob = coroutineScope.launch {
                                 var progressJob: Job? = null
                                 try {
                                     val saveService = ThreadSaveService(
@@ -645,9 +718,10 @@ fun ThreadScreen(
                                         fileSystem = fileSystem
                                     )
                                     progressJob = launch {
-                                        saveService.saveProgress.collect { progress ->
-                                            saveProgress = progress
-                                        }
+                                        saveService.saveProgress
+                                            .collect { progress ->
+                                                saveProgress = progress
+                                            }
                                     }
                                     val page = currentStateValue.page
                                     val resolvedTitle = resolveThreadTitle(
@@ -674,13 +748,27 @@ fun ThreadScreen(
                                         snackbarHostState.showSnackbar("スレッドを保存しました")
                                     }.onFailure { error ->
                                         saveProgress = null
-                                        snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                                        if (isAndroidPlatform && isSaveLocationPermissionIssue(error)) {
+                                            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                            onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                                            snackbarHostState.showSnackbar("保存先の権限が失われました。フォルダを再選択してください。")
+                                            onOpenSaveDirectoryPicker?.invoke()
+                                        } else {
+                                            snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                                        }
                                     }
                                 } catch (e: kotlinx.coroutines.CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
                                     saveProgress = null
-                                    snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                                    if (isAndroidPlatform && isSaveLocationPermissionIssue(e)) {
+                                        onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                                        onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                                        snackbarHostState.showSnackbar("保存先の権限が失われました。フォルダを再選択してください。")
+                                        onOpenSaveDirectoryPicker?.invoke()
+                                    } else {
+                                        snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                                    }
                                 } finally {
                                     progressJob?.cancel()
                                     saveProgress = null
@@ -690,7 +778,6 @@ fun ThreadScreen(
                                     }
                                 }
                             }
-                            manualSaveJob = launchedJob
                         } else {
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar("保存機能が利用できません")
@@ -732,7 +819,6 @@ fun ThreadScreen(
         if (isHistoryRefreshing) return@handleHistoryRefresh
         isHistoryRefreshing = true
         coroutineScope.launch {
-            snackbarHostState.showSnackbar("履歴を更新中...")
             try {
                 onHistoryRefresh()
                 snackbarHostState.showSnackbar("履歴を更新しました")
@@ -753,43 +839,52 @@ fun ThreadScreen(
         if (autoSaveJob?.isActive == true) return
         val now = Clock.System.now().toEpochMilliseconds()
         if (now - lastAutoSaveTimestamp.value < AUTO_SAVE_INTERVAL_MS) return
-        autoSaveJob?.let { currentJob ->
-            currentJob.cancelAndJoin()
-        }
         autoSaveJob = coroutineScope.launch {
-            val result = try {
-                val saveService = ThreadSaveService(client, localFileSystem)
-                val resolvedTitle = resolveThreadTitle(page.posts.firstOrNull(), threadTitle)
-                Result.success(
-                    saveService.saveThread(
-                        threadId = threadId,
-                        boardId = board.id,
-                        boardName = board.name,
-                        boardUrl = effectiveBoardUrl,
-                        title = resolvedTitle,
-                        expiresAtLabel = page.expiresAtLabel,
-                        posts = page.posts,
-                        baseDirectory = AUTO_SAVE_DIRECTORY,
-                        writeMetadata = true
+            val runningJob = coroutineContext[Job]
+            val attemptStartedAt = Clock.System.now().toEpochMilliseconds()
+            try {
+                val result = try {
+                    val saveService = ThreadSaveService(client, localFileSystem)
+                    val resolvedTitle = resolveThreadTitle(page.posts.firstOrNull(), threadTitle)
+                    Result.success(
+                        saveService.saveThread(
+                            threadId = threadId,
+                            boardId = board.id,
+                            boardName = board.name,
+                            boardUrl = effectiveBoardUrl,
+                            title = resolvedTitle,
+                            expiresAtLabel = page.expiresAtLabel,
+                            posts = page.posts,
+                            baseDirectory = AUTO_SAVE_DIRECTORY,
+                            writeMetadata = true
+                        )
                     )
-                )
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                Result.failure(t)
-            }
-            result.onSuccess { saveResult ->
-                saveResult.onSuccess { savedThread ->
-                    lastAutoSaveTimestamp.value = Clock.System.now().toEpochMilliseconds()
-                    repository.addThreadToIndex(savedThread)
-                        .onFailure {
-                            Logger.e(THREAD_AUTO_SAVE_TAG, "Failed to index auto-saved thread $threadId", it)
-                        }
-                }.onFailure {
-                    Logger.e(THREAD_AUTO_SAVE_TAG, "Auto-save failed for thread $threadId", it)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Result.failure(t)
                 }
-            }.onFailure {
-                Logger.e(THREAD_AUTO_SAVE_TAG, "Auto-save job failed unexpectedly for thread $threadId", it)
+                result.onSuccess { saveResult ->
+                    saveResult.onSuccess { savedThread ->
+                        lastAutoSaveTimestamp.value = Clock.System.now().toEpochMilliseconds()
+                        repository.addThreadToIndex(savedThread)
+                            .onFailure {
+                                Logger.e(THREAD_AUTO_SAVE_TAG, "Failed to index auto-saved thread $threadId", it)
+                            }
+                    }.onFailure {
+                        Logger.e(THREAD_AUTO_SAVE_TAG, "Auto-save failed for thread $threadId", it)
+                    }
+                }.onFailure {
+                    Logger.e(THREAD_AUTO_SAVE_TAG, "Auto-save job failed unexpectedly for thread $threadId", it)
+                }
+                if (lastAutoSaveTimestamp.value < attemptStartedAt) {
+                    // 失敗ケースでも次回試行まで最短間隔を確保し、連続失敗による負荷集中を避ける。
+                    lastAutoSaveTimestamp.value = attemptStartedAt
+                }
+            } finally {
+                if (runningJob != null && autoSaveJob == runningJob) {
+                    autoSaveJob = null
+                }
             }
         }
     }
@@ -801,11 +896,23 @@ fun ThreadScreen(
         onBack()
     }
 
-            val refreshThread: () -> Unit = remember(effectiveBoardUrl, threadId, activeRepository, history, onHistoryEntryUpdated) {
-                {
-                    coroutineScope.launch {
-                        uiState.value = ThreadUiState.Loading
-                        try {
+    val refreshThread: () -> Unit = remember(
+        effectiveBoardUrl,
+        threadId,
+        activeRepository,
+        history,
+        onHistoryEntryUpdated,
+        resolvedThreadUrlOverride,
+        threadTitle,
+        board.id,
+        board.name
+    ) {
+        {
+            refreshThreadJob?.cancel()
+            refreshThreadJob = coroutineScope.launch {
+                val runningJob = coroutineContext[Job]
+                uiState.value = ThreadUiState.Loading
+                try {
                     val (page, usedOffline) = loadThreadWithOfflineFallback(allowOfflineFallback = true)
                     if (isActive) {
                         uiState.value = ThreadUiState.Success(page)
@@ -823,28 +930,31 @@ fun ThreadScreen(
                             snackbarHostState.showSnackbar("ローカルコピーを表示しています")
                         }
                     }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            if (isActive) {
-                                val statusCode = e.statusCodeOrNull()
-                                val message = when {
-                                    e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
-                                    statusCode == 404 -> "スレッドが見つかりません (404)"
-                                    statusCode == 410 -> "スレッドは削除済みです (410)"
-                                    statusCode != null && statusCode >= 500 -> "サーバーエラー ($statusCode)"
-                                    e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
-                                    e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
-                                    else -> "スレッドを読み込めませんでした: ${e.message ?: "不明なエラー"}"
-                                }
-                                uiState.value = ThreadUiState.Error(message)
-                                snackbarHostState.showSnackbar(message)
-                            }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (isActive) {
+                        val statusCode = e.statusCodeOrNull()
+                        val message = when {
+                            e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
+                            statusCode == 404 -> "スレッドが見つかりません (404)"
+                            statusCode == 410 -> "スレッドは削除済みです (410)"
+                            statusCode != null && statusCode >= 500 -> "サーバーエラー ($statusCode)"
+                            e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
+                            e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
+                            else -> "スレッドを読み込めませんでした: ${e.message ?: "不明なエラー"}"
                         }
+                        uiState.value = ThreadUiState.Error(message)
+                        snackbarHostState.showSnackbar(message)
                     }
-                    Unit
+                } finally {
+                    if (runningJob != null && refreshThreadJob == runningJob) {
+                        refreshThreadJob = null
+                    }
                 }
             }
+        }
+    }
 
     LaunchedEffect(effectiveBoardUrl, threadId) {
         refreshThread()
@@ -868,11 +978,11 @@ fun ThreadScreen(
         }
     }
 
-    // Auto-save logic: Trigger only when post count changes or offline status changes
-    val currentPostsSize = currentPosts.size
-    LaunchedEffect(currentPostsSize, isShowingOfflineCopy, httpClient, fileSystem) {
-        if (currentState is ThreadUiState.Success && !isShowingOfflineCopy) {
-            startAutoSave(currentState.page)
+    // Auto-save logic: Trigger when thread content instance changes or offline state changes.
+    val currentPageForAutoSave = currentSuccessState?.page
+    LaunchedEffect(threadId, currentPageForAutoSave, isShowingOfflineCopy, httpClient, fileSystem) {
+        if (currentPageForAutoSave != null && !isShowingOfflineCopy) {
+            startAutoSave(currentPageForAutoSave)
         }
     }
 
@@ -901,7 +1011,7 @@ fun ThreadScreen(
         key1 = currentPosts
     ) {
         value = if (currentPosts.isNotEmpty()) {
-            withContext(Dispatchers.Default) {
+            withContext(AppDispatchers.parsing) {
                 buildReadAloudSegments(currentPosts)
             }
         } else {
@@ -994,18 +1104,33 @@ fun ThreadScreen(
     var searchQuery by rememberSaveable(threadId) { mutableStateOf("") }
     var currentSearchResultIndex by remember(threadId) { mutableStateOf(0) }
     val currentPage = (currentState as? ThreadUiState.Success)?.page
-    val searchMatches by produceState<List<ThreadSearchMatch>>(
+    val searchTargets by produceState<List<ThreadSearchTarget>>(
         initialValue = emptyList(),
-        key1 = isSearchActive,
-        key2 = searchQuery,
-        key3 = currentPage
+        key1 = currentPage?.posts
     ) {
-        value = if (isSearchActive && searchQuery.isNotBlank() && currentPage != null) {
-            withContext(Dispatchers.Default) {
-                buildThreadSearchMatches(currentPage.posts, searchQuery)
+        value = if (currentPage != null) {
+            withContext(AppDispatchers.parsing) {
+                buildThreadSearchTargets(currentPage.posts)
             }
         } else {
             emptyList()
+        }
+    }
+    val normalizedSearchQuery = remember(searchQuery) { searchQuery.trim() }
+    val searchMatches by produceState<List<ThreadSearchMatch>>(
+        initialValue = emptyList(),
+        key1 = isSearchActive,
+        key2 = normalizedSearchQuery,
+        key3 = searchTargets
+    ) {
+        if (!isSearchActive || normalizedSearchQuery.isBlank() || searchTargets.isEmpty()) {
+            value = emptyList()
+            return@produceState
+        }
+        // Avoid re-running expensive full-text scans for every keystroke.
+        delay(THREAD_SEARCH_DEBOUNCE_MILLIS)
+        value = withContext(AppDispatchers.parsing) {
+            buildThreadSearchMatches(searchTargets, normalizedSearchQuery)
         }
     }
     val postHighlightRanges = remember(isSearchActive, searchMatches) {
@@ -1079,7 +1204,11 @@ fun ThreadScreen(
     ) {
         coroutineScope.launch {
             if (actionInProgress) {
-                snackbarHostState.showSnackbar("処理中です…")
+                val nowMillis = Clock.System.now().toEpochMilliseconds()
+                if (nowMillis - lastBusyActionNoticeAtMillis >= ACTION_BUSY_NOTICE_INTERVAL_MS) {
+                    lastBusyActionNoticeAtMillis = nowMillis
+                    coroutineScope.launch { snackbarHostState.showSnackbar("処理中です…") }
+                }
                 return@launch
             }
             actionInProgress = true
@@ -1088,13 +1217,13 @@ fun ThreadScreen(
                 val result = block()
                 Logger.i(THREAD_ACTION_LOG_TAG, "Thread action succeeded: $successMessage")
                 onSuccess(result)
-                snackbarHostState.showSnackbar(successMessage)
+                coroutineScope.launch { snackbarHostState.showSnackbar(successMessage) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Logger.e(THREAD_ACTION_LOG_TAG, "Thread action failed: $failurePrefix", e)
                 val detail = e.message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
-                snackbarHostState.showSnackbar("$failurePrefix$detail")
+                coroutineScope.launch { snackbarHostState.showSnackbar("$failurePrefix$detail") }
             } finally {
                 actionInProgress = false
             }
@@ -1156,8 +1285,12 @@ fun ThreadScreen(
 
     val performRefresh: () -> Unit = refresh@{
         if (isRefreshing) return@refresh
+        val requestGeneration = manualRefreshGeneration + 1L
+        manualRefreshGeneration = requestGeneration
         isRefreshing = true
-        coroutineScope.launch {
+        refreshThreadJob?.cancel()
+        refreshThreadJob = coroutineScope.launch {
+            val runningJob = coroutineContext[Job]
             val savedIndex = lazyListState.firstVisibleItemIndex
             val savedOffset = lazyListState.firstVisibleItemScrollOffset
             try {
@@ -1191,7 +1324,12 @@ fun ThreadScreen(
                 }
                 snackbarHostState.showSnackbar(failureMessage)
             } finally {
-                isRefreshing = false
+                if (manualRefreshGeneration == requestGeneration) {
+                    isRefreshing = false
+                }
+                if (runningJob != null && refreshThreadJob == runningJob) {
+                    refreshThreadJob = null
+                }
             }
         }
     }
@@ -1214,7 +1352,7 @@ fun ThreadScreen(
     ) {
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = isDrawerOpen,
+        gesturesEnabled = true,
         drawerContent = {
             HistoryDrawerContent(
                 history = history,
@@ -1227,9 +1365,6 @@ fun ThreadScreen(
                     }
                 },
                 onRefreshClick = handleHistoryRefresh,
-                onThreadRefreshClick = {
-                    performRefresh()
-                },
                 onBatchDeleteClick = handleBatchDelete,
                 onSettingsClick = {
                     isGlobalSettingsVisible = true
@@ -1310,6 +1445,9 @@ fun ThreadScreen(
                             val delta = change.positionChange()
                             totalDx = (totalDx + delta.x).coerceAtLeast(0f)
                             totalDy += abs(delta.y)
+                            if (totalDy > backSwipeTriggerPx && totalDy > totalDx) {
+                                break
+                            }
                             if (totalDx > backSwipeTriggerPx && totalDx > totalDy) {
                                 change.consume()
                                 onBack()
@@ -1344,18 +1482,103 @@ fun ThreadScreen(
                                 sortOption = selectedThreadSortOption
                             )
                         }
-                        val filteredPage by produceState(
-                            state.page,
-                            state.page,
+                        val hasNgFilters = ngFilteringEnabled && (
+                            ngHeaders.any { it.isNotBlank() } ||
+                                ngWords.any { it.isNotBlank() }
+                            )
+                        val hasThreadFilters = threadFilterCriteria.options.isNotEmpty()
+                        val filterCache = remember {
+                            linkedMapOf<ThreadFilterCacheKey, ThreadPage>()
+                        }
+                        val postsFingerprint by produceState(
+                            initialValue = ThreadPostListFingerprint(
+                                size = state.page.posts.size,
+                                firstPostId = state.page.posts.firstOrNull()?.id,
+                                lastPostId = state.page.posts.lastOrNull()?.id,
+                                rollingHash = 0L
+                            ),
+                            key1 = state.page.posts
+                        ) {
+                            value = withContext(AppDispatchers.parsing) {
+                                buildThreadPostListFingerprint(state.page.posts)
+                            }
+                        }
+                        val filterCacheKey = remember(
+                            postsFingerprint,
+                            hasNgFilters,
                             ngHeaders,
                             ngWords,
-                            ngFilteringEnabled,
                             threadFilterCriteria
                         ) {
-                            value = withContext(Dispatchers.Default) {
-                                val ngFiltered = applyNgFilters(state.page, ngHeaders, ngWords, ngFilteringEnabled)
-                                applyThreadFilters(ngFiltered, threadFilterCriteria)
+                            ThreadFilterCacheKey(
+                                postsFingerprint = postsFingerprint,
+                                ngEnabled = hasNgFilters,
+                                ngHeadersFingerprint = stableNormalizedListFingerprint(ngHeaders),
+                                ngWordsFingerprint = stableNormalizedListFingerprint(ngWords),
+                                filterOptionsFingerprint = stableThreadFilterOptionSetFingerprint(threadFilterCriteria.options),
+                                keyword = threadFilterCriteria.keyword.trim().lowercase(),
+                                selfIdentifiersFingerprint = stableNormalizedListFingerprint(threadFilterCriteria.selfPostIdentifiers),
+                                sortOption = threadFilterCriteria.sortOption
+                            )
+                        }
+                        val cachedFilteredPage = remember(filterCacheKey) {
+                            filterCache[filterCacheKey]
+                        }
+                        val filteredPage by produceState(
+                            initialValue = cachedFilteredPage ?: state.page,
+                            key1 = filterCacheKey
+                        ) {
+                            filterCache[filterCacheKey]?.let {
+                                value = it
+                                return@produceState
                             }
+                            if (!hasNgFilters && !hasThreadFilters) {
+                                value = state.page
+                                if (filterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
+                                    val iterator = filterCache.entries.iterator()
+                                    if (iterator.hasNext()) {
+                                        iterator.next()
+                                        iterator.remove()
+                                    }
+                                }
+                                filterCache[filterCacheKey] = value
+                                return@produceState
+                            }
+                            // Keyword filtering can be expensive in large threads.
+                            if (threadFilterCriteria.options.contains(ThreadFilterOption.Keyword)) {
+                                delay(THREAD_FILTER_DEBOUNCE_MILLIS)
+                            }
+                            value = withContext(AppDispatchers.parsing) {
+                                val hasNgWordFilters = hasNgFilters && ngWords.any { it.isNotBlank() }
+                                val hasThreadLowerBodyFilters = threadFilterCriteria.options.any {
+                                    it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
+                                }
+                                val precomputedLowerBodyByPostId = if (hasNgWordFilters || hasThreadLowerBodyFilters) {
+                                    buildLowerBodyByPostId(state.page.posts)
+                                } else {
+                                    emptyMap()
+                                }
+                                val ngFiltered = applyNgFilters(
+                                    page = state.page,
+                                    ngHeaders = ngHeaders,
+                                    ngWords = ngWords,
+                                    enabled = hasNgFilters,
+                                    precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
+                                )
+                                applyThreadFilters(
+                                    page = ngFiltered,
+                                    criteria = threadFilterCriteria,
+                                    precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
+                                )
+                            }
+                            if (filterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
+                                val iterator = filterCache.entries.iterator()
+                                if (iterator.hasNext()) {
+                                    iterator.next()
+                                    iterator.remove()
+                                }
+                            }
+                            filterCache[filterCacheKey] = value
                         }
                         ThreadContent(
                             page = filteredPage,
@@ -2035,7 +2258,7 @@ private fun ThreadContent(
         initialValue = ThreadPostDerivedData(),
         key1 = page.posts
     ) {
-        value = withContext(Dispatchers.Default) {
+        value = withContext(AppDispatchers.parsing) {
             ThreadPostDerivedData(
                 posterIdLabels = buildPosterIdLabels(page.posts),
                 postIndex = page.posts.associateBy { it.id },
@@ -2551,7 +2774,7 @@ private fun ThreadMessageText(
         messageHtml,
         quoteReferences
     ) {
-        value = withContext(Dispatchers.Default) {
+        value = withContext(AppDispatchers.parsing) {
             buildAnnotatedMessageBase(messageHtml, quoteReferences)
         }
     }
@@ -2567,82 +2790,42 @@ private fun ThreadMessageText(
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     Text(
         modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
-            awaitEachGesture {
-                val layout = textLayoutResult ?: return@awaitEachGesture
-                var downChange: PointerInputChange? = null
-                // Listen in Initial pass to beat selection/long-press handlers
-                while (downChange == null) {
-                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                    downChange = event.changes.firstOrNull { it.changedToDownIgnoreConsumed() }
-                    if (event.changes.none { it.pressed }) return@awaitEachGesture
-                }
-                val downOffset = layout.getOffsetForPosition(downChange.position)
-                val urlOnDown = annotated
-                    .getStringAnnotations(URL_ANNOTATION_TAG, downOffset, downOffset)
-                    .firstOrNull()
-                    ?.item
-                val quoteIndexOnDown = annotated
-                    .getStringAnnotations(QUOTE_ANNOTATION_TAG, downOffset, downOffset)
-                    .firstOrNull()
-                    ?.item
-                    ?.toIntOrNull()
-                if (urlOnDown != null) {
-                    downChange.consume()
-                    val upChange = awaitPointerUpOrCancellation(downChange.id)
-                    val upPosition = upChange?.position ?: downChange.position
-                    val upOffset = layout.getOffsetForPosition(upPosition)
-                    val urlOnUp = annotated
-                        .getStringAnnotations(URL_ANNOTATION_TAG, upOffset, upOffset)
+            detectTapGestures(
+                onLongPress = { position ->
+                    val layout = textLayoutResult ?: return@detectTapGestures
+                    val offset = layout.getOffsetForPosition(position)
+                    val quoteIndex = annotated
+                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
                         .firstOrNull()
                         ?.item
-                    if (urlOnUp != null) {
-                        onUrlClick(urlOnUp)
-                        upChange?.consume()
-                    }
-                    return@awaitEachGesture
-                }
-                if (quoteIndexOnDown != null) {
-                    val reference = quoteReferences
-                        .getOrNull(quoteIndexOnDown)
+                        ?.toIntOrNull()
+                    quoteIndex
+                        ?.let { index -> quoteReferences.getOrNull(index) }
                         ?.takeIf { it.targetPostIds.isNotEmpty() }
-                    if (reference != null) {
-                        val touchSlop = viewConfiguration.touchSlop
-                        val holdSucceeded = withTimeoutOrNull(QUOTE_PREVIEW_HOLD_MS) {
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                val change = event.changes.firstOrNull { it.id == downChange.id } ?: continue
-                                if (change.changedToUpIgnoreConsumed()) {
-                                    return@withTimeoutOrNull false
-                                }
-                                val distance = (change.position - downChange.position).getDistance()
-                                if (distance > touchSlop) {
-                                    return@withTimeoutOrNull false
-                                }
-                            }
-                        } != false
-                        if (holdSucceeded) {
-                            onQuoteClick(reference)
-                            downChange.consume()
-                            awaitPointerUpOrCancellation(downChange.id)
-                        }
+                        ?.let(onQuoteClick)
+                },
+                onTap = { position ->
+                    val layout = textLayoutResult ?: return@detectTapGestures
+                    val offset = layout.getOffsetForPosition(position)
+                    val url = annotated
+                        .getStringAnnotations(URL_ANNOTATION_TAG, offset, offset)
+                        .firstOrNull()
+                        ?.item
+                    if (url != null) {
+                        onUrlClick(url)
+                        return@detectTapGestures
                     }
-                    return@awaitEachGesture
+                    val quoteIndex = annotated
+                        .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
+                        .firstOrNull()
+                        ?.item
+                        ?.toIntOrNull()
+                    quoteIndex
+                        ?.let { index -> quoteReferences.getOrNull(index) }
+                        ?.takeIf { it.targetPostIds.isNotEmpty() }
+                        ?.let(onQuoteClick)
                 }
-                val upChange = awaitPointerUpOrCancellation(downChange.id)
-                val upPosition = upChange?.position ?: downChange.position
-                val offset = layout.getOffsetForPosition(upPosition)
-                annotated
-                    .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
-                    .firstOrNull()
-                    ?.item
-                    ?.toIntOrNull()
-                    ?.let { index ->
-                        quoteReferences
-                            .getOrNull(index)
-                            ?.takeIf { it.targetPostIds.isNotEmpty() }
-                            ?.let(onQuoteClick)
-                    }
-            }
+            )
         },
         text = annotated,
         style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
@@ -3004,8 +3187,6 @@ private sealed interface ArchiveFallbackOutcome {
     data object NotFound : ArchiveFallbackOutcome
     data object NoMatch : ArchiveFallbackOutcome
 }
-private const val QUOTE_PREVIEW_HOLD_MS = 200L
-private const val POINTER_UP_WAIT_TIMEOUT_MS = 2_000L
 private val THREAD_URL_ID_REGEX = Regex("""/res/(\d+)\.html?""", RegexOption.IGNORE_CASE)
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
@@ -3020,6 +3201,12 @@ private const val THREAD_ACTION_LOG_TAG = "ThreadActions"
 private const val DEFAULT_DEL_REASON_CODE = "110"
 private const val AUTO_SAVE_INTERVAL_MS = 60_000L
 private const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
+private const val ARCHIVE_FALLBACK_TIMEOUT_MS = 20_000L
+private const val OFFLINE_FALLBACK_TIMEOUT_MS = 10_000L
+private const val THREAD_SEARCH_DEBOUNCE_MILLIS = 180L
+private const val THREAD_FILTER_DEBOUNCE_MILLIS = 120L
+private const val THREAD_FILTER_CACHE_MAX_ENTRIES = 8
+private const val ACTION_BUSY_NOTICE_INTERVAL_MS = 1_000L
 
 private val FutabaQuoteGreen = Color(0xFF789922)
 private val FutabaLinkColor = Color(0xFF800000)
@@ -3048,23 +3235,44 @@ private fun Throwable.statusCodeOrNull(): Int? {
     return null
 }
 
-private suspend fun AwaitPointerEventScope.awaitPointerUpOrCancellation(
-    pointerId: PointerId
-): PointerInputChange? {
-    return withTimeoutOrNull(POINTER_UP_WAIT_TIMEOUT_MS) {
-        var result: PointerInputChange? = null
-        while (result == null) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            if (event.changes.none { it.pressed }) {
-                break
-            }
-            val change = event.changes.firstOrNull { it.id == pointerId } ?: continue
-            if (change.changedToUpIgnoreConsumed() || !change.pressed) {
-                result = change
-            }
-        }
-        result
+private fun SavedThreadMetadata.matchesBoardForOfflineFallback(expectedBoardKeys: Set<String>): Boolean {
+    if (expectedBoardKeys.isEmpty()) return true
+    val metadataBoardKey = normalizeBoardUrlForOfflineLookup(boardUrl) ?: return false
+    return metadataBoardKey in expectedBoardKeys
+}
+
+private fun normalizeBoardUrlForOfflineLookup(value: String?): String? {
+    val candidate = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val normalizedBase = runCatching {
+        BoardUrlResolver.resolveBoardBaseUrl(candidate)
+    }.getOrElse {
+        candidate
     }
+    return normalizedBase
+        .substringBefore('?')
+        .trimEnd('/')
+        .lowercase()
+}
+
+private fun normalizeArchiveQuery(raw: String?, maxLength: Int): String {
+    if (raw.isNullOrBlank() || maxLength <= 0) return ""
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    val builder = StringBuilder(minOf(trimmed.length, maxLength))
+    var previousWasWhitespace = false
+    for (ch in trimmed) {
+        val isWhitespace = ch.isWhitespace()
+        if (isWhitespace) {
+            if (!previousWasWhitespace && builder.isNotEmpty()) {
+                builder.append(' ')
+            }
+        } else {
+            builder.append(ch)
+            if (builder.length >= maxLength) break
+        }
+        previousWasWhitespace = isWhitespace
+    }
+    return builder.toString().trim()
 }
 
 private fun buildAnnotatedMessageBase(
@@ -3344,13 +3552,18 @@ private fun applyNgFilters(
     page: ThreadPage,
     ngHeaders: List<String>,
     ngWords: List<String>,
-    enabled: Boolean
+    enabled: Boolean,
+    precomputedLowerBodyByPostId: Map<String, String>? = null
 ): ThreadPage {
     if (!enabled) return page
     val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
     val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
     if (headerFilters.isEmpty() && wordFilters.isEmpty()) return page
-    val lowerBodyByPostId = buildLowerBodyByPostId(page.posts)
+    val lowerBodyByPostId = if (wordFilters.isEmpty()) {
+        emptyMap()
+    } else {
+        precomputedLowerBodyByPostId ?: buildLowerBodyByPostId(page.posts)
+    }
     val filteredPosts = page.posts.filterNot { post ->
         matchesNgFilters(post, headerFilters, wordFilters, lowerBodyByPostId)
     }
@@ -3359,10 +3572,18 @@ private fun applyNgFilters(
 
 private fun applyThreadFilters(
     page: ThreadPage,
-    criteria: ThreadFilterCriteria
+    criteria: ThreadFilterCriteria,
+    precomputedLowerBodyByPostId: Map<String, String>? = null
 ): ThreadPage {
     if (criteria.options.isEmpty()) return page
-    val lowerBodyByPostId = buildLowerBodyByPostId(page.posts)
+    val needsLowerBodyByPostId = criteria.options.any {
+        it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
+    }
+    val lowerBodyByPostId = if (needsLowerBodyByPostId) {
+        precomputedLowerBodyByPostId ?: buildLowerBodyByPostId(page.posts)
+    } else {
+        emptyMap()
+    }
     val filteredPosts = page.posts.filter { post ->
         matchesThreadFilters(post, criteria, lowerBodyByPostId)
     }
@@ -3486,6 +3707,24 @@ private data class ThreadPostDerivedData(
     val postsByPosterId: Map<String, List<Post>> = emptyMap()
 )
 
+private data class ThreadPostListFingerprint(
+    val size: Int,
+    val firstPostId: String?,
+    val lastPostId: String?,
+    val rollingHash: Long
+)
+
+private data class ThreadFilterCacheKey(
+    val postsFingerprint: ThreadPostListFingerprint,
+    val ngEnabled: Boolean,
+    val ngHeadersFingerprint: Int,
+    val ngWordsFingerprint: Int,
+    val filterOptionsFingerprint: Int,
+    val keyword: String,
+    val selfIdentifiersFingerprint: Int,
+    val sortOption: ThreadFilterSortOption?
+)
+
 private data class QuoteSelectionItem(
     val id: String,
     val title: String,
@@ -3499,6 +3738,66 @@ private data class ThreadSearchMatch(
     val postIndex: Int,
     val highlightRanges: List<IntRange>
 )
+
+private data class ThreadSearchTarget(
+    val postId: String,
+    val postIndex: Int,
+    val searchableText: String,
+    val messagePlainText: String
+)
+
+private fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFingerprint {
+    if (posts.isEmpty()) {
+        return ThreadPostListFingerprint(
+            size = 0,
+            firstPostId = null,
+            lastPostId = null,
+            rollingHash = 0L
+        )
+    }
+    var rollingHash = 1_469_598_103_934_665_603L
+    posts.forEach { post ->
+        val idHash = post.id.hashCode().toLong()
+        val posterHash = post.posterId?.hashCode()?.toLong() ?: 0L
+        val quotedCount = post.quoteReferences.size.toLong()
+        val referencedCount = post.referencedCount.toLong()
+        val deletedFlag = if (post.isDeleted) 1L else 0L
+        rollingHash = (rollingHash * 1_099_511_628_211L) xor idHash
+        rollingHash = (rollingHash * 1_099_511_628_211L) xor posterHash
+        rollingHash = (rollingHash * 1_099_511_628_211L) xor quotedCount
+        rollingHash = (rollingHash * 1_099_511_628_211L) xor referencedCount
+        rollingHash = (rollingHash * 1_099_511_628_211L) xor deletedFlag
+    }
+    return ThreadPostListFingerprint(
+        size = posts.size,
+        firstPostId = posts.first().id,
+        lastPostId = posts.last().id,
+        rollingHash = rollingHash
+    )
+}
+
+private fun stableNormalizedListFingerprint(values: List<String>): Int {
+    var hash = 1
+    values.forEach { raw ->
+        val normalized = raw.trim().lowercase()
+        if (normalized.isNotEmpty()) {
+            hash = 31 * hash + normalized.hashCode()
+        }
+    }
+    return hash
+}
+
+private fun stableThreadFilterOptionSetFingerprint(options: Set<ThreadFilterOption>): Int {
+    if (options.isEmpty()) return 0
+    var hash = 1
+    options
+        .map { it.name }
+        .sorted()
+        .forEach { name ->
+            hash = 31 * hash + name.hashCode()
+        }
+    return hash
+}
 
 private fun buildPosterIdLabels(posts: List<Post>): Map<String, PosterIdLabel> {
     if (posts.isEmpty()) return emptyMap()
@@ -3557,23 +3856,38 @@ private fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>> 
     }
 }
 
-private fun buildThreadSearchMatches(posts: List<Post>, query: String): List<ThreadSearchMatch> {
+private fun buildThreadSearchTargets(posts: List<Post>): List<ThreadSearchTarget> {
     if (posts.isEmpty()) return emptyList()
+    return posts.mapIndexed { index, post ->
+        val messagePlainText = messageHtmlToPlainText(post.messageHtml)
+        ThreadSearchTarget(
+            postId = post.id,
+            postIndex = index,
+            searchableText = buildSearchTextForPost(post, messagePlainText),
+            messagePlainText = messagePlainText
+        )
+    }
+}
+
+private fun buildThreadSearchMatches(
+    searchTargets: List<ThreadSearchTarget>,
+    query: String
+): List<ThreadSearchMatch> {
+    if (searchTargets.isEmpty()) return emptyList()
     val normalizedQuery = query.trim().lowercase()
     if (normalizedQuery.isEmpty()) return emptyList()
-    return posts.mapIndexedNotNull { index, post ->
-        val haystack = buildSearchTextForPost(post)
+    return searchTargets.mapNotNull { target ->
+        val haystack = target.searchableText
         if (haystack.contains(normalizedQuery)) {
-            val messagePlain = messageHtmlToPlainText(post.messageHtml)
-            val ranges = computeHighlightRanges(messagePlain, normalizedQuery)
-            ThreadSearchMatch(post.id, index, ranges)
+            val ranges = computeHighlightRanges(target.messagePlainText, normalizedQuery)
+            ThreadSearchMatch(target.postId, target.postIndex, ranges)
         } else {
             null
         }
     }
 }
 
-private fun buildSearchTextForPost(post: Post): String {
+private fun buildSearchTextForPost(post: Post, messagePlainText: String): String {
     val builder = StringBuilder()
     post.subject?.takeIf { it.isNotBlank() }?.let {
         builder.appendLine(it)
@@ -3585,7 +3899,7 @@ private fun buildSearchTextForPost(post: Post): String {
         builder.appendLine(it)
     }
     builder.appendLine(post.id)
-    builder.append(messageHtmlToPlainText(post.messageHtml))
+    builder.append(messagePlainText)
     return builder.toString().lowercase()
 }
 

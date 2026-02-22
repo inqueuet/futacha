@@ -388,9 +388,8 @@ fun BoardManagementScreen(
     val handleHistoryRefresh: () -> Unit = remember(scope, snackbarHostState) {
         handleHistoryRefresh@{
             if (isHistoryRefreshing) return@handleHistoryRefresh
+            isHistoryRefreshing = true
             scope.launch {
-                isHistoryRefreshing = true
-                snackbarHostState.showSnackbar("履歴を更新中...")
                 try {
                     onHistoryRefreshState.value()
                     snackbarHostState.showSnackbar("履歴を更新しました")
@@ -417,7 +416,7 @@ fun BoardManagementScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = isDrawerOpen,
+        gesturesEnabled = true,
         drawerContent = {
             HistoryDrawerContent(
                 history = history,
@@ -498,6 +497,9 @@ fun BoardManagementScreen(
                                             BoardManagementMenuAction.REORDER -> {
                                                 isReorderMode = !isReorderMode
                                                 isDeleteMode = false
+                                            }
+                                            BoardManagementMenuAction.SAVED_THREADS -> {
+                                                // Handled by parent via onMenuAction callback.
                                             }
                                             BoardManagementMenuAction.SETTINGS -> {
                                                 isGlobalSettingsVisible = true
