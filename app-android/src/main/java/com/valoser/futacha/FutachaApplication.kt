@@ -16,6 +16,7 @@ import com.valoser.futacha.shared.network.PersistentCookieStorage
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.createFileSystem
+import com.valoser.futacha.shared.version.initializeVersionCheckerContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,9 +24,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
+
+private const val BACKGROUND_FLOW_MAX_RETRIES = 12L
 
 class FutachaApplication : Application() {
     lateinit var appStateStore: AppStateStore
@@ -49,6 +53,7 @@ class FutachaApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        initializeVersionCheckerContext(applicationContext)
         appStateStore = createAppStateStore(applicationContext)
         fileSystem = createFileSystem(applicationContext)
 
@@ -86,8 +91,25 @@ class FutachaApplication : Application() {
             try {
                 appStateStore.isBackgroundRefreshEnabled
                     .distinctUntilChanged()
+                    .onEach { enabled ->
+                        if (enabled) {
+                            HistoryRefreshWorker.enqueuePeriodic(workManager)
+                            HistoryRefreshWorker.enqueueImmediate(workManager)
+                        } else {
+                            HistoryRefreshWorker.cancel(workManager)
+                        }
+                    }
                     .retryWhen { cause, attempt ->
                         if (cause is CancellationException) throw cause
+                        val shouldRetry = attempt < BACKGROUND_FLOW_MAX_RETRIES
+                        if (!shouldRetry) {
+                            com.valoser.futacha.shared.util.Logger.e(
+                                "FutachaApplication",
+                                "Background refresh flow failed too many times; stopping collector",
+                                cause
+                            )
+                            return@retryWhen false
+                        }
                         val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
                         com.valoser.futacha.shared.util.Logger.e(
                             "FutachaApplication",
@@ -97,24 +119,7 @@ class FutachaApplication : Application() {
                         delay(backoffMillis)
                         true
                     }
-                    .collect { enabled ->
-                        try {
-                            if (enabled) {
-                                HistoryRefreshWorker.enqueuePeriodic(workManager)
-                                HistoryRefreshWorker.enqueueImmediate(workManager)
-                            } else {
-                                HistoryRefreshWorker.cancel(workManager)
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            com.valoser.futacha.shared.util.Logger.e(
-                                "FutachaApplication",
-                                "Failed to apply background refresh work state (enabled=$enabled)",
-                                e
-                            )
-                        }
-                    }
+                    .collect()
                 com.valoser.futacha.shared.util.Logger.w(
                     "FutachaApplication",
                     "Background refresh flow completed unexpectedly"

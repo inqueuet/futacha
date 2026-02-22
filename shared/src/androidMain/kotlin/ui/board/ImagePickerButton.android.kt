@@ -21,6 +21,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.app.Activity
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -41,8 +42,26 @@ actual fun rememberAttachmentPickerLauncher(
 ): () -> Unit {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    if (context !is Activity) {
+        return {
+            Logger.w("ImagePicker", "ActivityResultRegistryOwner is unavailable; attachment picker is disabled")
+            android.widget.Toast.makeText(
+                context,
+                "この画面では添付ピッカーを起動できません",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
     fun handleImageUri(uri: Uri) {
+        if (isActivityUnavailable(context)) {
+            Logger.w("ImagePicker", "Ignoring picker result because Activity is unavailable")
+            return
+        }
         coroutineScope.launch {
+            if (isActivityUnavailable(context)) {
+                Logger.w("ImagePicker", "Skipping image read because Activity is unavailable")
+                return@launch
+            }
             val imageData = withContext(Dispatchers.IO) {
                 readImageDataFromUri(context, uri)
             }
@@ -180,10 +199,24 @@ actual fun rememberDirectoryPickerLauncher(
 ): () -> Unit {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    if (context !is Activity) {
+        return {
+            Logger.w("DirectoryPicker", "ActivityResultRegistryOwner is unavailable; directory picker is disabled")
+            android.widget.Toast.makeText(
+                context,
+                "この画面ではフォルダ選択を起動できません",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     val customLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        if (isActivityUnavailable(context)) {
+            Logger.w("DirectoryPicker", "Ignoring picker result because Activity is unavailable")
+            return@rememberLauncherForActivityResult
+        }
         val uri = result.data?.data ?: return@rememberLauncherForActivityResult
         val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         try {
@@ -202,6 +235,10 @@ actual fun rememberDirectoryPickerLauncher(
             return@rememberLauncherForActivityResult
         }
         coroutineScope.launch {
+            if (isActivityUnavailable(context)) {
+                Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
+                return@launch
+            }
             val canWrite = withContext(Dispatchers.IO) {
                 canWriteToDocumentTree(context, uri)
             }
@@ -220,12 +257,20 @@ actual fun rememberDirectoryPickerLauncher(
             withContext(Dispatchers.IO) {
                 releaseStalePersistedUriPermissions(context, keepUri = uri, permissionFlags = permissionFlags)
             }
+            if (isActivityUnavailable(context)) {
+                Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
+                return@launch
+            }
             val treeUri = SaveLocation.TreeUri(uri.toString())
             onDirectorySelected(treeUri)
         }
     }
 
     val defaultLauncher = rememberLauncherForActivityResult(OpenDocumentTree()) { uri ->
+        if (isActivityUnavailable(context)) {
+            Logger.w("DirectoryPicker", "Ignoring default picker result because Activity is unavailable")
+            return@rememberLauncherForActivityResult
+        }
         if (uri != null) {
             val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             try {
@@ -238,6 +283,10 @@ actual fun rememberDirectoryPickerLauncher(
                 return@rememberLauncherForActivityResult
             }
             coroutineScope.launch {
+                if (isActivityUnavailable(context)) {
+                    Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
+                    return@launch
+                }
                 val canWrite = withContext(Dispatchers.IO) {
                     canWriteToDocumentTree(context, uri)
                 }
@@ -250,6 +299,10 @@ actual fun rememberDirectoryPickerLauncher(
                 }
                 withContext(Dispatchers.IO) {
                     releaseStalePersistedUriPermissions(context, keepUri = uri, permissionFlags = permissionFlags)
+                }
+                if (isActivityUnavailable(context)) {
+                    Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
+                    return@launch
                 }
                 val treeUri = SaveLocation.TreeUri(uri.toString())
                 onDirectorySelected(treeUri)
@@ -297,6 +350,10 @@ actual fun rememberDirectoryPickerLauncher(
             defaultLauncher.launch(null)
         }
     }
+}
+
+private fun isActivityUnavailable(activity: Activity): Boolean {
+    return activity.isFinishing || activity.isDestroyed
 }
 
 /**

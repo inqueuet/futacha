@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared
 
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.window.ComposeUIViewController
 import com.valoser.futacha.shared.background.BackgroundRefreshManager
@@ -16,11 +17,13 @@ import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.releaseSecurityScopedResource
 import com.valoser.futacha.shared.util.createFileSystem
 import platform.UIKit.UIViewController
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -34,6 +37,9 @@ private object IosAppGraph {
     val cookieRepository by lazy { CookieRepository(cookieStorage) }
     val httpClient by lazy { createHttpClient(cookieStorage = cookieStorage) }
 }
+
+private const val IOS_BG_MAX_THREADS_PER_RUN = 120
+private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 
 fun registerIosBackgroundRefreshTask() {
     BackgroundRefreshManager.registerAtLaunch()
@@ -51,8 +57,26 @@ fun MainViewController(): UIViewController {
             try {
                 stateStore.isBackgroundRefreshEnabled
                     .distinctUntilChanged()
+                    .onEach { enabled ->
+                        configureIosBackgroundRefresh(
+                            enabled = enabled,
+                            stateStore = stateStore,
+                            httpClient = httpClient,
+                            fileSystem = fileSystem,
+                            autoSaveRepo = autoSavedThreadRepository
+                        )
+                    }
                     .retryWhen { cause, attempt ->
                         if (cause is CancellationException) throw cause
+                        val shouldRetry = attempt < IOS_BACKGROUND_FLOW_MAX_RETRIES
+                        if (!shouldRetry) {
+                            Logger.e(
+                                "MainViewController",
+                                "Background refresh flow failed too many times; stopping collector",
+                                cause
+                            )
+                            return@retryWhen false
+                        }
                         val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
                         Logger.e(
                             "MainViewController",
@@ -62,15 +86,7 @@ fun MainViewController(): UIViewController {
                         delay(backoffMillis)
                         true
                     }
-                    .collect { enabled ->
-                        configureIosBackgroundRefresh(
-                            enabled = enabled,
-                            stateStore = stateStore,
-                            httpClient = httpClient,
-                            fileSystem = fileSystem,
-                            autoSaveRepo = autoSavedThreadRepository
-                        )
-                    }
+                    .collect()
                 Logger.w("MainViewController", "Background refresh flow completed unexpectedly")
             } catch (e: CancellationException) {
                 throw e
@@ -80,6 +96,11 @@ fun MainViewController(): UIViewController {
         }
         val versionChecker = remember(httpClient) {
             createVersionChecker(httpClient)
+        }
+        DisposableEffect(Unit) {
+            onDispose {
+                releaseSecurityScopedResource()
+            }
         }
 
         FutachaApp(
@@ -117,7 +138,9 @@ private fun configureIosBackgroundRefresh(
                 httpClient = httpClient,
                 fileSystem = fileSystem
             )
-            refresher.refresh()
+            refresher.refresh(maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN)
+        } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+            Logger.d("BackgroundRefresh", "Refresh already running; skipping duplicate iOS background run")
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {

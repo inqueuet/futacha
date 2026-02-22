@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.network
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.TextEncoding
+import com.valoser.futacha.shared.util.sanitizeForShiftJis
 import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.FormBuilder
 import io.ktor.client.request.forms.formData
@@ -24,6 +25,7 @@ import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.errors.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -208,6 +210,8 @@ class HttpBoardApi(
             Regex("""<input\s+[^>]{0,200}?name\s*=\s*["']chrenc["'][^>]{0,200}?>""", RegexOption.IGNORE_CASE)
         private val VALUE_ATTR_REGEX =
             Regex("""value\s*=\s*["']([^"']{0,500})["']""", RegexOption.IGNORE_CASE)
+        private const val CHRENC_NEARBY_SCAN_WINDOW = 4096
+        private const val CHRENC_FALLBACK_SCAN_MAX_BYTES = 512 * 1024
         // FIX: PostingConfigキャッシュサイズを削減（100→20）
         // PostingConfigは複雑なオブジェクトなので、メモリ節約のため制限
         // ほとんどのユーザーは数個の板しか使わないため、20で十分
@@ -218,6 +222,7 @@ class HttpBoardApi(
         private const val MAX_ZERO_READ_RETRIES = 1000
         private const val ZERO_READ_BACKOFF_MILLIS = 8L
         private const val RESPONSE_TOTAL_TIMEOUT_MILLIS = 30_000L
+        private const val REQUEST_ATTEMPT_TIMEOUT_MILLIS = 45_000L
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
@@ -376,7 +381,29 @@ class HttpBoardApi(
         var delayMillis = initialDelayMillis.coerceAtLeast(0L)
         while (true) {
             try {
-                return block()
+                return withTimeout(REQUEST_ATTEMPT_TIMEOUT_MILLIS) {
+                    block()
+                }
+            } catch (e: TimeoutCancellationException) {
+                attempt += 1
+                if (attempt >= safeMaxAttempts) {
+                    throw NetworkException(
+                        "Request timed out after $REQUEST_ATTEMPT_TIMEOUT_MILLIS ms (attempts=$attempt)",
+                        cause = e
+                    )
+                }
+                Logger.w(
+                    TAG,
+                    "Retrying request after timeout on attempt $attempt/$safeMaxAttempts"
+                )
+                if (delayMillis > 0L) {
+                    delay(delayMillis)
+                }
+                delayMillis = if (delayMillis >= 2_500L) {
+                    5_000L
+                } else {
+                    (delayMillis * 2).coerceAtMost(5_000L)
+                }
             } catch (e: CancellationException) {
                 // FIX: キャンセル例外は即座に再スロー（リトライしない）
                 throw e
@@ -1180,9 +1207,22 @@ class HttpBoardApi(
     }
 
     private fun FormBuilder.appendTextField(name: String, value: String, encoding: PostEncoding) {
+        val normalizedValue = when (encoding) {
+            PostEncoding.SHIFT_JIS -> {
+                val sanitized = sanitizeForShiftJis(value)
+                if (sanitized.escapedCodePointCount > 0 || sanitized.removedCodePointCount > 0) {
+                    Logger.w(
+                        TAG,
+                        "Escaped ${sanitized.escapedCodePointCount} and removed ${sanitized.removedCodePointCount} unsupported Shift_JIS character(s) from '$name'"
+                    )
+                }
+                sanitized.sanitizedText
+            }
+            PostEncoding.UTF8 -> value
+        }
         val (bytes, contentType) = when (encoding) {
-            PostEncoding.SHIFT_JIS -> TextEncoding.encodeToShiftJis(value) to SHIFT_JIS_TEXT_MIME
-            PostEncoding.UTF8 -> value.encodeToByteArray() to UTF8_TEXT_MIME
+            PostEncoding.SHIFT_JIS -> TextEncoding.encodeToShiftJis(normalizedValue) to SHIFT_JIS_TEXT_MIME
+            PostEncoding.UTF8 -> normalizedValue.encodeToByteArray() to UTF8_TEXT_MIME
         }
         append(
             name,
@@ -1225,55 +1265,68 @@ class HttpBoardApi(
         postingConfigCache.get(board)?.let { return it }
         return postingConfigFetchMutex.withLock {
             postingConfigCache.get(board)?.let { return@withLock it }
-            val fetched = fetchPostingConfig(board)
-            postingConfigCache.put(board, fetched)
-            fetched
+            try {
+                val fetched = fetchPostingConfig(board)
+                if (!fetched.fromFallback) {
+                    postingConfigCache.put(board, fetched)
+                }
+                fetched
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logger.w(
+                    TAG,
+                    "Failed to fetch posting config for board '$board', using non-cached Shift_JIS fallback: ${e.message}"
+                )
+                PostingConfig(
+                    encoding = PostEncoding.SHIFT_JIS,
+                    chrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
+                    fromFallback = true
+                )
+            }
         }
     }
 
     private suspend fun fetchPostingConfig(board: String): PostingConfig {
-        return try {
-            val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-            val url = buildString {
-                append(boardBase)
-                if (!boardBase.endsWith("/")) append('/')
-                append("futaba.htm")
-            }
-            val response = client.get(url) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-            }
-            if (!response.status.isSuccess()) {
-                throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url")
-            }
-            val html = readResponseBodyAsString(response)
-            val chrencValue = parseChrencValue(html) ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE
-            PostingConfig(
-                encoding = determineEncoding(chrencValue),
-                chrencValue = chrencValue
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Logger.w(
-                TAG,
-                "Failed to fetch posting config for board '$board', falling back to Shift_JIS: ${e.message}"
-            )
-            PostingConfig(
-                encoding = PostEncoding.SHIFT_JIS,
-                chrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE
-            )
+        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
+        val url = buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.htm")
         }
+        val response = client.get(url) {
+            headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
+            headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
+            headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
+            headers[HttpHeaders.CacheControl] = "no-cache"
+        }
+        if (!response.status.isSuccess()) {
+            throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url")
+        }
+        val html = readResponseBodyAsString(response)
+        val chrencValue = parseChrencValue(html)
+        if (chrencValue == null) {
+            Logger.w(TAG, "chrenc not found in posting config response for '$board'; using temporary fallback")
+        }
+        return PostingConfig(
+            encoding = determineEncoding(chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE),
+            chrencValue = chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
+            fromFallback = chrencValue == null
+        )
     }
 
     private fun parseChrencValue(html: String): String? {
-        // FIX: ReDoS対策 - 入力サイズ制限（最大100KB）
-        if (html.length > 100_000) {
-            return null
+        if (html.isBlank()) return null
+        val chrencIndex = html.indexOf("chrenc", ignoreCase = true)
+        val scanTarget = if (chrencIndex >= 0) {
+            val start = (chrencIndex - 1024).coerceAtLeast(0)
+            val end = (chrencIndex + CHRENC_NEARBY_SCAN_WINDOW).coerceAtMost(html.length)
+            html.substring(start, end)
+        } else {
+            html.take(CHRENC_FALLBACK_SCAN_MAX_BYTES)
         }
-        val input = CHRENC_INPUT_REGEX.find(html)?.value ?: return null
+
+        val input = CHRENC_INPUT_REGEX.find(scanTarget)?.value ?: return null
         val match = VALUE_ATTR_REGEX.find(input) ?: return null
         val rawValue = match.groupValues.getOrNull(1)?.trim().orEmpty()
         if (rawValue.isEmpty()) return null
@@ -1330,7 +1383,8 @@ class HttpBoardApi(
 
     private data class PostingConfig(
         val encoding: PostEncoding,
-        val chrencValue: String
+        val chrencValue: String,
+        val fromFallback: Boolean = false
     )
 
     private enum class PostEncoding {

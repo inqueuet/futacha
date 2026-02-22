@@ -464,6 +464,15 @@ class AndroidFileSystem(
         return Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED
     }
 
+    private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
+        val resolvedBase = resolveAbsolutePath(basePath)
+        return if (relativePath.isEmpty()) {
+            resolvedBase
+        } else {
+            File(resolvedBase, relativePath).absolutePath
+        }
+    }
+
     // ========================================
     // SaveLocation-based implementations
     // ========================================
@@ -477,7 +486,7 @@ class AndroidFileSystem(
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 createDirectory(fullPath)
             }
             is SaveLocation.TreeUri -> {
@@ -527,7 +536,7 @@ class AndroidFileSystem(
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = File(base.path, relativePath).absolutePath
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 writeBytes(fullPath, bytes)
             }
             is SaveLocation.TreeUri -> {
@@ -568,7 +577,7 @@ class AndroidFileSystem(
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = File(base.path, relativePath).absolutePath
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 appendBytes(fullPath, bytes)
             }
             is SaveLocation.TreeUri -> {
@@ -611,7 +620,7 @@ class AndroidFileSystem(
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = File(base.path, relativePath).absolutePath
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 readString(fullPath)
             }
             is SaveLocation.TreeUri -> {
@@ -674,7 +683,7 @@ class AndroidFileSystem(
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(Dispatchers.IO) {
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 exists(fullPath)
             }
             is SaveLocation.TreeUri -> {
@@ -714,8 +723,8 @@ class AndroidFileSystem(
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = if (relativePath.isEmpty()) base.path else File(base.path, relativePath).absolutePath
-                delete(fullPath)
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                deleteRecursively(fullPath)
             }
             is SaveLocation.TreeUri -> {
                 runFsCatching {
@@ -741,7 +750,7 @@ class AndroidFileSystem(
 
                     val target = parentDir.findFile(fileName) ?: return@runFsCatching Unit
 
-                    if (!target.delete()) {
+                    if (!deleteDocumentRecursively(target)) {
                         throw IllegalStateException("Failed to delete: $relativePath")
                     }
                 }
@@ -803,6 +812,18 @@ class AndroidFileSystem(
             }
         }
         return current
+    }
+
+    private fun deleteDocumentRecursively(target: DocumentFile): Boolean {
+        if (target.isDirectory) {
+            val children = runCatching { target.listFiles() }.getOrElse { emptyArray() }
+            children.forEach { child ->
+                if (!deleteDocumentRecursively(child)) {
+                    return false
+                }
+            }
+        }
+        return target.delete() || !target.exists()
     }
 
     /**

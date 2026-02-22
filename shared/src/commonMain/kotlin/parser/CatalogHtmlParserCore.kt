@@ -226,9 +226,11 @@ internal object CatalogHtmlParserCore {
         if (startIndex == -1) return null
         val contentStart = text.indexOf(">", startIndex) + 1
         if (contentStart == 0) return null
+        if (contentStart > text.length) return null
         val endIndex = text.indexOf(endTag, contentStart, ignoreCase = true)
         if (endIndex == -1) return null
         if (contentStart > endIndex) return null
+        if (endIndex > text.length) return null
         return text.substring(contentStart, endIndex)
     }
 
@@ -243,9 +245,15 @@ internal object CatalogHtmlParserCore {
 
     private fun resolveUrl(path: String, baseUrl: String): String = when {
         path.startsWith("http://") || path.startsWith("https://") -> path
-        path.startsWith("//") -> "https:$path"
+        path.startsWith("//") -> "${extractScheme(baseUrl)}:$path"
         path.startsWith("/") -> extractOrigin(baseUrl).trimEnd('/') + path
         else -> baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+    }
+
+    private fun extractScheme(baseUrl: String): String {
+        val schemeIndex = baseUrl.indexOf("://")
+        if (schemeIndex <= 0) return "https"
+        return baseUrl.substring(0, schemeIndex).lowercase()
     }
 
     private fun extractOrigin(baseUrl: String): String {

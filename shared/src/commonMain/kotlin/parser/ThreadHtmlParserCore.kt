@@ -265,8 +265,15 @@ internal object ThreadHtmlParserCore {
                         truncationReason = "Parse error: range overflow"
                         break
                     }
+                    val blockEndExclusive = tableEnd.range.last + 1
+                    if (blockEndExclusive > repliesHtml.length || tableStart.range.first < 0 || tableStart.range.first >= blockEndExclusive) {
+                        Logger.e(TAG, "Invalid block bounds detected (start=${tableStart.range.first}, endExclusive=$blockEndExclusive, length=${repliesHtml.length})")
+                        isTruncated = true
+                        truncationReason = "Parse error: invalid block bounds"
+                        break
+                    }
 
-                    val block = repliesHtml.substring(tableStart.range.first, tableEnd.range.last + 1)
+                    val block = repliesHtml.substring(tableStart.range.first, blockEndExclusive)
 
                     // FIX: Stricter size limits to prevent ReDoS
                     if (block.length > MAX_CHUNK_SIZE) {
@@ -274,7 +281,7 @@ internal object ThreadHtmlParserCore {
                         // FIX: Reduce max single block size from 1MB to 500KB
                         if (block.length > MAX_SINGLE_BLOCK_SIZE) {
                             Logger.w(TAG, "Skipping block exceeding safe size limit (${block.length} > $MAX_SINGLE_BLOCK_SIZE)")
-                            searchStart = tableEnd.range.last + 1
+                            searchStart = blockEndExclusive
                             continue
                         }
                     }
@@ -285,7 +292,7 @@ internal object ThreadHtmlParserCore {
                         parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
                     }
 
-                    val newSearchStart = tableEnd.range.last + 1
+                    val newSearchStart = blockEndExclusive
 
                     // Safety check to prevent searchStart from going backwards
                     if (newSearchStart <= searchStart) {
@@ -383,7 +390,10 @@ internal object ThreadHtmlParserCore {
                     Logger.w(TAG, "Range overflow in extractBetween")
                     return@withTimeoutOrNull null
                 }
-                text.substring(start.range.last + 1, end.range.first)
+                val contentStart = start.range.last + 1
+                if (contentStart > text.length) return@withTimeoutOrNull null
+                if (end.range.first < contentStart || end.range.first > text.length) return@withTimeoutOrNull null
+                text.substring(contentStart, end.range.first)
             }
         } catch (e: CancellationException) {
             throw e
@@ -648,10 +658,16 @@ internal object ThreadHtmlParserCore {
     private fun resolveUrl(path: String, baseUrl: String): String {
         return when {
             path.startsWith("http://") || path.startsWith("https://") -> path
-            path.startsWith("//") -> "https:$path"
+            path.startsWith("//") -> "${extractScheme(baseUrl)}:$path"
             path.startsWith("/") -> baseUrl.trimEnd('/') + path
             else -> baseUrl.trimEnd('/') + "/" + path
         }
+    }
+
+    private fun extractScheme(baseUrl: String): String {
+        val schemeIndex = baseUrl.indexOf("://")
+        if (schemeIndex <= 0) return "https"
+        return baseUrl.substring(0, schemeIndex).lowercase()
     }
 
     private fun extractBaseUrl(url: String): String? {

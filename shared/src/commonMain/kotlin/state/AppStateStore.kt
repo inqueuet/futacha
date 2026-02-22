@@ -819,27 +819,58 @@ class AppStateStore internal constructor(
                 val key = historyIdentity(existing)
                 val replacement = remainingUpdates.remove(key)
                 if (replacement != null) {
-                    if (replacement != existing) changed = true
-                    replacement
+                    val mergedEntry = mergeHistoryEntry(existing, replacement)
+                    if (mergedEntry != existing) changed = true
+                    mergedEntry
                 } else {
                     existing
                 }
             }
 
             val appended = remainingUpdates.values.toList()
-            if (appended.isNotEmpty()) {
-                changed = true
-            }
             if (!changed) return
-
-            val updatedHistory = if (appended.isEmpty()) merged else merged + appended
             try {
-                persistHistory(updatedHistory)
+                // Drop stale updates that no longer exist in current history.
+                // This avoids resurrecting entries removed while refresh was running.
+                persistHistory(merged)
+                if (appended.isNotEmpty()) {
+                    Logger.i(TAG, "Dropped ${appended.size} stale history update(s) during merge")
+                }
             } catch (e: Exception) {
                 rethrowIfCancellation(e)
                 Logger.e(TAG, "Failed to merge ${updatesByKey.size} history entries", e)
             }
         }
+    }
+
+    private fun mergeHistoryEntry(
+        existing: ThreadHistoryEntry,
+        incoming: ThreadHistoryEntry
+    ): ThreadHistoryEntry {
+        val keepExistingReadState = existing.lastVisitedEpochMillis >= incoming.lastVisitedEpochMillis
+        val mergedLastVisited = maxOf(existing.lastVisitedEpochMillis, incoming.lastVisitedEpochMillis)
+        val mergedReplyCount = maxOf(existing.replyCount, incoming.replyCount)
+
+        return incoming.copy(
+            boardId = incoming.boardId.ifBlank { existing.boardId },
+            title = incoming.title.ifBlank { existing.title },
+            titleImageUrl = incoming.titleImageUrl.ifBlank { existing.titleImageUrl },
+            boardName = incoming.boardName.ifBlank { existing.boardName },
+            boardUrl = incoming.boardUrl.ifBlank { existing.boardUrl },
+            lastVisitedEpochMillis = mergedLastVisited,
+            replyCount = mergedReplyCount,
+            lastReadItemIndex = if (keepExistingReadState) {
+                existing.lastReadItemIndex
+            } else {
+                incoming.lastReadItemIndex
+            },
+            lastReadItemOffset = if (keepExistingReadState) {
+                existing.lastReadItemOffset
+            } else {
+                incoming.lastReadItemOffset
+            },
+            hasAutoSave = existing.hasAutoSave || incoming.hasAutoSave
+        )
     }
 
     suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) {

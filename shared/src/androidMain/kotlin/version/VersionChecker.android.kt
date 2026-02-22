@@ -64,17 +64,29 @@ class AndroidVersionChecker(
     }
 }
 
+@Volatile
+private var versionCheckerAppContext: Context? = null
+
 /**
  * Android では Context が必要なため、この関数は使用できません。
  * 代わりに [createVersionChecker(Context, HttpClient)] を使用してください。
  *
- * @throws UnsupportedOperationException 常にスローされます
+ * 互換性のため、例外は投げず安全なフォールバックを返します。
  */
 actual fun createVersionChecker(httpClient: HttpClient): VersionChecker {
-    throw UnsupportedOperationException(
-        "Android では createVersionChecker(context, httpClient) を使用してください。" +
-        "Context が必要なため、共通コードからは直接呼び出せません。"
+    val context = versionCheckerAppContext
+    if (context != null) {
+        return AndroidVersionChecker(context, httpClient)
+    }
+    Logger.w(
+        "AndroidVersionChecker",
+        "createVersionChecker(httpClient) was called without Context on Android. " +
+            "Falling back to a no-op checker."
     )
+    return object : VersionChecker {
+        override fun getCurrentVersion(): String = "1.0"
+        override suspend fun checkForUpdate(): UpdateInfo? = null
+    }
 }
 
 /**
@@ -82,4 +94,8 @@ actual fun createVersionChecker(httpClient: HttpClient): VersionChecker {
  */
 fun createVersionChecker(context: Context, httpClient: HttpClient): VersionChecker {
     return AndroidVersionChecker(context, httpClient)
+}
+
+fun initializeVersionCheckerContext(context: Context) {
+    versionCheckerAppContext = context.applicationContext
 }

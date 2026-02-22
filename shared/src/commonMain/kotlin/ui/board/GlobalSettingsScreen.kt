@@ -39,13 +39,10 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.rememberUrlLauncher
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-private const val AUTO_SAVE_STATS_REFRESH_INTERVAL_MS = 5_000L
 private const val AUTO_SAVE_STATS_FETCH_TIMEOUT_MS = 4_000L
 
 private data class GlobalSettingsEntry(
@@ -144,25 +141,27 @@ internal fun GlobalSettingsScreen(
         autoSavedThreadRepository ?: fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
     }
 
-    LaunchedEffect(effectiveAutoSavedRepository) {
+    suspend fun refreshAutoSavedStats() {
         val repository = effectiveAutoSavedRepository
         if (repository == null) {
             autoSavedCount = null
             autoSavedSize = null
-            return@LaunchedEffect
+            return
         }
-        while (isActive) {
-            val stats = runCatching {
-                withTimeoutOrNull(AUTO_SAVE_STATS_FETCH_TIMEOUT_MS) {
+        val stats = runCatching {
+            withTimeoutOrNull(AUTO_SAVE_STATS_FETCH_TIMEOUT_MS) {
+                withContext(AppDispatchers.io) {
                     repository.getStats()
                 }
-            }.getOrNull()
-            if (stats != null) {
-                autoSavedCount = stats.threadCount
-                autoSavedSize = stats.totalSize
             }
-            delay(AUTO_SAVE_STATS_REFRESH_INTERVAL_MS)
+        }.getOrNull()
+        if (stats != null) {
+            autoSavedCount = stats.threadCount
+            autoSavedSize = stats.totalSize
         }
+    }
+    LaunchedEffect(effectiveAutoSavedRepository) {
+        refreshAutoSavedStats()
     }
 
     fun normalizeManualSaveInput(raw: String): String {
@@ -193,24 +192,10 @@ internal fun GlobalSettingsScreen(
         }
     }
     val isAndroidPlatform = remember { isAndroid() }
-    val availableSaveDirectorySelections = remember(isAndroidPlatform) {
-        if (isAndroidPlatform) {
-            listOf(SaveDirectorySelection.PICKER)
-        } else {
-            SaveDirectorySelection.entries.toList()
-        }
+    val availableSaveDirectorySelections = remember {
+        SaveDirectorySelection.entries.toList()
     }
-    val effectiveSaveDirectorySelection = if (isAndroidPlatform) {
-        SaveDirectorySelection.PICKER
-    } else {
-        saveDirectorySelection
-    }
-
-    LaunchedEffect(isAndroidPlatform, saveDirectorySelection) {
-        if (isAndroidPlatform && saveDirectorySelection != SaveDirectorySelection.PICKER) {
-            onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
-        }
-    }
+    val effectiveSaveDirectorySelection = saveDirectorySelection
 
     fun formatSizeMb(bytes: Long?): String {
         if (bytes == null) return "不明"
@@ -827,7 +812,7 @@ internal fun GlobalSettingsScreen(
                                     }
                                     SaveDirectorySelection.PICKER -> {
                                         val pickerDescription = if (isAndroidPlatform) {
-                                            "AndroidではSAFで選んだフォルダのみ使用できます。"
+                                            "AndroidではSAFで選ぶ方法を推奨します。手入力も利用できます。"
                                         } else {
                                             "ファイラーで選んだディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。"
                                         }
@@ -836,13 +821,6 @@ internal fun GlobalSettingsScreen(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        if (isAndroidPlatform) {
-                                            Text(
-                                                text = "AndroidではSAF経由の保存先のみ使用できます。",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
                                         Text(
                                             text = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
                                             style = MaterialTheme.typography.bodySmall,
@@ -989,6 +967,17 @@ internal fun GlobalSettingsScreen(
                                         color = MaterialTheme.colorScheme.error
                                     )
                                 }
+                            }
+                        },
+                        trailingContent = {
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        refreshAutoSavedStats()
+                                    }
+                                }
+                            ) {
+                                Text("更新")
                             }
                         },
                         modifier = Modifier.fillMaxWidth()

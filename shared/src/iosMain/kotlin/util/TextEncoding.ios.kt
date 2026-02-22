@@ -16,7 +16,6 @@ import platform.CoreFoundation.kCFAllocatorDefault
 import platform.CoreFoundation.kCFStringEncodingDOSJapanese
 import platform.CoreFoundation.kCFStringEncodingUTF8
 import platform.Foundation.NSString
-import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.dataUsingEncoding
 import platform.posix.memcpy
 
@@ -27,7 +26,6 @@ actual object TextEncoding {
     actual fun encodeToShiftJis(text: String): ByteArray {
         val nsString = text as NSString
         val data = nsString.dataUsingEncoding(shiftJisEncoding, allowLossyConversion = true)
-            ?: nsString.dataUsingEncoding(NSUTF8StringEncoding, allowLossyConversion = true)
             ?: return ByteArray(0)
         val length = data.length.toInt()
         if (length == 0) return ByteArray(0)

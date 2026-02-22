@@ -52,6 +52,7 @@ import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -351,6 +352,8 @@ fun CatalogScreen(
             try {
                 onHistoryRefresh()
                 snackbarHostState.showSnackbar("履歴を更新しました")
+            } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+                snackbarHostState.showSnackbar("履歴更新はすでに実行中です")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {

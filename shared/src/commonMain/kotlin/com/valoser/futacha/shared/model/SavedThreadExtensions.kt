@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.model
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.resolveBookmarkPathForDisplay
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
 
 fun SavedThreadMetadata.toThreadPage(
@@ -29,15 +30,21 @@ fun SavedThreadMetadata.toThreadPage(
 
         return when (val location = baseSaveLocation) {
             null -> fileSystem.resolveAbsolutePath("$baseDirectory/$storageFolder/$normalizedRelativePath")
-            is SaveLocation.Path -> fileSystem.resolveAbsolutePath(
-                "${location.path.trimEnd('/')}/$storageFolder/$normalizedRelativePath"
-            )
+            is SaveLocation.Path -> {
+                val resolvedBase = fileSystem.resolveAbsolutePath(location.path).trimEnd('/')
+                "$resolvedBase/$storageFolder/$normalizedRelativePath"
+            }
             is SaveLocation.TreeUri -> buildDocumentUriFromTree(
                 treeUri = location.uri,
                 storageFolder = storageFolder,
                 relativePath = normalizedRelativePath
             )
-            is SaveLocation.Bookmark -> null
+            is SaveLocation.Bookmark -> {
+                val bookmarkBasePath = resolveBookmarkPathForDisplay(location.bookmarkData)
+                    ?.trimEnd('/')
+                    ?: return null
+                "$bookmarkBasePath/$storageFolder/$normalizedRelativePath"
+            }
         }
     }
 

@@ -62,6 +62,8 @@ class ThreadSaveService(
     private val _saveProgress = MutableStateFlow<SaveProgress?>(null)
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
     private val counterMutex = Mutex()
+    private val mediaWriteLocksGuard = Mutex()
+    private val mediaWriteLocks = mutableMapOf<String, MediaPathLock>()
     private val json = Json { prettyPrint = true }
 
     // グローバルダウンロード並行数制限
@@ -89,10 +91,11 @@ class ThreadSaveService(
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
         private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
         private const val THREAD_HTML_FETCH_TIMEOUT_MILLIS = 30_000L
+        private const val WRITE_TIMEOUT_MILLIS = 60_000L
         private const val STREAM_READ_BUFFER_BYTES = 64 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 8L
-        private const val MAX_PARALLEL_DOWNLOADS = 2
+        private const val MAX_PARALLEL_DOWNLOADS = 1
 
         // FIX: Regexプリコンパイル（パフォーマンス最適化）
         private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
@@ -185,38 +188,44 @@ class ThreadSaveService(
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
-        try {
-            Result.success(run {
-            val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
-            val startedAtMillis = savedAtTimestamp
-            // 準備フェーズ
-            updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
+        val storageId = buildThreadStorageId(boardId, threadId)
+        val storageLockKey = buildThreadStorageLockKey(
+            storageId = storageId,
+            baseDirectory = baseDirectory,
+            baseSaveLocation = baseSaveLocation
+        )
+        ThreadStorageLockRegistry.withStorageLock(storageLockKey) {
+            try {
+                Result.success(run {
+                val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
+                val startedAtMillis = savedAtTimestamp
+                // 準備フェーズ
+                updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
-            // SaveLocation対応: nullの場合は従来のパスベース、非nullの場合は新API使用
-            val useSaveLocation = baseSaveLocation != null
-            val storageId = buildThreadStorageId(boardId, threadId)
-            val baseDir = "$baseDirectory/$storageId"
-            val boardPath = extractBoardPath(boardUrl, boardId)
-            val opPostId = posts.firstOrNull()?.id
+                // SaveLocation対応: nullの場合は従来のパスベース、非nullの場合は新API使用
+                val useSaveLocation = baseSaveLocation != null
+                val baseDir = "$baseDirectory/$storageId"
+                val boardPath = extractBoardPath(boardUrl, boardId)
+                val opPostId = posts.firstOrNull()?.id
 
-            if (useSaveLocation) {
-                val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
-                fileSystem.createDirectory(location, storageId).getOrThrow()
-                val boardMediaPath = if (boardPath.isNotBlank()) "$storageId/$boardPath" else storageId
-                fileSystem.createDirectory(location, "$boardMediaPath/src").getOrThrow()
-                fileSystem.createDirectory(location, "$boardMediaPath/thumb").getOrThrow()
-            } else {
-                fileSystem.createDirectory(baseDirectory).getOrThrow()
-                fileSystem.createDirectory(baseDir).getOrThrow()
-                val boardMediaRoot = listOf(baseDir, boardPath)
-                    .filter { it.isNotBlank() }
-                    .joinToString("/")
-                val srcDir = "$boardMediaRoot/src"
-                val thumbDir = "$boardMediaRoot/thumb"
-                fileSystem.createDirectory(boardMediaRoot).getOrThrow()
-                fileSystem.createDirectory(srcDir).getOrThrow()
-                fileSystem.createDirectory(thumbDir).getOrThrow()
-            }
+                if (useSaveLocation) {
+                    val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
+                    fileSystem.createDirectory(location, storageId).getOrThrow()
+                    val boardMediaPath = if (boardPath.isNotBlank()) "$storageId/$boardPath" else storageId
+                    fileSystem.createDirectory(location, "$boardMediaPath/src").getOrThrow()
+                    fileSystem.createDirectory(location, "$boardMediaPath/thumb").getOrThrow()
+                } else {
+                    fileSystem.createDirectory(baseDirectory).getOrThrow()
+                    fileSystem.createDirectory(baseDir).getOrThrow()
+                    val boardMediaRoot = listOf(baseDir, boardPath)
+                        .filter { it.isNotBlank() }
+                        .joinToString("/")
+                    val srcDir = "$boardMediaRoot/src"
+                    val thumbDir = "$boardMediaRoot/thumb"
+                    fileSystem.createDirectory(boardMediaRoot).getOrThrow()
+                    fileSystem.createDirectory(srcDir).getOrThrow()
+                    fileSystem.createDirectory(thumbDir).getOrThrow()
+                }
 
             // FIX: マップのサイズ制限とメモリ効率化
             // LRUキャッシュを使用して自動的に古いエントリを削除
@@ -238,9 +247,13 @@ class ThreadSaveService(
 
             // FIX: Build media items in chunks to avoid massive list creation
             // Use asSequence() to avoid creating intermediate collections
-            val totalMediaCount = posts.asSequence().sumOf {
-                (if (it.thumbnailUrl != null) 1 else 0) + (if (it.imageUrl != null) 1 else 0)
+            val scheduledMediaKeys = mutableSetOf<String>()
+            val allUniqueMediaKeys = mutableSetOf<String>()
+            posts.forEach { post ->
+                post.thumbnailUrl?.let { allUniqueMediaKeys.add(mediaDownloadKey(it, MediaType.THUMBNAIL)) }
+                post.imageUrl?.let { allUniqueMediaKeys.add(mediaDownloadKey(it, MediaType.FULL_IMAGE)) }
             }
+            val totalMediaCount = allUniqueMediaKeys.size
 
             // FIX: メディア数が異常に多い場合は警告
             if (totalMediaCount > MAX_MEDIA_ITEMS) {
@@ -259,9 +272,20 @@ class ThreadSaveService(
                         post.imageUrl?.let { add(MediaItem(it, MediaType.FULL_IMAGE, post)) }
                     }
                 }
+                val uniqueMediaItems = buildList {
+                    mediaItems.forEach { mediaItem ->
+                        val key = mediaDownloadKey(mediaItem.url, mediaItem.type)
+                        if (scheduledMediaKeys.add(key)) {
+                            add(mediaItem)
+                        }
+                    }
+                }
+                if (uniqueMediaItems.isEmpty()) {
+                    return@forEach
+                }
 
                 // FIX: 並列ダウンロードで処理速度を改善（セマフォで並行数を制限）
-                mediaItems.chunked(MAX_PARALLEL_DOWNLOADS).forEach { itemBatch ->
+                uniqueMediaItems.chunked(MAX_PARALLEL_DOWNLOADS).forEach { itemBatch ->
                     coroutineContext.ensureActive()
                     kotlinx.coroutines.coroutineScope {
                         val deferredResults = itemBatch.map { mediaItem ->
@@ -488,7 +512,7 @@ class ThreadSaveService(
             val finalTotalSize = totalSize + metadataSize
             enforceBudget(finalTotalSize, startedAtMillis)
 
-                SavedThread(
+                    SavedThread(
                 threadId = threadId,
                 boardId = boardId,
                 boardName = boardName,
@@ -503,10 +527,11 @@ class ThreadSaveService(
                 status = status
                 )
             })
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Result.failure(t)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Result.failure(t)
+            }
         }
     }
 
@@ -567,40 +592,42 @@ class ThreadSaveService(
                         throw IllegalStateException("Save aborted: exceeded time limit during download")
                     }
 
-                    val totalBytesRead = if (saveLocation != null) {
-                        val fileRelativePath = "$storageId/$relativePath"
-                        var completed = false
-                        try {
-                            val writtenBytes = streamResponseToStorage(
-                                response = response,
-                                saveLocation = saveLocation,
-                                saveLocationPath = fileRelativePath,
-                                absolutePath = null,
-                                startedAtMillis = startedAtMillis
-                            )
-                            completed = true
-                            writtenBytes
-                        } finally {
-                            if (!completed) {
-                                fileSystem.delete(saveLocation, fileRelativePath).getOrNull()
+                    val totalBytesRead = withMediaWriteLock(relativePath) {
+                        if (saveLocation != null) {
+                            val fileRelativePath = "$storageId/$relativePath"
+                            var completed = false
+                            try {
+                                val writtenBytes = streamResponseToStorage(
+                                    response = response,
+                                    saveLocation = saveLocation,
+                                    saveLocationPath = fileRelativePath,
+                                    absolutePath = null,
+                                    startedAtMillis = startedAtMillis
+                                )
+                                completed = true
+                                writtenBytes
+                            } finally {
+                                if (!completed) {
+                                    fileSystem.delete(saveLocation, fileRelativePath).getOrNull()
+                                }
                             }
-                        }
-                    } else {
-                        val fullPath = "$baseDir/$relativePath"
-                        var completed = false
-                        try {
-                            val writtenBytes = streamResponseToStorage(
-                                response = response,
-                                saveLocation = null,
-                                saveLocationPath = null,
-                                absolutePath = fullPath,
-                                startedAtMillis = startedAtMillis
-                            )
-                            completed = true
-                            writtenBytes
-                        } finally {
-                            if (!completed) {
-                                fileSystem.delete(fullPath).getOrNull()
+                        } else {
+                            val fullPath = "$baseDir/$relativePath"
+                            var completed = false
+                            try {
+                                val writtenBytes = streamResponseToStorage(
+                                    response = response,
+                                    saveLocation = null,
+                                    saveLocationPath = null,
+                                    absolutePath = fullPath,
+                                    startedAtMillis = startedAtMillis
+                                )
+                                completed = true
+                                writtenBytes
+                            } finally {
+                                if (!completed) {
+                                    fileSystem.delete(fullPath).getOrNull()
+                                }
                             }
                         }
                     }
@@ -630,15 +657,10 @@ class ThreadSaveService(
     ): Long {
         val channel = response.bodyAsChannel()
         val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
-        var totalBytesRead = 0L
+        var output = ByteArray(minOf(STREAM_READ_BUFFER_BYTES, MAX_FILE_SIZE_BYTES.toInt()))
+        var totalBytesRead = 0
         var zeroReadCount = 0
         var readLoopCount = 0L
-
-        if (saveLocation != null && saveLocationPath != null) {
-            fileSystem.delete(saveLocation, saveLocationPath).getOrNull()
-        } else if (absolutePath != null) {
-            fileSystem.delete(absolutePath).getOrNull()
-        }
 
         while (true) {
             coroutineContext.ensureActive()
@@ -657,33 +679,62 @@ class ThreadSaveService(
             }
 
             zeroReadCount = 0
-            totalBytesRead += read
-            if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
-                throw Exception("Actual file size exceeds limit: ${totalBytesRead / 1024}KB")
+            val requiredSize = totalBytesRead + read
+            if (requiredSize.toLong() > MAX_FILE_SIZE_BYTES) {
+                throw Exception("Actual file size exceeds limit: ${requiredSize / 1024}KB")
             }
             if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
                 throw IllegalStateException("Save aborted: exceeded time limit during download")
             }
 
-            val chunk = if (read == buffer.size) {
-                buffer
-            } else {
-                buffer.copyOf(read)
+            if (requiredSize > output.size) {
+                var newSize = output.size
+                while (newSize < requiredSize) {
+                    newSize = (newSize * 2).coerceAtMost(MAX_FILE_SIZE_BYTES.toInt())
+                    if (newSize == output.size) break
+                }
+                if (newSize < requiredSize) {
+                    throw IllegalStateException("Failed to expand media buffer safely")
+                }
+                output = output.copyOf(newSize)
             }
-            if (saveLocation != null && saveLocationPath != null) {
-                fileSystem.appendBytes(saveLocation, saveLocationPath, chunk).getOrThrow()
-            } else if (absolutePath != null) {
-                fileSystem.appendBytes(absolutePath, chunk).getOrThrow()
-            } else {
-                throw IllegalStateException("No target path specified for media stream")
-            }
+            buffer.copyInto(output, destinationOffset = totalBytesRead, startIndex = 0, endIndex = read)
+            totalBytesRead = requiredSize
+
             readLoopCount += 1
             if (readLoopCount % 32L == 0L) {
                 yield()
             }
         }
 
-        return totalBytesRead
+        val payload = if (totalBytesRead == output.size) {
+            output
+        } else {
+            output.copyOf(totalBytesRead)
+        }
+        if (saveLocation != null && saveLocationPath != null) {
+            // SaveLocation path is overwritten in one write to avoid per-chunk stream re-open costs.
+            val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
+                fileSystem.writeBytes(saveLocation, saveLocationPath, payload).getOrThrow()
+                true
+            } ?: false
+            if (!completed) {
+                throw IllegalStateException("Save aborted: timed out while writing media file")
+            }
+        } else if (absolutePath != null) {
+            // Absolute path is overwritten atomically in one write where supported.
+            val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
+                fileSystem.writeBytes(absolutePath, payload).getOrThrow()
+                true
+            } ?: false
+            if (!completed) {
+                throw IllegalStateException("Save aborted: timed out while writing media file")
+            }
+        } else {
+            throw IllegalStateException("No target path specified for media stream")
+        }
+
+        return totalBytesRead.toLong()
     }
 
     /**
@@ -1020,6 +1071,38 @@ class ThreadSaveService(
     private enum class MediaType {
         THUMBNAIL,
         FULL_IMAGE
+    }
+
+    private data class MediaPathLock(
+        val mutex: Mutex,
+        var holders: Int = 0
+    )
+
+    private fun mediaDownloadKey(url: String, type: MediaType): String {
+        return "${type.name}|${url.trim()}"
+    }
+
+    private suspend fun <T> withMediaWriteLock(relativePath: String, block: suspend () -> T): T {
+        val lockEntry = mediaWriteLocksGuard.withLock {
+            val entry = mediaWriteLocks.getOrPut(relativePath) { MediaPathLock(Mutex()) }
+            entry.holders += 1
+            entry
+        }
+        return try {
+            lockEntry.mutex.withLock {
+                block()
+            }
+        } finally {
+            mediaWriteLocksGuard.withLock {
+                val current = mediaWriteLocks[relativePath]
+                if (current === lockEntry) {
+                    current.holders -= 1
+                    if (current.holders <= 0 && !current.mutex.isLocked) {
+                        mediaWriteLocks.remove(relativePath)
+                    }
+                }
+            }
+        }
     }
 
     private fun extractFileName(url: String, extension: String, postId: String): String {

@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
@@ -13,7 +12,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
 
 private const val DATASTORE_NAME = "futacha_state"
 private val Context.dataStore by preferencesDataStore(name = DATASTORE_NAME)
@@ -50,17 +51,35 @@ private class AndroidPlatformStateStorage(
     private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
     private val threadSettingsMenuConfigKey = stringPreferencesKey("thread_settings_menu_config_json")
     private val lastUsedDeleteKeyPreferencesKey = stringPreferencesKey("last_used_delete_key")
+    private val lastReadablePreferences = AtomicReference<Preferences?>(null)
     private val safeData: Flow<Preferences> =
-        context.dataStore.data.catch { e ->
-            when (e) {
-                is CancellationException -> throw e
-                is IOException -> {
-                    Logger.e("AndroidPlatformStateStorage", "Recovering from DataStore read failure: ${e.message}", e)
-                    emit(emptyPreferences())
-                }
-                else -> throw e
+        context.dataStore.data
+            .onEach { prefs ->
+                lastReadablePreferences.set(prefs)
             }
-        }
+            .catch { e ->
+                when (e) {
+                    is CancellationException -> throw e
+                    is IOException -> {
+                        val cached = lastReadablePreferences.get()
+                        if (cached != null) {
+                            Logger.w(
+                                "AndroidPlatformStateStorage",
+                                "DataStore read failure detected; using last known preferences snapshot: ${e.message}"
+                            )
+                            emit(cached)
+                        } else {
+                            Logger.e(
+                                "AndroidPlatformStateStorage",
+                                "DataStore read failure with no cached snapshot",
+                                e
+                            )
+                            throw StorageException("Failed to read DataStore preferences", e)
+                        }
+                    }
+                    else -> throw e
+                }
+            }
 
     override val boardsJson: Flow<String?> =
         safeData.map { prefs -> prefs[boardsKey] }

@@ -101,6 +101,15 @@ class IosFileSystem : FileSystem {
         return error?.code == 4L
     }
 
+    private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
+        val resolvedBase = resolveAbsolutePath(basePath)
+        return if (relativePath.isEmpty()) {
+            resolvedBase
+        } else {
+            "$resolvedBase/$relativePath"
+        }
+    }
+
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
@@ -424,7 +433,7 @@ class IosFileSystem : FileSystem {
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 createDirectory(fullPath)
             }
             is SaveLocation.Bookmark -> {
@@ -432,10 +441,11 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
+                        val basePath = resolveBookmarkPath(url)
                         val fullPath = if (relativePath.isEmpty()) {
-                            url.path ?: throw IllegalStateException("URL path is null")
+                            basePath
                         } else {
-                            "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                            "$basePath/$relativePath"
                         }
                         createDirectory(fullPath).getOrThrow()
                     } finally {
@@ -461,7 +471,7 @@ class IosFileSystem : FileSystem {
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = "${base.path}/$relativePath"
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 writeBytes(fullPath, bytes)
             }
             is SaveLocation.Bookmark -> {
@@ -469,7 +479,8 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
-                        val fullPath = "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                        val basePath = resolveBookmarkPath(url)
+                        val fullPath = "$basePath/$relativePath"
                         writeBytes(fullPath, bytes).getOrThrow()
                     } finally {
                         if (startedAccess) {
@@ -494,7 +505,7 @@ class IosFileSystem : FileSystem {
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = "${base.path}/$relativePath"
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 appendBytes(fullPath, bytes)
             }
             is SaveLocation.Bookmark -> {
@@ -502,7 +513,8 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
-                        val fullPath = "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                        val basePath = resolveBookmarkPath(url)
+                        val fullPath = "$basePath/$relativePath"
                         appendBytes(fullPath, bytes).getOrThrow()
                     } finally {
                         if (startedAccess) {
@@ -529,7 +541,7 @@ class IosFileSystem : FileSystem {
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = "${base.path}/$relativePath"
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 readString(fullPath)
             }
             is SaveLocation.Bookmark -> {
@@ -537,7 +549,8 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
-                        val fullPath = "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                        val basePath = resolveBookmarkPath(url)
+                        val fullPath = "$basePath/$relativePath"
                         readString(fullPath).getOrThrow()
                     } finally {
                         if (startedAccess) {
@@ -555,7 +568,7 @@ class IosFileSystem : FileSystem {
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(Dispatchers.IO) {
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
                 exists(fullPath)
             }
             is SaveLocation.Bookmark -> {
@@ -563,10 +576,11 @@ class IosFileSystem : FileSystem {
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
+                        val basePath = resolveBookmarkPath(url)
                         val fullPath = if (relativePath.isEmpty()) {
-                            url.path ?: throw IllegalStateException("URL path is null")
+                            basePath
                         } else {
-                            "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                            "$basePath/$relativePath"
                         }
                         exists(fullPath)
                     } finally {
@@ -596,20 +610,28 @@ class IosFileSystem : FileSystem {
         }
         when (base) {
             is SaveLocation.Path -> {
-                val fullPath = if (relativePath.isEmpty()) base.path else "${base.path}/$relativePath"
-                delete(fullPath)
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                deleteRecursively(fullPath)
             }
             is SaveLocation.Bookmark -> {
                 runFsCatching {
+                    if (relativePath.isEmpty()) {
+                        Logger.w(
+                            "IosFileSystem",
+                            "Refusing to delete bookmark base directory directly"
+                        )
+                        return@runFsCatching Unit
+                    }
                     val url = resolveBookmarkUrl(base.bookmarkData)
                     val startedAccess = url.startAccessingSecurityScopedResource()
                     try {
+                        val basePath = resolveBookmarkPath(url)
                         val fullPath = if (relativePath.isEmpty()) {
-                            url.path ?: throw IllegalStateException("URL path is null")
+                            basePath
                         } else {
-                            "${url.path ?: throw IllegalStateException("URL path is null")}/$relativePath"
+                            "$basePath/$relativePath"
                         }
-                        delete(fullPath).getOrThrow()
+                        deleteRecursively(fullPath).getOrThrow()
                     } finally {
                         if (startedAccess) {
                             url.stopAccessingSecurityScopedResource()
@@ -627,8 +649,25 @@ class IosFileSystem : FileSystem {
     // Helper methods for secure bookmark
     // ========================================
 
+    private class BookmarkResolutionException(message: String, cause: Throwable? = null) :
+        IllegalStateException(message, cause)
+
+    private fun resolveBookmarkPath(url: NSURL): String {
+        url.path?.let { return it }
+        val absolute = url.absoluteString?.trim().orEmpty()
+        if (absolute.startsWith("file://")) {
+            return absolute.removePrefix("file://")
+        }
+        throw IllegalStateException("Resolved bookmark URL has no filesystem path")
+    }
+
     private fun resolveBookmarkUrl(bookmarkData: String): NSURL {
-        val data = bookmarkData.decodeBase64ToNSData()
+        val data = runCatching { bookmarkData.decodeBase64ToNSData() }.getOrElse { decodeError ->
+            throw BookmarkResolutionException(
+                "Invalid bookmark data. Please re-select the save directory.",
+                decodeError
+            )
+        }
         memScoped {
             val error = alloc<ObjCObjectVar<NSError?>>()
             val isStale = alloc<BooleanVar>()
@@ -640,7 +679,9 @@ class IosFileSystem : FileSystem {
                 error = error.ptr
             )
             if (url == null) {
-                throw Exception("Failed to resolve bookmark: ${error.value?.localizedDescription ?: "Unknown error"}. Please re-select the directory.")
+                throw BookmarkResolutionException(
+                    "Failed to resolve bookmark: ${error.value?.localizedDescription ?: "Unknown error"}. Please re-select the directory."
+                )
             }
             if (isStale.value) {
                 Logger.w("IosFileSystem", "Bookmark data is stale. The bookmark may not work after app restart. Consider re-selecting the directory.")
@@ -653,7 +694,22 @@ class IosFileSystem : FileSystem {
 
     @OptIn(ExperimentalEncodingApi::class)
     private fun String.decodeBase64ToNSData(): NSData {
-        val bytes = runCatching { Base64.decode(this) }.getOrNull()
+        val normalized = trim()
+            .replace("\n", "")
+            .replace("\r", "")
+
+        fun decode(candidate: String): ByteArray? {
+            return runCatching { Base64.decode(candidate) }.getOrNull()
+        }
+
+        val standard = normalized
+            .replace('-', '+')
+            .replace('_', '/')
+        val padded = standard + "=".repeat((4 - standard.length % 4) % 4)
+
+        val bytes = decode(normalized)
+            ?: decode(standard)
+            ?: decode(padded)
             ?: throw IllegalArgumentException("Invalid base64 bookmark data")
         return bytes.usePinned { pinned ->
             NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())

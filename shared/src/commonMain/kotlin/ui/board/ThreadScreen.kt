@@ -91,6 +91,7 @@ import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
@@ -126,7 +127,18 @@ private fun isSaveLocationPermissionIssue(error: Throwable): Boolean {
     val message = error.message?.lowercase().orEmpty()
     return message.contains("cannot resolve tree uri") ||
         message.contains("write permission lost for tree uri") ||
-        message.contains("please select the folder again")
+        message.contains("please select the folder again") ||
+        message.contains("invalid bookmark data") ||
+        message.contains("failed to resolve bookmark") ||
+        message.contains("bookmark url has no filesystem path")
+}
+
+private fun isDefaultManualSaveRoot(directory: String): Boolean {
+    val normalized = directory
+        .trim()
+        .removePrefix("./")
+        .trimEnd('/')
+    return normalized.equals(DEFAULT_MANUAL_SAVE_ROOT, ignoreCase = true)
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
@@ -249,6 +261,20 @@ fun ThreadScreen(
             )
         }
     }
+    val legacyManualSaveRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
+        val fs = fileSystem ?: return@remember null
+        val isCurrentDefaultPath = manualSaveLocation is SaveLocation.Path &&
+            isDefaultManualSaveRoot(manualSaveDirectory)
+        if (isCurrentDefaultPath) {
+            null
+        } else {
+            SavedThreadRepository(
+                fs,
+                baseDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+                baseSaveLocation = SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
+            )
+        }
+    }
     var autoSaveJob by remember { mutableStateOf<Job?>(null) }
     var manualSaveJob by remember { mutableStateOf<Job?>(null) }
     var refreshThreadJob by remember { mutableStateOf<Job?>(null) }
@@ -293,6 +319,7 @@ fun ThreadScreen(
     var selectedThreadFilterOptions by remember { mutableStateOf(emptySet<ThreadFilterOption>()) }
     var selectedThreadSortOption by rememberSaveable { mutableStateOf<ThreadFilterSortOption?>(null) }
     var threadFilterKeyword by rememberSaveable { mutableStateOf("") }
+    val threadFilterCache = remember(threadId) { linkedMapOf<ThreadFilterCacheKey, ThreadPage>() }
     val persistedSelfPostIdentifiersState = stateStore?.selfPostIdentifiersByThread?.collectAsState(initial = emptyMap())
     val persistedSelfPostMap = persistedSelfPostIdentifiersState?.value ?: emptyMap()
     val scopedSelfPostKey = remember(board.id, threadId) {
@@ -494,7 +521,15 @@ fun ThreadScreen(
             )
         }
 
-        if (autoSaveRepository != null || manualSaveRepository != null) {
+        loadMetadata(legacyManualSaveRepository)?.let { metadata ->
+            return metadata.toThreadPage(
+                fileSystem = localFileSystem,
+                baseDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+                baseSaveLocation = SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
+            )
+        }
+
+        if (autoSaveRepository != null || manualSaveRepository != null || legacyManualSaveRepository != null) {
             Logger.i(
                 THREAD_SCREEN_TAG,
                 "Offline metadata not found for threadId=$threadId boardIdCandidates=$boardIdCandidates"
@@ -589,7 +624,7 @@ fun ThreadScreen(
                     is ArchiveFallbackOutcome.NoMatch -> Unit
                 }
             }
-            if (!allowOfflineFallback) throw e
+            if (!allowOfflineFallback || !isOfflineFallbackCandidate(e)) throw e
             val offlinePage = withContext(Dispatchers.IO) {
                 withTimeoutOrNull(OFFLINE_FALLBACK_TIMEOUT_MS) {
                     loadOfflineThread()
@@ -738,7 +773,7 @@ fun ThreadScreen(
                                         posts = page.posts,
                                         baseSaveLocation = manualSaveLocation,
                                         baseDirectory = manualSaveDirectory,
-                                        writeMetadata = false
+                                        writeMetadata = true
                                     )
                                     result.onSuccess { savedThread ->
                                         manualSaveRepository
@@ -748,7 +783,7 @@ fun ThreadScreen(
                                         snackbarHostState.showSnackbar("スレッドを保存しました")
                                     }.onFailure { error ->
                                         saveProgress = null
-                                        if (isAndroidPlatform && isSaveLocationPermissionIssue(error)) {
+                                        if (isSaveLocationPermissionIssue(error)) {
                                             onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
                                             onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
                                             snackbarHostState.showSnackbar("保存先の権限が失われました。フォルダを再選択してください。")
@@ -761,7 +796,7 @@ fun ThreadScreen(
                                     throw e
                                 } catch (e: Exception) {
                                     saveProgress = null
-                                    if (isAndroidPlatform && isSaveLocationPermissionIssue(e)) {
+                                    if (isSaveLocationPermissionIssue(e)) {
                                         onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
                                         onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
                                         snackbarHostState.showSnackbar("保存先の権限が失われました。フォルダを再選択してください。")
@@ -822,6 +857,8 @@ fun ThreadScreen(
             try {
                 onHistoryRefresh()
                 snackbarHostState.showSnackbar("履歴を更新しました")
+            } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+                snackbarHostState.showSnackbar("履歴更新はすでに実行中です")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1487,9 +1524,6 @@ fun ThreadScreen(
                                 ngWords.any { it.isNotBlank() }
                             )
                         val hasThreadFilters = threadFilterCriteria.options.isNotEmpty()
-                        val filterCache = remember {
-                            linkedMapOf<ThreadFilterCacheKey, ThreadPage>()
-                        }
                         val postsFingerprint by produceState(
                             initialValue = ThreadPostListFingerprint(
                                 size = state.page.posts.size,
@@ -1522,26 +1556,26 @@ fun ThreadScreen(
                             )
                         }
                         val cachedFilteredPage = remember(filterCacheKey) {
-                            filterCache[filterCacheKey]
+                            threadFilterCache[filterCacheKey]
                         }
                         val filteredPage by produceState(
                             initialValue = cachedFilteredPage ?: state.page,
                             key1 = filterCacheKey
                         ) {
-                            filterCache[filterCacheKey]?.let {
+                            threadFilterCache[filterCacheKey]?.let {
                                 value = it
                                 return@produceState
                             }
                             if (!hasNgFilters && !hasThreadFilters) {
                                 value = state.page
-                                if (filterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
-                                    val iterator = filterCache.entries.iterator()
+                                if (threadFilterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
+                                    val iterator = threadFilterCache.entries.iterator()
                                     if (iterator.hasNext()) {
                                         iterator.next()
                                         iterator.remove()
                                     }
                                 }
-                                filterCache[filterCacheKey] = value
+                                threadFilterCache[filterCacheKey] = value
                                 return@produceState
                             }
                             // Keyword filtering can be expensive in large threads.
@@ -1571,14 +1605,14 @@ fun ThreadScreen(
                                     precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
                                 )
                             }
-                            if (filterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
-                                val iterator = filterCache.entries.iterator()
+                            if (threadFilterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
+                                val iterator = threadFilterCache.entries.iterator()
                                 if (iterator.hasNext()) {
                                     iterator.next()
                                     iterator.remove()
                                 }
                             }
-                            filterCache[filterCacheKey] = value
+                            threadFilterCache[filterCacheKey] = value
                         }
                         ThreadContent(
                             page = filteredPage,
@@ -1972,6 +2006,15 @@ fun ThreadScreen(
         progress = saveProgress,
         onDismissRequest = {
             saveProgress = null
+        },
+        onCancelRequest = {
+            manualSaveJob?.cancel()
+            manualSaveJob = null
+            isManualSaveInProgress = false
+            saveProgress = null
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("保存をキャンセルしました")
+            }
         }
     )
 
@@ -3233,6 +3276,28 @@ private fun Throwable.statusCodeOrNull(): Int? {
         current = current.cause
     }
     return null
+}
+
+private fun isOfflineFallbackCandidate(error: Throwable): Boolean {
+    if (error.statusCodeOrNull() != null) return true
+    var current: Throwable? = error
+    while (current != null) {
+        if (current is NetworkException) return true
+        val message = current.message?.lowercase().orEmpty()
+        if (
+            message.contains("timeout") ||
+            message.contains("network") ||
+            message.contains("http error") ||
+            message.contains("connection") ||
+            message.contains("unable to resolve") ||
+            message.contains("dns") ||
+            message.contains("socket")
+        ) {
+            return true
+        }
+        current = current.cause
+    }
+    return false
 }
 
 private fun SavedThreadMetadata.matchesBoardForOfflineFallback(expectedBoardKeys: Set<String>): Boolean {

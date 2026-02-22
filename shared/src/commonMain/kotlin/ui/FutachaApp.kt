@@ -35,7 +35,6 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
-import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
@@ -67,6 +66,11 @@ import com.valoser.futacha.shared.version.VersionChecker
 import com.valoser.futacha.shared.version.UpdateInfo
 
 private const val TAG = "FutachaApp"
+
+private fun isDefaultManualSaveRoot(directory: String): Boolean {
+    val normalized = directory.trim().removePrefix("./").trimEnd('/')
+    return normalized.equals(DEFAULT_MANUAL_SAVE_ROOT, ignoreCase = true)
+}
 
 @OptIn(ExperimentalTime::class)
 // FIX: リソース所有権を明確にするデータクラス
@@ -134,9 +138,6 @@ fun FutachaApp(
                 autoSavedThreadRepository ?: fileSystem?.let {
                     SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY)
                 }
-            }
-            val manualSavedThreadRepository = remember(fileSystem) {
-                fileSystem?.let { SavedThreadRepository(it, baseDirectory = MANUAL_SAVE_DIRECTORY) }
             }
 
             val historyRefresher = remember(repositoryHolder.repository, effectiveAutoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
@@ -209,6 +210,71 @@ fun FutachaApp(
             val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
             val manualSaveLocation = remember(manualSaveDirectory) {
                 com.valoser.futacha.shared.model.SaveLocation.fromString(manualSaveDirectory)
+            }
+            LaunchedEffect(manualSaveLocation, fileSystem) {
+                val currentLocation = manualSaveLocation
+                if (
+                    currentLocation !is com.valoser.futacha.shared.model.SaveLocation.Bookmark ||
+                    fileSystem == null
+                ) {
+                    return@LaunchedEffect
+                }
+                val isAccessible = withContext(AppDispatchers.io) {
+                    runCatching { fileSystem.exists(currentLocation, "") }.getOrDefault(false)
+                }
+                if (!isAccessible) {
+                    Logger.w(TAG, "Manual save bookmark is not accessible. Falling back to default path.")
+                    stateStore.setManualSaveDirectory(DEFAULT_MANUAL_SAVE_ROOT)
+                    stateStore.setSaveDirectorySelection(SaveDirectorySelection.MANUAL_INPUT)
+                }
+            }
+            val manualSavedThreadRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
+                fileSystem?.let { fs ->
+                    SavedThreadRepository(
+                        fs,
+                        baseDirectory = manualSaveDirectory,
+                        baseSaveLocation = manualSaveLocation
+                    )
+                }
+            }
+            val legacyManualSavedThreadRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
+                val fs = fileSystem ?: return@remember null
+                val isCurrentDefaultPath = manualSaveLocation is com.valoser.futacha.shared.model.SaveLocation.Path &&
+                    isDefaultManualSaveRoot(manualSaveDirectory)
+                if (isCurrentDefaultPath) {
+                    null
+                } else {
+                    SavedThreadRepository(
+                        fs,
+                        baseDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+                        baseSaveLocation = com.valoser.futacha.shared.model.SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
+                    )
+                }
+            }
+            val activeSavedThreadsRepository by produceState<SavedThreadRepository?>(
+                initialValue = manualSavedThreadRepository ?: legacyManualSavedThreadRepository,
+                key1 = manualSavedThreadRepository,
+                key2 = legacyManualSavedThreadRepository
+            ) {
+                val currentRepository = manualSavedThreadRepository
+                val legacyRepository = legacyManualSavedThreadRepository
+                if (currentRepository == null) {
+                    value = currentRepository ?: legacyRepository
+                    return@produceState
+                }
+                value = withContext(AppDispatchers.io) {
+                    val currentCount = runCatching { currentRepository.getThreadCount() }.getOrDefault(0)
+                    if (legacyRepository == null) {
+                        currentRepository
+                    } else {
+                        val legacyCount = runCatching { legacyRepository.getThreadCount() }.getOrDefault(0)
+                        when {
+                            currentCount <= 0 && legacyCount > 0 -> legacyRepository
+                            legacyCount > currentCount -> legacyRepository
+                            else -> currentRepository
+                        }
+                    }
+                }
             }
             val attachmentPickerPreference by stateStore.attachmentPickerPreference.collectAsState(initial = AttachmentPickerPreference.MEDIA)
             val saveDirectorySelection by stateStore.saveDirectorySelection.collectAsState(initial = SaveDirectorySelection.MANUAL_INPUT)
@@ -355,7 +421,7 @@ fun FutachaApp(
 
             when {
                 selectedBoardId == null && isSavedThreadsVisible -> {
-                    val manualRepository = manualSavedThreadRepository
+                    val manualRepository = activeSavedThreadsRepository
                     if (manualRepository != null) {
                         SavedThreadsScreen(
                             repository = manualRepository,
@@ -577,11 +643,9 @@ fun FutachaApp(
                     val historyThreadUrl = selectedThreadUrl ?: currentBoard.url
                     val historyReplies = selectedThreadReplies ?: 0
                     val historyThumbnail = selectedThreadThumbnailUrl.orEmpty()
-                    // Reduce LaunchedEffect dependencies to only essential keys to prevent excessive coroutine creation
-                    // Use a key that only changes when navigating to a different thread
-                    // Also use currentBoard.id to ensure we update when board context changes
-                    // Include persistedHistory.size to react to history changes
-                    LaunchedEffect(activeThreadId, currentBoard.id, persistedHistory.size) {
+                    // Keep dependencies limited to navigation context.
+                    // History size changes should not retrigger this effect.
+                    LaunchedEffect(activeThreadId, currentBoard.id) {
                         // FIX: デバウンス時間を60秒に増やしてDataStore書き込みを削減
                         val isSameEntry: (ThreadHistoryEntry) -> Boolean = { historyEntry ->
                             if (historyEntry.threadId != activeThreadId) {

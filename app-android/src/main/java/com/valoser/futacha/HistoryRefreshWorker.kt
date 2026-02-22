@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -52,17 +53,21 @@ class HistoryRefreshWorker(
         return try {
             withTimeout(REFRESH_TIMEOUT_MILLIS) {
                 app.historyRefresher.refresh(
-                    autoSaveBudgetMillis = AUTO_SAVE_BUDGET_MILLIS
+                    autoSaveBudgetMillis = AUTO_SAVE_BUDGET_MILLIS,
+                    maxThreadsPerRun = MAX_THREADS_PER_RUN
                 )
             }
+            Result.success()
+        } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+            Logger.d(TAG, "History refresh already running; skip duplicate worker execution")
             Result.success()
         } catch (e: TimeoutCancellationException) {
             Logger.w(TAG, "Background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
             if (runAttemptCount < MAX_TIMEOUT_RETRIES) {
                 Result.retry()
             } else {
-                Logger.w(TAG, "Timeout retry limit reached; completing without retry (attempt=$runAttemptCount)")
-                Result.success()
+                Logger.e(TAG, "Timeout retry limit reached; marking run as failure (attempt=$runAttemptCount)")
+                Result.failure()
             }
         } catch (e: CancellationException) {
             throw e
@@ -89,11 +94,12 @@ class HistoryRefreshWorker(
         private const val TAG = "HistoryRefreshWorker"
         const val UNIQUE_WORK_NAME = "history_refresh_periodic"
         private const val UNIQUE_ONE_TIME_NAME = "history_refresh_once"
-        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(10)
+        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(9)
         private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(3)
         private const val INTERVAL_MINUTES = 15L
+        private const val MAX_THREADS_PER_RUN = 120
         private const val MAX_SETTING_READ_RETRIES = 3
-        private const val MAX_TIMEOUT_RETRIES = 0
+        private const val MAX_TIMEOUT_RETRIES = 2
         private const val MAX_RETRY_ATTEMPTS = 3
 
         private val constraints: Constraints = Constraints.Builder()

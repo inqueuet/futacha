@@ -15,12 +15,21 @@ import com.valoser.futacha.shared.model.SaveProgress
 @Composable
 fun SaveProgressDialog(
     progress: SaveProgress?,
-    onDismissRequest: () -> Unit
+    onDismissRequest: () -> Unit,
+    onCancelRequest: (() -> Unit)? = null
 ) {
     if (progress == null) return
 
+    val isCompleted = progress.phase == SavePhase.FINALIZING && progress.current == progress.total
+
     AlertDialog(
-        onDismissRequest = { /* 進行中は閉じられない */ },
+        onDismissRequest = {
+            if (isCompleted) {
+                onDismissRequest()
+            } else {
+                onCancelRequest?.invoke()
+            }
+        },
         title = {
             Text(text = getPhaseTitle(progress.phase))
         },
@@ -61,9 +70,16 @@ fun SaveProgressDialog(
             }
         },
         confirmButton = {
-            if (progress.phase == SavePhase.FINALIZING && progress.current == progress.total) {
+            if (isCompleted) {
                 TextButton(onClick = onDismissRequest) {
                     Text("閉じる")
+                }
+            }
+        },
+        dismissButton = {
+            if (!isCompleted && onCancelRequest != null) {
+                TextButton(onClick = onCancelRequest) {
+                    Text("キャンセル")
                 }
             }
         }

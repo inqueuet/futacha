@@ -41,11 +41,8 @@ import kotlin.coroutines.suspendCoroutine
 private const val MAX_PICKED_IMAGE_BYTES = 10L * 1024L * 1024L
 
 /**
- * セキュリティスコープリソースの管理
- * pickDirectoryPath()で取得したURLへのアクセスを追跡し、
- * 次回呼び出し時または明示的なリリース時に解放する
+ * UIDocumentPicker delegate の保持
  */
-private val currentSecurityScopedUrl = AtomicReference<NSURL?>(null)
 private val activePickerDelegate = AtomicReference<NSObject?>(null)
 
 private fun retainPickerDelegate(delegate: NSObject) {
@@ -58,10 +55,10 @@ private fun releasePickerDelegate(delegate: NSObject?) {
 }
 
 /**
- * 現在保持しているセキュリティスコープリソースへのアクセスを解放する
+ * 互換性のため公開。現在は pickDirectoryPath() 側で都度解放されるため no-op。
  */
 fun releaseSecurityScopedResource() {
-    currentSecurityScopedUrl.getAndSet(null)?.stopAccessingSecurityScopedResource()
+    // no-op
 }
 
 /**
@@ -236,8 +233,8 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
  * アプリを再起動すると、セキュリティスコープリソースへのアクセス権が失われます。
  * 永続的なアクセスが必要な場合は [pickDirectorySaveLocation] を使用してください。
  *
- * セキュリティスコープリソースは次回の呼び出し時に自動的に解放されます。
- * 明示的に解放する場合は [releaseSecurityScopedResource] を呼び出してください。
+ * セキュリティスコープは書き込み可否チェック後に即座に解放されます。
+ * 永続アクセスが必要な場合は [pickDirectorySaveLocation] を利用してください。
  */
 actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuation ->
     val rootViewController = getRootViewController()
@@ -267,9 +264,6 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
                 return
             }
 
-            // 前回のセキュリティスコープリソースを解放
-            releaseSecurityScopedResource()
-
             // Security-scoped resourceへのアクセスを開始
             val started = url.startAccessingSecurityScopedResource()
             val path = url.path
@@ -284,9 +278,8 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
                 val canWrite = canWriteTestFile(path)
                 dispatch_async(dispatch_get_main_queue()) {
                     if (canWrite) {
-                        // 成功時はURLを保持（次回呼び出し時またはreleaseSecurityScopedResource()で解放）
                         if (started) {
-                            currentSecurityScopedUrl.value = url
+                            url.stopAccessingSecurityScopedResource()
                         }
                         complete(path)
                     } else {
