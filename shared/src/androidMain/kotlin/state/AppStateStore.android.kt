@@ -9,10 +9,12 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 
@@ -57,27 +59,36 @@ private class AndroidPlatformStateStorage(
             .onEach { prefs ->
                 lastReadablePreferences.set(prefs)
             }
-            .catch { e ->
-                when (e) {
-                    is CancellationException -> throw e
+            .retryWhen { cause, attempt ->
+                when (cause) {
+                    is CancellationException -> throw cause
                     is IOException -> {
                         val cached = lastReadablePreferences.get()
                         if (cached != null) {
                             Logger.w(
                                 "AndroidPlatformStateStorage",
-                                "DataStore read failure detected; using last known preferences snapshot: ${e.message}"
+                                "DataStore read failure detected; using last known preferences snapshot and retrying: ${cause.message}"
                             )
                             emit(cached)
+                            val backoffMillis = (250L shl attempt.toInt().coerceAtMost(4)).coerceAtMost(4_000L)
+                            delay(backoffMillis)
+                            true
                         } else {
                             Logger.e(
                                 "AndroidPlatformStateStorage",
                                 "DataStore read failure with no cached snapshot",
-                                e
+                                cause
                             )
-                            throw StorageException("Failed to read DataStore preferences", e)
+                            false
                         }
                     }
-                    else -> throw e
+                    else -> false
+                }
+            }
+            .catch { e ->
+                when (e) {
+                    is CancellationException -> throw e
+                    else -> throw StorageException("Failed to read DataStore preferences", e)
                 }
             }
 
@@ -369,6 +380,19 @@ private class AndroidPlatformStateStorage(
             rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager label: ${e.message}")
             throw StorageException("Failed to save preferred file manager label", e)
+        }
+    }
+
+    override suspend fun updatePreferredFileManager(packageName: String, label: String) {
+        try {
+            context.dataStore.edit { prefs ->
+                prefs[preferredFileManagerPackageKey] = packageName
+                prefs[preferredFileManagerLabelKey] = label
+            }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager pair: ${e.message}")
+            throw StorageException("Failed to save preferred file manager pair", e)
         }
     }
 

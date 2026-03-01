@@ -141,6 +141,7 @@ fun CatalogScreen(
     var isHistoryRefreshing by remember { mutableStateOf(false) }
     var isSearchActive by rememberSaveable(board?.id) { mutableStateOf(false) }
     var searchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
+    var debouncedSearchQuery by rememberSaveable(board?.id) { mutableStateOf("") }
     var showModeDialog by remember { mutableStateOf(false) }
     var showDisplayStyleDialog by remember { mutableStateOf(false) }
     var showCreateThreadDialog by remember { mutableStateOf(false) }
@@ -210,6 +211,15 @@ fun CatalogScreen(
         isPastSearchSheetVisible = false
         pastSearchState = ArchiveSearchState.Idle
         lastArchiveSearchScope = archiveSearchScope
+    }
+    LaunchedEffect(searchQuery) {
+        val normalized = searchQuery.trim()
+        if (normalized.isEmpty()) {
+            debouncedSearchQuery = ""
+            return@LaunchedEffect
+        }
+        delay(200L)
+        debouncedSearchQuery = normalized
     }
     var lastCatalogItems by remember { mutableStateOf<List<CatalogItem>>(emptyList()) }
     val persistCatalogMode: (CatalogMode) -> Unit = { mode ->
@@ -374,7 +384,9 @@ fun CatalogScreen(
         catalogLoadJob = coroutineScope.launch {
             val runningJob = coroutineContext[Job]
             try {
-                val catalog = activeRepository.getCatalog(currentBoard.url, catalogMode)
+                val catalog = withContext(AppDispatchers.io) {
+                    activeRepository.getCatalog(currentBoard.url, catalogMode)
+                }
                 if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
@@ -414,7 +426,9 @@ fun CatalogScreen(
         pastSearchJob = coroutineScope.launch {
             val runningJob = coroutineContext[Job]
             try {
-                val items = fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                val items = withContext(AppDispatchers.io) {
+                    fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                }
                 if (!isActive || pastSearchGeneration != requestGeneration) return@launch
                 pastSearchState = ArchiveSearchState.Success(items)
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -460,7 +474,9 @@ fun CatalogScreen(
         catalogLoadJob = coroutineScope.launch {
             val runningJob = coroutineContext[Job]
             try {
-                val catalog = activeRepository.getCatalog(board.url, catalogMode)
+                val catalog = withContext(AppDispatchers.io) {
+                    activeRepository.getCatalog(board.url, catalogMode)
+                }
                 if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
@@ -608,13 +624,13 @@ fun CatalogScreen(
                     val visibleItems: List<CatalogItem> by produceState<List<CatalogItem>>(
                         initialValue = emptyList(),
                         key1 = state.items,
-                        key2 = listOf(catalogMode, catalogNgWords, catalogNgFilteringEnabled, searchQuery)
+                        key2 = listOf(catalogMode, catalogNgWords, catalogNgFilteringEnabled, debouncedSearchQuery)
                     ) {
                         value = withContext(AppDispatchers.parsing) {
                             state.items
                                 .let { catalogMode.applyLocalSort(it) }
                                 .filterByCatalogNgWords(catalogNgWords, catalogNgFilteringEnabled)
-                                .filterByQuery(searchQuery)
+                                .filterByQuery(debouncedSearchQuery)
                         }
                     }
 
@@ -1365,6 +1381,8 @@ private fun CatalogGrid(
                 layoutInfo.visibleItemsInfo.size >= totalItems
         }
     }
+    val latestIsAtTop by rememberUpdatedState(isAtTop)
+    val latestIsAtBottom by rememberUpdatedState(isAtBottom)
 
     // Return overscroll space once refresh completes.
     LaunchedEffect(isRefreshing) {
@@ -1379,7 +1397,7 @@ private fun CatalogGrid(
             .fillMaxSize()
             .padding(horizontal = 8.dp)
             .offset { IntOffset(0, overscrollOffset.toInt()) }
-            .pointerInput(isRefreshing, isAtTop, isAtBottom, refreshTriggerPx, maxOverscrollPx) {
+            .pointerInput(isRefreshing, refreshTriggerPx, maxOverscrollPx) {
                 var totalDrag = 0f
                 detectVerticalDragGestures(
                     onDragStart = {
@@ -1388,13 +1406,13 @@ private fun CatalogGrid(
                     onVerticalDrag = { change, dragAmount ->
                         if (isRefreshing) return@detectVerticalDragGestures
                         when {
-                            isAtTop && dragAmount > 0f -> {
+                            latestIsAtTop && dragAmount > 0f -> {
                                 totalDrag += dragAmount
                                 overscrollTarget = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
                                 change.consume()
                             }
 
-                            isAtBottom && dragAmount < 0f -> {
+                            latestIsAtBottom && dragAmount < 0f -> {
                                 totalDrag += dragAmount
                                 overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
                                 change.consume()
@@ -1489,6 +1507,8 @@ private fun CatalogList(
                 layoutInfo.visibleItemsInfo.size >= totalItems
         }
     }
+    val latestIsAtTop by rememberUpdatedState(isAtTop)
+    val latestIsAtBottom by rememberUpdatedState(isAtBottom)
 
     // Return overscroll space once refresh completes.
     LaunchedEffect(isRefreshing) {
@@ -1502,7 +1522,7 @@ private fun CatalogList(
         modifier = modifier
             .fillMaxSize()
             .offset { IntOffset(0, overscrollOffset.toInt()) }
-            .pointerInput(isRefreshing, isAtTop, isAtBottom, refreshTriggerPx, maxOverscrollPx) {
+            .pointerInput(isRefreshing, refreshTriggerPx, maxOverscrollPx) {
                 var totalDrag = 0f
                 detectVerticalDragGestures(
                     onDragStart = {
@@ -1511,13 +1531,13 @@ private fun CatalogList(
                     onVerticalDrag = { change, dragAmount ->
                         if (isRefreshing) return@detectVerticalDragGestures
                         when {
-                            isAtTop && dragAmount > 0f -> {
+                            latestIsAtTop && dragAmount > 0f -> {
                                 totalDrag += dragAmount
                                 overscrollTarget = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
                                 change.consume()
                             }
 
-                            isAtBottom && dragAmount < 0f -> {
+                            latestIsAtBottom && dragAmount < 0f -> {
                                 totalDrag += dragAmount
                                 overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
                                 change.consume()

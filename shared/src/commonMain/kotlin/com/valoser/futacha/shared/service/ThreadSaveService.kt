@@ -91,10 +91,11 @@ class ThreadSaveService(
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
         private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
         private const val THREAD_HTML_FETCH_TIMEOUT_MILLIS = 30_000L
+        private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 120_000L
         private const val WRITE_TIMEOUT_MILLIS = 60_000L
         private const val STREAM_READ_BUFFER_BYTES = 64 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
-        private const val ZERO_READ_BACKOFF_MILLIS = 8L
+        private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val MAX_PARALLEL_DOWNLOADS = 1
 
         // FIX: Regexプリコンパイル（パフォーマンス最適化）
@@ -194,7 +195,10 @@ class ThreadSaveService(
             baseDirectory = baseDirectory,
             baseSaveLocation = baseSaveLocation
         )
-        ThreadStorageLockRegistry.withStorageLock(storageLockKey) {
+        val saveResult = ThreadStorageLockRegistry.withStorageLockOrNull(
+            storageId = storageLockKey,
+            waitTimeoutMillis = STORAGE_LOCK_WAIT_TIMEOUT_MILLIS
+        ) {
             try {
                 Result.success(run {
                 val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
@@ -207,6 +211,14 @@ class ThreadSaveService(
                 val baseDir = "$baseDirectory/$storageId"
                 val boardPath = extractBoardPath(boardUrl, boardId)
                 val opPostId = posts.firstOrNull()?.id
+
+                // 既存保存物が残っていると旧ファイル混在が起きるため、保存開始前に対象を掃除する。
+                if (useSaveLocation) {
+                    val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
+                    fileSystem.delete(location, storageId).getOrNull()
+                } else {
+                    fileSystem.deleteRecursively(baseDir).getOrNull()
+                }
 
                 if (useSaveLocation) {
                     val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
@@ -230,7 +242,7 @@ class ThreadSaveService(
             // FIX: マップのサイズ制限とメモリ効率化
             // LRUキャッシュを使用して自動的に古いエントリを削除
             val urlToPathMap = createLruCache<String, String>(MAX_MEDIA_ITEMS)
-            val urlToFileInfoMap = createLruCache<String, LocalFileInfo>(MAX_MEDIA_ITEMS)
+            val mediaKeyToFileInfoMap = createLruCache<String, LocalFileInfo>(MAX_MEDIA_ITEMS)
 
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
@@ -361,8 +373,19 @@ class ThreadSaveService(
                                     totalSize += fileInfo.byteSize
                                     enforceBudget(totalSize, startedAtMillis)
                                     // URL→ローカルパスマッピングに追加
-                                    urlToPathMap[mediaItem.url] = fileInfo.relativePath
-                                    urlToFileInfoMap[mediaItem.url] = fileInfo
+                                    val mediaKey = mediaDownloadKey(mediaItem.url, mediaItem.type)
+                                    mediaKeyToFileInfoMap[mediaKey] = fileInfo
+                                    when (mediaItem.type) {
+                                        MediaType.THUMBNAIL -> {
+                                            if (urlToPathMap[mediaItem.url] == null) {
+                                                urlToPathMap[mediaItem.url] = fileInfo.relativePath
+                                            }
+                                        }
+                                        MediaType.FULL_IMAGE -> {
+                                            // 本体URLはサムネより優先して紐付ける。
+                                            urlToPathMap[mediaItem.url] = fileInfo.relativePath
+                                        }
+                                    }
 
                                     when (fileInfo.fileType) {
                                         FileType.THUMBNAIL -> {
@@ -427,8 +450,12 @@ class ThreadSaveService(
                 )
 
                 // マッピングからローカルパスを取得（再ダウンロードしない）
-                val imageFileInfo = post.imageUrl?.let { urlToFileInfoMap[it] }
-                val thumbnailFileInfo = post.thumbnailUrl?.let { urlToFileInfoMap[it] }
+                val imageFileInfo = post.imageUrl?.let {
+                    mediaKeyToFileInfoMap[mediaDownloadKey(it, MediaType.FULL_IMAGE)]
+                }
+                val thumbnailFileInfo = post.thumbnailUrl?.let {
+                    mediaKeyToFileInfoMap[mediaDownloadKey(it, MediaType.THUMBNAIL)]
+                }
                 val localImagePath = imageFileInfo
                     ?.takeIf { it.fileType == FileType.FULL_IMAGE }
                     ?.relativePath
@@ -528,11 +555,32 @@ class ThreadSaveService(
                 )
             })
             } catch (e: CancellationException) {
+                runCatching {
+                    cleanupFailedSave(
+                        baseSaveLocation = baseSaveLocation,
+                        baseDirectory = baseDirectory,
+                        storageId = storageId
+                    )
+                }.onFailure { cleanupError ->
+                    Logger.w("ThreadSaveService", "Failed to cleanup canceled save for $storageId: ${cleanupError.message}")
+                }
                 throw e
             } catch (t: Throwable) {
+                runCatching {
+                    cleanupFailedSave(
+                        baseSaveLocation = baseSaveLocation,
+                        baseDirectory = baseDirectory,
+                        storageId = storageId
+                    )
+                }.onFailure { cleanupError ->
+                    Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
+                }
                 Result.failure(t)
             }
         }
+        saveResult ?: Result.failure(
+            IllegalStateException("保存処理が混雑しています。しばらく待ってから再試行してください。")
+        )
     }
 
     /**
@@ -735,6 +783,18 @@ class ThreadSaveService(
         }
 
         return totalBytesRead.toLong()
+    }
+
+    private suspend fun cleanupFailedSave(
+        baseSaveLocation: SaveLocation?,
+        baseDirectory: String,
+        storageId: String
+    ) {
+        if (baseSaveLocation != null) {
+            fileSystem.delete(baseSaveLocation, storageId).getOrNull()
+        } else {
+            fileSystem.deleteRecursively("$baseDirectory/$storageId").getOrNull()
+        }
     }
 
     /**

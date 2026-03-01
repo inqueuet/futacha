@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.TextEncoding
 import com.valoser.futacha.shared.util.sanitizeForShiftJis
@@ -30,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.coroutines.coroutineContext
@@ -219,20 +221,24 @@ class HttpBoardApi(
         private const val MIN_THREAD_HEAD_RANGE_BYTES = 64 * 1024
         private const val MAX_THREAD_HEAD_RANGE_BYTES = 1024 * 1024
         private const val RESPONSE_READ_BUFFER_BYTES = 8 * 1024
-        private const val MAX_ZERO_READ_RETRIES = 1000
-        private const val ZERO_READ_BACKOFF_MILLIS = 8L
+        private const val MAX_ZERO_READ_RETRIES = 250
+        private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val RESPONSE_TOTAL_TIMEOUT_MILLIS = 30_000L
         private const val REQUEST_ATTEMPT_TIMEOUT_MILLIS = 45_000L
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
         val bytes = readResponseBytesWithLimit(response, MAX_RESPONSE_SIZE)
-        return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
+        return withContext(AppDispatchers.parsing) {
+            TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
+        }
     }
 
     private suspend fun readResponseHeadAsString(response: HttpResponse, maxLines: Int): String {
         val bytes = readResponseHeadBytesWithLimit(response, maxLines)
-        return TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType]).trimEnd('\n', '\r')
+        return withContext(AppDispatchers.parsing) {
+            TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType]).trimEnd('\n', '\r')
+        }
     }
 
     private suspend fun readResponseBytesWithLimit(response: HttpResponse, maxBytes: Int): ByteArray {
@@ -240,57 +246,65 @@ class HttpBoardApi(
         if (contentLength != null && contentLength > maxBytes) {
             throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
         }
-        return withTimeout(RESPONSE_TOTAL_TIMEOUT_MILLIS) {
-            val channel = response.bodyAsChannel()
-            val buffer = ByteArray(RESPONSE_READ_BUFFER_BYTES)
-            var output = ByteArray(minOf(RESPONSE_READ_BUFFER_BYTES, maxBytes.coerceAtLeast(1)))
-            var totalBytes = 0
-            var zeroReadCount = 0
-            var readLoopCount = 0L
-            try {
-                while (true) {
-                    coroutineContext.ensureActive()
-                    val read = channel.readAvailable(buffer, 0, buffer.size)
-                    if (read == -1) break
-                    if (read == 0) {
-                        zeroReadCount += 1
-                        if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                            throw NetworkException("Response body read stalled")
+        return withContext(AppDispatchers.io) {
+            withTimeout(RESPONSE_TOTAL_TIMEOUT_MILLIS) {
+                val channel = response.bodyAsChannel()
+                val buffer = ByteArray(RESPONSE_READ_BUFFER_BYTES)
+                var output = ByteArray(minOf(RESPONSE_READ_BUFFER_BYTES, maxBytes.coerceAtLeast(1)))
+                var totalBytes = 0
+                var zeroReadCount = 0
+                var readLoopCount = 0L
+                var fullyConsumed = false
+                try {
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val read = channel.readAvailable(buffer, 0, buffer.size)
+                        if (read == -1) {
+                            fullyConsumed = true
+                            break
                         }
-                        delay(ZERO_READ_BACKOFF_MILLIS)
-                        continue
-                    }
+                        if (read == 0) {
+                            zeroReadCount += 1
+                            if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
+                                throw NetworkException("Response body read stalled")
+                            }
+                            delay(ZERO_READ_BACKOFF_MILLIS)
+                            continue
+                        }
 
-                    zeroReadCount = 0
-                    val requiredSize = totalBytes + read
-                    if (requiredSize > maxBytes) {
-                        throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
-                    }
-                    if (requiredSize > output.size) {
-                        var newSize = output.size
-                        while (newSize < requiredSize) {
-                            newSize = (newSize * 2).coerceAtMost(maxBytes)
-                            if (newSize == output.size) break
+                        zeroReadCount = 0
+                        val requiredSize = totalBytes + read
+                        if (requiredSize > maxBytes) {
+                            throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
                         }
-                        if (newSize < requiredSize) {
-                            throw NetworkException("Failed to expand response buffer safely")
+                        if (requiredSize > output.size) {
+                            var newSize = output.size
+                            while (newSize < requiredSize) {
+                                newSize = (newSize * 2).coerceAtMost(maxBytes)
+                                if (newSize == output.size) break
+                            }
+                            if (newSize < requiredSize) {
+                                throw NetworkException("Failed to expand response buffer safely")
+                            }
+                            output = output.copyOf(newSize)
                         }
-                        output = output.copyOf(newSize)
+                        buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
+                        totalBytes = requiredSize
+                        readLoopCount += 1
+                        if (readLoopCount % 32L == 0L) {
+                            yield()
+                        }
                     }
-                    buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
-                    totalBytes = requiredSize
-                    readLoopCount += 1
-                    if (readLoopCount % 32L == 0L) {
-                        yield()
+                    if (totalBytes == output.size) {
+                        output
+                    } else {
+                        output.copyOf(totalBytes)
+                    }
+                } finally {
+                    if (!fullyConsumed) {
+                        runCatching { channel.cancel() }
                     }
                 }
-                if (totalBytes == output.size) {
-                    output
-                } else {
-                    output.copyOf(totalBytes)
-                }
-            } finally {
-                runCatching { channel.cancel() }
             }
         }
     }
@@ -303,69 +317,77 @@ class HttpBoardApi(
         if (maxLines <= 0) {
             return readResponseBytesWithLimit(response, MAX_RESPONSE_SIZE)
         }
-        return withTimeout(RESPONSE_TOTAL_TIMEOUT_MILLIS) {
-            val channel = response.bodyAsChannel()
-            val buffer = ByteArray(RESPONSE_READ_BUFFER_BYTES)
-            var output = ByteArray(RESPONSE_READ_BUFFER_BYTES)
-            var totalBytes = 0
-            var lineCount = 0
-            var zeroReadCount = 0
-            var readLoopCount = 0L
-            try {
-                reading@ while (true) {
-                    coroutineContext.ensureActive()
-                    val read = channel.readAvailable(buffer, 0, buffer.size)
-                    if (read == -1) break
-                    if (read == 0) {
-                        zeroReadCount += 1
-                        if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                            throw NetworkException("Response head read stalled")
+        return withContext(AppDispatchers.io) {
+            withTimeout(RESPONSE_TOTAL_TIMEOUT_MILLIS) {
+                val channel = response.bodyAsChannel()
+                val buffer = ByteArray(RESPONSE_READ_BUFFER_BYTES)
+                var output = ByteArray(RESPONSE_READ_BUFFER_BYTES)
+                var totalBytes = 0
+                var lineCount = 0
+                var zeroReadCount = 0
+                var readLoopCount = 0L
+                var fullyConsumed = false
+                try {
+                    reading@ while (true) {
+                        coroutineContext.ensureActive()
+                        val read = channel.readAvailable(buffer, 0, buffer.size)
+                        if (read == -1) {
+                            fullyConsumed = true
+                            break
                         }
-                        delay(ZERO_READ_BACKOFF_MILLIS)
-                        continue
-                    }
+                        if (read == 0) {
+                            zeroReadCount += 1
+                            if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
+                                throw NetworkException("Response head read stalled")
+                            }
+                            delay(ZERO_READ_BACKOFF_MILLIS)
+                            continue
+                        }
 
-                    zeroReadCount = 0
-                    var writeCount = read
-                    for (i in 0 until read) {
-                        if (buffer[i] == '\n'.code.toByte()) {
-                            lineCount += 1
-                            if (lineCount >= maxLines) {
-                                writeCount = i + 1
-                                break
+                        zeroReadCount = 0
+                        var writeCount = read
+                        for (i in 0 until read) {
+                            if (buffer[i] == '\n'.code.toByte()) {
+                                lineCount += 1
+                                if (lineCount >= maxLines) {
+                                    writeCount = i + 1
+                                    break
+                                }
                             }
                         }
-                    }
-                    val requiredSize = totalBytes + writeCount
-                    if (requiredSize > MAX_RESPONSE_SIZE) {
-                        throw NetworkException("Response size exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                    }
-                    if (requiredSize > output.size) {
-                        var newSize = output.size
-                        while (newSize < requiredSize) {
-                            newSize = (newSize * 2).coerceAtMost(MAX_RESPONSE_SIZE)
-                            if (newSize == output.size) break
+                        val requiredSize = totalBytes + writeCount
+                        if (requiredSize > MAX_RESPONSE_SIZE) {
+                            throw NetworkException("Response size exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
                         }
-                        if (newSize < requiredSize) {
-                            throw NetworkException("Failed to expand response head buffer safely")
+                        if (requiredSize > output.size) {
+                            var newSize = output.size
+                            while (newSize < requiredSize) {
+                                newSize = (newSize * 2).coerceAtMost(MAX_RESPONSE_SIZE)
+                                if (newSize == output.size) break
+                            }
+                            if (newSize < requiredSize) {
+                                throw NetworkException("Failed to expand response head buffer safely")
+                            }
+                            output = output.copyOf(newSize)
                         }
-                        output = output.copyOf(newSize)
+                        buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = writeCount)
+                        totalBytes = requiredSize
+                        if (lineCount >= maxLines) break@reading
+                        readLoopCount += 1
+                        if (readLoopCount % 32L == 0L) {
+                            yield()
+                        }
                     }
-                    buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = writeCount)
-                    totalBytes = requiredSize
-                    if (lineCount >= maxLines) break@reading
-                    readLoopCount += 1
-                    if (readLoopCount % 32L == 0L) {
-                        yield()
+                    if (totalBytes == output.size) {
+                        output
+                    } else {
+                        output.copyOf(totalBytes)
+                    }
+                } finally {
+                    if (!fullyConsumed) {
+                        runCatching { channel.cancel() }
                     }
                 }
-                if (totalBytes == output.size) {
-                    output
-                } else {
-                    output.copyOf(totalBytes)
-                }
-            } finally {
-                runCatching { channel.cancel() }
             }
         }
     }
@@ -454,7 +476,8 @@ class HttpBoardApi(
 
     // FIX: スレッドセーフなLRUキャッシュに変更
     private val postingConfigCache = ThreadSafeLruCache<String, PostingConfig>(MAX_CACHE_SIZE)
-    private val postingConfigFetchMutex = Mutex()
+    private val postingConfigLocksGuard = Mutex()
+    private val postingConfigLocks = mutableMapOf<String, Mutex>()
 
     override suspend fun fetchCatalogSetup(board: String) {
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
@@ -495,7 +518,7 @@ class HttpBoardApi(
                     // Drain body so pooled connection is released promptly.
                     readSmallResponseSummary(response)
                 } finally {
-                    runCatching { response.bodyAsChannel().cancel(null) }
+                    // Body is already drained by readSmallResponseSummary.
                 }
 
                 // Cookies (posttime, cxyl, etc.) are automatically stored by HttpCookies plugin
@@ -525,19 +548,25 @@ class HttpBoardApi(
                     headers[HttpHeaders.Referrer] = board
                 }
 
-                if (!response.status.isSuccess()) {
-                    val errorMsg = "HTTP error ${response.status.value} when fetching catalog from $url"
-                    Logger.w(TAG, errorMsg)
-                    throw NetworkException(errorMsg, response.status.value)
-                }
+                try {
+                    if (!response.status.isSuccess()) {
+                        val detail = readSmallResponseSummary(response)
+                        val suffix = detail?.let { ": $it" }.orEmpty()
+                        val errorMsg = "HTTP error ${response.status.value} when fetching catalog from $url$suffix"
+                        Logger.w(TAG, errorMsg)
+                        throw NetworkException(errorMsg, response.status.value)
+                    }
 
-                // Check content length before reading
-                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                    throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                }
+                    // Check content length before reading
+                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                    if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
+                        throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+                    }
 
-                readResponseBodyAsString(response)
+                    readResponseBodyAsString(response)
+                } finally {
+                    // Body lifecycle is managed in readResponseBodyAsString.
+                }
             }
         } catch (e: NetworkException) {
             throw e
@@ -614,19 +643,25 @@ class HttpBoardApi(
                     headers[HttpHeaders.Referrer] = refererBase
                 }
 
-                if (!response.status.isSuccess()) {
-                    val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url"
-                    Logger.w(TAG, errorMsg)
-                    throw NetworkException(errorMsg, response.status.value)
-                }
+                try {
+                    if (!response.status.isSuccess()) {
+                        val detail = readSmallResponseSummary(response)
+                        val suffix = detail?.let { ": $it" }.orEmpty()
+                        val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url$suffix"
+                        Logger.w(TAG, errorMsg)
+                        throw NetworkException(errorMsg, response.status.value)
+                    }
 
-                // Check content length before reading
-                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                    throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                }
+                    // Check content length before reading
+                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                    if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
+                        throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+                    }
 
-                readResponseBodyAsString(response)
+                    readResponseBodyAsString(response)
+                } finally {
+                    // Body lifecycle is managed in readResponseBodyAsString.
+                }
             }
         } catch (e: NetworkException) {
             throw e
@@ -654,18 +689,24 @@ class HttpBoardApi(
                     }
                 }
 
-                if (!response.status.isSuccess()) {
-                    val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url"
-                    Logger.w(TAG, errorMsg)
-                    throw NetworkException(errorMsg, response.status.value)
-                }
+                try {
+                    if (!response.status.isSuccess()) {
+                        val detail = readSmallResponseSummary(response)
+                        val suffix = detail?.let { ": $it" }.orEmpty()
+                        val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url$suffix"
+                        Logger.w(TAG, errorMsg)
+                        throw NetworkException(errorMsg, response.status.value)
+                    }
 
-                val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                    throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                }
+                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                    if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
+                        throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
+                    }
 
-                readResponseBodyAsString(response)
+                    readResponseBodyAsString(response)
+                } finally {
+                    // Body lifecycle is managed in readResponseBodyAsString.
+                }
             }
         } catch (e: NetworkException) {
             throw e
@@ -696,12 +737,18 @@ class HttpBoardApi(
                 headers[HttpHeaders.Pragma] = "no-cache"
                 headers[HttpHeaders.Referrer] = referer
             }
-            if (!response.status.isSuccess()) {
-                throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value})")
-            }
-            val result = readResponseBodyAsString(response).trim()
-            if (result != "1") {
-                throw NetworkException("そうだね投票に失敗しました (応答: '$result')")
+            try {
+                if (!response.status.isSuccess()) {
+                    val detail = readSmallResponseSummary(response)
+                    val suffix = detail?.let { ": $it" }.orEmpty()
+                    throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)")
+                }
+                val result = readResponseBodyAsString(response).trim()
+                if (result != "1") {
+                    throw NetworkException("そうだね投票に失敗しました (応答: '$result')")
+                }
+            } finally {
+                // Body lifecycle is managed in readResponseBodyAsString.
             }
         } catch (e: NetworkException) {
             throw e
@@ -733,12 +780,20 @@ class HttpBoardApi(
     }
 
     private suspend fun readSmallResponseSummary(response: HttpResponse): String? {
-        val bytes = runCatching {
+        val bytes = try {
             readResponseBytesWithLimit(response, 64 * 1024)
-        }.getOrNull() ?: return null
-        val decoded = runCatching {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            return null
+        }
+        val decoded = try {
             TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
-        }.getOrNull() ?: return null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            return null
+        }
         return decoded
             .trim()
             .lineSequence()
@@ -788,7 +843,7 @@ class HttpBoardApi(
             // Drain short response body to promptly release underlying connection.
             readSmallResponseSummary(response)
         } finally {
-            runCatching { response.bodyAsChannel().cancel(null) }
+            // Body is already drained by readSmallResponseSummary.
         }
     }
 
@@ -847,7 +902,7 @@ class HttpBoardApi(
             // Drain short response body to promptly release underlying connection.
             readSmallResponseSummary(response)
         } finally {
-            runCatching { response.bodyAsChannel().cancel(null) }
+            // Body is already drained by readSmallResponseSummary.
         }
     }
 
@@ -906,30 +961,36 @@ class HttpBoardApi(
         } catch (e: Exception) {
             throw NetworkException("Failed to create thread: ${e.message}", cause = e)
         }
-        if (!response.status.isSuccess()) {
-            throw NetworkException("スレッド作成に失敗しました (HTTP ${response.status.value})")
-        }
+        try {
+            if (!response.status.isSuccess()) {
+                val detail = readSmallResponseSummary(response)
+                val suffix = detail?.let { ": $it" }.orEmpty()
+                throw NetworkException("スレッド作成に失敗しました (HTTP ${response.status.value}$suffix)")
+            }
 
-        // Parse response to extract thread ID
-        val responseBody = readResponseBodyAsString(response)
-        val extractedThreadId = tryExtractThreadId(responseBody)
-        if (!extractedThreadId.isNullOrBlank()) {
-            return extractedThreadId
+            // Parse response to extract thread ID
+            val responseBody = readResponseBodyAsString(response)
+            val extractedThreadId = tryExtractThreadId(responseBody)
+            if (!extractedThreadId.isNullOrBlank()) {
+                return extractedThreadId
+            }
+            val jsonThreadId = tryParseThreadIdFromJson(responseBody)
+            if (jsonThreadId != null) {
+                return jsonThreadId
+            }
+            val errorDetail = extractServerError(responseBody)
+            val summary = summarizeResponse(responseBody)
+            if (errorDetail != null) {
+                throw NetworkException("スレッド作成に失敗しました: $errorDetail")
+            }
+            if (isSuccessfulPostResponse(responseBody)) {
+                com.valoser.futacha.shared.util.Logger.w("HttpBoardApi", "Thread created but thread ID was not found in response")
+                return null
+            }
+            throw NetworkException("スレッドIDの取得に失敗しました: $summary")
+        } finally {
+            // Body lifecycle is managed in readResponseBodyAsString.
         }
-        val jsonThreadId = tryParseThreadIdFromJson(responseBody)
-        if (jsonThreadId != null) {
-            return jsonThreadId
-        }
-        val errorDetail = extractServerError(responseBody)
-        val summary = summarizeResponse(responseBody)
-        if (errorDetail != null) {
-            throw NetworkException("スレッド作成に失敗しました: $errorDetail")
-        }
-        if (isSuccessfulPostResponse(responseBody)) {
-            com.valoser.futacha.shared.util.Logger.w("HttpBoardApi", "Thread created but thread ID was not found in response")
-            return null
-        }
-        throw NetworkException("スレッドIDの取得に失敗しました: $summary")
     }
 
     override suspend fun replyToThread(
@@ -983,17 +1044,23 @@ class HttpBoardApi(
         } catch (e: Exception) {
             throw NetworkException("Failed to reply to thread: ${e.message}", cause = e)
         }
-        if (!response.status.isSuccess()) {
-            throw NetworkException("返信に失敗しました (HTTP ${response.status.value})")
+        try {
+            if (!response.status.isSuccess()) {
+                val detail = readSmallResponseSummary(response)
+                val suffix = detail?.let { ": $it" }.orEmpty()
+                throw NetworkException("返信に失敗しました (HTTP ${response.status.value}$suffix)")
+            }
+            val responseBody = readResponseBodyAsString(response)
+            if (!isSuccessfulPostResponse(responseBody)) {
+                val errorDetail = extractServerError(responseBody)
+                val summary = summarizeResponse(responseBody)
+                val detail = errorDetail ?: summary
+                throw NetworkException("返信に失敗しました: $detail")
+            }
+            return tryExtractThisNo(responseBody)
+        } finally {
+            // Body lifecycle is managed in readResponseBodyAsString.
         }
-        val responseBody = readResponseBodyAsString(response)
-        if (!isSuccessfulPostResponse(responseBody)) {
-            val errorDetail = extractServerError(responseBody)
-            val summary = summarizeResponse(responseBody)
-            val detail = errorDetail ?: summary
-            throw NetworkException("返信に失敗しました: $detail")
-        }
-        return tryExtractThisNo(responseBody)
     }
 
     // SECURITY NOTE: パスワードはStringで渡されるため、メモリダンプから漏洩する可能性があります。
@@ -1261,9 +1328,16 @@ class HttpBoardApi(
     private fun generateClientTimestampSeed(): String =
         Clock.System.now().toEpochMilliseconds().toString()
 
+    private suspend fun postingConfigLockFor(board: String): Mutex {
+        return postingConfigLocksGuard.withLock {
+            postingConfigLocks.getOrPut(board) { Mutex() }
+        }
+    }
+
     private suspend fun getPostingConfig(board: String): PostingConfig {
         postingConfigCache.get(board)?.let { return it }
-        return postingConfigFetchMutex.withLock {
+        val boardLock = postingConfigLockFor(board)
+        return boardLock.withLock {
             postingConfigCache.get(board)?.let { return@withLock it }
             try {
                 val fetched = fetchPostingConfig(board)
@@ -1300,19 +1374,25 @@ class HttpBoardApi(
             headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
             headers[HttpHeaders.CacheControl] = "no-cache"
         }
-        if (!response.status.isSuccess()) {
-            throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url")
+        try {
+            if (!response.status.isSuccess()) {
+                val detail = readSmallResponseSummary(response)
+                val suffix = detail?.let { ": $it" }.orEmpty()
+                throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url$suffix")
+            }
+            val html = readResponseBodyAsString(response)
+            val chrencValue = parseChrencValue(html)
+            if (chrencValue == null) {
+                Logger.w(TAG, "chrenc not found in posting config response for '$board'; using temporary fallback")
+            }
+            return PostingConfig(
+                encoding = determineEncoding(chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE),
+                chrencValue = chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
+                fromFallback = chrencValue == null
+            )
+        } finally {
+            // Body lifecycle is managed in readResponseBodyAsString.
         }
-        val html = readResponseBodyAsString(response)
-        val chrencValue = parseChrencValue(html)
-        if (chrencValue == null) {
-            Logger.w(TAG, "chrenc not found in posting config response for '$board'; using temporary fallback")
-        }
-        return PostingConfig(
-            encoding = determineEncoding(chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE),
-            chrencValue = chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
-            fromFallback = chrencValue == null
-        )
     }
 
     private fun parseChrencValue(html: String): String? {

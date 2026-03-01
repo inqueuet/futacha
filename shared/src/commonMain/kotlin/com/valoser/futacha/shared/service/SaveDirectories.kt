@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.SaveLocation
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -52,6 +53,36 @@ object ThreadStorageLockRegistry {
             }
         }
     }
+
+    suspend fun <T> withStorageLockOrNull(
+        storageId: String,
+        waitTimeoutMillis: Long,
+        block: suspend () -> T
+    ): T? {
+        val key = storageId.trim().ifBlank { "thread" }
+        val entry = guard.withLock {
+            val current = locks.getOrPut(key) { StorageLockEntry(Mutex()) }
+            current.holders += 1
+            current
+        }
+        return try {
+            withTimeoutOrNull(waitTimeoutMillis.coerceAtLeast(1L)) {
+                entry.mutex.withLock {
+                    block()
+                }
+            }
+        } finally {
+            guard.withLock {
+                val current = locks[key]
+                if (current === entry) {
+                    current.holders -= 1
+                    if (current.holders <= 0 && !current.mutex.isLocked) {
+                        locks.remove(key)
+                    }
+                }
+            }
+        }
+    }
 }
 
 fun buildThreadStorageLockKey(
@@ -71,13 +102,17 @@ fun buildThreadStorageLockKey(
 }
 
 fun buildThreadStorageId(boardId: String?, threadId: String): String {
-    val safeThread = sanitizeStorageSegment(threadId).ifBlank { "thread" }
-    val safeBoard = sanitizeStorageSegment(boardId.orEmpty())
-    return if (safeBoard.isBlank()) {
+    val rawThread = threadId.trim()
+    val rawBoard = boardId.orEmpty().trim()
+    val safeThread = sanitizeStorageSegment(rawThread).ifBlank { "thread" }
+    val safeBoard = sanitizeStorageSegment(rawBoard)
+    val base = if (safeBoard.isBlank()) {
         safeThread
     } else {
         "$safeBoard$STORAGE_KEY_DELIMITER$safeThread"
     }
+    val pairHash = shortStableHash("board:$rawBoard|thread:$rawThread")
+    return "${base}_$pairHash"
 }
 
 internal fun buildLegacyThreadStorageId(boardId: String?, threadId: String): String {

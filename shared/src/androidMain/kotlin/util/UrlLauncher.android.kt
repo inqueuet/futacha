@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 @Composable
 actual fun rememberUrlLauncher(): (String) -> Unit {
     val context = LocalContext.current
-    return remember {
+    return remember(context) {
         { url: String ->
             try {
                 val trimmed = url.trim()

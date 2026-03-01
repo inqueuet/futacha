@@ -135,6 +135,16 @@ internal object CatalogHtmlParserCore {
                 val cellEndIndex = normalized.indexOf(tdEnd, cellContentStart, ignoreCase = true)
                 if (cellEndIndex == -1) break
 
+                val cellSize = cellEndIndex - cellContentStart
+                if (cellSize > MAX_CHUNK_SIZE) {
+                    Logger.w(
+                        "CatalogHtmlParserCore",
+                        "Skipping oversized catalog cell ($cellSize bytes > $MAX_CHUNK_SIZE)"
+                    )
+                    searchStart = cellEndIndex + tdEnd.length
+                    continue
+                }
+
                 // Extract cell content - keep it small
                 val cell = normalized.substring(cellContentStart, cellEndIndex)
 

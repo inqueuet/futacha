@@ -88,16 +88,20 @@ class FutachaApplication : Application() {
         // Initialize WorkManager for background refresh
         val workManager = WorkManager.getInstance(applicationContext)
         applicationScope.launch {
+            var hasObservedBackgroundToggle = false
             try {
                 appStateStore.isBackgroundRefreshEnabled
                     .distinctUntilChanged()
                     .onEach { enabled ->
                         if (enabled) {
                             HistoryRefreshWorker.enqueuePeriodic(workManager)
-                            HistoryRefreshWorker.enqueueImmediate(workManager)
+                            if (hasObservedBackgroundToggle) {
+                                HistoryRefreshWorker.enqueueImmediate(workManager)
+                            }
                         } else {
                             HistoryRefreshWorker.cancel(workManager)
                         }
+                        hasObservedBackgroundToggle = true
                     }
                     .retryWhen { cause, attempt ->
                         if (cause is CancellationException) throw cause

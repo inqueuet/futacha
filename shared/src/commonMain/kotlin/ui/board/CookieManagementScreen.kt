@@ -39,7 +39,9 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.network.StoredCookie
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
@@ -55,12 +57,22 @@ fun CookieManagementScreen(
     val scope = rememberCoroutineScope()
     var cookies by remember { mutableStateOf<List<StoredCookie>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var reloadGeneration by remember { mutableStateOf(0L) }
 
     fun reload() {
+        val requestGeneration = reloadGeneration + 1L
+        reloadGeneration = requestGeneration
         scope.launch {
             isLoading = true
-            cookies = runCatching { repository.listCookies() }.getOrElse { emptyList() }
-            isLoading = false
+            val loaded = runCatching {
+                withContext(AppDispatchers.io) {
+                    repository.listCookies()
+                }
+            }.getOrElse { emptyList() }
+            if (reloadGeneration == requestGeneration) {
+                cookies = loaded
+                isLoading = false
+            }
         }
     }
 
@@ -83,7 +95,9 @@ fun CookieManagementScreen(
                     if (cookies.isNotEmpty()) {
                         IconButton(onClick = {
                             scope.launch {
-                                repository.clearAll()
+                                withContext(AppDispatchers.io) {
+                                    repository.clearAll()
+                                }
                                 reload()
                                 snackbarHostState.showSnackbar("すべてのCookieを削除しました")
                             }
@@ -155,7 +169,9 @@ fun CookieManagementScreen(
                         cookie = cookie,
                         onDelete = {
                             scope.launch {
-                                repository.deleteCookie(cookie.domain, cookie.path, cookie.name)
+                                withContext(AppDispatchers.io) {
+                                    repository.deleteCookie(cookie.domain, cookie.path, cookie.name)
+                                }
                                 reload()
                                 snackbarHostState.showSnackbar("削除しました: ${cookie.name}")
                             }

@@ -23,6 +23,7 @@ import platform.darwin.dispatch_get_main_queue
 object BackgroundRefreshManager {
     private const val TASK_ID = "com.valoser.futacha.refresh"
     private const val SCHEDULE_BACKOFF_MILLIS = 60_000L
+    private const val MAX_SCHEDULE_RETRY_ATTEMPTS = 12
     private var registered = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var isEnabled = false
@@ -30,6 +31,8 @@ object BackgroundRefreshManager {
     @Volatile private var activeTaskJob: Job? = null
     @Volatile private var retryScheduleJob: Job? = null
     @Volatile private var nextScheduleAllowedAtMillis: Long = 0L
+    @Volatile private var hasPendingRefreshRequest: Boolean = false
+    @Volatile private var scheduleRetryAttempts: Int = 0
 
     fun registerAtLaunch() {
         if (!isSupported()) return
@@ -43,6 +46,9 @@ object BackgroundRefreshManager {
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
         isEnabled = enabled
         executeBlock = onExecute
+        if (enabled) {
+            scheduleRetryAttempts = 0
+        }
         if (!isSupported()) {
             NSLog("BGTask not supported on this OS")
             return
@@ -78,6 +84,7 @@ object BackgroundRefreshManager {
     }
 
     private fun handleTask(task: BGTask) {
+        hasPendingRefreshRequest = false
         var taskCompleted = false
         val completeTask: (Boolean) -> Unit = { success ->
             dispatch_async(dispatch_get_main_queue()) {
@@ -88,14 +95,14 @@ object BackgroundRefreshManager {
             }
         }
         if (!isEnabled) {
-            completeTask(false)
+            completeTask(true)
             cancel()
             return
         }
         val runningJob = activeTaskJob
         if (runningJob?.isActive == true) {
             NSLog("BGTask skipped: previous task is still running")
-            completeTask(false)
+            completeTask(true)
             if (isEnabled) {
                 scheduleRefresh()
             }
@@ -104,7 +111,7 @@ object BackgroundRefreshManager {
         val job = scope.launch {
             try {
                 if (!isEnabled) {
-                    completeTask(false)
+                    completeTask(true)
                     return@launch
                 }
                 val block = executeBlock
@@ -138,24 +145,41 @@ object BackgroundRefreshManager {
 
     private fun scheduleRefresh() {
         if (!isEnabled) return
+        if (hasPendingRefreshRequest) return
         val now = currentEpochMillis()
         val remainingBackoff = nextScheduleAllowedAtMillis - now
         if (remainingBackoff > 0L) {
             scheduleRetryAttempt(remainingBackoff)
             return
         }
+        hasPendingRefreshRequest = true
         dispatch_async(dispatch_get_main_queue()) {
-            if (!isEnabled) return@dispatch_async
+            if (!isEnabled) {
+                hasPendingRefreshRequest = false
+                return@dispatch_async
+            }
             val request = BGAppRefreshTaskRequest(TASK_ID)
             runCatching {
-                BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
+                val submitted = BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
+                if (!submitted) {
+                    throw IllegalStateException("submitTaskRequest returned false")
+                }
                 nextScheduleAllowedAtMillis = 0L
+                scheduleRetryAttempts = 0
                 retryScheduleJob?.cancel()
                 retryScheduleJob = null
             }.onFailure {
                 NSLog("BGTask schedule failed: ${it.message}")
                 val failureNow = currentEpochMillis()
+                hasPendingRefreshRequest = false
                 nextScheduleAllowedAtMillis = failureNow + SCHEDULE_BACKOFF_MILLIS
+                scheduleRetryAttempts += 1
+                if (scheduleRetryAttempts > MAX_SCHEDULE_RETRY_ATTEMPTS) {
+                    NSLog(
+                        "BGTask schedule retry limit reached ($MAX_SCHEDULE_RETRY_ATTEMPTS); waiting for next explicit enable/event"
+                    )
+                    return@onFailure
+                }
                 scheduleRetryAttempt(SCHEDULE_BACKOFF_MILLIS)
             }
         }
@@ -163,6 +187,7 @@ object BackgroundRefreshManager {
 
     private fun scheduleRetryAttempt(delayMillis: Long) {
         if (!isEnabled) return
+        if (scheduleRetryAttempts > MAX_SCHEDULE_RETRY_ATTEMPTS) return
         val activeRetry = retryScheduleJob
         if (activeRetry?.isActive == true) return
         val safeDelay = delayMillis.coerceAtLeast(1L)
@@ -183,6 +208,8 @@ object BackgroundRefreshManager {
         retryScheduleJob?.cancel(CancellationException("Background refresh retry disabled"))
         retryScheduleJob = null
         nextScheduleAllowedAtMillis = 0L
+        hasPendingRefreshRequest = false
+        scheduleRetryAttempts = 0
         if (!isSupported()) return
         dispatch_async(dispatch_get_main_queue()) {
             BGTaskScheduler.sharedScheduler().cancel(taskRequestWithIdentifier = TASK_ID)

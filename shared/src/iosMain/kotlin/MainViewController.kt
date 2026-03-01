@@ -20,6 +20,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.releaseSecurityScopedResource
 import com.valoser.futacha.shared.util.createFileSystem
 import platform.UIKit.UIViewController
+import platform.Foundation.NSUserDefaults
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -40,9 +41,18 @@ private object IosAppGraph {
 
 private const val IOS_BG_MAX_THREADS_PER_RUN = 120
 private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
+private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 
 fun registerIosBackgroundRefreshTask() {
     BackgroundRefreshManager.registerAtLaunch()
+    val enabled = NSUserDefaults.standardUserDefaults().boolForKey(IOS_BACKGROUND_REFRESH_KEY)
+    configureIosBackgroundRefresh(
+        enabled = enabled,
+        stateStore = IosAppGraph.stateStore,
+        httpClient = IosAppGraph.httpClient,
+        fileSystem = IosAppGraph.fileSystem,
+        autoSaveRepo = IosAppGraph.autoSavedThreadRepository
+    )
 }
 
 fun MainViewController(): UIViewController {
@@ -122,31 +132,43 @@ private fun configureIosBackgroundRefresh(
     autoSaveRepo: SavedThreadRepository?
 ) {
     BackgroundRefreshManager.configure(enabled) {
-        val sharedClientApi = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
-        // Keep shared HttpClient ownership in MainViewController. Background repo closes only its own state.
-        val nonClosingApi = object : BoardApi by sharedClientApi {}
-        val repo = DefaultBoardRepository(
-            api = nonClosingApi,
-            parser = createHtmlParser()
+        runIosBackgroundRefresh(
+            stateStore = stateStore,
+            httpClient = httpClient,
+            fileSystem = fileSystem,
+            autoSaveRepo = autoSaveRepo
         )
-        try {
-            val refresher = HistoryRefresher(
-                stateStore = stateStore,
-                repository = repo,
-                dispatcher = kotlinx.coroutines.Dispatchers.IO,
-                autoSavedThreadRepository = autoSaveRepo,
-                httpClient = httpClient,
-                fileSystem = fileSystem
-            )
-            refresher.refresh(maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN)
-        } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
-            Logger.d("BackgroundRefresh", "Refresh already running; skipping duplicate iOS background run")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Logger.e("BackgroundRefresh", "Background history refresh failed", t)
-        } finally {
-            repo.closeAsync().join()
-        }
+    }
+}
+
+private suspend fun runIosBackgroundRefresh(
+    stateStore: com.valoser.futacha.shared.state.AppStateStore,
+    httpClient: io.ktor.client.HttpClient,
+    fileSystem: com.valoser.futacha.shared.util.FileSystem?,
+    autoSaveRepo: SavedThreadRepository?
+) {
+    val sharedClientApi = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
+    // Keep shared HttpClient ownership in MainViewController. Background repo closes only its own state.
+    val nonClosingApi = object : BoardApi by sharedClientApi {}
+    val repo = DefaultBoardRepository(
+        api = nonClosingApi,
+        parser = createHtmlParser()
+    )
+    try {
+        val refresher = HistoryRefresher(
+            stateStore = stateStore,
+            repository = repo,
+            dispatcher = kotlinx.coroutines.Dispatchers.IO,
+            autoSavedThreadRepository = autoSaveRepo,
+            httpClient = httpClient,
+            fileSystem = fileSystem
+        )
+        refresher.refresh(maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN)
+    } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+        Logger.d("BackgroundRefresh", "Refresh already running; skipping duplicate iOS background run")
+    } catch (e: CancellationException) {
+        throw e
+    } finally {
+        repo.closeAsync().join()
     }
 }

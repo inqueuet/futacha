@@ -4,10 +4,14 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.util.AppDispatchers
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.Url
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.cancel
+import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
@@ -27,6 +31,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.coroutines.coroutineContext
 
 data class ArchiveSearchScope(val server: String, val board: String)
 
@@ -59,6 +64,9 @@ private const val MAX_ARCHIVE_RESPONSE_SIZE = 2 * 1024 * 1024 // 2MB
 private const val ARCHIVE_READ_IDLE_TIMEOUT_MILLIS = 15_000L
 private const val ARCHIVE_REQUEST_TIMEOUT_MILLIS = 20_000L
 private const val MAX_ARCHIVE_RESULT_ITEMS = 1_500
+private const val ARCHIVE_READ_BUFFER_BYTES = 8 * 1024
+private const val ARCHIVE_MAX_ZERO_READ_RETRIES = 250
+private const val ARCHIVE_ZERO_READ_BACKOFF_MILLIS = 25L
 
 object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
     override val descriptor: SerialDescriptor =
@@ -126,26 +134,79 @@ suspend fun fetchArchiveSearchResults(
     scope: ArchiveSearchScope?,
     json: Json
 ): List<ArchiveSearchItem> {
-    return withTimeout(ARCHIVE_REQUEST_TIMEOUT_MILLIS) {
-        val url = buildArchiveSearchUrl(query, scope)
-        val response = httpClient.get(url)
-        if (!response.status.isSuccess()) {
-            throw IllegalStateException("検索に失敗しました: ${response.status}")
-        }
-        val contentLength = response.headers["Content-Length"]?.toLongOrNull()
-        if (contentLength != null && contentLength > MAX_ARCHIVE_RESPONSE_SIZE) {
-            throw IllegalStateException("検索結果が大きすぎます")
-        }
-        val body = withTimeoutOrNull(ARCHIVE_READ_IDLE_TIMEOUT_MILLIS) {
-            response.bodyAsText()
-        } ?: throw IllegalStateException("検索結果の取得がタイムアウトしました")
-        if (utf8ByteLength(body) > MAX_ARCHIVE_RESPONSE_SIZE.toLong()) {
-            throw IllegalStateException("検索結果が大きすぎます")
-        }
-        withContext(AppDispatchers.parsing) {
-            parseArchiveSearchResults(body, scope, json)
+    return withContext(AppDispatchers.io) {
+        withTimeout(ARCHIVE_REQUEST_TIMEOUT_MILLIS) {
+            val url = buildArchiveSearchUrl(query, scope)
+            val response = httpClient.get(url)
+            try {
+                if (!response.status.isSuccess()) {
+                    throw IllegalStateException("検索に失敗しました: ${response.status}")
+                }
+                val contentLength = response.headers["Content-Length"]?.toLongOrNull()
+                if (contentLength != null && contentLength > MAX_ARCHIVE_RESPONSE_SIZE) {
+                    throw IllegalStateException("検索結果が大きすぎます")
+                }
+                val body = readArchiveResponseBody(response)
+                withContext(AppDispatchers.parsing) {
+                    parseArchiveSearchResults(body, scope, json)
+                }
+            } finally {
+                // Body lifecycle is managed in readArchiveResponseBody.
+            }
         }
     }
+}
+
+private suspend fun readArchiveResponseBody(response: io.ktor.client.statement.HttpResponse): String {
+    val channel = response.bodyAsChannel()
+    val buffer = ByteArray(ARCHIVE_READ_BUFFER_BYTES)
+    var output = ByteArray(ARCHIVE_READ_BUFFER_BYTES)
+    var totalBytes = 0
+    var zeroReadCount = 0
+    val bytes = try {
+        while (true) {
+            coroutineContext.ensureActive()
+            val read = withTimeoutOrNull(ARCHIVE_READ_IDLE_TIMEOUT_MILLIS) {
+                channel.readAvailable(buffer, 0, buffer.size)
+            } ?: throw IllegalStateException("検索結果の取得がタイムアウトしました")
+            if (read == -1) break
+            if (read == 0) {
+                zeroReadCount += 1
+                if (zeroReadCount >= ARCHIVE_MAX_ZERO_READ_RETRIES) {
+                    throw IllegalStateException("検索結果の取得がタイムアウトしました")
+                }
+                delay(ARCHIVE_ZERO_READ_BACKOFF_MILLIS)
+                continue
+            }
+            zeroReadCount = 0
+            val requiredSize = totalBytes + read
+            if (requiredSize > MAX_ARCHIVE_RESPONSE_SIZE) {
+                throw IllegalStateException("検索結果が大きすぎます")
+            }
+            if (requiredSize > output.size) {
+                var nextSize = output.size
+                while (nextSize < requiredSize) {
+                    nextSize = (nextSize * 2).coerceAtMost(MAX_ARCHIVE_RESPONSE_SIZE)
+                    if (nextSize == output.size) break
+                }
+                if (nextSize < requiredSize) {
+                    throw IllegalStateException("検索結果が大きすぎます")
+                }
+                output = output.copyOf(nextSize)
+            }
+            buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
+            totalBytes = requiredSize
+        }
+        if (totalBytes == output.size) output else output.copyOf(totalBytes)
+    } finally {
+        runCatching { channel.cancel(null) }
+    }
+
+    val body = bytes.decodeToString()
+    if (utf8ByteLength(body) > MAX_ARCHIVE_RESPONSE_SIZE.toLong()) {
+        throw IllegalStateException("検索結果が大きすぎます")
+    }
+    return body
 }
 
 fun parseArchiveSearchResults(

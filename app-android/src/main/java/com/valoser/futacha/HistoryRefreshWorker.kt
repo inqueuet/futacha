@@ -71,7 +71,7 @@ class HistoryRefreshWorker(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (t: Throwable) {
+        } catch (t: Exception) {
             Logger.e(TAG, "Background history refresh failed", t)
             if (isRetriable(t) && runAttemptCount < MAX_RETRY_ATTEMPTS) {
                 Result.retry()

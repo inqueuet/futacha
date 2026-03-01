@@ -353,14 +353,16 @@ fun FutachaApp(
             }
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 coroutineScope.launch {
+                    val resolvedBoardId = entry.boardId
+                        .ifBlank { runCatching { BoardUrlResolver.resolveBoardSlug(entry.boardUrl) }.getOrDefault("") }
                     stateStore.removeSelfPostIdentifiersForThread(
                         threadId = entry.threadId,
-                        boardId = entry.boardId.ifBlank { null }
+                        boardId = resolvedBoardId.ifBlank { null }
                     )
                     stateStore.removeHistoryEntry(entry)
                     effectiveAutoSavedThreadRepository?.deleteThread(
                         threadId = entry.threadId,
-                        boardId = entry.boardId.ifBlank { null }
+                        boardId = resolvedBoardId.ifBlank { null }
                     )
                         ?.onFailure {
                             Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
@@ -736,6 +738,7 @@ fun FutachaApp(
                                 }
                             },
                             manualSaveDirectory = manualSaveDirectory,
+                            manualSaveLocation = manualSaveLocation,
                             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
                             onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
                             attachmentPickerPreference = attachmentPickerPreference,

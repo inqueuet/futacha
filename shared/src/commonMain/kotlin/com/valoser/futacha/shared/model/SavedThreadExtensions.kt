@@ -66,7 +66,7 @@ fun SavedThreadMetadata.toThreadPage(
                 ?: savedPost.originalVideoUrl,
             thumbnailUrl = resolvedThumbnailPath ?: savedPost.originalThumbnailUrl,
             saidaneLabel = null,
-            isDeleted = !savedPost.downloadSuccess,
+            isDeleted = false,
             referencedCount = 0,
             quoteReferences = emptyList()
         )

@@ -17,6 +17,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -32,6 +33,7 @@ private const val OPERATION_BACKUP_RETENTION_MILLIS = 24L * 60L * 60L * 1000L
 private const val OPERATION_BACKUP_CLEANUP_MIN_INTERVAL_MILLIS = 15L * 60L * 1000L
 private const val OPERATION_BACKUP_CLEANUP_MAX_DELETIONS_PER_RUN = 24
 private const val OPERATION_BACKUP_CLEANUP_ERROR_LOG_LIMIT = 3
+private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 15_000L
 
 /**
  * 保存済みスレッドリポジトリ
@@ -105,10 +107,10 @@ class SavedThreadRepository(
      * - 失敗時は古いインデックスが保持されるため、整合性が保たれる
      */
     suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = runSuspendCatchingNonCancellation {
-        mutationMutex.withLock {
-            var lastException: Throwable? = null
-            repeat(3) { attempt ->
-                try {
+        var lastException: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                mutationMutex.withLock {
                     withIndexLock {
                         val currentIndex = readIndexUnlocked()
                         val updatedThreads = currentIndex.threads
@@ -123,17 +125,17 @@ class SavedThreadRepository(
                         )
                         saveIndexUnlocked(updatedIndex)
                     }
-                    return@withLock
-                } catch (e: Throwable) {
-                    if (e is CancellationException) throw e
-                    lastException = e
-                    if (attempt < 2) {
-                        delay(100L * (attempt + 1))
-                    }
+                }
+                return@runSuspendCatchingNonCancellation
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                lastException = e
+                if (attempt < 2) {
+                    delay(100L * (attempt + 1))
                 }
             }
-            throw lastException ?: Exception("Failed to save index after adding thread ${thread.threadId}")
         }
+        throw lastException ?: Exception("Failed to save index after adding thread ${thread.threadId}")
     }
 
     /**
@@ -163,52 +165,50 @@ class SavedThreadRepository(
      */
     suspend fun loadThreadMetadata(threadId: String, boardId: String? = null): Result<SavedThreadMetadata> = runSuspendCatchingNonCancellation {
         withContext(Dispatchers.IO) {
-            deleteMutex.withLock {
-                val normalizedThreadId = threadId.trim()
-                if (normalizedThreadId.isBlank()) {
-                    throw IllegalArgumentException("threadId must not be blank")
-                }
-                val normalizedBoardId = boardId?.trim()?.takeIf { it.isNotBlank() }
-                val triedPaths = linkedSetOf<String>()
-                var lastError: Throwable? = null
-
-                suspend fun tryLoadMetadataAt(path: String): SavedThreadMetadata? {
-                    if (!triedPaths.add(path)) return null
-                    val jsonString = readStringAt(path).getOrElse { error ->
-                        lastError = error
-                        return null
-                    }
-                    val metadata = runCatching {
-                        json.decodeFromString<SavedThreadMetadata>(jsonString)
-                    }.getOrElse { error ->
-                        lastError = error
-                        return null
-                    }
-                    return metadata
-                }
-
-                val fastCandidates = buildList {
-                    add("${resolveStorageId(normalizedThreadId, normalizedBoardId)}/metadata.json")
-                    val legacyStorageId = resolveLegacyStorageId(normalizedThreadId, normalizedBoardId)
-                    if (legacyStorageId != resolveStorageId(normalizedThreadId, normalizedBoardId)) {
-                        add("$legacyStorageId/metadata.json")
-                    }
-                    add("$normalizedThreadId/metadata.json")
-                }
-
-                fastCandidates.forEach { path ->
-                    tryLoadMetadataAt(path)?.let { return@withContext it }
-                }
-
-                val metadataCandidates = withIndexLock {
-                    resolveMetadataCandidatesUnlocked(normalizedThreadId, normalizedBoardId)
-                }
-                metadataCandidates.forEach { path ->
-                    tryLoadMetadataAt(path)?.let { return@withContext it }
-                }
-
-                throw lastError ?: IllegalStateException("Metadata not found for threadId=$threadId boardId=${boardId.orEmpty()}")
+            val normalizedThreadId = threadId.trim()
+            if (normalizedThreadId.isBlank()) {
+                throw IllegalArgumentException("threadId must not be blank")
             }
+            val normalizedBoardId = boardId?.trim()?.takeIf { it.isNotBlank() }
+            val triedPaths = linkedSetOf<String>()
+            var lastError: Throwable? = null
+
+            suspend fun tryLoadMetadataAt(path: String): SavedThreadMetadata? {
+                if (!triedPaths.add(path)) return null
+                val jsonString = readStringAt(path).getOrElse { error ->
+                    lastError = error
+                    return null
+                }
+                val metadata = runCatching {
+                    json.decodeFromString<SavedThreadMetadata>(jsonString)
+                }.getOrElse { error ->
+                    lastError = error
+                    return null
+                }
+                return metadata
+            }
+
+            val fastCandidates = buildList {
+                add("${resolveStorageId(normalizedThreadId, normalizedBoardId)}/metadata.json")
+                val legacyStorageId = resolveLegacyStorageId(normalizedThreadId, normalizedBoardId)
+                if (legacyStorageId != resolveStorageId(normalizedThreadId, normalizedBoardId)) {
+                    add("$legacyStorageId/metadata.json")
+                }
+                add("$normalizedThreadId/metadata.json")
+            }
+
+            fastCandidates.forEach { path ->
+                tryLoadMetadataAt(path)?.let { return@withContext it }
+            }
+
+            val metadataCandidates = withIndexLock {
+                resolveMetadataCandidatesUnlocked(normalizedThreadId, normalizedBoardId)
+            }
+            metadataCandidates.forEach { path ->
+                tryLoadMetadataAt(path)?.let { return@withContext it }
+            }
+
+            throw lastError ?: IllegalStateException("Metadata not found for threadId=$threadId boardId=${boardId.orEmpty()}")
         }
     }
 
@@ -224,98 +224,102 @@ class SavedThreadRepository(
                 val cutoffSavedAtByStorageId: Map<String, Long>
             )
 
-            deleteMutex.withLock {
-                mutationMutex.withLock {
-                    val plan = withIndexLock {
-                        val currentIndex = readIndexUnlocked()
+            val plan = deleteMutex.withLock {
+                withIndexLock {
+                    val currentIndex = readIndexUnlocked()
 
-                        // 削除対象が存在するか確認
-                        val threadsToDelete = currentIndex.threads
-                            .filter { isSameThreadIdentity(it, threadId, boardId) }
-                            .sortedByDescending { it.savedAt }
-                        if (threadsToDelete.isEmpty()) {
-                            return@withIndexLock null // 存在しない場合は正常終了
-                        }
-
-                        // バックアップを操作単位で分離（同時削除時の競合防止）
-                        val backupIndexPath = "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}.thread_delete.backup"
-                        val currentIndexJson = json.encodeToString(currentIndex)
-
-                        val cutoffSavedAtByStorageId = threadsToDelete
-                            .groupBy { resolveStorageId(it) }
-                            .mapValues { (_, threads) -> threads.maxOf { it.savedAt } }
-                        DeletePlan(
-                            backupIndexPath = backupIndexPath,
-                            backupIndexJson = currentIndexJson,
-                            targetStorageIds = cutoffSavedAtByStorageId.keys,
-                            cutoffSavedAtByStorageId = cutoffSavedAtByStorageId
-                        )
-                    } ?: return@withLock
-                    writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
-
-                    val deletionErrors = mutableListOf<Pair<String, Throwable>>()
-                    val successfullyDeletedStorageIds = mutableSetOf<String>()
-                    var keepBackup = false
-                    try {
-                        plan.targetStorageIds.forEach { threadPath ->
-                            coroutineContext.ensureActive()
-                            yield()
-                            val deleteResult = ThreadStorageLockRegistry.withStorageLock(storageLockKey(threadPath)) {
-                                deletePath(threadPath)
-                            }
-                            val deleteError = deleteResult.exceptionOrNull()
-                            if (deleteResult.isSuccess || isPathAlreadyDeleted(deleteError)) {
-                                successfullyDeletedStorageIds.add(threadPath)
-                            } else {
-                                deletionErrors.add(
-                                    threadPath to (deleteError
-                                        ?: Exception("Failed to delete thread directory: $threadPath"))
-                                )
-                            }
-                        }
-
-                        if (successfullyDeletedStorageIds.isNotEmpty()) {
-                            withIndexLock {
-                                val latestIndex = readIndexUnlocked()
-                                val updatedThreads = latestIndex.threads.filterNot { thread ->
-                                    val storageId = resolveStorageId(thread)
-                                    val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
-                                    storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
-                                }
-                                val updatedIndex = SavedThreadIndex(
-                                    threads = updatedThreads,
-                                    totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
-                                    lastUpdated = Clock.System.now().toEpochMilliseconds()
-                                )
-
-                                try {
-                                    saveIndexUnlocked(updatedIndex)
-                                } catch (e: Throwable) {
-                                    if (e is CancellationException) throw e
-                                    throw Exception("Failed to update index after deleting thread $threadId. Index may be inconsistent.", e)
-                                }
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        keepBackup = true
-                        throw e
-                    } catch (e: Throwable) {
-                        keepBackup = true
-                        throw e
-                    } finally {
-                        if (deletionErrors.isNotEmpty()) {
-                            keepBackup = true
-                        }
-                        finalizeDeleteBackup(plan.backupIndexPath, keepBackup)
+                    // 削除対象が存在するか確認
+                    val threadsToDelete = currentIndex.threads
+                        .filter { isSameThreadIdentity(it, threadId, boardId) }
+                        .sortedByDescending { it.savedAt }
+                    if (threadsToDelete.isEmpty()) {
+                        return@withIndexLock null // 存在しない場合は正常終了
                     }
 
-                    if (deletionErrors.isNotEmpty()) {
-                        val errorMessage = deletionErrors.joinToString("\n") { (storageId, error) ->
-                            "$storageId: ${error.message}"
+                    // バックアップを操作単位で分離（同時削除時の競合防止）
+                    val backupIndexPath = "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}.thread_delete.backup"
+                    val currentIndexJson = json.encodeToString(currentIndex)
+
+                    val cutoffSavedAtByStorageId = threadsToDelete
+                        .groupBy { resolveStorageId(it) }
+                        .mapValues { (_, threads) -> threads.maxOf { it.savedAt } }
+                    DeletePlan(
+                        backupIndexPath = backupIndexPath,
+                        backupIndexJson = currentIndexJson,
+                        targetStorageIds = cutoffSavedAtByStorageId.keys,
+                        cutoffSavedAtByStorageId = cutoffSavedAtByStorageId
+                    )
+                }
+            } ?: return@withContext
+            writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
+
+            val deletionErrors = mutableListOf<Pair<String, Throwable>>()
+            val successfullyDeletedStorageIds = mutableSetOf<String>()
+            var keepBackup = false
+            try {
+                plan.targetStorageIds.forEach { threadPath ->
+                    coroutineContext.ensureActive()
+                    yield()
+                    val deleteResult = withTimeoutOrNull(STORAGE_LOCK_WAIT_TIMEOUT_MILLIS) {
+                        ThreadStorageLockRegistry.withStorageLock(storageLockKey(threadPath)) {
+                            deletePath(threadPath)
                         }
-                        throw Exception("Failed to delete ${deletionErrors.size} thread directory(s):\n$errorMessage")
+                    } ?: Result.failure(
+                        IllegalStateException("Timed out waiting for storage lock: $threadPath")
+                    )
+                    val deleteError = deleteResult.exceptionOrNull()
+                    if (deleteResult.isSuccess || isPathAlreadyDeleted(deleteError)) {
+                        successfullyDeletedStorageIds.add(threadPath)
+                    } else {
+                        deletionErrors.add(
+                            threadPath to (deleteError
+                                ?: Exception("Failed to delete thread directory: $threadPath"))
+                        )
                     }
                 }
+
+                if (successfullyDeletedStorageIds.isNotEmpty()) {
+                    deleteMutex.withLock {
+                        withIndexLock {
+                            val latestIndex = readIndexUnlocked()
+                            val updatedThreads = latestIndex.threads.filterNot { thread ->
+                                val storageId = resolveStorageId(thread)
+                                val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
+                                storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
+                            }
+                            val updatedIndex = SavedThreadIndex(
+                                threads = updatedThreads,
+                                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
+                                lastUpdated = Clock.System.now().toEpochMilliseconds()
+                            )
+
+                            try {
+                                saveIndexUnlocked(updatedIndex)
+                            } catch (e: Throwable) {
+                                if (e is CancellationException) throw e
+                                throw Exception("Failed to update index after deleting thread $threadId. Index may be inconsistent.", e)
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                keepBackup = true
+                throw e
+            } catch (e: Throwable) {
+                keepBackup = true
+                throw e
+            } finally {
+                if (deletionErrors.isNotEmpty()) {
+                    keepBackup = true
+                }
+                finalizeDeleteBackup(plan.backupIndexPath, keepBackup)
+            }
+
+            if (deletionErrors.isNotEmpty()) {
+                val errorMessage = deletionErrors.joinToString("\n") { (storageId, error) ->
+                    "$storageId: ${error.message}"
+                }
+                throw Exception("Failed to delete ${deletionErrors.size} thread directory(s):\n$errorMessage")
             }
         }
     }
@@ -332,89 +336,93 @@ class SavedThreadRepository(
                 val cutoffSavedAtByStorageId: Map<String, Long>
             )
 
-            deleteMutex.withLock {
-                mutationMutex.withLock {
-                    val plan = withIndexLock {
-                        val currentIndex = readIndexUnlocked()
-                        if (currentIndex.threads.isEmpty()) {
-                            return@withIndexLock null
-                        }
-
-                        val backupIndexPath = "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}.all_delete.backup"
-                        val currentIndexJson = json.encodeToString(currentIndex)
-
-                        val cutoffSavedAtByStorageId = currentIndex.threads
-                            .groupBy { resolveStorageId(it) }
-                            .mapValues { (_, threads) -> threads.maxOf { it.savedAt } }
-                        DeleteAllPlan(
-                            backupIndexPath = backupIndexPath,
-                            backupIndexJson = currentIndexJson,
-                            targetStorageIds = cutoffSavedAtByStorageId.keys,
-                            cutoffSavedAtByStorageId = cutoffSavedAtByStorageId
-                        )
-                    } ?: return@withLock
-                    writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
-
-                    val deletionErrors = mutableListOf<Pair<String, Throwable>>()
-                    val successfullyDeletedStorageIds = mutableSetOf<String>()
-                    var keepBackup = false
-                    try {
-                        plan.targetStorageIds.forEach { threadPath ->
-                            coroutineContext.ensureActive()
-                            yield()
-                            val result = ThreadStorageLockRegistry.withStorageLock(storageLockKey(threadPath)) {
-                                deletePath(threadPath)
-                            }
-                            val deleteError = result.exceptionOrNull()
-                            if (result.isSuccess || isPathAlreadyDeleted(deleteError)) {
-                                successfullyDeletedStorageIds.add(threadPath)
-                            } else {
-                                deletionErrors.add(
-                                    threadPath to (deleteError
-                                        ?: Exception("Unknown error deleting $threadPath"))
-                                )
-                            }
-                        }
-
-                        if (successfullyDeletedStorageIds.isNotEmpty()) {
-                            withIndexLock {
-                                val currentIndex = readIndexUnlocked()
-                                // 成功した削除対象のうち、削除開始時点のエントリだけを除外
-                                val remainingThreads = currentIndex.threads.filterNot { thread ->
-                                    val storageId = resolveStorageId(thread)
-                                    val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
-                                    storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
-                                }
-
-                                val updatedIndex = SavedThreadIndex(
-                                    threads = remainingThreads,
-                                    totalSize = remainingThreads.safeTotalSize(), // FIX: オーバーフロー対策
-                                    lastUpdated = Clock.System.now().toEpochMilliseconds()
-                                )
-                                saveIndexUnlocked(updatedIndex)
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        keepBackup = true
-                        throw e
-                    } catch (e: Throwable) {
-                        keepBackup = true
-                        throw e
-                    } finally {
-                        if (deletionErrors.isNotEmpty()) {
-                            keepBackup = true
-                        }
-                        finalizeDeleteBackup(plan.backupIndexPath, keepBackup)
+            val plan = deleteMutex.withLock {
+                withIndexLock {
+                    val currentIndex = readIndexUnlocked()
+                    if (currentIndex.threads.isEmpty()) {
+                        return@withIndexLock null
                     }
 
-                    // エラーがあった場合は例外をスロー
-                    if (deletionErrors.isNotEmpty()) {
-                        val errorMessage = deletionErrors.joinToString("\n") { (storageId, error) ->
-                            "$storageId: ${error.message}"
+                    val backupIndexPath = "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}.all_delete.backup"
+                    val currentIndexJson = json.encodeToString(currentIndex)
+
+                    val cutoffSavedAtByStorageId = currentIndex.threads
+                        .groupBy { resolveStorageId(it) }
+                        .mapValues { (_, threads) -> threads.maxOf { it.savedAt } }
+                    DeleteAllPlan(
+                        backupIndexPath = backupIndexPath,
+                        backupIndexJson = currentIndexJson,
+                        targetStorageIds = cutoffSavedAtByStorageId.keys,
+                        cutoffSavedAtByStorageId = cutoffSavedAtByStorageId
+                    )
+                }
+            } ?: return@withContext
+            writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
+
+            val deletionErrors = mutableListOf<Pair<String, Throwable>>()
+            val successfullyDeletedStorageIds = mutableSetOf<String>()
+            var keepBackup = false
+            try {
+                plan.targetStorageIds.forEach { threadPath ->
+                    coroutineContext.ensureActive()
+                    yield()
+                    val result = withTimeoutOrNull(STORAGE_LOCK_WAIT_TIMEOUT_MILLIS) {
+                        ThreadStorageLockRegistry.withStorageLock(storageLockKey(threadPath)) {
+                            deletePath(threadPath)
                         }
-                        throw Exception("Failed to delete ${deletionErrors.size} thread(s):\n$errorMessage")
+                    } ?: Result.failure(
+                        IllegalStateException("Timed out waiting for storage lock: $threadPath")
+                    )
+                    val deleteError = result.exceptionOrNull()
+                    if (result.isSuccess || isPathAlreadyDeleted(deleteError)) {
+                        successfullyDeletedStorageIds.add(threadPath)
+                    } else {
+                        deletionErrors.add(
+                            threadPath to (deleteError
+                                ?: Exception("Unknown error deleting $threadPath"))
+                        )
                     }
                 }
+
+                if (successfullyDeletedStorageIds.isNotEmpty()) {
+                    deleteMutex.withLock {
+                        withIndexLock {
+                            val currentIndex = readIndexUnlocked()
+                            // 成功した削除対象のうち、削除開始時点のエントリだけを除外
+                            val remainingThreads = currentIndex.threads.filterNot { thread ->
+                                val storageId = resolveStorageId(thread)
+                                val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
+                                storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
+                            }
+
+                            val updatedIndex = SavedThreadIndex(
+                                threads = remainingThreads,
+                                totalSize = remainingThreads.safeTotalSize(), // FIX: オーバーフロー対策
+                                lastUpdated = Clock.System.now().toEpochMilliseconds()
+                            )
+                            saveIndexUnlocked(updatedIndex)
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                keepBackup = true
+                throw e
+            } catch (e: Throwable) {
+                keepBackup = true
+                throw e
+            } finally {
+                if (deletionErrors.isNotEmpty()) {
+                    keepBackup = true
+                }
+                finalizeDeleteBackup(plan.backupIndexPath, keepBackup)
+            }
+
+            // エラーがあった場合は例外をスロー
+            if (deletionErrors.isNotEmpty()) {
+                val errorMessage = deletionErrors.joinToString("\n") { (storageId, error) ->
+                    "$storageId: ${error.message}"
+                }
+                throw Exception("Failed to delete ${deletionErrors.size} thread(s):\n$errorMessage")
             }
         }
     }
@@ -430,33 +438,31 @@ class SavedThreadRepository(
      * スレッドが存在するか確認
      */
     suspend fun threadExists(threadId: String, boardId: String? = null): Boolean = withContext(Dispatchers.IO) {
-        deleteMutex.withLock {
-            val threadPaths = withIndexLock {
-                val currentIndex = readIndexUnlocked()
-                val fromIndex = currentIndex.threads
-                    .filter { isSameThreadIdentity(it, threadId, boardId) }
-                    .sortedByDescending { it.savedAt }
-                    .map { resolveStorageId(it) }
-                    .distinct()
-                if (fromIndex.isNotEmpty()) {
-                    fromIndex
-                } else {
-                    buildList {
-                        val currentStorageId = resolveStorageId(threadId = threadId, boardId = boardId)
-                        add(currentStorageId)
-                        val legacyStorageId = resolveLegacyStorageId(threadId = threadId, boardId = boardId)
-                        if (legacyStorageId != currentStorageId) {
-                            add(legacyStorageId)
-                        }
+        val threadPaths = withIndexLock {
+            val currentIndex = readIndexUnlocked()
+            val fromIndex = currentIndex.threads
+                .filter { isSameThreadIdentity(it, threadId, boardId) }
+                .sortedByDescending { it.savedAt }
+                .map { resolveStorageId(it) }
+                .distinct()
+            if (fromIndex.isNotEmpty()) {
+                fromIndex
+            } else {
+                buildList {
+                    val currentStorageId = resolveStorageId(threadId = threadId, boardId = boardId)
+                    add(currentStorageId)
+                    val legacyStorageId = resolveLegacyStorageId(threadId = threadId, boardId = boardId)
+                    if (legacyStorageId != currentStorageId) {
+                        add(legacyStorageId)
                     }
                 }
             }
+        }
 
-            if (useSaveLocationApi) {
-                threadPaths.any { path -> fileSystem.exists(resolvedSaveLocation, path) }
-            } else {
-                threadPaths.any { path -> fileSystem.exists(buildPath(path)) }
-            }
+        if (useSaveLocationApi) {
+            threadPaths.any { path -> fileSystem.exists(resolvedSaveLocation, path) }
+        } else {
+            threadPaths.any { path -> fileSystem.exists(buildPath(path)) }
         }
     }
 
@@ -529,34 +535,56 @@ class SavedThreadRepository(
             lastUpdated = Clock.System.now().toEpochMilliseconds()
         )
 
-        suspend fun readIndexFromPath(path: String): SavedThreadIndex? {
-            return fileSystem.readString(path)
-                .map { jsonString ->
-                    try {
-                        json.decodeFromString<SavedThreadIndex>(jsonString)
-                    } catch (_: SerializationException) {
-                        null
-                    }
-                }
-                .getOrNull()
+        var primaryCorrupted = false
+        var backupCorrupted = false
+
+        fun markCorruption(path: String, error: SerializationException, isBackup: Boolean) {
+            if (isBackup) {
+                backupCorrupted = true
+            } else {
+                primaryCorrupted = true
+            }
+            Logger.e(
+                "SavedThreadRepository",
+                "Failed to decode saved thread index at '$path': ${error.message}",
+                error
+            )
         }
 
-        suspend fun readIndexFromLocation(relativePath: String): SavedThreadIndex? {
-            return fileSystem.readString(resolvedSaveLocation, relativePath)
-                .map { jsonString ->
-                    try {
-                        json.decodeFromString<SavedThreadIndex>(jsonString)
-                    } catch (_: SerializationException) {
-                        null
-                    }
+        suspend fun readIndexFromPath(path: String, isBackup: Boolean): SavedThreadIndex? {
+            val jsonString = fileSystem.readString(path).getOrElse { error ->
+                if (isPathAlreadyDeleted(error)) {
+                    return null
                 }
-                .getOrNull()
+                throw IllegalStateException("Failed to read saved thread index at '$path': ${error.message}", error)
+            }
+            return try {
+                json.decodeFromString<SavedThreadIndex>(jsonString)
+            } catch (e: SerializationException) {
+                markCorruption(path, e, isBackup)
+                null
+            }
+        }
+
+        suspend fun readIndexFromLocation(relativePath: String, isBackup: Boolean): SavedThreadIndex? {
+            val jsonString = fileSystem.readString(resolvedSaveLocation, relativePath).getOrElse { error ->
+                if (isPathAlreadyDeleted(error)) {
+                    return null
+                }
+                throw IllegalStateException("Failed to read saved thread index at '$relativePath': ${error.message}", error)
+            }
+            return try {
+                json.decodeFromString<SavedThreadIndex>(jsonString)
+            } catch (e: SerializationException) {
+                markCorruption(relativePath, e, isBackup)
+                null
+            }
         }
 
         val primary = if (useSaveLocationApi) {
-            readIndexFromLocation(indexRelativePath)
+            readIndexFromLocation(indexRelativePath, isBackup = false)
         } else {
-            readIndexFromPath(buildPath(indexRelativePath))
+            readIndexFromPath(buildPath(indexRelativePath), isBackup = false)
         }
         if (primary != null) {
             return sanitizeAndRepairIndexUnlocked(primary)
@@ -564,14 +592,21 @@ class SavedThreadRepository(
 
         val backupPath = "$indexRelativePath.backup"
         val backup = if (useSaveLocationApi) {
-            readIndexFromLocation(backupPath)
+            readIndexFromLocation(backupPath, isBackup = true)
         } else {
-            readIndexFromPath(buildPath(backupPath))
+            readIndexFromPath(buildPath(backupPath), isBackup = true)
         }
         if (backup != null) {
             val repairedBackup = sanitizeAndRepairIndexUnlocked(backup)
             Logger.w("SavedThreadRepository", "Loaded index from backup due to missing/corrupted primary index")
             return repairedBackup
+        }
+
+        if (primaryCorrupted || backupCorrupted) {
+            throw IllegalStateException(
+                "Saved thread index is corrupted and no valid backup is available " +
+                    "(primaryCorrupted=$primaryCorrupted, backupCorrupted=$backupCorrupted)"
+            )
         }
 
         return emptyIndex()
@@ -624,24 +659,42 @@ class SavedThreadRepository(
     }
 
     private suspend fun saveIndexUnlocked(index: SavedThreadIndex) {
-        suspend fun writeIndexPayload(jsonString: String) {
+        suspend fun writeIndexPayload(relativePath: String, jsonString: String) {
             if (useSaveLocationApi) {
-                fileSystem.writeString(resolvedSaveLocation, indexRelativePath, jsonString).getOrThrow()
+                fileSystem.writeString(resolvedSaveLocation, relativePath, jsonString).getOrThrow()
             } else {
-                fileSystem.writeString(buildPath(indexRelativePath), jsonString).getOrThrow()
+                fileSystem.writeString(buildPath(relativePath), jsonString).getOrThrow()
+            }
+        }
+
+        suspend fun deleteBestEffort(relativePath: String) {
+            runCatching {
+                if (useSaveLocationApi) {
+                    fileSystem.delete(resolvedSaveLocation, relativePath).getOrThrow()
+                } else {
+                    fileSystem.delete(buildPath(relativePath)).getOrThrow()
+                }
             }
         }
 
         ensureBaseDirectoryPreparedUnlocked()
         val jsonString = json.encodeToString(index)
+        val tempPath = "$indexRelativePath.tmp"
+        val backupPath = "$indexRelativePath.backup"
         runCatching {
-            writeIndexPayload(jsonString)
+            writeIndexPayload(tempPath, jsonString)
+            writeIndexPayload(backupPath, jsonString)
+            writeIndexPayload(indexRelativePath, jsonString)
+            deleteBestEffort(tempPath)
         }.getOrElse { firstError ->
             // ディレクトリが外部要因で消えたケースに備え、作り直して1回だけ再試行する。
             isBaseDirectoryPrepared = false
             ensureBaseDirectoryPreparedUnlocked()
             runCatching {
-                writeIndexPayload(jsonString)
+                writeIndexPayload(tempPath, jsonString)
+                writeIndexPayload(backupPath, jsonString)
+                writeIndexPayload(indexRelativePath, jsonString)
+                deleteBestEffort(tempPath)
             }.getOrElse { retryError ->
                 throw Exception(
                     "Failed to persist index after directory re-prepare. first=${firstError.message}, retry=${retryError.message}",
@@ -664,8 +717,8 @@ class SavedThreadRepository(
     private fun isSameThreadIdentity(thread: SavedThread, threadId: String, boardId: String?): Boolean {
         if (thread.threadId != threadId) return false
         val normalizedBoardId = boardId?.trim().orEmpty()
-        if (normalizedBoardId.isBlank()) return true
         val candidateBoardId = thread.boardId.trim()
+        if (normalizedBoardId.isBlank()) return candidateBoardId.isBlank()
         return candidateBoardId.equals(normalizedBoardId, ignoreCase = true)
     }
 

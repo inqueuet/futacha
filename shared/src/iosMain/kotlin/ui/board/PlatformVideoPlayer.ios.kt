@@ -81,6 +81,7 @@ private fun AvKitVideoPlayer(
         NSURL.URLWithString(videoUrl)?.let { AVPlayer(uRL = it) }
     }
     var lastPlaybackActive by remember(player) { mutableStateOf<Boolean?>(null) }
+    var hasBecomeReady by remember(player) { mutableStateOf(false) }
     val controller = remember(player) {
         AVPlayerViewController().apply {
             showsPlaybackControls = true
@@ -89,6 +90,8 @@ private fun AvKitVideoPlayer(
     }
     LaunchedEffect(player) {
         onStateChanged(VideoPlayerState.Buffering)
+        hasBecomeReady = false
+        lastPlaybackActive = null
         val item = player?.currentItem
         if (item == null) {
             onStateChanged(VideoPlayerState.Error)
@@ -102,6 +105,7 @@ private fun AvKitVideoPlayer(
                         if (size.width > 0 && size.height > 0) {
                             onVideoSizeKnown(size.width.toInt(), size.height.toInt())
                         }
+                        hasBecomeReady = true
                         onStateChanged(VideoPlayerState.Ready)
                         player.play()
                         return@withTimeoutOrNull true
@@ -119,15 +123,18 @@ private fun AvKitVideoPlayer(
             onStateChanged(VideoPlayerState.Error)
         }
     }
-    LaunchedEffect(player) {
+    LaunchedEffect(player, hasBecomeReady) {
+        if (!hasBecomeReady) return@LaunchedEffect
         while (isActive) {
             val currentPlayer = player ?: break
             val isPlayingNow = currentPlayer.rate > 0f
-            if (lastPlaybackActive != isPlayingNow) {
+            if (lastPlaybackActive == null) {
+                lastPlaybackActive = isPlayingNow
+            } else if (lastPlaybackActive != isPlayingNow) {
                 onStateChanged(if (isPlayingNow) VideoPlayerState.Ready else VideoPlayerState.Idle)
                 lastPlaybackActive = isPlayingNow
             }
-            delay(500)
+            delay(if (isPlayingNow) 750L else 2_000L)
         }
     }
     LaunchedEffect(volume, isMuted, player) {
@@ -173,7 +180,7 @@ private fun WebVideoPlayer(
             .replace(">", "%3E")
             .replace("\"", "%22")
     }
-    val html = remember(sanitizedUrl, isMuted) {
+    val html = remember(sanitizedUrl) {
         """
         <html>
         <head>
@@ -184,7 +191,7 @@ private fun WebVideoPlayer(
         </style>
         </head>
         <body>
-        <video controls playsinline autoplay src="$sanitizedUrl" ${if (isMuted) "muted" else ""}></video>
+        <video controls playsinline autoplay src="$sanitizedUrl"></video>
         </body>
         </html>
         """.trimIndent()

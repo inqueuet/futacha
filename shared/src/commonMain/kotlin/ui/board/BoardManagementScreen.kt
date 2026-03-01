@@ -666,6 +666,7 @@ private fun AddBoardDialog(
     val trimmedUrl = url.trim()
     val hasName = trimmedName.isNotEmpty()
     val hasUrl = trimmedUrl.isNotEmpty()
+    val ipv4Regex = remember { Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$") }
     val urlHasScheme = trimmedUrl.startsWith("http://", ignoreCase = true) ||
         trimmedUrl.startsWith("https://", ignoreCase = true)
     val normalizedInputUrl = remember(trimmedUrl) {
@@ -690,10 +691,10 @@ private fun AddBoardDialog(
             !hostPart.startsWith(".") &&
             !hostPart.endsWith(".") &&
             !hostPart.contains("..") && // No consecutive dots
-            !hostPart.contains(" ") && // No spaces
-            (hostPart.contains(".") || // Must have at least one dot for domain
+             !hostPart.contains(" ") && // No spaces
+             (hostPart.contains(".") || // Must have at least one dot for domain
              hostPart.equals("localhost", ignoreCase = true) || // Allow localhost
-             hostPart.matches(Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$"))) // Allow IP addresses
+             hostPart.matches(ipv4Regex)) // Allow IP addresses
     }
 
     val isDuplicateUrl = hasUrl && isValidUrl &&

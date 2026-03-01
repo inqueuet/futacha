@@ -162,6 +162,21 @@ private class AtomicJobMap {
     }
 }
 
+private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D
+)
+
+private data class Quintuple<A, B, C, D, E>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D,
+    val fifth: E
+)
+
 @OptIn(ExperimentalTime::class)
 class AppStateStore internal constructor(
     private val storage: PlatformStateStorage,
@@ -182,6 +197,7 @@ class AppStateStore internal constructor(
     // - 現在の実装では各Mutexは独立して使用されており、デッドロックのリスクは低い
     private val boardsMutex = Mutex()
     private val historyMutex = Mutex()
+    private val historyPersistMutex = Mutex()
     private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex
     private val catalogModeMutex = Mutex()
     private val selfPostIdentifiersMutex = Mutex()
@@ -197,6 +213,9 @@ class AppStateStore internal constructor(
     private val scrollPositionJobs = AtomicJobMap()
     private var scrollDebounceScope: CoroutineScope? = null
     private var cachedHistory: List<ThreadHistoryEntry>? = null
+    private var historyRevision: Long = 0L
+    private var cachedCatalogModeMap: Map<String, CatalogMode>? = null
+    private var cachedSelfPostIdentifierMap: Map<String, List<String>>? = null
 
     // Error propagation
     private val _lastStorageError = MutableStateFlow<StorageError?>(null)
@@ -206,9 +225,11 @@ class AppStateStore internal constructor(
         private const val TAG = "AppStateStore"
         private const val SCROLL_DEBOUNCE_DELAY_MS = 1_000L
         private const val SCROLL_OFFSET_WRITE_THRESHOLD_PX = 24
+        private const val SCROLL_PERSIST_MIN_INTERVAL_MS = 2_000L
         private const val SCROLL_VISITED_UPDATE_INTERVAL_MS = 15_000L
         private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
         private const val SELF_POST_KEY_DELIMITER = "::"
+        private const val HISTORY_PERSIST_MAX_PASSES = 8
     }
 
     suspend fun setScrollDebounceScope(scope: CoroutineScope) {
@@ -384,21 +405,25 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
-        val encoded = encodeHistory(history)
-        historyMutex.withLock {
-            try {
-                storage.updateHistoryJson(encoded)
-                cachedHistory = history
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to save history with ${history.size} entries", e)
-                _lastStorageError.value = StorageError(
-                    operation = "setHistory",
-                    message = e.message ?: "Unknown error",
-                    timestamp = Clock.System.now().toEpochMilliseconds()
-                )
-                // Log error but don't crash - data will be lost but app continues
-            }
+        val (revision, previousRevision, previousHistory) = historyMutex.withLock {
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = history
+            historyRevision = beforeRevision + 1L
+            Triple(historyRevision, beforeRevision, beforeHistory)
+        }
+        try {
+            persistHistory(revision, history)
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to save history with ${history.size} entries", e)
+            _lastStorageError.value = StorageError(
+                operation = "setHistory",
+                message = e.message ?: "Unknown error",
+                timestamp = Clock.System.now().toEpochMilliseconds()
+            )
+            throw e
         }
     }
 
@@ -476,11 +501,11 @@ class AppStateStore internal constructor(
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) {
         try {
-            storage.updatePreferredFileManagerPackage(packageName ?: "")
-            storage.updatePreferredFileManagerLabel(label ?: "")
+            storage.updatePreferredFileManager(packageName ?: "", label ?: "")
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e(TAG, "Failed to save preferred file manager: $packageName", e)
+            throw e
         }
     }
 
@@ -522,21 +547,31 @@ class AppStateStore internal constructor(
             Logger.w(TAG, "Ignoring catalog mode update with blank boardId")
             return
         }
+        val loadedSnapshot = runCatching {
+            val currentRaw = storage.catalogModeMapJson.first()
+            withContext(AppDispatchers.parsing) {
+                decodeCatalogModeMap(currentRaw)
+            }
+        }.getOrElse { error ->
+            rethrowIfCancellation(error)
+            Logger.e(TAG, "Failed to read catalog mode map snapshot", error)
+            emptyMap()
+        }
+
         catalogModeMutex.withLock {
+            val current = cachedCatalogModeMap ?: loadedSnapshot
+            if (current[normalizedBoardId] == mode) {
+                return@withLock
+            }
+            val updated = current + (normalizedBoardId to mode)
+            val encoded = withContext(AppDispatchers.parsing) {
+                json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
+            }
             try {
-                val currentRaw = storage.catalogModeMapJson.first()
-                val current = withContext(AppDispatchers.parsing) {
-                    decodeCatalogModeMap(currentRaw)
-                }
-                if (current[normalizedBoardId] == mode) {
-                    return@withLock
-                }
-                val updated = current + (normalizedBoardId to mode)
-                val encoded = withContext(AppDispatchers.parsing) {
-                    json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
-                }
                 storage.updateCatalogModeMapJson(encoded)
+                cachedCatalogModeMap = updated
             } catch (e: Exception) {
+                cachedCatalogModeMap = current
                 rethrowIfCancellation(e)
                 Logger.e(TAG, "Failed to save catalog mode for $normalizedBoardId: ${mode.name}", e)
             }
@@ -645,8 +680,9 @@ class AppStateStore internal constructor(
 
     suspend fun addSelfPostIdentifier(threadId: String, identifier: String, boardId: String? = null) {
         val trimmed = identifier.trim().takeIf { it.isNotBlank() } ?: return
+        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
         selfPostIdentifiersMutex.withLock {
-            val currentMap = readSelfPostIdentifierMapSnapshot()
+            val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
             val scopedKey = buildSelfPostKey(threadId, boardId)
             val legacyKey = threadId.trim()
             val existingForThread = buildList {
@@ -667,34 +703,60 @@ class AppStateStore internal constructor(
                 .distinctBy { it.lowercase() }
                 .take(SELF_IDENTIFIER_MAX_ENTRIES)
                 .toList()
-            val updatedMap = currentMap.toMutableMap()
-            updatedMap[scopedKey] = updatedThreadList
-            persistSelfPostIdentifierMap(updatedMap)
+            val nextMap = currentMap.toMutableMap()
+            nextMap[scopedKey] = updatedThreadList
+            val updatedMap = nextMap.toMap()
+            try {
+                persistSelfPostIdentifierMap(updatedMap)
+                cachedSelfPostIdentifierMap = updatedMap
+            } catch (e: Exception) {
+                cachedSelfPostIdentifierMap = currentMap
+                rethrowIfCancellation(e)
+                throw e
+            }
         }
     }
 
     suspend fun removeSelfPostIdentifiersForThread(threadId: String, boardId: String? = null) {
+        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
         selfPostIdentifiersMutex.withLock {
-            val currentMap = readSelfPostIdentifierMapSnapshot()
+            val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
             val scopedKey = buildSelfPostKey(threadId, boardId)
-            val updatedMap = currentMap.toMutableMap()
-            val removedScoped = updatedMap.remove(scopedKey) != null
+            val mutable = currentMap.toMutableMap()
+            val removedScoped = mutable.remove(scopedKey) != null
             if (boardId.isNullOrBlank()) {
-                updatedMap.remove(threadId.trim())
+                mutable.remove(threadId.trim())
                 val scopedSuffix = "$SELF_POST_KEY_DELIMITER${threadId.trim()}"
-                updatedMap.keys
+                mutable.keys
                     .filter { it.endsWith(scopedSuffix) }
-                    .forEach { key -> updatedMap.remove(key) }
+                    .forEach { key -> mutable.remove(key) }
             } else if (!removedScoped) {
-                return
+                return@withLock
             }
-            persistSelfPostIdentifierMap(updatedMap)
+            val updatedMap = mutable.toMap()
+            try {
+                persistSelfPostIdentifierMap(updatedMap)
+                cachedSelfPostIdentifierMap = updatedMap
+            } catch (e: Exception) {
+                cachedSelfPostIdentifierMap = currentMap
+                rethrowIfCancellation(e)
+                throw e
+            }
         }
     }
 
     suspend fun clearSelfPostIdentifiers() {
+        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
         selfPostIdentifiersMutex.withLock {
-            persistSelfPostIdentifierMap(emptyMap())
+            val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
+            try {
+                persistSelfPostIdentifierMap(emptyMap())
+                cachedSelfPostIdentifierMap = emptyMap()
+            } catch (e: Exception) {
+                cachedSelfPostIdentifierMap = currentMap
+                rethrowIfCancellation(e)
+                throw e
+            }
         }
     }
 
@@ -708,7 +770,7 @@ class AppStateStore internal constructor(
             Logger.w(TAG, "Skipping history upsert due to missing snapshot")
             return
         }
-        historyMutex.withLock {
+        val (revision, updatedHistory, previousRevision, previousHistory) = historyMutex.withLock {
             val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
             val existingIndex = currentHistory.indexOfFirst {
                 matchesHistoryEntry(it, entry.threadId, entry.boardId, entry.boardUrl)
@@ -721,14 +783,20 @@ class AppStateStore internal constructor(
                     add(entry)
                 }
             }
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = updatedHistory
+            historyRevision = beforeRevision + 1L
+            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
+        }
 
-            try {
-                persistHistory(updatedHistory)
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to upsert history entry ${entry.threadId}", e)
-                // Log error but don't crash
-            }
+        try {
+            persistHistory(revision, updatedHistory)
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to upsert history entry ${entry.threadId}", e)
+            throw e
         }
     }
 
@@ -737,12 +805,12 @@ class AppStateStore internal constructor(
             Logger.w(TAG, "Skipping history prepend due to missing snapshot")
             return
         }
-        historyMutex.withLock {
+        val updateResult = historyMutex.withLock {
             val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
             val targetKey = historyIdentity(entry)
             if (targetKey.isBlank()) {
                 Logger.w(TAG, "Skipping history prepend due to invalid identity")
-                return
+                return@withLock null
             }
             val updatedHistory = buildList {
                 add(entry)
@@ -752,12 +820,20 @@ class AppStateStore internal constructor(
                     }
                 )
             }
-            try {
-                persistHistory(updatedHistory)
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to prepend history entry ${entry.threadId}", e)
-            }
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = updatedHistory
+            historyRevision = beforeRevision + 1L
+            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
+        } ?: return
+        val (revision, updatedHistory, previousRevision, previousHistory) = updateResult
+        try {
+            persistHistory(revision, updatedHistory)
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to prepend history entry ${entry.threadId}", e)
+            throw e
         }
     }
 
@@ -767,7 +843,7 @@ class AppStateStore internal constructor(
             Logger.w(TAG, "Skipping history prepend batch due to missing snapshot")
             return
         }
-        historyMutex.withLock {
+        val updateResult = historyMutex.withLock {
             val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
             val dedupedByKey = linkedMapOf<String, ThreadHistoryEntry>()
             entries.forEach { candidate ->
@@ -777,7 +853,7 @@ class AppStateStore internal constructor(
                 }
             }
             val dedupedEntries = dedupedByKey.values.toList()
-            if (dedupedEntries.isEmpty()) return
+            if (dedupedEntries.isEmpty()) return@withLock null
             val dedupedKeys = dedupedByKey.keys
             val updatedHistory = buildList {
                 addAll(dedupedEntries)
@@ -787,12 +863,20 @@ class AppStateStore internal constructor(
                     }
                 )
             }
-            try {
-                persistHistory(updatedHistory)
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to prepend ${dedupedEntries.size} history entries", e)
-            }
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = updatedHistory
+            historyRevision = beforeRevision + 1L
+            Quintuple(historyRevision, updatedHistory, dedupedEntries.size, beforeRevision, beforeHistory)
+        } ?: return
+        val (revision, updatedHistory, dedupedSize, previousRevision, previousHistory) = updateResult
+        try {
+            persistHistory(revision, updatedHistory)
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to prepend ${dedupedSize} history entries", e)
+            throw e
         }
     }
 
@@ -802,7 +886,7 @@ class AppStateStore internal constructor(
             Logger.w(TAG, "Skipping history merge due to missing snapshot")
             return
         }
-        historyMutex.withLock {
+        val mergeResult = historyMutex.withLock {
             val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
             val updatesByKey = linkedMapOf<String, ThreadHistoryEntry>()
             entries.forEach { candidate ->
@@ -811,7 +895,7 @@ class AppStateStore internal constructor(
                     updatesByKey[key] = candidate
                 }
             }
-            if (updatesByKey.isEmpty()) return
+            if (updatesByKey.isEmpty()) return@withLock null
 
             var changed = false
             val remainingUpdates = updatesByKey.toMutableMap()
@@ -828,18 +912,26 @@ class AppStateStore internal constructor(
             }
 
             val appended = remainingUpdates.values.toList()
-            if (!changed) return
-            try {
-                // Drop stale updates that no longer exist in current history.
-                // This avoids resurrecting entries removed while refresh was running.
-                persistHistory(merged)
-                if (appended.isNotEmpty()) {
-                    Logger.i(TAG, "Dropped ${appended.size} stale history update(s) during merge")
-                }
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to merge ${updatesByKey.size} history entries", e)
+            if (!changed) return@withLock null
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = merged
+            historyRevision = beforeRevision + 1L
+            Quintuple(historyRevision, merged, appended.size, beforeRevision, beforeHistory)
+        } ?: return
+        val (revision, merged, appendedSize, previousRevision, previousHistory) = mergeResult
+        try {
+            // Drop stale updates that no longer exist in current history.
+            // This avoids resurrecting entries removed while refresh was running.
+            persistHistory(revision, merged)
+            if (appendedSize > 0) {
+                Logger.i(TAG, "Dropped $appendedSize stale history update(s) during merge")
             }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to merge ${entries.size} history entries", e)
+            throw e
         }
     }
 
@@ -878,25 +970,33 @@ class AppStateStore internal constructor(
             Logger.w(TAG, "Skipping history removal due to missing snapshot")
             return
         }
-        historyMutex.withLock {
+        val removeResult = historyMutex.withLock {
             val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
             val targetKey = historyIdentity(entry)
             if (targetKey.isBlank()) {
                 Logger.w(TAG, "Skipping history removal due to invalid identity")
-                return
+                return@withLock null
             }
             val updatedHistory = currentHistory.filterNot {
                 historyIdentity(it) == targetKey
             }
             if (updatedHistory.size == currentHistory.size) {
-                return
+                return@withLock null
             }
-            try {
-                persistHistory(updatedHistory)
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to remove history entry ${entry.threadId}", e)
-            }
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = updatedHistory
+            historyRevision = beforeRevision + 1L
+            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
+        } ?: return
+        val (revision, updatedHistory, previousRevision, previousHistory) = removeResult
+        try {
+            persistHistory(revision, updatedHistory)
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to remove history entry ${entry.threadId}", e)
+            throw e
         }
     }
 
@@ -977,7 +1077,7 @@ class AppStateStore internal constructor(
         replyCount: Int
     ) {
         val historySnapshot = readHistorySnapshot() ?: return
-        historyMutex.withLock {
+        val updateResult = historyMutex.withLock {
             val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
             val existingEntry = currentHistory.firstOrNull {
                 matchesHistoryEntry(it, threadId, boardId, boardUrl)
@@ -989,7 +1089,18 @@ class AppStateStore internal constructor(
                 existingEntry.lastReadItemIndex == index &&
                 abs(existingEntry.lastReadItemOffset - offset) < SCROLL_OFFSET_WRITE_THRESHOLD_PX
             ) {
-                return
+                return@withLock null
+            }
+            if (existingEntry != null) {
+                val indexDelta = abs(existingEntry.lastReadItemIndex - index)
+                val offsetDelta = abs(existingEntry.lastReadItemOffset - offset)
+                val isFrequentNearbyUpdate =
+                    nowMillis - existingEntry.lastVisitedEpochMillis < SCROLL_PERSIST_MIN_INTERVAL_MS &&
+                        indexDelta <= 2 &&
+                        offsetDelta < (SCROLL_OFFSET_WRITE_THRESHOLD_PX * 8)
+                if (isFrequentNearbyUpdate) {
+                    return@withLock null
+                }
             }
 
             val updatedHistory = if (existingEntry != null) {
@@ -1033,13 +1144,20 @@ class AppStateStore internal constructor(
                     addAll(currentHistory)
                 }
             }
-
-            try {
-                persistHistory(updatedHistory)
-            } catch (e: Exception) {
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to persist updated history for thread $threadId", e)
-            }
+            val beforeRevision = historyRevision
+            val beforeHistory = cachedHistory
+            cachedHistory = updatedHistory
+            historyRevision = beforeRevision + 1L
+            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
+        } ?: return
+        val (revision, updatedHistory, previousRevision, previousHistory) = updateResult
+        try {
+            persistHistory(revision, updatedHistory)
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            rollbackHistoryMutation(revision, previousRevision, previousHistory)
+            Logger.e(TAG, "Failed to persist updated history for thread $threadId", e)
+            throw e
         }
     }
 
@@ -1091,8 +1209,9 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun readHistorySnapshot(): List<ThreadHistoryEntry>? {
-        historyMutex.withLock {
-            cachedHistory?.let { return it }
+        val cached = historyMutex.withLock { cachedHistory }
+        if (cached != null) {
+            return cached
         }
         val decoded = try {
             val raw = storage.historyJson.first()
@@ -1109,9 +1228,13 @@ class AppStateStore internal constructor(
             return null
         }
         return historyMutex.withLock {
-            cachedHistory?.let { return@withLock it }
-            cachedHistory = decoded
-            decoded
+            val latest = cachedHistory
+            if (latest != null) {
+                latest
+            } else {
+                cachedHistory = decoded
+                decoded
+            }
         }
     }
 
@@ -1123,9 +1246,51 @@ class AppStateStore internal constructor(
         return cachedHistory
     }
 
-    private suspend fun persistHistory(history: List<ThreadHistoryEntry>) {
-        storage.updateHistoryJson(encodeHistory(history))
-        cachedHistory = history
+    private suspend fun rollbackHistoryMutation(
+        failedRevision: Long,
+        previousRevision: Long,
+        previousHistory: List<ThreadHistoryEntry>?
+    ) {
+        historyMutex.withLock {
+            if (historyRevision == failedRevision) {
+                historyRevision = previousRevision
+                cachedHistory = previousHistory
+            }
+        }
+    }
+
+    private suspend fun persistHistory(revision: Long, history: List<ThreadHistoryEntry>) {
+        historyPersistMutex.withLock {
+            var targetRevision = revision
+            var targetHistory = history
+            var passCount = 0
+            while (true) {
+                passCount += 1
+                if (passCount > HISTORY_PERSIST_MAX_PASSES) {
+                    throw IllegalStateException(
+                        "History persistence exceeded $HISTORY_PERSIST_MAX_PASSES passes; aborting to prevent lock starvation"
+                    )
+                }
+                storage.updateHistoryJson(encodeHistory(targetHistory))
+                val nextHistory = historyMutex.withLock {
+                    if (historyRevision > targetRevision) {
+                        val latest = cachedHistory
+                        if (latest != null) {
+                            targetRevision = historyRevision
+                            latest
+                        } else {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                }
+                if (nextHistory == null) {
+                    break
+                }
+                targetHistory = nextHistory
+            }
+        }
     }
 
     private suspend fun encodeBoards(boards: List<BoardSummary>): String {
@@ -1285,10 +1450,23 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {
+        val cached = selfPostIdentifiersMutex.withLock { cachedSelfPostIdentifierMap }
+        if (cached != null) {
+            return cached
+        }
         return try {
             val raw = storage.selfPostIdentifiersJson.first()
-            withContext(AppDispatchers.parsing) {
+            val decoded = withContext(AppDispatchers.parsing) {
                 decodeSelfPostIdentifierMap(raw)
+            }
+            selfPostIdentifiersMutex.withLock {
+                val latest = cachedSelfPostIdentifierMap
+                if (latest != null) {
+                    latest
+                } else {
+                    cachedSelfPostIdentifierMap = decoded
+                    decoded
+                }
             }
         } catch (e: Exception) {
             rethrowIfCancellation(e)
@@ -1410,6 +1588,7 @@ internal interface PlatformStateStorage {
     suspend fun updateCatalogNgWordsJson(value: String)
     suspend fun updateWatchWordsJson(value: String)
     suspend fun updateSelfPostIdentifiersJson(value: String)
+    suspend fun updatePreferredFileManager(packageName: String, label: String)
     suspend fun updatePreferredFileManagerPackage(packageName: String)
     suspend fun updatePreferredFileManagerLabel(label: String)
     suspend fun updateThreadMenuConfigJson(value: String)

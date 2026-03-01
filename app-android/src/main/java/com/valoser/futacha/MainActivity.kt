@@ -15,6 +15,9 @@ import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
 import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.version.createVersionChecker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,7 +50,9 @@ class MainActivity : ComponentActivity() {
             DisposableEffect(app, httpClient) {
                 onDispose {
                     if (app == null) {
-                        runCatching { httpClient.close() }
+                        CoroutineScope(Dispatchers.IO).launch {
+                            runCatching { httpClient.close() }
+                        }
                     }
                 }
             }

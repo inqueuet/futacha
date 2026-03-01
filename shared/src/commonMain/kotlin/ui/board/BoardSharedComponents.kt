@@ -233,6 +233,12 @@ private fun HistoryEntryCard(
     onClick: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
+    val titleImageRequest = remember(platformContext, entry.titleImageUrl) {
+        ImageRequest.Builder(platformContext)
+            .data(entry.titleImageUrl)
+            .crossfade(true)
+            .build()
+    }
     val formattedLastVisited = remember(entry.lastVisitedEpochMillis) {
         formatLastVisited(entry.lastVisitedEpochMillis)
     }
@@ -252,10 +258,7 @@ private fun HistoryEntryCard(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(platformContext)
-                    .data(entry.titleImageUrl)
-                    .crossfade(true)
-                    .build(),
+                model = titleImageRequest,
                 imageLoader = LocalFutachaImageLoader.current,
                 contentDescription = "${entry.title} のタイトル画像",
                 contentScale = ContentScale.Crop,

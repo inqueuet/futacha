@@ -97,6 +97,15 @@ private fun FileManagerItem(
             .fillMaxWidth()
             .clickable(onClick = onClick)
     ) {
+        val iconBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+            initialValue = null,
+            key1 = fileManager.packageName,
+            key2 = fileManager.icon
+        ) {
+            value = withContext(Dispatchers.Default) {
+                fileManager.icon?.toBitmap(48, 48)?.asImageBitmap()
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -104,9 +113,9 @@ private fun FileManagerItem(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            fileManager.icon?.let { icon ->
+            iconBitmap?.let { bitmap ->
                 Image(
-                    bitmap = icon.toBitmap(48, 48).asImageBitmap(),
+                    bitmap = bitmap,
                     contentDescription = null,
                     modifier = Modifier.size(48.dp)
                 )

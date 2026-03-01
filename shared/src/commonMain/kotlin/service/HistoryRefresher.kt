@@ -19,8 +19,10 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.http.Url
 import com.valoser.futacha.shared.network.NetworkException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,14 +30,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
@@ -61,6 +64,7 @@ private const val THREAD_REFRESH_EARLY_ABORT_FAILURE_RATE = 0.9f
 private const val ARCHIVE_LOOKUP_EARLY_ABORT_MIN_ATTEMPTS = 30
 private const val ARCHIVE_LOOKUP_EARLY_ABORT_MIN_FAILURES = 20
 private const val ARCHIVE_LOOKUP_EARLY_ABORT_FAILURE_RATE = 0.85f
+private const val STATE_SNAPSHOT_READ_TIMEOUT_MILLIS = 10_000L
 private const val ABORT_FLUSH_TIMEOUT_MILLIS = 5_000L
 private const val REFRESH_ABORT_REASON_PREFIX = "Aborting history refresh due to persistent"
 
@@ -90,6 +94,7 @@ class HistoryRefresher(
     private val updatesMutex = Mutex()
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
     private val effectiveThreadFetchTimeoutMillis = threadFetchTimeoutMillis.coerceAtLeast(1_000L)
+    private val autoSaveScope = CoroutineScope(SupervisorJob() + dispatcher)
     private var historyRefreshCursor = 0
 
     // FIX: エラー状態を公開
@@ -134,10 +139,14 @@ class HistoryRefresher(
         var publishedDetailedError = false
         var flushOnExit: (suspend (Boolean) -> Boolean)? = null
         try {
+            val boards = boardsSnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
+                stateStore.boards.first()
+            } ?: throw IllegalStateException("Timed out while reading board snapshot")
+            val fullHistory = historySnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
+                stateStore.history.first()
+            } ?: throw IllegalStateException("Timed out while reading history snapshot")
             val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
             val autoSaveDeadline = autoSaveBudgetMillis?.let { refreshStartedAt + it }
-            val boards = boardsSnapshot ?: stateStore.boards.first()
-            val fullHistory = historySnapshot ?: stateStore.history.first()
             if (fullHistory.isEmpty()) return@withContext
             val history = selectHistoryWindow(fullHistory, maxThreadsPerRun)
             totalThreadsInRun = history.size
@@ -332,47 +341,65 @@ class HistoryRefresher(
                                         statsMutex.withLock {
                                             attemptedCount += 1
                                         }
-                                        val page = withTimeout(effectiveThreadFetchTimeoutMillis) {
+                                        val page = withTimeoutOrNull(effectiveThreadFetchTimeoutMillis) {
                                             repository.getThread(baseUrl, entry.threadId)
-                                        }
+                                        } ?: throw NetworkException(
+                                            "Thread fetch timed out for ${entry.threadId}"
+                                        )
                                         val opPost = page.posts.firstOrNull()
                                         val resolvedTitle = resolveThreadTitle(opPost, entry.title)
-                                        var hasAutoSave = entry.hasAutoSave
                                         statsMutex.withLock {
                                             successfulCount += 1
+                                        }
+                                        val updatedEntry = entry.copy(
+                                            title = resolvedTitle,
+                                            titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
+                                            boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                                            replyCount = page.posts.size,
+                                            hasAutoSave = entry.hasAutoSave
+                                        )
+                                        updatesMutex.withLock {
+                                            updates[key] = updatedEntry
                                         }
 
                                         // 背景更新でも本文・メディアを自動保存
                                         // FIX: 既に自動保存済みかつレス数が変わらない場合は保存を省略してI/O負荷を抑える
                                         val shouldAutoSave = !entry.hasAutoSave || page.posts.size != entry.replyCount
                                         if (shouldAutoSave && autoSaveService != null && autoSavedThreadRepository != null) {
-                                            val nowForBudgetCheck = Clock.System.now().toEpochMilliseconds()
-                                            var autoSaveSlotReserved = false
-                                            val allowAutoSave = statsMutex.withLock {
-                                                if (
-                                                    autoSaveDeadline != null &&
-                                                    nowForBudgetCheck > autoSaveDeadline
-                                                ) {
-                                                    false
-                                                } else if (autoSaveCount >= maxAutoSavesPerRefresh) {
-                                                    false
-                                                } else {
-                                                    autoSaveCount += 1
-                                                    autoSaveSlotReserved = true
-                                                    true
+                                            autoSaveScope.launch {
+                                                val nowForBudgetCheck = Clock.System.now().toEpochMilliseconds()
+                                                var autoSaveSlotReserved = false
+                                                val allowAutoSave = statsMutex.withLock {
+                                                    if (
+                                                        autoSaveDeadline != null &&
+                                                        nowForBudgetCheck > autoSaveDeadline
+                                                    ) {
+                                                        false
+                                                    } else if (autoSaveCount >= maxAutoSavesPerRefresh) {
+                                                        false
+                                                    } else {
+                                                        autoSaveCount += 1
+                                                        autoSaveSlotReserved = true
+                                                        true
+                                                    }
                                                 }
-                                            }
-                                            if (!allowAutoSave) {
-                                                if (autoSaveDeadline != null && nowForBudgetCheck > autoSaveDeadline) {
-                                                    Logger.w(HISTORY_REFRESH_TAG, "Auto-save budget exceeded, skipping auto-save for ${entry.threadId}")
-                                                } else {
-                                                    Logger.d(
-                                                        HISTORY_REFRESH_TAG,
-                                                        "Auto-save limit reached ($maxAutoSavesPerRefresh), skipping ${entry.threadId}"
-                                                    )
+                                                if (!allowAutoSave) {
+                                                    if (autoSaveDeadline != null && nowForBudgetCheck > autoSaveDeadline) {
+                                                        Logger.w(HISTORY_REFRESH_TAG, "Auto-save budget exceeded, skipping auto-save for ${entry.threadId}")
+                                                    } else {
+                                                        Logger.d(
+                                                            HISTORY_REFRESH_TAG,
+                                                            "Auto-save limit reached ($maxAutoSavesPerRefresh), skipping ${entry.threadId}"
+                                                        )
+                                                    }
+                                                    return@launch
                                                 }
-                                            } else {
                                                 try {
+                                                    val resolvedBoardId = entry.boardId.ifBlank {
+                                                        board?.id
+                                                            ?.takeIf { it.isNotBlank() }
+                                                            ?: runCatching { BoardUrlResolver.resolveBoardSlug(baseUrl) }.getOrDefault("")
+                                                    }
                                                     val saved = autoSaveSemaphore.withPermit {
                                                         if (autoSaveDeadline != null && Clock.System.now().toEpochMilliseconds() > autoSaveDeadline) {
                                                             Logger.w(HISTORY_REFRESH_TAG, "Auto-save budget exceeded while waiting permit, skipping ${entry.threadId}")
@@ -384,10 +411,10 @@ class HistoryRefresher(
                                                             autoSaveSlotReserved = false
                                                             return@withPermit null
                                                         }
-                                                        withTimeout(AUTO_SAVE_THREAD_TIMEOUT_MILLIS) {
+                                                        withTimeoutOrNull(AUTO_SAVE_THREAD_TIMEOUT_MILLIS) {
                                                             autoSaveService.saveThread(
                                                                 threadId = entry.threadId,
-                                                                boardId = entry.boardId.ifBlank { board?.id ?: "" },
+                                                                boardId = resolvedBoardId,
                                                                 boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
                                                                 boardUrl = baseUrl,
                                                                 title = resolvedTitle,
@@ -401,27 +428,23 @@ class HistoryRefresher(
                                                     if (saved != null) {
                                                         autoSavedThreadRepository.addThreadToIndex(saved)
                                                             .onFailure { Logger.e(HISTORY_REFRESH_TAG, "Failed to index auto-saved thread ${entry.threadId}", it) }
-                                                        hasAutoSave = true
+                                                        runCatching {
+                                                            stateStore.upsertHistoryEntry(updatedEntry.copy(hasAutoSave = true))
+                                                        }.onFailure {
+                                                            Logger.w(
+                                                                HISTORY_REFRESH_TAG,
+                                                                "Failed to update history hasAutoSave flag for ${entry.threadId}: ${it.message}"
+                                                            )
+                                                        }
+                                                    } else {
+                                                        Logger.w(HISTORY_REFRESH_TAG, "Auto-save timed out for ${entry.threadId}")
                                                     }
-                                                } catch (timeout: TimeoutCancellationException) {
-                                                    Logger.w(HISTORY_REFRESH_TAG, "Auto-save timed out for ${entry.threadId}")
                                                 } catch (e: CancellationException) {
                                                     throw e
                                                 } catch (error: Throwable) {
                                                     Logger.e(HISTORY_REFRESH_TAG, "Auto-save during background refresh failed for ${entry.threadId}", error)
                                                 }
                                             }
-                                        }
-
-                                        val updatedEntry = entry.copy(
-                                            title = resolvedTitle,
-                                            titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
-                                            boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
-                                            replyCount = page.posts.size,
-                                            hasAutoSave = hasAutoSave
-                                        )
-                                        updatesMutex.withLock {
-                                            updates[key] = updatedEntry
                                         }
                                     } catch (e: CancellationException) {
                                         throw e
@@ -467,9 +490,14 @@ class HistoryRefresher(
                                             // FIX: 404/410の場合、自動保存があるかチェック
                                             val hasAutoSave = autoSavedThreadRepository?.let { repo ->
                                                 try {
+                                                    val resolvedBoardId = entry.boardId.ifBlank {
+                                                        board?.id
+                                                            ?.takeIf { it.isNotBlank() }
+                                                            ?: runCatching { BoardUrlResolver.resolveBoardSlug(baseUrl) }.getOrDefault("")
+                                                    }
                                                     repo.loadThreadMetadata(
                                                         threadId = entry.threadId,
-                                                        boardId = entry.boardId.ifBlank { board?.id }
+                                                        boardId = resolvedBoardId.ifBlank { null }
                                                     ).isSuccess
                                                 } catch (e: CancellationException) {
                                                     throw e
@@ -722,8 +750,13 @@ class HistoryRefresher(
         var hadSuccessfulSearch = false
         queryCandidates.forEach { query ->
             val results = try {
-                withTimeout(effectiveThreadFetchTimeoutMillis) {
+                withTimeoutOrNull(effectiveThreadFetchTimeoutMillis) {
                     fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                } ?: run {
+                    val detail = "Archive search timed out"
+                    lastErrorMessage = detail
+                    Logger.w(HISTORY_REFRESH_TAG, "Archive search timed out for ${entry.threadId}")
+                    return@forEach
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -749,15 +782,18 @@ class HistoryRefresher(
         val baseUrl = resolveArchiveBaseUrl(match.htmlUrl, board?.url ?: entry.boardUrl)
         val boardName = entry.boardName.ifBlank { board?.name.orEmpty() }
         val pageResult = try {
-            Result.success(
-                withTimeout(effectiveThreadFetchTimeoutMillis) {
-                    if (match.htmlUrl.isNotBlank()) {
-                        repository.getThreadByUrl(match.htmlUrl)
-                    } else {
-                        baseUrl?.let { repository.getThread(it, entry.threadId) }
-                    }
+            val page = withTimeoutOrNull(effectiveThreadFetchTimeoutMillis) {
+                if (match.htmlUrl.isNotBlank()) {
+                    repository.getThreadByUrl(match.htmlUrl)
+                } else {
+                    baseUrl?.let { repository.getThread(it, entry.threadId) }
                 }
-            )
+            }
+            if (page == null) {
+                Result.failure(NetworkException("Archive thread fetch timed out"))
+            } else {
+                Result.success(page)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {

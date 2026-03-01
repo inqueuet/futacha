@@ -93,6 +93,8 @@ import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.SavedMediaType
+import com.valoser.futacha.shared.service.SingleMediaSaveService
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
@@ -199,7 +201,7 @@ fun ThreadScreen(
     val effectiveBoardUrl = remember(resolvedThreadUrlOverride, board.url) {
         resolveEffectiveBoardUrl(resolvedThreadUrlOverride, board.url)
     }
-    val uiState = remember { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
+    val uiState = remember(board.id, threadId) { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val archiveSearchJson = remember {
@@ -277,7 +279,10 @@ fun ThreadScreen(
     }
     var autoSaveJob by remember { mutableStateOf<Job?>(null) }
     var manualSaveJob by remember { mutableStateOf<Job?>(null) }
+    var singleMediaSaveJob by remember { mutableStateOf<Job?>(null) }
     var refreshThreadJob by remember { mutableStateOf<Job?>(null) }
+    var isManualSaveInProgress by remember { mutableStateOf(false) }
+    var isSingleMediaSaveInProgress by remember { mutableStateOf(false) }
     val lastAutoSaveTimestamp = rememberSaveable(threadId) { mutableStateOf(0L) }
     var isShowingOfflineCopy by rememberSaveable(threadId) { mutableStateOf(false) }
     LaunchedEffect(threadId) {
@@ -285,15 +290,20 @@ fun ThreadScreen(
         isReadAloudControlsVisible = false
         autoSaveJob?.cancel()
         manualSaveJob?.cancel()
+        singleMediaSaveJob?.cancel()
         refreshThreadJob?.cancel()
         autoSaveJob = null
         manualSaveJob = null
+        singleMediaSaveJob = null
+        isManualSaveInProgress = false
+        isSingleMediaSaveInProgress = false
         refreshThreadJob = null
     }
     DisposableEffect(Unit) {
         onDispose {
             autoSaveJob?.cancel()
             manualSaveJob?.cancel()
+            singleMediaSaveJob?.cancel()
             refreshThreadJob?.cancel()
         }
     }
@@ -442,14 +452,13 @@ fun ThreadScreen(
     var manualRefreshGeneration by remember { mutableStateOf(0L) }
     var isHistoryRefreshing by remember { mutableStateOf(false) }
     var saveProgress by remember { mutableStateOf<SaveProgress?>(null) }
-    var isManualSaveInProgress by remember { mutableStateOf(false) }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val currentState = uiState.value
     val normalizedBoardUrlForHistory = remember(board.url) {
         board.url.trim().substringBefore('?').trimEnd('/').lowercase()
     }
-    val initialHistoryEntry = remember(threadId, board.id, normalizedBoardUrlForHistory) {
+    val initialHistoryEntry = remember(history, threadId, board.id, normalizedBoardUrlForHistory) {
         history.firstOrNull { entry ->
             if (entry.threadId != threadId) {
                 false
@@ -485,6 +494,16 @@ fun ThreadScreen(
         val boardIdCandidates = buildList {
             add(board.id.ifBlank { null })
             add(initialHistoryEntry?.boardId?.ifBlank { null })
+            add(
+                runCatching { BoardUrlResolver.resolveBoardSlug(effectiveBoardUrl) }
+                    .getOrNull()
+                    ?.ifBlank { null }
+            )
+            add(
+                runCatching { BoardUrlResolver.resolveBoardSlug(initialHistoryEntry?.boardUrl.orEmpty()) }
+                    .getOrNull()
+                    ?.ifBlank { null }
+            )
             add(null)
         }.distinct()
         val expectedBoardKeys = buildSet<String> {
@@ -563,7 +582,9 @@ fun ThreadScreen(
         if (queryCandidates.isEmpty()) return ArchiveFallbackOutcome.NoMatch
         for (query in queryCandidates) {
             val results = try {
-                fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                withContext(AppDispatchers.io) {
+                    fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (error: Throwable) {
@@ -572,7 +593,11 @@ fun ThreadScreen(
             }
             val match = selectLatestArchiveMatch(results, threadId) ?: continue
             val pageResult = try {
-                Result.success(activeRepository.getThreadByUrl(match.htmlUrl))
+                Result.success(
+                    withContext(AppDispatchers.io) {
+                        activeRepository.getThreadByUrl(match.htmlUrl)
+                    }
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -596,9 +621,13 @@ fun ThreadScreen(
         try {
             isShowingOfflineCopy = false
             val page = if (shouldFetchByUrl(resolvedThreadUrlOverride, threadId)) {
-                activeRepository.getThreadByUrl(resolvedThreadUrlOverride.orEmpty())
+                withContext(AppDispatchers.io) {
+                    activeRepository.getThreadByUrl(resolvedThreadUrlOverride.orEmpty())
+                }
             } else {
-                activeRepository.getThread(effectiveBoardUrl, threadId)
+                withContext(AppDispatchers.io) {
+                    activeRepository.getThread(effectiveBoardUrl, threadId)
+                }
             }
             return page to false
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -722,7 +751,7 @@ fun ThreadScreen(
             }
             ThreadMenuEntryId.Save -> {
                 run {
-                    if (isManualSaveInProgress) {
+                    if (isManualSaveInProgress || isSingleMediaSaveInProgress) {
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar("保存処理を実行中です…")
                         }
@@ -999,8 +1028,13 @@ fun ThreadScreen(
 
     val currentSuccessState = currentState as? ThreadUiState.Success
     val currentPosts = currentSuccessState?.page?.posts ?: emptyList()
-    val mediaPreviewEntries = remember(currentPosts) {
-        buildMediaPreviewEntries(currentPosts)
+    val mediaPreviewEntries by produceState<List<MediaPreviewEntry>>(
+        initialValue = emptyList(),
+        key1 = currentPosts
+    ) {
+        value = withContext(AppDispatchers.parsing) {
+            buildMediaPreviewEntries(currentPosts)
+        }
     }
     var previewMediaIndex by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(mediaPreviewEntries.size) {
@@ -1018,7 +1052,11 @@ fun ThreadScreen(
     // Auto-save logic: Trigger when thread content instance changes or offline state changes.
     val currentPageForAutoSave = currentSuccessState?.page
     LaunchedEffect(threadId, currentPageForAutoSave, isShowingOfflineCopy, httpClient, fileSystem) {
-        if (currentPageForAutoSave != null && !isShowingOfflineCopy) {
+        if (
+            currentPageForAutoSave != null &&
+            !isShowingOfflineCopy &&
+            currentPageForAutoSave.threadId == threadId
+        ) {
             startAutoSave(currentPageForAutoSave)
         }
     }
@@ -1043,16 +1081,20 @@ fun ThreadScreen(
         }
     }.ifBlank { null }
 
+    val shouldPrepareReadAloudSegments = isReadAloudControlsVisible ||
+        readAloudStatus is ReadAloudStatus.Speaking ||
+        readAloudStatus is ReadAloudStatus.Paused
     val readAloudSegments by produceState<List<ReadAloudSegment>>(
         initialValue = emptyList(),
-        key1 = currentPosts
+        key1 = currentPosts,
+        key2 = shouldPrepareReadAloudSegments
     ) {
-        value = if (currentPosts.isNotEmpty()) {
-            withContext(AppDispatchers.parsing) {
-                buildReadAloudSegments(currentPosts)
-            }
-        } else {
-            emptyList()
+        if (!shouldPrepareReadAloudSegments || currentPosts.isEmpty()) {
+            value = emptyList()
+            return@produceState
+        }
+        value = withContext(AppDispatchers.parsing) {
+            buildReadAloudSegments(currentPosts)
         }
     }
     LaunchedEffect(readAloudSegments.size) {
@@ -1064,11 +1106,12 @@ fun ThreadScreen(
     val density = LocalDensity.current
     val backSwipeEdgePx = remember(density) { with(density) { 48.dp.toPx() } }
     val backSwipeTriggerPx = remember(density) { with(density) { 96.dp.toPx() } }
-    val firstVisibleSegmentIndex by remember(readAloudSegments, lazyListState) {
+    val firstVisibleSegmentIndex by remember(readAloudSegments, lazyListState, isReadAloudControlsVisible) {
         derivedStateOf {
+            if (!isReadAloudControlsVisible) return@derivedStateOf -1
             val firstVisibleItem = lazyListState.firstVisibleItemIndex
             if (readAloudSegments.isEmpty()) return@derivedStateOf -1
-            readAloudSegments.indexOfFirst { it.postIndex >= firstVisibleItem }.takeIf { it >= 0 } ?: -1
+            findFirstVisibleReadAloudSegmentIndex(readAloudSegments, firstVisibleItem)
         }
     }
 
@@ -1143,14 +1186,15 @@ fun ThreadScreen(
     val currentPage = (currentState as? ThreadUiState.Success)?.page
     val searchTargets by produceState<List<ThreadSearchTarget>>(
         initialValue = emptyList(),
-        key1 = currentPage?.posts
+        key1 = isSearchActive,
+        key2 = currentPage?.posts
     ) {
-        value = if (currentPage != null) {
-            withContext(AppDispatchers.parsing) {
-                buildThreadSearchTargets(currentPage.posts)
-            }
-        } else {
-            emptyList()
+        if (!isSearchActive || currentPage == null) {
+            value = emptyList()
+            return@produceState
+        }
+        value = withContext(AppDispatchers.parsing) {
+            buildThreadSearchTargets(currentPage.posts)
         }
     }
     val normalizedSearchQuery = remember(searchQuery) { searchQuery.trim() }
@@ -1524,17 +1568,18 @@ fun ThreadScreen(
                                 ngWords.any { it.isNotBlank() }
                             )
                         val hasThreadFilters = threadFilterCriteria.options.isNotEmpty()
+                        val shouldComputeFullPostFingerprint = hasNgFilters || hasThreadFilters
                         val postsFingerprint by produceState(
-                            initialValue = ThreadPostListFingerprint(
-                                size = state.page.posts.size,
-                                firstPostId = state.page.posts.firstOrNull()?.id,
-                                lastPostId = state.page.posts.lastOrNull()?.id,
-                                rollingHash = 0L
-                            ),
-                            key1 = state.page.posts
+                            initialValue = buildLightweightThreadPostListFingerprint(state.page.posts),
+                            key1 = state.page.posts,
+                            key2 = shouldComputeFullPostFingerprint
                         ) {
-                            value = withContext(AppDispatchers.parsing) {
-                                buildThreadPostListFingerprint(state.page.posts)
+                            value = if (shouldComputeFullPostFingerprint) {
+                                withContext(AppDispatchers.parsing) {
+                                    buildThreadPostListFingerprint(state.page.posts)
+                                }
+                            } else {
+                                buildLightweightThreadPostListFingerprint(state.page.posts)
                             }
                         }
                         val filterCacheKey = remember(
@@ -1555,8 +1600,12 @@ fun ThreadScreen(
                                 sortOption = threadFilterCriteria.sortOption
                             )
                         }
-                        val cachedFilteredPage = remember(filterCacheKey) {
-                            threadFilterCache[filterCacheKey]
+                        val cachedFilteredPage = remember(filterCacheKey, hasNgFilters, hasThreadFilters) {
+                            if (!hasNgFilters && !hasThreadFilters) {
+                                null
+                            } else {
+                                threadFilterCache[filterCacheKey]
+                            }
                         }
                         val filteredPage by produceState(
                             initialValue = cachedFilteredPage ?: state.page,
@@ -1568,14 +1617,6 @@ fun ThreadScreen(
                             }
                             if (!hasNgFilters && !hasThreadFilters) {
                                 value = state.page
-                                if (threadFilterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
-                                    val iterator = threadFilterCache.entries.iterator()
-                                    if (iterator.hasNext()) {
-                                        iterator.next()
-                                        iterator.remove()
-                                    }
-                                }
-                                threadFilterCache[filterCacheKey] = value
                                 return@produceState
                             }
                             // Keyword filtering can be expensive in large threads.
@@ -1856,7 +1897,94 @@ fun ThreadScreen(
         val currentIndex = previewMediaIndex ?: 0
         previewMediaIndex = (currentIndex + totalMediaCount - 1) % totalMediaCount
     }
+    val savePreviewMedia: (MediaPreviewEntry) -> Unit = savePreviewMedia@{ entry ->
+        if (isManualSaveInProgress || isSingleMediaSaveInProgress) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("保存処理を実行中です…")
+            }
+            return@savePreviewMedia
+        }
+
+        if (!isRemoteMediaUrl(entry.url)) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("このメディアは保存に対応していません")
+            }
+            return@savePreviewMedia
+        }
+
+        if (
+            isAndroidPlatform &&
+            manualSaveLocation !is SaveLocation.TreeUri &&
+            manualSaveLocation !is SaveLocation.Path
+        ) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("保存先が未選択です。設定からフォルダを選択してください。")
+                onOpenSaveDirectoryPicker?.invoke()
+            }
+            return@savePreviewMedia
+        }
+
+        val client = httpClient
+        val localFileSystem = fileSystem
+        if (client == null || localFileSystem == null) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("保存機能が利用できません")
+            }
+            return@savePreviewMedia
+        }
+
+        isSingleMediaSaveInProgress = true
+        singleMediaSaveJob?.cancel()
+        singleMediaSaveJob = coroutineScope.launch {
+            try {
+                val mediaSaveService = SingleMediaSaveService(
+                    httpClient = client,
+                    fileSystem = localFileSystem
+                )
+                val result = mediaSaveService.saveMedia(
+                    mediaUrl = entry.url,
+                    boardId = board.id,
+                    threadId = threadId,
+                    baseSaveLocation = manualSaveLocation,
+                    baseDirectory = manualSaveDirectory
+                )
+                result.onSuccess { savedMedia ->
+                    val mediaLabel = when (savedMedia.mediaType) {
+                        SavedMediaType.VIDEO -> "動画"
+                        SavedMediaType.IMAGE -> "画像"
+                    }
+                    snackbarHostState.showSnackbar("${mediaLabel}を保存しました: ${savedMedia.fileName}")
+                }.onFailure { error ->
+                    if (isSaveLocationPermissionIssue(error)) {
+                        onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                        onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                        snackbarHostState.showSnackbar("保存先の権限が失われました。フォルダを再選択してください。")
+                        onOpenSaveDirectoryPicker?.invoke()
+                    } else {
+                        snackbarHostState.showSnackbar("保存に失敗しました: ${error.message}")
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (isSaveLocationPermissionIssue(e)) {
+                    onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+                    onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+                    snackbarHostState.showSnackbar("保存先の権限が失われました。フォルダを再選択してください。")
+                    onOpenSaveDirectoryPicker?.invoke()
+                } else {
+                    snackbarHostState.showSnackbar("エラーが発生しました: ${e.message}")
+                }
+            } finally {
+                isSingleMediaSaveInProgress = false
+                if (singleMediaSaveJob === this.coroutineContext[Job]) {
+                    singleMediaSaveJob = null
+                }
+            }
+        }
+    }
     previewMediaEntry?.let { entry ->
+        val canSaveCurrentMedia = isRemoteMediaUrl(entry.url)
         when (entry.mediaType) {
             MediaType.Image -> ImagePreviewDialog(
                 entry = entry,
@@ -1864,7 +1992,10 @@ fun ThreadScreen(
                 totalCount = totalMediaCount,
                 onDismiss = { previewMediaIndex = null },
                 onNavigateNext = navigateToNextMedia,
-                onNavigatePrevious = navigateToPreviousMedia
+                onNavigatePrevious = navigateToPreviousMedia,
+                onSave = { savePreviewMedia(entry) },
+                isSaveEnabled = canSaveCurrentMedia && !isSingleMediaSaveInProgress,
+                isSaveInProgress = isSingleMediaSaveInProgress
             )
             MediaType.Video -> VideoPreviewDialog(
                 entry = entry,
@@ -1872,7 +2003,10 @@ fun ThreadScreen(
                 totalCount = totalMediaCount,
                 onDismiss = { previewMediaIndex = null },
                 onNavigateNext = navigateToNextMedia,
-                onNavigatePrevious = navigateToPreviousMedia
+                onNavigatePrevious = navigateToPreviousMedia,
+                onSave = { savePreviewMedia(entry) },
+                isSaveEnabled = canSaveCurrentMedia && !isSingleMediaSaveInProgress,
+                isSaveInProgress = isSingleMediaSaveInProgress
             )
         }
     }
@@ -2009,9 +2143,6 @@ fun ThreadScreen(
         },
         onCancelRequest = {
             manualSaveJob?.cancel()
-            manualSaveJob = null
-            isManualSaveInProgress = false
-            saveProgress = null
             coroutineScope.launch {
                 snackbarHostState.showSnackbar("保存をキャンセルしました")
             }
@@ -2365,6 +2496,8 @@ private fun ThreadContent(
                 layoutInfo.visibleItemsInfo.size >= totalItems
         }
     }
+    val latestIsAtTop by rememberUpdatedState(isAtTop)
+    val latestIsAtBottom by rememberUpdatedState(isAtBottom)
 
     // リフレッシュ完了時に空間を戻す
     LaunchedEffect(isRefreshing) {
@@ -2379,7 +2512,7 @@ private fun ThreadContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .offset { IntOffset(0, overscrollOffset.toInt()) }
-                    .pointerInput(isRefreshing, isAtTop, isAtBottom, refreshTriggerPx, maxOverscrollPx) {
+                    .pointerInput(isRefreshing, refreshTriggerPx, maxOverscrollPx) {
                         var totalDrag = 0f
                         detectVerticalDragGestures(
                             onDragStart = {
@@ -2388,13 +2521,13 @@ private fun ThreadContent(
                             onVerticalDrag = { change, dragAmount ->
                                 if (isRefreshing) return@detectVerticalDragGestures
                                 when {
-                                    isAtTop && dragAmount > 0f -> {
+                                    latestIsAtTop && dragAmount > 0f -> {
                                         totalDrag += dragAmount
                                         overscrollTarget = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
                                         change.consume()
                                     }
 
-                                    isAtBottom && dragAmount < 0f -> {
+                                    latestIsAtBottom && dragAmount < 0f -> {
                                         totalDrag += dragAmount
                                         overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
                                         change.consume()
@@ -2631,11 +2764,14 @@ private fun ThreadPostCard(
         )
         val thumbnailForDisplay = post.thumbnailUrl ?: post.imageUrl
         thumbnailForDisplay?.let { displayUrl ->
+            val thumbnailRequest = remember(platformContext, displayUrl) {
+                ImageRequest.Builder(platformContext)
+                    .data(displayUrl)
+                    .crossfade(true)
+                    .build()
+            }
                 AsyncImage(
-                    model = ImageRequest.Builder(platformContext)
-                        .data(displayUrl)
-                        .crossfade(true)
-                        .build(),
+                    model = thumbnailRequest,
                     imageLoader = LocalFutachaImageLoader.current,
                     contentDescription = "添付画像",
                 modifier = Modifier
@@ -2812,14 +2948,27 @@ private fun ThreadMessageText(
     val highlightStyle = SpanStyle(
         background = MaterialTheme.colorScheme.secondary.copy(alpha = 0.32f)
     )
+    val annotationCacheKey = remember(messageHtml, quoteReferences) {
+        buildThreadMessageAnnotationCacheKey(messageHtml, quoteReferences)
+    }
     val baseAnnotated: AnnotatedString by produceState(
-        AnnotatedString(""),
-        messageHtml,
-        quoteReferences
+        initialValue = threadMessageAnnotationBaseCache.get(annotationCacheKey) ?: AnnotatedString(""),
+        key1 = annotationCacheKey,
+        key2 = messageHtml,
+        key3 = quoteReferences
     ) {
+        threadMessageAnnotationBaseCache.get(annotationCacheKey)?.let {
+            value = it
+            return@produceState
+        }
+        if (messageHtml.isBlank()) {
+            value = AnnotatedString("")
+            return@produceState
+        }
         value = withContext(AppDispatchers.parsing) {
             buildAnnotatedMessageBase(messageHtml, quoteReferences)
         }
+        threadMessageAnnotationBaseCache.put(annotationCacheKey, value)
     }
     val annotated = remember(baseAnnotated, highlightRanges, highlightStyle) {
         applyHighlightsToAnnotatedMessage(baseAnnotated, highlightRanges, highlightStyle)
@@ -3186,6 +3335,12 @@ private fun GalleryImageItem(
     onClick: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
+    val thumbnailRequest = remember(platformContext, post.thumbnailUrl) {
+        ImageRequest.Builder(platformContext)
+            .data(post.thumbnailUrl)
+            .crossfade(true)
+            .build()
+    }
     Card(
         onClick = onClick,
         modifier = Modifier
@@ -3195,10 +3350,7 @@ private fun GalleryImageItem(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = ImageRequest.Builder(platformContext)
-                    .data(post.thumbnailUrl)
-                    .crossfade(true)
-                    .build(),
+                model = thumbnailRequest,
                 imageLoader = LocalFutachaImageLoader.current,
                 contentDescription = "No.${post.id}",
                 contentScale = ContentScale.Crop,
@@ -3249,6 +3401,7 @@ private const val OFFLINE_FALLBACK_TIMEOUT_MS = 10_000L
 private const val THREAD_SEARCH_DEBOUNCE_MILLIS = 180L
 private const val THREAD_FILTER_DEBOUNCE_MILLIS = 120L
 private const val THREAD_FILTER_CACHE_MAX_ENTRIES = 8
+private const val THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES = 512
 private const val ACTION_BUSY_NOTICE_INTERVAL_MS = 1_000L
 
 private val FutabaQuoteGreen = Color(0xFF789922)
@@ -3263,6 +3416,47 @@ private data class UrlMatch(
     val url: String,
     val range: IntRange
 )
+
+private class ThreadMessageAnnotationCache(
+    private val maxEntries: Int
+) {
+    private val entries = LinkedHashMap<String, AnnotatedString>()
+
+    fun get(key: String): AnnotatedString? {
+        val value = entries.remove(key) ?: return null
+        entries[key] = value
+        return value
+    }
+
+    fun put(key: String, value: AnnotatedString) {
+        entries.remove(key)
+        entries[key] = value
+        while (entries.size > maxEntries) {
+            val iterator = entries.entries.iterator()
+            if (!iterator.hasNext()) break
+            iterator.next()
+            iterator.remove()
+        }
+    }
+}
+
+private val threadMessageAnnotationBaseCache = ThreadMessageAnnotationCache(
+    maxEntries = THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES
+)
+
+private fun buildThreadMessageAnnotationCacheKey(
+    messageHtml: String,
+    quoteReferences: List<QuoteReference>
+): String {
+    var hash = 17
+    quoteReferences.forEach { reference ->
+        hash = 31 * hash + reference.text.hashCode()
+        reference.targetPostIds.forEach { targetId ->
+            hash = 31 * hash + targetId.hashCode()
+        }
+    }
+    return "${messageHtml.hashCode()}:${quoteReferences.size}:$hash"
+}
 
 private fun Throwable.statusCodeOrNull(): Int? {
     var current: Throwable? = this
@@ -3641,6 +3835,11 @@ private fun applyThreadFilters(
     precomputedLowerBodyByPostId: Map<String, String>? = null
 ): ThreadPage {
     if (criteria.options.isEmpty()) return page
+    val normalizedSelfPostIdentifiers = criteria.selfPostIdentifiers
+        .asSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toSet()
     val needsLowerBodyByPostId = criteria.options.any {
         it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
     }
@@ -3650,7 +3849,12 @@ private fun applyThreadFilters(
         emptyMap()
     }
     val filteredPosts = page.posts.filter { post ->
-        matchesThreadFilters(post, criteria, lowerBodyByPostId)
+        matchesThreadFilters(
+            post = post,
+            criteria = criteria,
+            lowerBodyByPostId = lowerBodyByPostId,
+            normalizedSelfPostIdentifiers = normalizedSelfPostIdentifiers
+        )
     }
     val sortedPosts = sortThreadPosts(filteredPosts, criteria.sortOption)
     return page.copy(posts = sortedPosts)
@@ -3659,7 +3863,8 @@ private fun applyThreadFilters(
 private fun matchesThreadFilters(
     post: Post,
     criteria: ThreadFilterCriteria,
-    lowerBodyByPostId: Map<String, String>
+    lowerBodyByPostId: Map<String, String>,
+    normalizedSelfPostIdentifiers: Set<String>
 ): Boolean {
     val filterOptions = criteria.options.filter { it.sortOption == null }
     if (filterOptions.isEmpty()) return true
@@ -3668,7 +3873,7 @@ private fun matchesThreadFilters(
     return filterOptions.any { option ->
         when (option) {
             ThreadFilterOption.SelfPosts ->
-                matchesSelfFilter(post, criteria.selfPostIdentifiers)
+                matchesSelfFilter(post, normalizedSelfPostIdentifiers)
             ThreadFilterOption.Deleted -> post.isDeleted
             ThreadFilterOption.Url -> THREAD_FILTER_URL_REGEX.containsMatchIn(lowerText)
             ThreadFilterOption.Image -> post.imageUrl?.isNotBlank() == true
@@ -3680,15 +3885,10 @@ private fun matchesThreadFilters(
 
 private fun matchesSelfFilter(
     post: Post,
-    storedIdentifiers: List<String>
+    normalizedStoredIdentifiers: Set<String>
 ): Boolean {
-    val normalizedStored = storedIdentifiers
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-    if (normalizedStored.isEmpty()) return false
-    return normalizedStored.any { storedId ->
-        post.id == storedId
-    }
+    if (normalizedStoredIdentifiers.isEmpty()) return false
+    return post.id in normalizedStoredIdentifiers
 }
 
 private fun parseSaidaneCount(label: String?): Int? {
@@ -3811,14 +4011,18 @@ private data class ThreadSearchTarget(
     val messagePlainText: String
 )
 
+private fun buildLightweightThreadPostListFingerprint(posts: List<Post>): ThreadPostListFingerprint {
+    return ThreadPostListFingerprint(
+        size = posts.size,
+        firstPostId = posts.firstOrNull()?.id,
+        lastPostId = posts.lastOrNull()?.id,
+        rollingHash = 0L
+    )
+}
+
 private fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFingerprint {
     if (posts.isEmpty()) {
-        return ThreadPostListFingerprint(
-            size = 0,
-            firstPostId = null,
-            lastPostId = null,
-            rollingHash = 0L
-        )
+        return buildLightweightThreadPostListFingerprint(posts)
     }
     var rollingHash = 1_469_598_103_934_665_603L
     posts.forEach { post ->
@@ -3839,6 +4043,27 @@ private fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFin
         lastPostId = posts.last().id,
         rollingHash = rollingHash
     )
+}
+
+private fun findFirstVisibleReadAloudSegmentIndex(
+    segments: List<ReadAloudSegment>,
+    firstVisibleItemIndex: Int
+): Int {
+    if (segments.isEmpty()) return -1
+    var left = 0
+    var right = segments.lastIndex
+    var result = -1
+    while (left <= right) {
+        val mid = left + (right - left) / 2
+        val postIndex = segments[mid].postIndex
+        if (postIndex >= firstVisibleItemIndex) {
+            result = mid
+            right = mid - 1
+        } else {
+            left = mid + 1
+        }
+    }
+    return result
 }
 
 private fun stableNormalizedListFingerprint(values: List<String>): Int {
@@ -3988,7 +4213,10 @@ private fun ImagePreviewDialog(
     totalCount: Int,
     onDismiss: () -> Unit,
     onNavigateNext: () -> Unit,
-    onNavigatePrevious: () -> Unit
+    onNavigatePrevious: () -> Unit,
+    onSave: (() -> Unit)? = null,
+    isSaveEnabled: Boolean = true,
+    isSaveInProgress: Boolean = false
 ) {
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
@@ -4155,21 +4383,41 @@ private fun ImagePreviewDialog(
                     )
                 }
             }
-            IconButton(
-                onClick = onDismiss,
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(16.dp)
-                    .size(40.dp),
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
-                    contentColor = MaterialTheme.colorScheme.onSurface
-                )
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "プレビューを閉じる"
-                )
+                if (onSave != null) {
+                    FilledTonalButton(
+                        onClick = onSave,
+                        enabled = isSaveEnabled && !isSaveInProgress,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color.Black.copy(alpha = 0.5f),
+                            contentColor = Color.White,
+                            disabledContainerColor = Color.Black.copy(alpha = 0.35f),
+                            disabledContentColor = Color.White.copy(alpha = 0.55f)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(if (isSaveInProgress) "保存中..." else "保存")
+                    }
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(40.dp),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "プレビューを閉じる"
+                    )
+                }
             }
         }
     }
@@ -4182,7 +4430,10 @@ private fun VideoPreviewDialog(
     totalCount: Int,
     onDismiss: () -> Unit,
     onNavigateNext: () -> Unit,
-    onNavigatePrevious: () -> Unit
+    onNavigatePrevious: () -> Unit,
+    onSave: (() -> Unit)? = null,
+    isSaveEnabled: Boolean = true,
+    isSaveInProgress: Boolean = false
 ) {
     var swipeDistance by remember { mutableStateOf(0f) }
     var playbackState by remember { mutableStateOf(VideoPlayerState.Buffering) }
@@ -4373,6 +4624,23 @@ private fun VideoPreviewDialog(
                             inactiveTrackColor = Color.White.copy(alpha = 0.25f)
                         )
                     )
+                    if (onSave != null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = onSave,
+                                enabled = isSaveEnabled && !isSaveInProgress,
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = Color.White,
+                                    disabledContentColor = Color.White.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Text(if (isSaveInProgress) "保存中..." else "この動画を保存")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -4382,6 +4650,12 @@ private fun VideoPreviewDialog(
 private enum class MediaType {
     Image,
     Video
+}
+
+private fun isRemoteMediaUrl(url: String): Boolean {
+    val normalized = url.trim()
+    return normalized.startsWith("https://", ignoreCase = true) ||
+        normalized.startsWith("http://", ignoreCase = true)
 }
 
 private fun determineMediaType(url: String): MediaType {

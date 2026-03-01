@@ -29,7 +29,7 @@ actual fun PlatformVideoPlayer(
     val context = LocalContext.current
     val currentCallback by rememberUpdatedState(onStateChanged)
     val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
-    val player = remember {
+    val player = remember(context) {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
         }

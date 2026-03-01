@@ -9,6 +9,7 @@ import io.ktor.http.Cookie
 import io.ktor.http.CookieEncoding
 import io.ktor.http.Url
 import io.ktor.util.date.GMTDate
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -70,6 +71,10 @@ class PersistentCookieStorage(
     // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
     private var lastPurgeTimeMillis = 0L
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
+    private val knownPublicSuffixes = setOf(
+        "com", "net", "org", "edu", "gov", "io", "dev",
+        "jp", "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp"
+    )
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         var savePayload: String? = null
@@ -79,6 +84,10 @@ class PersistentCookieStorage(
             val domain = resolveDomain(cookie.domain, requestUrl.host)
             if (domain == null) {
                 Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' with invalid domain: ${cookie.domain} for host: ${requestUrl.host}")
+                return
+            }
+            if (!isCookieNameAllowed(cookie.name) || !isCookieValueAllowed(cookie.value)) {
+                Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' due to invalid size/format")
                 return
             }
             val path = normalizePath(cookie.path)
@@ -109,6 +118,7 @@ class PersistentCookieStorage(
                 externalMutationDuringTransaction = true
             }
             cookies[key] = stored
+            enforceCookieCapacityLocked(now)
             if (transactionSnapshot == null || !isInActiveTransaction) {
                 savePayload = encodeSnapshotLocked()
             }
@@ -302,29 +312,33 @@ class PersistentCookieStorage(
             isLoaded = true
             return
         }
-        val content = fileSystem.readString(storagePath).getOrNull().orEmpty()
+        val content = readBoundedCookieFile(storagePath).orEmpty()
         if (content.isNotBlank()) {
             // FIX: エラーログを追加し、破損時はバックアップから復元を試みる
             runCatching<Unit> {
                 val parsed = json.decodeFromString<StoredCookieFile>(content)
                 cookies.clear()
                 parsed.cookies.forEach { stored ->
+                    if (!isStoredCookieAllowed(stored)) return@forEach
                     val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
                     cookies[key] = stored
                 }
+                enforceCookieCapacityLocked(currentTimeMillis())
             }.onFailure { error ->
                 Logger.e("PersistentCookieStorage", "Failed to parse cookie file: ${error.message}")
                 // FIX: バックアップから復元を試みる
                 val backupPath = "$storagePath.backup"
                 if (fileSystem.exists(backupPath)) {
-                    val backupContent = fileSystem.readString(backupPath).getOrNull().orEmpty()
+                    val backupContent = readBoundedCookieFile(backupPath).orEmpty()
                     runCatching<Unit> {
                         val parsed = json.decodeFromString<StoredCookieFile>(backupContent)
                         cookies.clear()
                         parsed.cookies.forEach { stored ->
+                            if (!isStoredCookieAllowed(stored)) return@forEach
                             val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
                             cookies[key] = stored
                         }
+                        enforceCookieCapacityLocked(currentTimeMillis())
                         Logger.i("PersistentCookieStorage", "Successfully restored from backup")
                     }.onFailure { backupError ->
                         Logger.e("PersistentCookieStorage", "Backup restoration also failed: ${backupError.message}")
@@ -332,8 +346,20 @@ class PersistentCookieStorage(
                 }
             }
         }
-        purgeExpiredLocked(currentTimeMillis())
+        purgeExpiredLocked(currentTimeMillis(), force = true)
         isLoaded = true
+    }
+
+    private suspend fun readBoundedCookieFile(path: String): String? {
+        val size = runCatching { fileSystem.getFileSize(path) }.getOrNull()
+        if (size != null && size > MAX_COOKIE_FILE_BYTES) {
+            Logger.w(
+                "PersistentCookieStorage",
+                "Skipping oversized cookie file '$path' (${size} bytes > $MAX_COOKIE_FILE_BYTES bytes)"
+            )
+            return null
+        }
+        return fileSystem.readString(path).getOrNull()
     }
 
     private fun encodeSnapshotLocked(): String {
@@ -364,10 +390,10 @@ class PersistentCookieStorage(
             .getOrThrow()
     }
 
-    private fun purgeExpiredLocked(now: Long): Boolean {
+    private fun purgeExpiredLocked(now: Long, force: Boolean = false): Boolean {
         // FIX: パフォーマンス最適化 - 一定間隔でのみパージを実行
         // 毎回のget()で全Cookie走査するのは非効率なため、5分に1回に制限
-        if (now - lastPurgeTimeMillis < purgeIntervalMillis) {
+        if (!force && now - lastPurgeTimeMillis < purgeIntervalMillis) {
             return false
         }
         lastPurgeTimeMillis = now
@@ -409,15 +435,20 @@ class PersistentCookieStorage(
     }
 
     private fun resolveDomain(setCookieDomain: String?, requestHost: String): String? {
-        val request = requestHost.lowercase()
+        val request = requestHost.trim().trimEnd('.').lowercase()
+        if (request.isBlank()) return null
+        if (!isDomainAllowedForCookies(request)) return null
         val candidate = setCookieDomain
             ?.ifBlank { null }
             ?.trim()
             ?.trimStart('.')
+            ?.trimEnd('.')
             ?.lowercase()
             ?: request
+        if (!isDomainAllowedForCookies(candidate)) return null
+        if (candidate in knownPublicSuffixes) return null
         val isSameHost = request == candidate
-        val isParentDomain = request.endsWith(".$candidate")
+        val isParentDomain = request.endsWith(".$candidate") && !isLikelyIpAddress(candidate)
         return if (isSameHost || isParentDomain) candidate else null
     }
 
@@ -431,6 +462,64 @@ class PersistentCookieStorage(
         val normalizedDomain = cookieDomain.trimStart('.').lowercase()
         val normalizedHost = host.lowercase()
         return normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain")
+    }
+
+    private fun isDomainAllowedForCookies(domain: String): Boolean {
+        if (domain.isBlank() || domain.length > MAX_COOKIE_DOMAIN_LENGTH) return false
+        if (domain.startsWith(".") || domain.endsWith(".")) return false
+        if (!COOKIE_DOMAIN_REGEX.matches(domain)) return false
+        val labels = domain.split('.').filter { it.isNotBlank() }
+        if (labels.size < 2 && !isLikelyIpAddress(domain)) return false
+        return true
+    }
+
+    private fun isLikelyIpAddress(value: String): Boolean {
+        val parts = value.split('.')
+        return parts.size == 4 && parts.all { part ->
+            part.isNotBlank() && part.all { it.isDigit() } && part.toIntOrNull() in 0..255
+        }
+    }
+
+    private fun isCookieNameAllowed(name: String): Boolean {
+        if (name.isBlank()) return false
+        if (name.length > MAX_COOKIE_NAME_LENGTH) return false
+        return COOKIE_NAME_REGEX.matches(name)
+    }
+
+    private fun isCookieValueAllowed(value: String): Boolean {
+        if (value.length > MAX_COOKIE_VALUE_LENGTH) return false
+        if (value.any { it == '\u0000' || it == '\r' || it == '\n' }) return false
+        return true
+    }
+
+    private fun isStoredCookieAllowed(stored: StoredCookie): Boolean {
+        if (!isDomainAllowedForCookies(stored.domain)) return false
+        if (!isCookieNameAllowed(stored.name)) return false
+        if (!isCookieValueAllowed(stored.value)) return false
+        return true
+    }
+
+    private fun enforceCookieCapacityLocked(now: Long) {
+        purgeExpiredLocked(now, force = true)
+        while (cookies.size > MAX_COOKIES_TOTAL) {
+            evictOldestCookieLocked()
+        }
+        val groupedByDomain = cookies.values.groupBy { it.domain.lowercase() }
+        groupedByDomain.forEach { (domain, domainCookies) ->
+            val overflow = domainCookies.size - MAX_COOKIES_PER_DOMAIN
+            if (overflow <= 0) return@forEach
+            domainCookies
+                .sortedBy { it.createdAtMillis }
+                .take(overflow)
+                .forEach { cookie ->
+                    cookies.remove(CookieKey(domain, normalizePath(cookie.path), cookie.name))
+                }
+        }
+    }
+
+    private fun evictOldestCookieLocked() {
+        val oldest = cookies.entries.minByOrNull { it.value.createdAtMillis }?.key ?: return
+        cookies.remove(oldest)
     }
 
     private fun pathMatches(requestPath: String, cookiePath: String): Boolean {
@@ -452,4 +541,15 @@ class PersistentCookieStorage(
         val path: String,
         val name: String
     )
+
+    companion object {
+        private const val MAX_COOKIES_TOTAL = 256
+        private const val MAX_COOKIES_PER_DOMAIN = 64
+        private const val MAX_COOKIE_NAME_LENGTH = 128
+        private const val MAX_COOKIE_VALUE_LENGTH = 2048
+        private const val MAX_COOKIE_DOMAIN_LENGTH = 253
+        private const val MAX_COOKIE_FILE_BYTES = 1_048_576L // 1 MiB
+        private val COOKIE_NAME_REGEX = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+        private val COOKIE_DOMAIN_REGEX = Regex("^[A-Za-z0-9.-]+$")
+    }
 }

@@ -41,7 +41,7 @@ class AndroidFileSystem(
         private const val MAX_FILENAME_LENGTH = 255
         // FIX: パスの最大長（合理的な上限）
         private const val MAX_PATH_LENGTH = 4096
-        private const val ZERO_READ_BACKOFF_MILLIS = 8L
+        private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val SAF_READ_IDLE_TIMEOUT_MILLIS = 15_000L
     }
 

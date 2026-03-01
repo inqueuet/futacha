@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlin.text.concatToString
+import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
 /**
@@ -51,7 +52,10 @@ internal object ThreadHtmlParserCore {
     private const val MAX_HTML_SIZE = 10 * 1024 * 1024 // 10MB limit to prevent ReDoS attacks
     private const val MAX_CHUNK_SIZE = 200_000 // Process HTML in chunks to prevent ReDoS
     private const val MAX_PARSE_TIME_MS = 5000L // FIX: 5秒に戻す（parsing専用dispatcherで実行）
+    private const val MAX_REFERENCE_BUILD_TIME_MS = 1500L
     private const val MAX_SINGLE_BLOCK_SIZE = 300_000 // FIX: 500KB→300KBに削減してより早く異常を検出
+    private const val MAX_PARTIAL_MATCH_SCAN_LINES = 300
+    private val TRUSTED_CANONICAL_HOST_SUFFIXES = setOf("2chan.net")
 
     // FIX: ReDoS対策 - [^>]+に長さ制限を追加
     private val canonicalRegex = Regex(
@@ -159,7 +163,9 @@ internal object ThreadHtmlParserCore {
             // NOTE: この処理は大きなHTML文字列のコピーを作成するため、メモリ使用量が増加する
             // TODO: 将来的には、チャンク処理や正規表現での\r?\n対応を検討
             val normalized = html.replace("\r\n", "\n")
-            val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
+            val canonical = sanitizeCanonicalUrl(
+                canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
+            )
             val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL
 
             // Extract threadId with better error handling
@@ -281,6 +287,10 @@ internal object ThreadHtmlParserCore {
                         // FIX: Reduce max single block size from 1MB to 500KB
                         if (block.length > MAX_SINGLE_BLOCK_SIZE) {
                             Logger.w(TAG, "Skipping block exceeding safe size limit (${block.length} > $MAX_SINGLE_BLOCK_SIZE)")
+                            isTruncated = true
+                            if (truncationReason == null) {
+                                truncationReason = "Skipped oversized post block (${block.length} bytes)"
+                            }
                             searchStart = blockEndExclusive
                             continue
                         }
@@ -319,6 +329,12 @@ internal object ThreadHtmlParserCore {
 
             // FIX: Build references and counts in a single pass to reduce CPU usage
             val referenceData = buildReferencesAndCounts(posts)
+            if (referenceData.timedOut) {
+                isTruncated = true
+                if (truncationReason.isNullOrBlank()) {
+                    truncationReason = "Reference rebuild exceeded time budget (${MAX_REFERENCE_BUILD_TIME_MS}ms)"
+                }
+            }
             val postsWithReferences = posts.map { post ->
                 post.copy(
                     referencedCount = referenceData.counts[post.id] ?: 0,
@@ -348,7 +364,9 @@ internal object ThreadHtmlParserCore {
     fun extractOpImageUrl(html: String, baseUrl: String? = null): String? {
         if (html.isBlank()) return null
         val normalized = html.replace("\r\n", "\n")
-        val canonical = canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
+        val canonical = sanitizeCanonicalUrl(
+            canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
+        )
         val resolvedBaseUrl = canonical?.let(::extractBaseUrl)
             ?: baseUrl?.takeIf { it.isNotBlank() }
             ?: DEFAULT_BASE_URL
@@ -511,7 +529,8 @@ internal object ThreadHtmlParserCore {
     // FIX: Combine reference counting and map building to avoid O(n²) complexity
     private data class ReferenceData(
         val counts: Map<String, Int>,
-        val references: Map<String, List<QuoteReference>>
+        val references: Map<String, List<QuoteReference>>,
+        val timedOut: Boolean = false
     )
 
     /**
@@ -536,13 +555,23 @@ internal object ThreadHtmlParserCore {
         val mediaFileIndex = mutableMapOf<String, MutableSet<String>>()
         val counts = mutableMapOf<String, Int>()
         val references = mutableMapOf<String, MutableList<QuoteReference>>()
+        val startedAtMillis = Clock.System.now().toEpochMilliseconds()
+        var timedOut = false
 
         // FIX: デコード/ストリップ処理をキャッシュして繰り返し処理を避ける
         val decodedMessages = mutableMapOf<String, List<String>>()
 
         // Single pass through posts in order; only以前の投稿を参照対象とする
-        posts.forEach { post: Post ->
-            if (post.messageHtml.isBlank()) return@forEach
+        for ((index, post) in posts.withIndex()) {
+            if (index % 32 == 0) {
+                val elapsed = Clock.System.now().toEpochMilliseconds() - startedAtMillis
+                if (elapsed > MAX_REFERENCE_BUILD_TIME_MS) {
+                    timedOut = true
+                    Logger.w(TAG, "Reference rebuild timed out at post=$index elapsed=${elapsed}ms")
+                    break
+                }
+            }
+            if (post.messageHtml.isBlank()) continue
 
             // デコード済みメッセージをキャッシュから取得または生成
             val lines = decodedMessages.getOrPut(post.id) {
@@ -550,7 +579,7 @@ internal object ThreadHtmlParserCore {
                     .lines()
                     .map { it.trimStart() }
             }
-            if (lines.isEmpty()) return@forEach
+            if (lines.isEmpty()) continue
 
             val postReferences = mutableListOf<QuoteReference>()
             val referencedTargets = mutableSetOf<String>()
@@ -644,7 +673,7 @@ internal object ThreadHtmlParserCore {
             addMediaToIndex(mediaFileIndex, post)
         }
 
-        return ReferenceData(counts, references)
+        return ReferenceData(counts, references, timedOut = timedOut)
     }
 
     private fun computeReferencedCounts(posts: List<Post>): Map<String, Int> {
@@ -662,6 +691,20 @@ internal object ThreadHtmlParserCore {
             path.startsWith("/") -> baseUrl.trimEnd('/') + path
             else -> baseUrl.trimEnd('/') + "/" + path
         }
+    }
+
+    private fun sanitizeCanonicalUrl(url: String?): String? {
+        val candidate = url?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val base = extractBaseUrl(candidate) ?: return null
+        val scheme = extractScheme(base)
+        if (scheme != "http" && scheme != "https") return null
+        val host = base.substringAfter("://", "").substringBefore('/').substringBefore(':').lowercase().trim('.')
+        if (host.isBlank()) return null
+        val trusted = TRUSTED_CANONICAL_HOST_SUFFIXES.any { suffix ->
+            host == suffix || host.endsWith(".$suffix")
+        }
+        if (!trusted) return null
+        return candidate
     }
 
     private fun extractScheme(baseUrl: String): String {
@@ -776,6 +819,7 @@ internal object ThreadHtmlParserCore {
     ): Set<String> {
         if (normalizedQuote.length < MIN_PARTIAL_MATCH_LENGTH) return emptySet()
         if (index.isEmpty()) return emptySet()
+        if (index.size > MAX_PARTIAL_MATCH_SCAN_LINES) return emptySet()
         val targets = mutableSetOf<String>()
         index.forEach { (line, ids) ->
             if (line.length < MIN_PARTIAL_MATCH_LENGTH) return@forEach

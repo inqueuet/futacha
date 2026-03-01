@@ -20,7 +20,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -113,6 +113,7 @@ class DefaultBoardRepository(
         private const val OP_IMAGE_LINE_LIMIT = 65
         private const val OP_IMAGE_CONCURRENCY = 4
         private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
+        private const val DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS = 30_000L // 30 seconds
         private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
         // Timeout for semaphore acquisition to avoid permanent wait.
         private const val SEMAPHORE_TIMEOUT_MILLIS = 30_000L // 30 seconds
@@ -215,7 +216,9 @@ class DefaultBoardRepository(
         mode: CatalogMode
     ): List<CatalogItem> {
         return withRetryOnAuthFailure(board) {
-            val html = api.fetchCatalog(board, mode)
+            val html = withContext(AppDispatchers.io) {
+                api.fetchCatalog(board, mode)
+            }
             val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
             withContext(AppDispatchers.parsing) {
                 parser.parseCatalog(html, baseUrl)
@@ -228,18 +231,18 @@ class DefaultBoardRepository(
         val key = OpImageKey(board, threadId)
         getCachedOpImageUrl(key)?.let { return it }
 
-        // Add timeout to avoid waiting forever for semaphore permit.
-        val resolvedUrl = try {
-            withTimeout(SEMAPHORE_TIMEOUT_MILLIS) {
-                opImageSemaphore.withPermit {
-                    withRetryOnAuthFailure(board) {
-                        resolveOpImageUrl(board, threadId)
-                    }
+        // Apply timeout only to permit acquisition wait.
+        val resolvedUrl = withTimeoutOrNull(SEMAPHORE_TIMEOUT_MILLIS) {
+            opImageSemaphore.withPermit {
+                withRetryOnAuthFailure(board) {
+                    resolveOpImageUrl(board, threadId)
                 }
             }
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        }
+        if (resolvedUrl == null) {
             Logger.w(TAG, "Timeout waiting for image fetch permit for thread $threadId")
-            null
+            // Do not cache timeout-derived nulls.
+            return null
         }
         saveOpImageUrlToCache(key, resolvedUrl)
         return resolvedUrl
@@ -247,7 +250,9 @@ class DefaultBoardRepository(
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
         return withRetryOnAuthFailure(board) {
-            val html = api.fetchThread(board, threadId)
+            val html = withContext(AppDispatchers.io) {
+                api.fetchThread(board, threadId)
+            }
             withContext(AppDispatchers.parsing) {
                 parser.parseThread(html)
             }
@@ -255,7 +260,9 @@ class DefaultBoardRepository(
     }
 
     override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
-        val html = api.fetchThreadByUrl(threadUrl)
+        val html = withContext(AppDispatchers.io) {
+            api.fetchThreadByUrl(threadUrl)
+        }
         return withContext(AppDispatchers.parsing) {
             parser.parseThread(html)
         }
@@ -376,7 +383,11 @@ class DefaultBoardRepository(
 
     private data class OpImageKey(val board: String, val threadId: String)
 
-    private data class OpImageCacheEntry(val url: String?, val recordedAtMillis: Long)
+    private data class OpImageCacheEntry(
+        val url: String?,
+        val recordedAtMillis: Long,
+        val ttlMillis: Long
+    )
 
     // Simple access-order LRU cache. Not thread-safe by itself.
     // All access must be guarded by opImageCacheMutex.
@@ -433,7 +444,7 @@ class DefaultBoardRepository(
         return opImageCacheMutex.withLock {
             val entry = opImageCache[key]
             if (entry == null) return@withLock null
-            if (now - entry.recordedAtMillis <= opImageCacheTtlMillis) {
+            if (now - entry.recordedAtMillis <= entry.ttlMillis) {
                 return@withLock entry.url
             }
             opImageCache.remove(key)
@@ -445,14 +456,19 @@ class DefaultBoardRepository(
     private suspend fun saveOpImageUrlToCache(key: OpImageKey, url: String?) {
         val now = Clock.System.now().toEpochMilliseconds()
         opImageCacheMutex.withLock {
-            opImageCache[key] = OpImageCacheEntry(url, now)
+            val ttl = if (url == null) {
+                DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS
+            } else {
+                opImageCacheTtlMillis
+            }
+            opImageCache[key] = OpImageCacheEntry(url = url, recordedAtMillis = now, ttlMillis = ttl)
             purgeExpiredEntriesLocked(now)
         }
     }
 
     private fun purgeExpiredEntriesLocked(now: Long) {
         opImageCache.removeIf { _, entry ->
-            now - entry.recordedAtMillis > opImageCacheTtlMillis
+            now - entry.recordedAtMillis > entry.ttlMillis
         }
     }
 
@@ -462,7 +478,9 @@ class DefaultBoardRepository(
     ): String? {
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
         return try {
-            val snippet = api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+            val snippet = withContext(AppDispatchers.io) {
+                api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+            }
             // Parse on background dispatcher.
             withContext(AppDispatchers.parsing) {
                 parser.extractOpImageUrl(snippet, baseUrl)

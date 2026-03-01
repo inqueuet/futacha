@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.state
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import platform.Foundation.NSUserDefaults
@@ -37,6 +39,7 @@ internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformS
 
 private class IosPlatformStateStorage : PlatformStateStorage {
     private val defaults = NSUserDefaults.standardUserDefaults()
+    private val updateMutex = Mutex()
     private val boardsState = MutableStateFlow(defaults.stringForKey(BOARDS_KEY))
     private val historyState = MutableStateFlow(defaults.stringForKey(HISTORY_KEY))
     private val displayStyleState = MutableStateFlow(defaults.stringForKey(CATALOG_DISPLAY_STYLE_KEY))
@@ -88,8 +91,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
 
     private suspend fun update(block: () -> Unit) {
-        withContext(Dispatchers.Default) {
-            block()
+        updateMutex.withLock {
+            withContext(Dispatchers.Default) {
+                block()
+            }
         }
     }
 
@@ -247,6 +252,15 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         }
     }
 
+    override suspend fun updatePreferredFileManager(packageName: String, label: String) {
+        update {
+            defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
+            defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
+            preferredFileManagerPackageState.value = packageName
+            preferredFileManagerLabelState.value = label
+        }
+    }
+
     override suspend fun updateLastUsedDeleteKey(value: String) {
         update {
             defaults.setObject(value, forKey = LAST_USED_DELETE_KEY)
@@ -271,86 +285,71 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         defaultThreadMenuEntriesConfigJson: String?,
         defaultCatalogNavEntriesJson: String?
     ) {
-        var updated = false
-        if (defaults.stringForKey(BOARDS_KEY) == null) {
-            defaults.setObject(defaultBoardsJson, forKey = BOARDS_KEY)
-            boardsState.value = defaultBoardsJson
-            updated = true
-        }
-        if (defaults.stringForKey(HISTORY_KEY) == null) {
-            defaults.setObject(defaultHistoryJson, forKey = HISTORY_KEY)
-            historyState.value = defaultHistoryJson
-            updated = true
-        }
-        if (defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY) == null) {
-            defaults.setObject(DEFAULT_MANUAL_SAVE_ROOT, forKey = MANUAL_SAVE_DIRECTORY_KEY)
-            manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
-            updated = true
-        }
-        if (defaultLastUsedDeleteKey != null && defaults.stringForKey(LAST_USED_DELETE_KEY) == null) {
-            defaults.setObject(defaultLastUsedDeleteKey, forKey = LAST_USED_DELETE_KEY)
-            lastUsedDeleteKeyState.value = defaultLastUsedDeleteKey
-            updated = true
-        }
-        if (defaultNgHeadersJson != null && defaults.stringForKey(NG_HEADERS_KEY) == null) {
-            defaults.setObject(defaultNgHeadersJson, forKey = NG_HEADERS_KEY)
-            ngHeadersState.value = defaultNgHeadersJson
-            updated = true
-        }
-        if (defaultNgWordsJson != null && defaults.stringForKey(NG_WORDS_KEY) == null) {
-            defaults.setObject(defaultNgWordsJson, forKey = NG_WORDS_KEY)
-            ngWordsState.value = defaultNgWordsJson
-            updated = true
-        }
-        if (defaultCatalogNgWordsJson != null && defaults.stringForKey(CATALOG_NG_WORDS_KEY) == null) {
-            defaults.setObject(defaultCatalogNgWordsJson, forKey = CATALOG_NG_WORDS_KEY)
-            catalogNgWordsState.value = defaultCatalogNgWordsJson
-            updated = true
-        }
-        if (defaultWatchWordsJson != null && defaults.stringForKey(WATCH_WORDS_KEY) == null) {
-            defaults.setObject(defaultWatchWordsJson, forKey = WATCH_WORDS_KEY)
-            watchWordsState.value = defaultWatchWordsJson
-            updated = true
-        }
-        if (defaultSelfPostIdentifiersJson != null && defaults.stringForKey(SELF_POST_IDENTIFIERS_KEY) == null) {
-            defaults.setObject(defaultSelfPostIdentifiersJson, forKey = SELF_POST_IDENTIFIERS_KEY)
-            selfPostIdentifiersState.value = defaultSelfPostIdentifiersJson
-            updated = true
-        }
-        if (defaultAttachmentPickerPreference != null && defaults.stringForKey(ATTACHMENT_PICKER_PREF_KEY) == null) {
-            defaults.setObject(defaultAttachmentPickerPreference, forKey = ATTACHMENT_PICKER_PREF_KEY)
-            attachmentPickerPreferenceState.value = defaultAttachmentPickerPreference
-            updated = true
-        }
-        if (defaultSaveDirectorySelection != null && defaults.stringForKey(SAVE_DIRECTORY_SELECTION_KEY) == null) {
-            defaults.setObject(defaultSaveDirectorySelection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
-            saveDirectorySelectionState.value = defaultSaveDirectorySelection
-            updated = true
-        }
-        if (defaultThreadMenuConfigJson != null && defaults.stringForKey(THREAD_MENU_CONFIG_KEY) == null) {
-            defaults.setObject(defaultThreadMenuConfigJson, forKey = THREAD_MENU_CONFIG_KEY)
-            threadMenuConfigState.value = defaultThreadMenuConfigJson
-            updated = true
-        }
-        if (defaultThreadSettingsMenuConfigJson != null && defaults.stringForKey(THREAD_SETTINGS_MENU_CONFIG_KEY) == null) {
-            defaults.setObject(defaultThreadSettingsMenuConfigJson, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
-            threadSettingsMenuConfigState.value = defaultThreadSettingsMenuConfigJson
-            updated = true
-        }
-        if (defaultThreadMenuEntriesConfigJson != null && defaults.stringForKey(THREAD_MENU_ENTRIES_KEY) == null) {
-            defaults.setObject(defaultThreadMenuEntriesConfigJson, forKey = THREAD_MENU_ENTRIES_KEY)
-            threadMenuEntriesState.value = defaultThreadMenuEntriesConfigJson
-            updated = true
-        }
-        if (defaultCatalogNavEntriesJson != null && defaults.stringForKey(CATALOG_NAV_ENTRIES_KEY) == null) {
-            defaults.setObject(defaultCatalogNavEntriesJson, forKey = CATALOG_NAV_ENTRIES_KEY)
-            catalogNavEntriesState.value = defaultCatalogNavEntriesJson
-            updated = true
-        }
-        if (defaultCatalogModeMapJson != null && defaults.stringForKey(CATALOG_MODE_MAP_KEY) == null) {
-            defaults.setObject(defaultCatalogModeMapJson, forKey = CATALOG_MODE_MAP_KEY)
-            catalogModeMapState.value = defaultCatalogModeMapJson
-            updated = true
+        update {
+            if (defaults.stringForKey(BOARDS_KEY) == null) {
+                defaults.setObject(defaultBoardsJson, forKey = BOARDS_KEY)
+                boardsState.value = defaultBoardsJson
+            }
+            if (defaults.stringForKey(HISTORY_KEY) == null) {
+                defaults.setObject(defaultHistoryJson, forKey = HISTORY_KEY)
+                historyState.value = defaultHistoryJson
+            }
+            if (defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY) == null) {
+                defaults.setObject(DEFAULT_MANUAL_SAVE_ROOT, forKey = MANUAL_SAVE_DIRECTORY_KEY)
+                manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
+            }
+            if (defaultLastUsedDeleteKey != null && defaults.stringForKey(LAST_USED_DELETE_KEY) == null) {
+                defaults.setObject(defaultLastUsedDeleteKey, forKey = LAST_USED_DELETE_KEY)
+                lastUsedDeleteKeyState.value = defaultLastUsedDeleteKey
+            }
+            if (defaultNgHeadersJson != null && defaults.stringForKey(NG_HEADERS_KEY) == null) {
+                defaults.setObject(defaultNgHeadersJson, forKey = NG_HEADERS_KEY)
+                ngHeadersState.value = defaultNgHeadersJson
+            }
+            if (defaultNgWordsJson != null && defaults.stringForKey(NG_WORDS_KEY) == null) {
+                defaults.setObject(defaultNgWordsJson, forKey = NG_WORDS_KEY)
+                ngWordsState.value = defaultNgWordsJson
+            }
+            if (defaultCatalogNgWordsJson != null && defaults.stringForKey(CATALOG_NG_WORDS_KEY) == null) {
+                defaults.setObject(defaultCatalogNgWordsJson, forKey = CATALOG_NG_WORDS_KEY)
+                catalogNgWordsState.value = defaultCatalogNgWordsJson
+            }
+            if (defaultWatchWordsJson != null && defaults.stringForKey(WATCH_WORDS_KEY) == null) {
+                defaults.setObject(defaultWatchWordsJson, forKey = WATCH_WORDS_KEY)
+                watchWordsState.value = defaultWatchWordsJson
+            }
+            if (defaultSelfPostIdentifiersJson != null && defaults.stringForKey(SELF_POST_IDENTIFIERS_KEY) == null) {
+                defaults.setObject(defaultSelfPostIdentifiersJson, forKey = SELF_POST_IDENTIFIERS_KEY)
+                selfPostIdentifiersState.value = defaultSelfPostIdentifiersJson
+            }
+            if (defaultAttachmentPickerPreference != null && defaults.stringForKey(ATTACHMENT_PICKER_PREF_KEY) == null) {
+                defaults.setObject(defaultAttachmentPickerPreference, forKey = ATTACHMENT_PICKER_PREF_KEY)
+                attachmentPickerPreferenceState.value = defaultAttachmentPickerPreference
+            }
+            if (defaultSaveDirectorySelection != null && defaults.stringForKey(SAVE_DIRECTORY_SELECTION_KEY) == null) {
+                defaults.setObject(defaultSaveDirectorySelection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
+                saveDirectorySelectionState.value = defaultSaveDirectorySelection
+            }
+            if (defaultThreadMenuConfigJson != null && defaults.stringForKey(THREAD_MENU_CONFIG_KEY) == null) {
+                defaults.setObject(defaultThreadMenuConfigJson, forKey = THREAD_MENU_CONFIG_KEY)
+                threadMenuConfigState.value = defaultThreadMenuConfigJson
+            }
+            if (defaultThreadSettingsMenuConfigJson != null && defaults.stringForKey(THREAD_SETTINGS_MENU_CONFIG_KEY) == null) {
+                defaults.setObject(defaultThreadSettingsMenuConfigJson, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
+                threadSettingsMenuConfigState.value = defaultThreadSettingsMenuConfigJson
+            }
+            if (defaultThreadMenuEntriesConfigJson != null && defaults.stringForKey(THREAD_MENU_ENTRIES_KEY) == null) {
+                defaults.setObject(defaultThreadMenuEntriesConfigJson, forKey = THREAD_MENU_ENTRIES_KEY)
+                threadMenuEntriesState.value = defaultThreadMenuEntriesConfigJson
+            }
+            if (defaultCatalogNavEntriesJson != null && defaults.stringForKey(CATALOG_NAV_ENTRIES_KEY) == null) {
+                defaults.setObject(defaultCatalogNavEntriesJson, forKey = CATALOG_NAV_ENTRIES_KEY)
+                catalogNavEntriesState.value = defaultCatalogNavEntriesJson
+            }
+            if (defaultCatalogModeMapJson != null && defaults.stringForKey(CATALOG_MODE_MAP_KEY) == null) {
+                defaults.setObject(defaultCatalogModeMapJson, forKey = CATALOG_MODE_MAP_KEY)
+                catalogModeMapState.value = defaultCatalogModeMapJson
+            }
         }
         // NSUserDefaults writes are automatically persisted; explicit synchronize is unnecessary.
     }
