@@ -97,16 +97,6 @@ class ThreadSaveService(
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val MAX_PARALLEL_DOWNLOADS = 1
-
-        // FIX: Regexプリコンパイル（パフォーマンス最適化）
-        private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val LINK_HREF_REGEX = Regex("""<a[^>]+href\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src="([^"]+)"[^>]*>.*?</script>""")
-        private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>""")
-        private val CHARSET_REGEX = Regex("""<meta[^>]+charset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
-        private val CONTENT_TYPE_REGEX = Regex("""<meta[^>]+http-equiv\s*=\s*["']?Content-Type["']?[^>]+content\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
     }
 
     /**
@@ -246,9 +236,7 @@ class ThreadSaveService(
 
             // ダウンロードフェーズ
             val savedPosts = mutableListOf<SavedPost>()
-            var thumbnailPath: String? = null
-            var imageCount = 0
-            var videoCount = 0
+            var mediaCounts = ThreadSaveMediaCounts()
             var totalSize = 0L
             var rawHtmlRelativePath: String? = null
 
@@ -387,15 +375,13 @@ class ThreadSaveService(
                                         }
                                     }
 
-                                    when (fileInfo.fileType) {
-                                        FileType.THUMBNAIL -> {
-                                            if (thumbnailPath == null && mediaItem.post.id == opPostId) {
-                                                thumbnailPath = fileInfo.relativePath
-                                            }
-                                        }
-                                        FileType.FULL_IMAGE -> imageCount++
-                                        FileType.VIDEO -> videoCount++
-                                    }
+                                    mediaCounts = updateThreadSaveMediaCounts(
+                                        current = mediaCounts,
+                                        fileType = fileInfo.fileType,
+                                        relativePath = fileInfo.relativePath,
+                                        postId = mediaItem.post.id,
+                                        opPostId = opPostId
+                                    )
                                 }
                                 .onFailure { error ->
                                     // ダウンロード失敗はログに記録してスキップ
@@ -485,7 +471,11 @@ class ThreadSaveService(
                         localVideoPath = localVideoPath,
                         originalThumbnailUrl = post.thumbnailUrl,
                         localThumbnailPath = localThumbnailPath,
-                        downloadSuccess = post.imageUrl == null || localImagePath != null || localVideoPath != null
+                        downloadSuccess = resolveThreadSavedPostDownloadSuccess(
+                            originalImageUrl = post.imageUrl,
+                            localImagePath = localImagePath,
+                            localVideoPath = localVideoPath
+                        )
                     )
                 )
             }
@@ -496,11 +486,7 @@ class ThreadSaveService(
             updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
 
             // ステータスを失敗数に応じて設定
-            val status = when {
-                downloadFailureCount == 0 -> SaveStatus.COMPLETED
-                downloadFailureCount < totalMediaCount -> SaveStatus.PARTIAL
-                else -> SaveStatus.FAILED
-            }
+            val status = resolveThreadSaveStatus(downloadFailureCount, totalMediaCount)
 
             // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
             val metadataSize = if (writeMetadata) {
@@ -545,11 +531,11 @@ class ThreadSaveService(
                 boardName = boardName,
                 title = title,
                 storageId = storageId,
-                thumbnailPath = thumbnailPath,
+                thumbnailPath = mediaCounts.thumbnailPath,
                 savedAt = savedAtTimestamp,
                 postCount = posts.size,
-                imageCount = imageCount,
-                videoCount = videoCount,
+                imageCount = mediaCounts.imageCount,
+                videoCount = mediaCounts.videoCount,
                 totalSize = finalTotalSize,
                 status = status
                 )
@@ -615,26 +601,16 @@ class ThreadSaveService(
                         throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
                     }
 
-                    val extension = (getExtensionFromUrl(url)
-                        ?: getExtensionFromContentType(response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }))
+                    val extension = (getThreadSaveExtensionFromUrl(url)
+                        ?: getThreadSaveExtensionFromContentType(response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }))
                         .lowercase()
-                    val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
-                    if (!isSupported) {
+                    if (!isThreadSaveSupportedExtension(extension)) {
                         throw Exception("Unsupported file type: $extension")
                     }
 
-                    val fileType = when {
-                        type == MediaType.THUMBNAIL -> FileType.THUMBNAIL
-                        extension in SUPPORTED_VIDEO_EXTENSIONS -> FileType.VIDEO
-                        else -> FileType.FULL_IMAGE
-                    }
+                    val fileType = resolveThreadSaveFileType(type.toSupportType(), extension)
                     val fileName = extractFileName(url, extension, postId)
-                    val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
-                    val subDir = when (fileType) {
-                        FileType.THUMBNAIL -> "${boardPrefix}thumb"
-                        FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
-                    }
-                    val relativePath = "$subDir/$fileName"
+                    val relativePath = buildThreadSaveRelativePath(boardPath, fileType, fileName)
 
                     if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
                         throw IllegalStateException("Save aborted: exceeded time limit during download")
@@ -801,54 +777,7 @@ class ThreadSaveService(
      * HTML内のパスを相対パスに変換
      */
     private fun convertHtmlPaths(html: String, urlToPathMap: Map<String, String>): String {
-        var converted = html
-
-        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
-        // 画像URLを相対パスに変換
-        converted = IMAGE_SRC_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        // リンクURLを相対パスに変換
-        converted = LINK_HREF_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        // videoタグのsrcを相対パスに変換
-        converted = VIDEO_SRC_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        // sourceタグのsrcも相対パスに変換
-        converted = SOURCE_SRC_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        return converted
+        return convertSavedThreadHtmlPaths(html, urlToPathMap)
     }
 
     /**
@@ -860,44 +789,18 @@ class ThreadSaveService(
         urlToPathMap: Map<String, String>,
         stripExternalResources: Boolean
     ): String {
-        var updated = html
-        if (stripExternalResources) {
-            updated = stripExternalScriptsAndIframes(updated)
-        }
-        updated = replaceMediaPaths(updated, boardPath, urlToPathMap)
-        updated = forceUtf8Charset(updated)
-        return updated
+        return rewriteSavedOriginalHtml(html, boardPath, urlToPathMap, stripExternalResources)
     }
 
     private fun stripExternalScriptsAndIframes(html: String): String {
-        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
-        fun shouldStrip(url: String): Boolean {
-            val normalized = url.lowercase()
-            return normalized.contains("/bin/") || normalized.contains("dec.2chan.net")
-        }
-        var updated = SCRIPT_SRC_REGEX.replace(html) { matchResult ->
-            val src = matchResult.groupValues.getOrNull(1).orEmpty()
-            if (shouldStrip(src)) "" else matchResult.value
-        }
-        updated = IFRAME_SRC_REGEX.replace(updated) { matchResult ->
-            val src = matchResult.groupValues.getOrNull(1).orEmpty()
-            if (shouldStrip(src)) "" else matchResult.value
-        }
-        return updated
+        return stripSavedExternalScriptsAndIframes(html)
     }
 
     /**
      * 書き出しはUTF-8固定なので charset をUTF-8に置き換える
      */
     private fun forceUtf8Charset(html: String): String {
-        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
-        var updated = CHARSET_REGEX.replace(html) { matchResult ->
-            matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
-        }
-        updated = CONTENT_TYPE_REGEX.replace(updated) { matchResult ->
-            matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
-        }
-        return updated
+        return forceSavedHtmlUtf8Charset(html)
     }
 
     /**
@@ -908,50 +811,14 @@ class ThreadSaveService(
         boardPath: String,
         urlToPathMap: Map<String, String>
     ): String {
-        var updated = html
-        // まずはダウンロード時に記録したURLを優先して置き換え
-        urlToPathMap.forEach { (original, relative) ->
-            updated = updated.replace(original, relative)
-        }
-
-        val normalizedBoard = boardPath.trim('/').takeIf { it.isNotEmpty() } ?: return updated
-        val escapedBoard = Regex.escape(normalizedBoard)
-
-        val srcPatterns = listOf(
-            Regex("https?://[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("//[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
-        )
-        val thumbPatterns = listOf(
-            Regex("https?://[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("//[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
-        )
-
-        srcPatterns.forEach { regex ->
-            updated = regex.replace(updated) { matchResult ->
-                "$normalizedBoard/src/${matchResult.groupValues[1]}"
-            }
-        }
-        thumbPatterns.forEach { regex ->
-            updated = regex.replace(updated) { matchResult ->
-                "$normalizedBoard/thumb/${matchResult.groupValues[1]}"
-            }
-        }
-        return updated
+        return replaceSavedMediaPaths(html, boardPath, urlToPathMap)
     }
 
     /**
      * 板URLから板パス部分を抽出（例: https://may.2chan.net/b -> b）
      */
     private fun extractBoardPath(boardUrl: String, boardIdFallback: String): String {
-        val fallback = boardIdFallback.trim('/').ifEmpty { "b" }
-        return runCatching {
-            val base = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
-            val afterHost = base.substringAfter("://", base)
-            val path = afterHost.substringAfter('/', "").trim('/')
-            path.ifEmpty { fallback }
-        }.getOrElse { fallback }
+        return extractThreadSaveBoardPath(boardUrl, boardIdFallback)
     }
 
     private fun buildMetadataPayloadWithStableSize(
@@ -1096,28 +963,6 @@ class ThreadSaveService(
     /**
      * URLから拡張子を取得
      */
-    private fun getExtensionFromUrl(url: String): String? {
-        val sanitized = url
-            .substringBefore('#')
-            .substringBefore('?')
-        return sanitized.substringAfterLast('.', "").takeIf { it.length in 3..4 }
-    }
-
-    /**
-     * ContentTypeから拡張子を取得
-     */
-    private fun getExtensionFromContentType(contentType: ContentType?): String {
-        return when (contentType?.contentSubtype) {
-            "jpeg", "jpg" -> "jpg"
-            "png" -> "png"
-            "gif" -> "gif"
-            "webp" -> "webp"
-            "mp4" -> "mp4"
-            "webm" -> "webm"
-            else -> "jpg"
-        }
-    }
-
     /**
      * 進捗を更新
      */
@@ -1131,6 +976,13 @@ class ThreadSaveService(
     private enum class MediaType {
         THUMBNAIL,
         FULL_IMAGE
+    }
+
+    private fun MediaType.toSupportType(): ThreadSaveMediaRequestType {
+        return when (this) {
+            MediaType.THUMBNAIL -> ThreadSaveMediaRequestType.THUMBNAIL
+            MediaType.FULL_IMAGE -> ThreadSaveMediaRequestType.FULL_IMAGE
+        }
     }
 
     private data class MediaPathLock(

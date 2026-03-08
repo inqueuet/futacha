@@ -84,4 +84,33 @@ class CatalogHtmlParserCoreTest {
         assertEquals("https://www.example.com/t/thumb/5000000000s.gif", items[0].thumbnailUrl)
         assertEquals("https://www.example.com/t/src/5000000000.webm", items[0].fullImageUrl)
     }
+
+    @Test
+    fun parseCatalog_skipsOversizedCell_andKeepsFollowingEntries() {
+        val oversizedTitle = "x".repeat(100_100)
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='res/6000000000.htm'>thread</a>
+                        <small>$oversizedTitle</small>
+                    </td>
+                    <td>
+                        <a href='res/6000000001.htm'><img src='/t/cat/6000000001s.jpg'></a>
+                        <br><font size=2>4</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html) }
+
+        assertEquals(1, items.size)
+        assertEquals("6000000001", items.single().id)
+        assertEquals(4, items.single().replyCount)
+    }
 }

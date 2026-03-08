@@ -86,7 +86,7 @@ private val globalSettingsEntries = listOf(
     )
 )
 
-private enum class GlobalSettingsAction {
+internal enum class GlobalSettingsAction {
     Cookies,
     Email,
     X,
@@ -164,33 +164,6 @@ internal fun GlobalSettingsScreen(
         refreshAutoSavedStats()
     }
 
-    fun normalizeManualSaveInput(raw: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isBlank()) return MANUAL_SAVE_DIRECTORY
-        if (trimmed.startsWith("/")) return trimmed
-
-        val lower = trimmed.lowercase()
-        return when {
-            lower == "download" || lower == "downloads" -> "Download"
-            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Download/${trimmed.substringAfter('/')}"
-            lower == "documents" -> "Documents"
-            lower.startsWith("documents/") -> "Documents/${trimmed.substringAfter('/')}"
-            else -> trimmed
-        }
-    }
-    fun fallbackResolvedPath(manualSaveDir: String): String {
-        val normalized = normalizeManualSaveInput(manualSaveDir)
-        if (normalized.startsWith("/")) return normalized
-
-        val lower = normalized.lowercase()
-        return when {
-            lower == "download" || lower == "downloads" -> "Download/futacha/$MANUAL_SAVE_DIRECTORY"
-            lower.startsWith("download/") || lower.startsWith("downloads/") -> "Download/${normalized.substringAfter('/')}"
-            lower == "documents" -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$MANUAL_SAVE_DIRECTORY"
-            lower.startsWith("documents/") -> "$DEFAULT_MANUAL_SAVE_ROOT/${normalized.substringAfter('/')}"
-            else -> "$DEFAULT_MANUAL_SAVE_ROOT/futacha/$normalized"
-        }
-    }
     val isAndroidPlatform = remember { isAndroid() }
     val availableSaveDirectorySelections = remember {
         SaveDirectorySelection.entries.toList()
@@ -207,7 +180,13 @@ internal fun GlobalSettingsScreen(
         mutableStateOf(manualSaveDirectory)
     }
     val resolvedManualPath = remember(manualSaveDirectory, resolvedManualSaveDirectory) {
-        resolvedManualSaveDirectory ?: fallbackResolvedPath(manualSaveDirectory)
+        resolvedManualSaveDirectory ?: resolveFallbackManualSavePathValue(manualSaveDirectory)
+    }
+    val saveDestinationModeLabel = remember(effectiveSaveDirectorySelection, isAndroidPlatform) {
+        buildSaveDestinationModeLabelValue(effectiveSaveDirectorySelection, isAndroidPlatform)
+    }
+    val saveDestinationHint = remember(effectiveSaveDirectorySelection, isAndroidPlatform) {
+        buildSaveDestinationHintValue(effectiveSaveDirectorySelection, isAndroidPlatform)
     }
     val settingsEntries = remember(onOpenCookieManager) {
         buildList {
@@ -777,6 +756,30 @@ internal fun GlobalSettingsScreen(
                                     }
                                 }
                                 Spacer(Modifier.height(4.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    shape = MaterialTheme.shapes.medium,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = saveDestinationModeLabel,
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
+                                        Text(
+                                            text = resolvedManualPath,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = saveDestinationHint,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                }
                                 when (effectiveSaveDirectorySelection) {
                                     SaveDirectorySelection.MANUAL_INPUT -> {
                                         OutlinedTextField(
@@ -786,11 +789,6 @@ internal fun GlobalSettingsScreen(
                                             placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
                                             modifier = Modifier.fillMaxWidth(),
                                             label = { Text("フォルダ名またはパス") }
-                                        )
-                                        Text(
-                                            text = "保存先: $resolvedManualPath",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Row(
                                             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -802,7 +800,7 @@ internal fun GlobalSettingsScreen(
                                                 Text("デフォルトに戻す")
                                             }
                                             Button(onClick = {
-                                                val normalized = normalizeManualSaveInput(manualSaveInput)
+                                                val normalized = normalizeManualSaveInputValue(manualSaveInput)
                                                 manualSaveInput = normalized
                                                 onManualSaveDirectoryChanged(normalized)
                                             }) {
@@ -825,11 +823,6 @@ internal fun GlobalSettingsScreen(
                                             text = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.error
-                                        )
-                                        Text(
-                                            text = "保存先: $resolvedManualPath",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                             Button(
@@ -1007,17 +1000,11 @@ internal fun GlobalSettingsScreen(
                                         GlobalSettingsAction.Cookies -> {
                                             onOpenCookieManager?.invoke()
                                         }
-                                        GlobalSettingsAction.Email -> {
-                                            urlLauncher("mailto:admin@valoser.com?subject=お問い合わせ")
-                                        }
-                                        GlobalSettingsAction.X -> {
-                                            urlLauncher("https://x.com/may_012345")
-                                        }
-                                        GlobalSettingsAction.Developer -> {
-                                            urlLauncher("https://github.com/inqueuet/futacha")
-                                        }
+                                        GlobalSettingsAction.Email,
+                                        GlobalSettingsAction.X,
+                                        GlobalSettingsAction.Developer,
                                         GlobalSettingsAction.PrivacyPolicy -> {
-                                            urlLauncher("https://note.com/inqueuet/n/nc6ebcc1d6a67")
+                                            resolveGlobalSettingsActionTarget(entry.action)?.let(urlLauncher)
                                         }
                                     }
                                     onBack()

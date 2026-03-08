@@ -20,8 +20,6 @@ import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
 import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
 import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
 import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
-import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
-import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
@@ -47,7 +45,6 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.abs
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -224,9 +221,6 @@ class AppStateStore internal constructor(
     companion object {
         private const val TAG = "AppStateStore"
         private const val SCROLL_DEBOUNCE_DELAY_MS = 1_000L
-        private const val SCROLL_OFFSET_WRITE_THRESHOLD_PX = 24
-        private const val SCROLL_PERSIST_MIN_INTERVAL_MS = 2_000L
-        private const val SCROLL_VISITED_UPDATE_INTERVAL_MS = 15_000L
         private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
         private const val SELF_POST_KEY_DELIMITER = "::"
         private const val HISTORY_PERSIST_MAX_PASSES = 8
@@ -683,29 +677,13 @@ class AppStateStore internal constructor(
         val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
         selfPostIdentifiersMutex.withLock {
             val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
-            val scopedKey = buildSelfPostKey(threadId, boardId)
-            val legacyKey = threadId.trim()
-            val existingForThread = buildList {
-                addAll(currentMap[scopedKey].orEmpty())
-                if (scopedKey != legacyKey) {
-                    addAll(currentMap[legacyKey].orEmpty())
-                }
-            }
-            val normalized = existingForThread
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .toMutableList()
-            if (normalized.none { it.equals(trimmed, ignoreCase = true) }) {
-                normalized.add(trimmed)
-            }
-            val updatedThreadList = normalized
-                .asSequence()
-                .distinctBy { it.lowercase() }
-                .take(SELF_IDENTIFIER_MAX_ENTRIES)
-                .toList()
-            val nextMap = currentMap.toMutableMap()
-            nextMap[scopedKey] = updatedThreadList
-            val updatedMap = nextMap.toMap()
+            val updatedMap = mergeSelfPostIdentifierMap(
+                currentMap = currentMap,
+                threadId = threadId,
+                identifier = trimmed,
+                boardId = boardId,
+                maxEntries = SELF_IDENTIFIER_MAX_ENTRIES
+            )
             try {
                 persistSelfPostIdentifierMap(updatedMap)
                 cachedSelfPostIdentifierMap = updatedMap
@@ -721,19 +699,10 @@ class AppStateStore internal constructor(
         val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
         selfPostIdentifiersMutex.withLock {
             val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
-            val scopedKey = buildSelfPostKey(threadId, boardId)
-            val mutable = currentMap.toMutableMap()
-            val removedScoped = mutable.remove(scopedKey) != null
-            if (boardId.isNullOrBlank()) {
-                mutable.remove(threadId.trim())
-                val scopedSuffix = "$SELF_POST_KEY_DELIMITER${threadId.trim()}"
-                mutable.keys
-                    .filter { it.endsWith(scopedSuffix) }
-                    .forEach { key -> mutable.remove(key) }
-            } else if (!removedScoped) {
+            val updatedMap = removeSelfPostIdentifiersFromMap(currentMap, threadId, boardId)
+            if (updatedMap === currentMap) {
                 return@withLock
             }
-            val updatedMap = mutable.toMap()
             try {
                 persistSelfPostIdentifierMap(updatedMap)
                 cachedSelfPostIdentifierMap = updatedMap
@@ -939,30 +908,7 @@ class AppStateStore internal constructor(
         existing: ThreadHistoryEntry,
         incoming: ThreadHistoryEntry
     ): ThreadHistoryEntry {
-        val keepExistingReadState = existing.lastVisitedEpochMillis >= incoming.lastVisitedEpochMillis
-        val mergedLastVisited = maxOf(existing.lastVisitedEpochMillis, incoming.lastVisitedEpochMillis)
-        val mergedReplyCount = maxOf(existing.replyCount, incoming.replyCount)
-
-        return incoming.copy(
-            boardId = incoming.boardId.ifBlank { existing.boardId },
-            title = incoming.title.ifBlank { existing.title },
-            titleImageUrl = incoming.titleImageUrl.ifBlank { existing.titleImageUrl },
-            boardName = incoming.boardName.ifBlank { existing.boardName },
-            boardUrl = incoming.boardUrl.ifBlank { existing.boardUrl },
-            lastVisitedEpochMillis = mergedLastVisited,
-            replyCount = mergedReplyCount,
-            lastReadItemIndex = if (keepExistingReadState) {
-                existing.lastReadItemIndex
-            } else {
-                incoming.lastReadItemIndex
-            },
-            lastReadItemOffset = if (keepExistingReadState) {
-                existing.lastReadItemOffset
-            } else {
-                incoming.lastReadItemOffset
-            },
-            hasAutoSave = existing.hasAutoSave || incoming.hasAutoSave
-        )
+        return mergeAppStateHistoryEntry(existing, incoming)
     }
 
     suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) {
@@ -1085,41 +1031,15 @@ class AppStateStore internal constructor(
             val nowMillis = Clock.System.now().toEpochMilliseconds()
 
             // Skip tiny offset movements in the same item to avoid excessive JSON writes.
-            if (existingEntry != null &&
-                existingEntry.lastReadItemIndex == index &&
-                abs(existingEntry.lastReadItemOffset - offset) < SCROLL_OFFSET_WRITE_THRESHOLD_PX
-            ) {
+            if (shouldSkipHistoryScrollUpdate(existingEntry, index, offset, nowMillis)) {
                 return@withLock null
-            }
-            if (existingEntry != null) {
-                val indexDelta = abs(existingEntry.lastReadItemIndex - index)
-                val offsetDelta = abs(existingEntry.lastReadItemOffset - offset)
-                val isFrequentNearbyUpdate =
-                    nowMillis - existingEntry.lastVisitedEpochMillis < SCROLL_PERSIST_MIN_INTERVAL_MS &&
-                        indexDelta <= 2 &&
-                        offsetDelta < (SCROLL_OFFSET_WRITE_THRESHOLD_PX * 8)
-                if (isFrequentNearbyUpdate) {
-                    return@withLock null
-                }
             }
 
             val updatedHistory = if (existingEntry != null) {
                 // Update existing entry's scroll position while preserving other fields
                 currentHistory.map { entry ->
                     if (matchesHistoryEntry(entry, threadId, boardId, boardUrl)) {
-                        entry.copy(
-                            lastReadItemIndex = index,
-                            lastReadItemOffset = offset,
-                            lastVisitedEpochMillis = if (
-                                entry.lastReadItemIndex != index ||
-                                abs(entry.lastReadItemOffset - offset) >= SCROLL_OFFSET_WRITE_THRESHOLD_PX ||
-                                nowMillis - entry.lastVisitedEpochMillis >= SCROLL_VISITED_UPDATE_INTERVAL_MS
-                            ) {
-                                nowMillis
-                            } else {
-                                entry.lastVisitedEpochMillis
-                            }
-                        )
+                        applyHistoryScrollUpdate(entry, index, offset, nowMillis)
                     } else {
                         entry
                     }
@@ -1127,20 +1047,18 @@ class AppStateStore internal constructor(
             } else {
                 // Entry doesn't exist yet - create a new one
                 buildList {
-                    add(
-                        ThreadHistoryEntry(
-                            threadId = threadId,
-                            boardId = boardId,
-                            title = title,
-                            titleImageUrl = titleImageUrl,
-                            boardName = boardName,
-                            boardUrl = boardUrl,
-                            lastVisitedEpochMillis = nowMillis,
-                            replyCount = replyCount,
-                            lastReadItemIndex = index,
-                            lastReadItemOffset = offset
-                        )
-                    )
+                    add(buildNewHistoryScrollEntry(
+                        threadId = threadId,
+                        index = index,
+                        offset = offset,
+                        boardId = boardId,
+                        title = title,
+                        titleImageUrl = titleImageUrl,
+                        boardName = boardName,
+                        boardUrl = boardUrl,
+                        replyCount = replyCount,
+                        nowMillis = nowMillis
+                    ))
                     addAll(currentHistory)
                 }
             }
@@ -1318,48 +1236,23 @@ class AppStateStore internal constructor(
         boardId: String,
         boardUrl: String
     ): Boolean {
-        if (entry.threadId != threadId) return false
-        val normalizedBoardId = boardId.trim()
-        val entryBoardId = entry.boardId.trim()
-        if (normalizedBoardId.isNotBlank() && entryBoardId.isNotBlank()) {
-            return entryBoardId == normalizedBoardId
-        }
-        val normalizedBoardUrl = normalizeHistoryBoardUrlForIdentity(boardUrl)
-        val entryBoardUrl = normalizeHistoryBoardUrlForIdentity(entry.boardUrl)
-        if (normalizedBoardUrl.isNotBlank() && entryBoardUrl.isNotBlank()) {
-            return entryBoardUrl == normalizedBoardUrl
-        }
-        return normalizedBoardId.isBlank() && entryBoardId.isBlank() &&
-            normalizedBoardUrl.isBlank() && entryBoardUrl.isBlank()
+        return matchesHistoryEntryIdentity(entry, threadId, boardId, boardUrl)
     }
 
     private fun decodeCatalogDisplayStyle(raw: String?): CatalogDisplayStyle {
-        return raw?.let { value ->
-            CatalogDisplayStyle.entries.firstOrNull { it.name == value }
-        } ?: CatalogDisplayStyle.Grid
+        return decodeCatalogDisplayStyleValue(raw)
     }
 
     private fun decodeCatalogGridColumns(raw: String?): Int {
-        val parsed = raw?.toIntOrNull() ?: DEFAULT_CATALOG_GRID_COLUMNS
-        return parsed.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)
+        return decodeCatalogGridColumnsValue(raw)
     }
 
     private fun decodeCatalogModeMap(raw: String?): Map<String, CatalogMode> {
-        if (raw.isNullOrBlank()) return emptyMap()
-        return runCatching {
-            val decoded = json.decodeFromString(catalogModeMapSerializer, raw)
-            decoded.mapNotNull { (boardId, modeName) ->
-                val mode = CatalogMode.entries.firstOrNull { it.name == modeName }
-                mode?.let { boardId to it }
-            }.toMap()
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode catalog mode map", e)
-            emptyMap()
-        }
+        return decodeCatalogModeMapValue(raw)
     }
 
     private fun encodeCatalogModeMap(map: Map<String, CatalogMode>): Map<String, String> {
-        return map.mapValues { it.value.name }
+        return encodeCatalogModeMapValue(map)
     }
 
     private fun decodeStringList(raw: String?): List<String> {
@@ -1373,32 +1266,11 @@ class AppStateStore internal constructor(
     }
 
     private fun decodeSelfPostIdentifierMap(raw: String?): Map<String, List<String>> {
-        if (raw == null) return emptyMap()
-        return runCatching {
-            json.decodeFromString(selfPostIdentifierMapSerializer, raw)
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode self post identifiers map", e)
-            emptyMap()
-        }
+        return decodeSelfPostIdentifierMapValue(raw, json, selfPostIdentifierMapSerializer)
     }
 
     private fun aggregateIdentifiers(map: Map<String, List<String>>): List<String> {
-        val seenKeys = mutableSetOf<String>()
-        val aggregated = mutableListOf<String>()
-        map.values.forEach { identifiers ->
-            identifiers.forEach { identifier ->
-                val trimmed = identifier.trim()
-                if (trimmed.isBlank()) return@forEach
-                val key = trimmed.lowercase()
-                if (key in seenKeys) return@forEach
-                aggregated.add(trimmed)
-                seenKeys.add(key)
-                if (aggregated.size >= SELF_IDENTIFIER_MAX_ENTRIES) {
-                    return aggregated
-                }
-            }
-        }
-        return aggregated
+        return aggregateSelfPostIdentifiers(map, SELF_IDENTIFIER_MAX_ENTRIES)
     }
 
     private fun decodeThreadMenuConfig(raw: String?): List<ThreadMenuItemConfig> {
@@ -1483,13 +1355,7 @@ class AppStateStore internal constructor(
     }
 
     private fun buildSelfPostKey(threadId: String, boardId: String?): String {
-        val cleanThreadId = threadId.trim()
-        val cleanBoardId = boardId?.trim().orEmpty()
-        return if (cleanBoardId.isBlank()) {
-            cleanThreadId
-        } else {
-            "$cleanBoardId$SELF_POST_KEY_DELIMITER$cleanThreadId"
-        }
+        return buildSelfPostStorageKey(threadId, boardId)
     }
 
     private fun rethrowIfCancellation(error: Throwable) {
@@ -1497,48 +1363,19 @@ class AppStateStore internal constructor(
     }
 
     private fun historyIdentity(entry: ThreadHistoryEntry): String {
-        return historyIdentity(
-            threadId = entry.threadId,
-            boardId = entry.boardId,
-            boardUrl = entry.boardUrl
-        )
+        return historyEntryIdentity(entry)
     }
 
     private fun historyIdentity(threadId: String, boardId: String, boardUrl: String): String {
-        val normalizedThreadId = threadId.trim()
-        if (normalizedThreadId.isBlank()) return ""
-        val normalizedBoardId = boardId.trim()
-        if (normalizedBoardId.isNotBlank()) {
-            return "$normalizedBoardId$SELF_POST_KEY_DELIMITER$normalizedThreadId"
-        }
-        val normalizedBoardUrl = normalizeHistoryBoardUrlForIdentity(boardUrl)
-        if (normalizedBoardUrl.isNotBlank()) {
-            return "$normalizedBoardUrl$SELF_POST_KEY_DELIMITER$normalizedThreadId"
-        }
-        return normalizedThreadId
+        return historyEntryIdentity(threadId, boardId, boardUrl)
     }
 
     private fun normalizeHistoryBoardUrlForIdentity(boardUrl: String): String {
-        val normalized = boardUrl
-            .trim()
-            .substringBefore('?')
-            .trimEnd('/')
-            .lowercase()
-        if (normalized.isBlank()) return ""
-        return normalized.substringBefore("/res/")
+        return com.valoser.futacha.shared.state.normalizeHistoryBoardUrlForIdentity(boardUrl)
     }
 
     private fun buildScrollJobKey(threadId: String, boardId: String, boardUrl: String): String {
-        val normalizedBoardId = boardId.trim()
-        if (normalizedBoardId.isNotBlank()) {
-            return "$normalizedBoardId$SELF_POST_KEY_DELIMITER${threadId.trim()}"
-        }
-        val normalizedBoardUrl = boardUrl.trimEnd('/')
-        return if (normalizedBoardUrl.isNotBlank()) {
-            "$normalizedBoardUrl$SELF_POST_KEY_DELIMITER${threadId.trim()}"
-        } else {
-            threadId.trim()
-        }
+        return buildHistoryScrollJobKey(threadId, boardId, boardUrl)
     }
 }
 
@@ -1618,25 +1455,13 @@ internal interface PlatformStateStorage {
 internal expect fun createPlatformStateStorage(platformContext: Any? = null): PlatformStateStorage
 
 private fun sanitizeManualSaveDirectory(input: String?): String {
-    val trimmed = input?.trim().orEmpty()
-    if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
-    if (trimmed == MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
-    val withoutCurrentDirPrefix = if (trimmed.startsWith("./")) {
-        trimmed.removePrefix("./")
-    } else {
-        trimmed
-    }
-    return withoutCurrentDirPrefix.ifBlank { DEFAULT_MANUAL_SAVE_ROOT }
+    return sanitizeManualSaveDirectoryValue(input)
 }
 
 private fun decodeAttachmentPickerPreference(raw: String?): AttachmentPickerPreference {
-    return runCatching {
-        raw?.let { AttachmentPickerPreference.valueOf(it) }
-    }.getOrNull() ?: AttachmentPickerPreference.MEDIA
+    return decodeAttachmentPickerPreferenceValue(raw)
 }
 
 private fun decodeSaveDirectorySelection(raw: String?): SaveDirectorySelection {
-    return runCatching {
-        raw?.let { SaveDirectorySelection.valueOf(it) }
-    }.getOrNull() ?: SaveDirectorySelection.MANUAL_INPUT
+    return decodeSaveDirectorySelectionValue(raw)
 }

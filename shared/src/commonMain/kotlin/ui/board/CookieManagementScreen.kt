@@ -43,9 +43,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
-import kotlin.time.Instant
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -137,7 +135,7 @@ fun CookieManagementScreen(
             return@Scaffold
         }
 
-        val grouped = cookies.groupBy { it.domain }
+        val sections = buildCookieDomainSections(cookies)
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -145,26 +143,26 @@ fun CookieManagementScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
-            grouped.forEach { (domain, domainCookies) ->
-                item(key = "header-$domain") {
+            sections.forEach { section ->
+                item(key = "header-${section.domain}") {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text(
-                            text = domain,
+                            text = section.domain,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${domainCookies.size} 件",
+                            text = "${section.cookies.size} 件",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                items(domainCookies, key = { "${it.domain}-${it.path}-${it.name}" }) { cookie ->
+                items(section.cookies, key = { "${it.domain}-${it.path}-${it.name}" }) { cookie ->
                     CookieRow(
                         cookie = cookie,
                         onDelete = {
@@ -189,12 +187,10 @@ private fun CookieRow(
     cookie: StoredCookie,
     onDelete: () -> Unit
 ) {
-    val expiresLabel = cookie.expiresAtMillis?.let {
-        val instant = Instant.fromEpochMilliseconds(it)
-        val local = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-        @Suppress("DEPRECATION")
-        "${local.year}/${local.monthNumber.toString().padStart(2, '0')}/${local.dayOfMonth.toString().padStart(2, '0')} ${local.hour.toString().padStart(2, '0')}:${local.minute.toString().padStart(2, '0')}"
-    } ?: "セッション"
+    val expiresLabel = formatCookieExpiresLabel(
+        expiresAtMillis = cookie.expiresAtMillis,
+        timeZone = TimeZone.currentSystemDefault()
+    )
 
     ListItem(
         leadingContent = {

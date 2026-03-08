@@ -345,6 +345,60 @@ class ThreadHtmlParserCoreTest {
         assertEquals(listOf("501"), ref.targetPostIds)
         assertTrue(ref.text.contains("小分けして冷凍"))
     }
+
+    @Test
+    fun parseThread_skipsOversizedReplyBlock_andMarksPageTruncated() {
+        val oversizedMessage = "a".repeat(310_000)
+        val html = """
+            <html>
+            <head><link rel="canonical" href="https://www.example.com/t/res/900.htm"></head>
+            <body>
+            <div class="thre" data-res="900">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.900</span>
+            <blockquote>op</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:01:00 ID:BIG</span><span class="cno">No.901</span>
+            <blockquote>$oversizedMessage</blockquote>
+            </td></tr>
+            </table>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:02:00 ID:OK</span><span class="cno">No.902</span>
+            <blockquote>通常レス</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertEquals(listOf("900", "902"), page.posts.map { it.id })
+        assertTrue(page.isTruncated)
+        val truncationReason = assertNotNull(page.truncationReason)
+        assertTrue(truncationReason.startsWith("Skipped oversized post block ("))
+    }
+
+    @Test
+    fun extractOpImageUrl_ignoresUntrustedCanonicalHost() {
+        val snippet = """
+            <html>
+            <head><link rel="canonical" href="https://evil.example/res/777.htm"></head>
+            <body>
+            <div class="thre">
+            <a href="/img/src/777.jpg">777.jpg</a>
+            <img src="/img/thumb/777s.jpg">
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val url = ThreadHtmlParserCore.extractOpImageUrl(snippet, "https://www.example.com/img")
+
+        assertEquals("https://www.example.com/img/src/777.jpg", url)
+    }
 }
 
 private val sampleThreadHtml = """

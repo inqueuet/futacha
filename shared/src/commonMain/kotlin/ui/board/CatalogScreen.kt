@@ -64,7 +64,6 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
-import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
@@ -233,29 +232,11 @@ fun CatalogScreen(
         }
     }
     suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): List<CatalogItem> {
-        if (mode != CatalogMode.WatchWords) {
-            return activeRepository.getCatalog(currentBoard.url, mode)
-        }
-
-        val fetchResults = coroutineScope {
-            CatalogMode.watchSourceModes.map { sourceMode ->
-                async(AppDispatchers.io) {
-                    runCatching {
-                        activeRepository.getCatalog(currentBoard.url, sourceMode)
-                    }
-                }
-            }.awaitAll()
-        }
-
-        val successfulCatalogs = fetchResults.mapNotNull { it.getOrNull() }
-        if (successfulCatalogs.isEmpty()) {
-            val firstError = fetchResults.firstNotNullOfOrNull { it.exceptionOrNull() }
-            throw firstError ?: IllegalStateException("監視モード用のカタログ取得に失敗しました")
-        }
-
-        return successfulCatalogs
-            .flatten()
-            .distinctBy { item -> item.id.ifBlank { item.threadUrl } }
+        return loadCatalogItemsForMode(
+            boardUrl = currentBoard.url,
+            mode = mode,
+            fetchCatalog = activeRepository::getCatalog
+        )
     }
     val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
         if (stateStore != null) {
@@ -360,7 +341,7 @@ fun CatalogScreen(
     val performRefresh: () -> Unit = refresh@{
         val currentBoard = board ?: return@refresh
         if (isRefreshing) return@refresh
-        val requestGeneration = catalogLoadGeneration + 1L
+        val requestGeneration = nextCatalogRequestGeneration(catalogLoadGeneration)
         catalogLoadGeneration = requestGeneration
         isRefreshing = true
         catalogLoadJob?.cancel()
@@ -368,21 +349,23 @@ fun CatalogScreen(
             val runningJob = coroutineContext[Job]
             try {
                 val catalog = loadCatalogItems(currentBoard, catalogMode)
-                if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
+                if (!shouldApplyCatalogRequestResult(isActive, catalogLoadGeneration, requestGeneration)) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
                 snackbarHostState.showSnackbar("カタログを更新しました")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (isActive && catalogLoadGeneration == requestGeneration) {
-                    snackbarHostState.showSnackbar("更新に失敗しました")
+                if (shouldApplyCatalogRequestResult(isActive, catalogLoadGeneration, requestGeneration)) {
+                    snackbarHostState.showSnackbar(buildCatalogRefreshFailureMessage())
                 }
             } finally {
                 if (
-                    runningJob != null &&
-                    catalogLoadJob == runningJob &&
-                    catalogLoadGeneration == requestGeneration
+                    shouldFinalizeCatalogRefresh(
+                        isSameRunningJob = runningJob != null && catalogLoadJob == runningJob,
+                        currentGeneration = catalogLoadGeneration,
+                        requestGeneration = requestGeneration
+                    )
                 ) {
                     isRefreshing = false
                     catalogLoadJob = null
@@ -399,7 +382,7 @@ fun CatalogScreen(
             }
             return@runPastThreadSearch false
         }
-        val requestGeneration = pastSearchGeneration + 1L
+        val requestGeneration = nextCatalogRequestGeneration(pastSearchGeneration)
         pastSearchGeneration = requestGeneration
         pastSearchState = ArchiveSearchState.Loading
         pastSearchJob?.cancel()
@@ -409,13 +392,13 @@ fun CatalogScreen(
                 val items = withContext(AppDispatchers.io) {
                     fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
                 }
-                if (!isActive || pastSearchGeneration != requestGeneration) return@launch
+                if (!shouldApplyCatalogRequestResult(isActive, pastSearchGeneration, requestGeneration)) return@launch
                 pastSearchState = ArchiveSearchState.Success(items)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (error: Throwable) {
-                if (isActive && pastSearchGeneration == requestGeneration) {
-                    pastSearchState = ArchiveSearchState.Error(error.message ?: "検索に失敗しました")
+                if (shouldApplyCatalogRequestResult(isActive, pastSearchGeneration, requestGeneration)) {
+                    pastSearchState = ArchiveSearchState.Error(buildPastThreadSearchErrorMessage(error))
                 }
             } finally {
                 if (runningJob != null && pastSearchJob == runningJob) {
@@ -439,14 +422,14 @@ fun CatalogScreen(
 
     LaunchedEffect(board?.url, catalogMode) {
         if (board == null) {
-            catalogLoadGeneration += 1L
+            catalogLoadGeneration = nextCatalogRequestGeneration(catalogLoadGeneration)
             catalogLoadJob?.cancel()
             catalogLoadJob = null
             isRefreshing = false
             uiState.value = CatalogUiState.Error("板が選択されていません")
             return@LaunchedEffect
         }
-        val requestGeneration = catalogLoadGeneration + 1L
+        val requestGeneration = nextCatalogRequestGeneration(catalogLoadGeneration)
         catalogLoadGeneration = requestGeneration
         catalogLoadJob?.cancel()
         isRefreshing = false
@@ -455,22 +438,14 @@ fun CatalogScreen(
             val runningJob = coroutineContext[Job]
             try {
                 val catalog = loadCatalogItems(board, catalogMode)
-                if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
+                if (!shouldApplyCatalogRequestResult(isActive, catalogLoadGeneration, requestGeneration)) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (isActive && catalogLoadGeneration == requestGeneration) {
-                    val message = when {
-                        e.message?.contains("timeout", ignoreCase = true) == true -> "タイムアウト: サーバーが応答しません"
-                        e.message?.contains("404") == true -> "板が見つかりません (404)"
-                        e.message?.contains("500") == true -> "サーバーエラー (500)"
-                        e.message?.contains("HTTP error") == true -> "ネットワークエラー: ${e.message}"
-                        e.message?.contains("exceeds maximum") == true -> "データサイズが大きすぎます"
-                        else -> "カタログを読み込めませんでした: ${e.message ?: "不明なエラー"}"
-                    }
-                    uiState.value = CatalogUiState.Error(message)
+                if (shouldApplyCatalogRequestResult(isActive, catalogLoadGeneration, requestGeneration)) {
+                    uiState.value = CatalogUiState.Error(buildCatalogLoadErrorMessage(e))
                 }
             } finally {
                 if (runningJob != null && catalogLoadJob == runningJob) {
@@ -604,10 +579,14 @@ fun CatalogScreen(
                         key2 = listOf(catalogMode, watchWords, catalogNgWords, catalogNgFilteringEnabled, debouncedSearchQuery)
                     ) {
                         value = withContext(AppDispatchers.parsing) {
-                            state.items
-                                .let { catalogMode.applyClientTransform(it, watchWords) }
-                                .filterByCatalogNgWords(catalogNgWords, catalogNgFilteringEnabled)
-                                .filterByQuery(debouncedSearchQuery)
+                            buildVisibleCatalogItems(
+                                items = state.items,
+                                mode = catalogMode,
+                                watchWords = watchWords,
+                                catalogNgWords = catalogNgWords,
+                                catalogNgFilteringEnabled = catalogNgFilteringEnabled,
+                                query = debouncedSearchQuery
+                            )
                         }
                     }
 
@@ -703,7 +682,7 @@ fun CatalogScreen(
                 createThreadPassword = ""
                 createThreadImage = null
             }
-            val isCreateThreadSubmitEnabled = createThreadTitle.isNotBlank() || createThreadComment.isNotBlank()
+            val isCreateThreadSubmitEnabled = canSubmitCreateThread(createThreadTitle, createThreadComment)
             CreateThreadDialog(
                 boardName = board?.name,
                 attachmentPickerPreference = attachmentPickerPreference,
@@ -727,7 +706,7 @@ fun CatalogScreen(
                     val boardSummary = board
                     if (boardSummary == null) {
                         coroutineScope.launch {
-                            snackbarHostState.showSnackbar("板が選択されていません")
+                            snackbarHostState.showSnackbar(buildCreateThreadBoardMissingMessage())
                         }
                         return@CreateThreadDialog
                     }
@@ -754,18 +733,14 @@ fun CatalogScreen(
                                 imageFileName = imageData?.fileName,
                                 textOnly = imageData == null
                             )
-                            if (threadId.isNullOrBlank()) {
-                                snackbarHostState.showSnackbar("スレッドを作成しました。カタログ更新で確認してください")
-                            } else {
-                                snackbarHostState.showSnackbar("スレッドを作成しました (ID: $threadId)")
-                            }
+                            snackbarHostState.showSnackbar(buildCreateThreadSuccessMessage(threadId))
                             resetCreateThreadDraft()
                             // Refresh catalog to show the new thread
                             performRefresh()
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            snackbarHostState.showSnackbar("スレッド作成に失敗しました: ${e.message ?: "不明なエラー"}")
+                            snackbarHostState.showSnackbar(buildCreateThreadFailureMessage(e))
                         }
                     }
                 },
@@ -780,7 +755,7 @@ fun CatalogScreen(
                 initialQuery = archiveSearchQuery.ifBlank { searchQuery },
                 onDismiss = { showPastThreadSearchDialog = false },
                 onSearch = { query ->
-                    val trimmed = query.trim()
+                    val trimmed = normalizePastThreadSearchQuery(query)
                     val appliedScope = archiveSearchScope
                     lastArchiveSearchScope = archiveSearchScope
                     archiveSearchQuery = trimmed
@@ -805,14 +780,7 @@ fun CatalogScreen(
                     runPastThreadSearch(archiveSearchQuery, lastArchiveSearchScope)
                 },
                 onItemSelected = { item ->
-                    val catalogItem = CatalogItem(
-                        id = item.threadId,
-                        threadUrl = item.htmlUrl,
-                        title = item.title,
-                        thumbnailUrl = item.thumbUrl,
-                        fullImageUrl = item.thumbUrl,
-                        replyCount = 0
-                    )
+                    val catalogItem = archiveSearchItemToCatalogItem(item)
                     pastSearchGeneration += 1L
                     pastSearchJob?.cancel()
                     pastSearchJob = null
@@ -837,11 +805,7 @@ fun CatalogScreen(
                         }
                         CatalogSettingsMenuItem.ExternalApp -> {
                             board?.let { b ->
-                                val catalogUrl = if (catalogMode.sortParam != null) {
-                                    "${b.url.trimEnd('/')}/futaba.php?mode=cat&sort=${catalogMode.sortParam}"
-                                } else {
-                                    "${b.url.trimEnd('/')}/futaba.php?mode=cat"
-                                }
+                                val catalogUrl = buildCatalogExternalAppUrl(b.url, catalogMode)
                                 urlLauncher(catalogUrl)
                             }
                         }
@@ -1049,7 +1013,7 @@ private fun PastThreadSearchResultSheet(
             when (state) {
                 ArchiveSearchState.Idle -> {
                     Text(
-                        text = "検索ワードを入力するとここに結果が表示されます。",
+                        text = buildPastThreadSearchIdleMessage(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1079,7 +1043,7 @@ private fun PastThreadSearchResultSheet(
                 is ArchiveSearchState.Success -> {
                     if (state.items.isEmpty()) {
                         Text(
-                            text = "見つかりませんでした",
+                            text = buildPastThreadSearchEmptyMessage(),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2178,41 +2142,6 @@ private fun DisplayStyleDialog(
             }
         }
     )
-}
-
-// Helper functions
-
-private fun List<CatalogItem>.filterByQuery(query: String): List<CatalogItem> {
-    val trimmedQuery = query.trim()
-    if (trimmedQuery.isEmpty()) return this
-    val normalizedQuery = trimmedQuery.lowercase()
-    return filter { item ->
-        val titleMatch = item.title?.lowercase()?.contains(normalizedQuery) == true
-        val idMatch = item.id.lowercase().contains(normalizedQuery)
-        val threadMatch = item.threadUrl.lowercase().contains(normalizedQuery)
-        titleMatch || idMatch || threadMatch
-    }
-}
-
-private fun List<CatalogItem>.filterByCatalogNgWords(
-    catalogNgWords: List<String>,
-    enabled: Boolean
-): List<CatalogItem> {
-    if (!enabled) return this
-    val wordFilters = catalogNgWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
-    if (wordFilters.isEmpty()) return this
-    return filterNot { item ->
-        matchesCatalogNgWords(item, wordFilters)
-    }
-}
-
-private fun matchesCatalogNgWords(
-    item: CatalogItem,
-    wordFilters: List<String>
-): Boolean {
-    val titleText = item.title?.lowercase().orEmpty()
-    if (titleText.isEmpty()) return false
-    return wordFilters.any { titleText.contains(it) }
 }
 
 private sealed interface ArchiveSearchState {

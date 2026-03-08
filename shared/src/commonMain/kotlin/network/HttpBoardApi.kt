@@ -36,7 +36,6 @@ import kotlinx.coroutines.yield
 import kotlinx.io.IOException
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
-import kotlin.text.RegexOption
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -94,126 +93,12 @@ class HttpBoardApi(
         private const val ASCII_TEXT_MIME = "text/plain; charset=US-ASCII"
         private const val DEFAULT_SHIFT_JIS_CHRENC_SAMPLE = "文字"
 
-        // FIX: 投稿入力検証のための定数
-        private const val MAX_NAME_LENGTH = 100
-        private const val MAX_EMAIL_LENGTH = 100
-        private const val MAX_SUBJECT_LENGTH = 100
-        private const val MAX_COMMENT_LENGTH = 10000
-        private const val MAX_PASSWORD_LENGTH = 100
-        private const val MAX_IMAGE_FILE_SIZE = 8_192_000L // 8MB（フォームのMAX_FILE_SIZEと一致）
-
-        /**
-         * FIX: 投稿入力検証 - DoS攻撃・インジェクション攻撃防止
-         *
-         * @throws IllegalArgumentException 入力が不正な場合
-         */
-        private fun validatePostInput(
-            name: String,
-            email: String,
-            subject: String,
-            comment: String,
-            password: String,
-            imageFile: ByteArray?
-        ) {
-            // FIX: null文字チェック（全てのテキストフィールド）
-            listOf(
-                "name" to name,
-                "email" to email,
-                "subject" to subject,
-                "comment" to comment,
-                "password" to password
-            ).forEach { (fieldName, value) ->
-                if (value.contains('\u0000')) {
-                    throw IllegalArgumentException("$fieldName contains null character")
-                }
-            }
-
-            // FIX: 長さ制限チェック
-            if (name.length > MAX_NAME_LENGTH) {
-                throw IllegalArgumentException("Name exceeds maximum length ($MAX_NAME_LENGTH): ${name.length}")
-            }
-            if (email.length > MAX_EMAIL_LENGTH) {
-                throw IllegalArgumentException("Email exceeds maximum length ($MAX_EMAIL_LENGTH): ${email.length}")
-            }
-            if (subject.length > MAX_SUBJECT_LENGTH) {
-                throw IllegalArgumentException("Subject exceeds maximum length ($MAX_SUBJECT_LENGTH): ${subject.length}")
-            }
-            if (comment.length > MAX_COMMENT_LENGTH) {
-                throw IllegalArgumentException("Comment exceeds maximum length ($MAX_COMMENT_LENGTH): ${comment.length}")
-            }
-            if (password.length > MAX_PASSWORD_LENGTH) {
-                throw IllegalArgumentException("Password exceeds maximum length ($MAX_PASSWORD_LENGTH): ${password.length}")
-            }
-
-            // FIX: 画像ファイルサイズチェック
-            imageFile?.let { file ->
-                if (file.size > MAX_IMAGE_FILE_SIZE) {
-                    throw IllegalArgumentException("Image file size (${file.size} bytes) exceeds maximum ($MAX_IMAGE_FILE_SIZE bytes)")
-                }
-            }
-        }
-
-        /**
-         * FIX: 削除・投票操作の入力検証
-         *
-         * @throws IllegalArgumentException 入力が不正な場合
-         */
-        private fun validateDeletionInput(password: String) {
-            // FIX: null文字チェック
-            if (password.contains('\u0000')) {
-                throw IllegalArgumentException("password contains null character")
-            }
-
-            // FIX: 長さ制限チェック
-            if (password.length > MAX_PASSWORD_LENGTH) {
-                throw IllegalArgumentException("Password exceeds maximum length ($MAX_PASSWORD_LENGTH): ${password.length}")
-            }
-
-            // FIX: 空文字列チェック
-            if (password.isBlank()) {
-                throw IllegalArgumentException("Password must not be blank")
-            }
-        }
-
-        /**
-         * FIX: 削除理由コードの検証
-         *
-         * @throws IllegalArgumentException 入力が不正な場合
-         */
-        private fun validateReasonCode(reasonCode: String) {
-            // FIX: null文字チェック
-            if (reasonCode.contains('\u0000')) {
-                throw IllegalArgumentException("reasonCode contains null character")
-            }
-
-            // FIX: 長さ制限チェック（理由コードは通常短い）
-            if (reasonCode.length > 50) {
-                throw IllegalArgumentException("Reason code exceeds maximum length (50): ${reasonCode.length}")
-            }
-        }
         private const val DEFAULT_SCREEN_SPEC = "1080x1920x24"
         private const val DEFAULT_PTUA_VALUE = "1341647872"
-        private val THREAD_ID_REGEX = """res/(\d+)\.html?""".toRegex(RegexOption.IGNORE_CASE)
-        private val RES_QUERY_ID_REGEX = """\bres=(\d+)\b""".toRegex(RegexOption.IGNORE_CASE)
-        private val SUCCESS_KEYWORDS = listOf("書き込みました", "書き込みました。", "書き込みが完了", "書きこみました")
-        private val ERROR_KEYWORDS = listOf("エラー", "error", "荒らし", "規制", "拒否", "連続投稿", "大きすぎ", "時間を置いて")
         private val WEBP_CONTENT_TYPE = ContentType.parse("image/webp")
         private val WEBM_CONTENT_TYPE = ContentType.parse("video/webm")
         private val BMP_CONTENT_TYPE = ContentType.parse("image/bmp")
         private val MP4_CONTENT_TYPE = ContentType.parse("video/mp4")
-        private val JSON_STATUS_REGEX = """"status"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
-        private val JSON_MESSAGE_REGEX = """"(error|reason|message)"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
-        private val JSON_JUMPTO_REGEX = """"jumpto"\s*:\s*(\d+)""".toRegex()
-        private val JSON_THISNO_REGEX = """"thisno"\s*:\s*(\d+)""".toRegex()
-        // FIX: ReDoS対策 - より具体的なパターンに変更して[^>]*の繰り返しを排除
-        // 元: <input[^>]*name="chrenc"[^>]*> は2つの[^>]*が指数的バックトラッキングを引き起こす
-        // 修正: nameとvalue属性の順序を限定して確実にマッチさせる
-        private val CHRENC_INPUT_REGEX =
-            Regex("""<input\s+[^>]{0,200}?name\s*=\s*["']chrenc["'][^>]{0,200}?>""", RegexOption.IGNORE_CASE)
-        private val VALUE_ATTR_REGEX =
-            Regex("""value\s*=\s*["']([^"']{0,500})["']""", RegexOption.IGNORE_CASE)
-        private const val CHRENC_NEARBY_SCAN_WINDOW = 4096
-        private const val CHRENC_FALLBACK_SCAN_MAX_BYTES = 512 * 1024
         // FIX: PostingConfigキャッシュサイズを削減（100→20）
         // PostingConfigは複雑なオブジェクトなので、メモリ節約のため制限
         // ほとんどのユーザーは数個の板しか使わないため、20で十分
@@ -803,7 +688,7 @@ class HttpBoardApi(
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
         // FIX: 入力検証を最初に実行
-        validateReasonCode(reasonCode)
+        validateHttpBoardApiReasonCode(reasonCode)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for del request")
@@ -855,7 +740,7 @@ class HttpBoardApi(
         imageOnly: Boolean
     ) {
         // FIX: 入力検証を最初に実行（既存のチェックを統合）
-        validateDeletionInput(password)
+        validateHttpBoardApiDeletionPassword(password)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for user deletion")
@@ -918,7 +803,7 @@ class HttpBoardApi(
         textOnly: Boolean
     ): String? {
         // FIX: 入力検証を最初に実行
-        validatePostInput(name, email, subject, comment, password, imageFile)
+        validateHttpBoardApiPostInput(name, email, subject, comment, password, imageFile)
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
         val referer = buildString {
             append(boardBase)
@@ -1006,7 +891,7 @@ class HttpBoardApi(
         textOnly: Boolean
     ): String? {
         // FIX: 入力検証を最初に実行
-        validatePostInput(name, email, subject, comment, password, imageFile)
+        validateHttpBoardApiPostInput(name, email, subject, comment, password, imageFile)
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
         val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         val url = buildString {
@@ -1180,97 +1065,35 @@ class HttpBoardApi(
     }
 
     private fun isSuccessfulPostResponse(body: String): Boolean {
-        val trimmed = body.trim()
-        if (trimmed.isEmpty()) return false
-        if (looksLikeJson(trimmed) && isJsonStatusOk(trimmed)) {
-            return true
-        }
-        if (containsThreadId(trimmed)) {
-            return true
-        }
-        return SUCCESS_KEYWORDS.any { keyword -> trimmed.contains(keyword) }
+        return isSuccessfulHttpBoardApiPostResponse(body)
     }
 
     private fun extractServerError(body: String): String? {
-        val normalized = body.replace("\r\n", "\n")
-        if (looksLikeJson(normalized)) {
-            if (isJsonStatusOk(normalized)) {
-                return null
-            }
-            val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
-            if (message != null) {
-                return message
-            }
-            val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
-            return status?.let { "status=$it" }
-        }
-        return normalized.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { line ->
-                line.isNotEmpty() && ERROR_KEYWORDS.any { keyword ->
-                    line.contains(keyword, ignoreCase = true)
-                }
-            }
+        return extractHttpBoardApiServerError(body)
     }
 
     private fun summarizeResponse(body: String): String {
-        val normalized = body.replace("\r\n", "\n")
-        if (looksLikeJson(normalized)) {
-            val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
-            val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
-            return buildString {
-                append("status=${status ?: "unknown"}")
-                if (!message.isNullOrBlank()) {
-                    append(", message=")
-                    append(message)
-                }
-            }
-        }
-        return normalized.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isNotEmpty() }
-            ?.take(120)
-            ?: body.take(120)
+        return summarizeHttpBoardApiResponse(body)
     }
 
     private fun tryParseThreadIdFromJson(body: String): String? {
-        if (!looksLikeJson(body) || !isJsonStatusOk(body)) {
-            return null
-        }
-        val jumpto = JSON_JUMPTO_REGEX.find(body)?.groupValues?.getOrNull(1)
-        if (!jumpto.isNullOrBlank()) {
-            return jumpto
-        }
-        val thisNo = JSON_THISNO_REGEX.find(body)?.groupValues?.getOrNull(1)
-        if (!thisNo.isNullOrBlank()) {
-            return thisNo
-        }
-        return null
+        return tryParseHttpBoardApiThreadIdFromJson(body)
     }
 
     private fun tryExtractThreadId(body: String): String? {
-        THREAD_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.let { return it }
-        RES_QUERY_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.let { return it }
-        return null
-    }
-
-    private fun containsThreadId(body: String): Boolean {
-        return THREAD_ID_REGEX.containsMatchIn(body) || RES_QUERY_ID_REGEX.containsMatchIn(body)
+        return tryExtractHttpBoardApiThreadId(body)
     }
 
     private fun tryExtractThisNo(body: String): String? {
-        val match = JSON_THISNO_REGEX.find(body)
-        return match?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+        return tryExtractHttpBoardApiThisNo(body)
     }
 
     private fun looksLikeJson(body: String): Boolean {
-        val firstNonWhitespace = body.firstOrNull { !it.isWhitespace() }
-        return firstNonWhitespace == '{' || firstNonWhitespace == '['
+        return looksLikeHttpBoardApiJson(body)
     }
 
     private fun isJsonStatusOk(body: String): Boolean {
-        val status = JSON_STATUS_REGEX.find(body)?.groupValues?.getOrNull(1)?.lowercase()
-        return status == "ok" || status == "success"
+        return isHttpBoardApiJsonStatusOk(body)
     }
 
     private fun FormBuilder.appendTextField(name: String, value: String, encoding: PostEncoding) {
@@ -1396,68 +1219,17 @@ class HttpBoardApi(
     }
 
     private fun parseChrencValue(html: String): String? {
-        if (html.isBlank()) return null
-        val chrencIndex = html.indexOf("chrenc", ignoreCase = true)
-        val scanTarget = if (chrencIndex >= 0) {
-            val start = (chrencIndex - 1024).coerceAtLeast(0)
-            val end = (chrencIndex + CHRENC_NEARBY_SCAN_WINDOW).coerceAtMost(html.length)
-            html.substring(start, end)
-        } else {
-            html.take(CHRENC_FALLBACK_SCAN_MAX_BYTES)
-        }
-
-        val input = CHRENC_INPUT_REGEX.find(scanTarget)?.value ?: return null
-        val match = VALUE_ATTR_REGEX.find(input) ?: return null
-        val rawValue = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        if (rawValue.isEmpty()) return null
-        return decodeNumericEntities(rawValue)
+        return parseHttpBoardApiChrencValue(html)
     }
 
     private fun decodeNumericEntities(value: String): String {
-        if (!value.contains("&#")) return value
-        val numericEntityRegex = Regex("""&#(x?[0-9a-fA-F]+);""")
-        return numericEntityRegex.replace(value) { match ->
-            val payload = match.groupValues.getOrNull(1) ?: return@replace match.value
-            val codePoint = when {
-                payload.startsWith("x") || payload.startsWith("X") -> payload.drop(1).toIntOrNull(16)
-                else -> payload.toIntOrNull(10)
-            }
-            codePoint?.let {
-                // FIX: サロゲートペア計算の修正 - 範囲チェックと正しい変換
-                when {
-                    it in 0x0000..0xFFFF -> {
-                        // BMP (Basic Multilingual Plane) - 直接変換可能
-                        if (it in 0xD800..0xDFFF) {
-                            // サロゲート範囲は無効
-                            return@replace match.value
-                        }
-                        it.toChar().toString()
-                    }
-                    it in 0x10000..0x10FFFF -> {
-                        // 補助平面 - サロゲートペアが必要
-                        val adjusted = it - 0x10000
-                        val highSurrogate = 0xD800 + (adjusted shr 10)
-                        val lowSurrogate = 0xDC00 + (adjusted and 0x3FF)
-                        buildString {
-                            append(highSurrogate.toChar())
-                            append(lowSurrogate.toChar())
-                        }
-                    }
-                    else -> {
-                        // 範囲外のコードポイントは無視
-                        match.value
-                    }
-                }
-            } ?: match.value
-        }
+        return decodeHttpBoardApiNumericEntities(value)
     }
 
     private fun determineEncoding(chrencValue: String): PostEncoding {
-        val normalized = chrencValue.lowercase()
-        return if (normalized.contains("unicode") || normalized.contains("utf")) {
-            PostEncoding.UTF8
-        } else {
-            PostEncoding.SHIFT_JIS
+        return when (determineHttpBoardApiEncoding(chrencValue)) {
+            HttpBoardApiPostEncoding.UTF8 -> PostEncoding.UTF8
+            HttpBoardApiPostEncoding.SHIFT_JIS -> PostEncoding.SHIFT_JIS
         }
     }
 

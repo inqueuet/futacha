@@ -19,7 +19,6 @@ import kotlinx.serialization.json.Json
 import kotlin.math.max
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Clock
 
 private fun currentTimeMillis(): Long = Clock.System.now().toEpochMilliseconds()
@@ -71,33 +70,29 @@ class PersistentCookieStorage(
     // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
     private var lastPurgeTimeMillis = 0L
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
-    private val knownPublicSuffixes = setOf(
-        "com", "net", "org", "edu", "gov", "io", "dev",
-        "jp", "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp"
-    )
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
             val now = currentTimeMillis()
-            val domain = resolveDomain(cookie.domain, requestUrl.host)
+            val domain = resolvePersistentCookieDomain(cookie.domain, requestUrl.host)
             if (domain == null) {
                 Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' with invalid domain: ${cookie.domain} for host: ${requestUrl.host}")
                 return
             }
-            if (!isCookieNameAllowed(cookie.name) || !isCookieValueAllowed(cookie.value)) {
+            if (!isPersistentCookieNameAllowed(cookie.name) || !isPersistentCookieValueAllowed(cookie.value)) {
                 Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' due to invalid size/format")
                 return
             }
-            val path = normalizePath(cookie.path)
-            if (shouldDeleteCookie(cookie, now)) {
+            val path = normalizePersistentCookiePath(cookie.path)
+            if (shouldDeletePersistentCookie(cookie, now)) {
                 if (removeCookieLocked(domain, path, cookie.name)) {
                     savePayload = encodeSnapshotLocked()
                 }
                 return@withLock
             }
-            val expiresAt = resolveExpiresAt(cookie, now)
+            val expiresAt = resolvePersistentCookieExpiresAt(cookie, now)
             val key = CookieKey(domain, path, cookie.name)
             val stored = StoredCookie(
                 name = cookie.name,
@@ -135,11 +130,11 @@ class PersistentCookieStorage(
                 savePayload = encodeSnapshotLocked()
             }
             val host = requestUrl.host.lowercase()
-            val path = normalizePath(requestUrl.encodedPath)
+            val path = normalizePersistentCookiePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
             cookies.values.filter { stored ->
                 !isExpiredAt(now, stored) &&
-                domainMatches(host, stored.domain) &&
+                persistentCookieDomainMatches(host, stored.domain) &&
                     pathMatches(path, stored.path) &&
                     (!stored.secure || isSecure)
             }.map { stored ->
@@ -174,11 +169,11 @@ class PersistentCookieStorage(
                 savePayload = encodeSnapshotLocked()
             }
             val host = requestUrl.host.lowercase()
-            val path = normalizePath(requestUrl.encodedPath)
+            val path = normalizePersistentCookiePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
             val candidates = cookies.values.filter { stored ->
                 !isExpiredAt(now, stored) &&
-                domainMatches(host, stored.domain) &&
+                persistentCookieDomainMatches(host, stored.domain) &&
                     pathMatches(path, stored.path) &&
                     (!stored.secure || isSecure)
             }
@@ -218,7 +213,7 @@ class PersistentCookieStorage(
             if (activeTransactionId != null && !isInActiveTransaction) {
                 externalMutationDuringTransaction = true
             }
-            cookies.remove(CookieKey(domain.lowercase(), normalizePath(path), name))
+            cookies.remove(CookieKey(domain.lowercase(), normalizePersistentCookiePath(path), name))
             if (transactionSnapshot == null || !isInActiveTransaction) {
                 savePayload = encodeSnapshotLocked()
             }
@@ -319,8 +314,8 @@ class PersistentCookieStorage(
                 val parsed = json.decodeFromString<StoredCookieFile>(content)
                 cookies.clear()
                 parsed.cookies.forEach { stored ->
-                    if (!isStoredCookieAllowed(stored)) return@forEach
-                    val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
+                    if (!isStoredPersistentCookieAllowed(stored)) return@forEach
+                    val key = CookieKey(stored.domain.lowercase(), normalizePersistentCookiePath(stored.path), stored.name)
                     cookies[key] = stored
                 }
                 enforceCookieCapacityLocked(currentTimeMillis())
@@ -334,8 +329,8 @@ class PersistentCookieStorage(
                         val parsed = json.decodeFromString<StoredCookieFile>(backupContent)
                         cookies.clear()
                         parsed.cookies.forEach { stored ->
-                            if (!isStoredCookieAllowed(stored)) return@forEach
-                            val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
+                            if (!isStoredPersistentCookieAllowed(stored)) return@forEach
+                            val key = CookieKey(stored.domain.lowercase(), normalizePersistentCookiePath(stored.path), stored.name)
                             cookies[key] = stored
                         }
                         enforceCookieCapacityLocked(currentTimeMillis())
@@ -409,94 +404,9 @@ class PersistentCookieStorage(
         return false
     }
 
-    private fun shouldDeleteCookie(cookie: Cookie, now: Long): Boolean {
-        val maxAgeSeconds = cookie.maxAge
-        if (maxAgeSeconds == 0) return true
-        val expiresAt = cookie.expires?.timestamp
-        return expiresAt != null && expiresAt <= now
-    }
-
-    private fun resolveExpiresAt(cookie: Cookie, now: Long): Long? {
-        val maxAgeSeconds = cookie.maxAge
-        if (maxAgeSeconds != null) {
-            if (maxAgeSeconds > 0) {
-                return now + maxAgeSeconds.seconds.inWholeMilliseconds
-            }
-            if (maxAgeSeconds < 0) {
-                return null
-            }
-        }
-        return cookie.expires?.timestamp
-    }
-
     private fun isExpiredAt(now: Long, cookie: StoredCookie): Boolean {
         val expires = cookie.expiresAtMillis ?: return false
         return expires <= now
-    }
-
-    private fun resolveDomain(setCookieDomain: String?, requestHost: String): String? {
-        val request = requestHost.trim().trimEnd('.').lowercase()
-        if (request.isBlank()) return null
-        if (!isDomainAllowedForCookies(request)) return null
-        val candidate = setCookieDomain
-            ?.ifBlank { null }
-            ?.trim()
-            ?.trimStart('.')
-            ?.trimEnd('.')
-            ?.lowercase()
-            ?: request
-        if (!isDomainAllowedForCookies(candidate)) return null
-        if (candidate in knownPublicSuffixes) return null
-        val isSameHost = request == candidate
-        val isParentDomain = request.endsWith(".$candidate") && !isLikelyIpAddress(candidate)
-        return if (isSameHost || isParentDomain) candidate else null
-    }
-
-    private fun normalizePath(path: String?): String {
-        val normalized = path?.trim().orEmpty()
-        if (normalized.isBlank()) return "/"
-        return if (normalized.startsWith("/")) normalized else "/$normalized"
-    }
-
-    private fun domainMatches(host: String, cookieDomain: String): Boolean {
-        val normalizedDomain = cookieDomain.trimStart('.').lowercase()
-        val normalizedHost = host.lowercase()
-        return normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain")
-    }
-
-    private fun isDomainAllowedForCookies(domain: String): Boolean {
-        if (domain.isBlank() || domain.length > MAX_COOKIE_DOMAIN_LENGTH) return false
-        if (domain.startsWith(".") || domain.endsWith(".")) return false
-        if (!COOKIE_DOMAIN_REGEX.matches(domain)) return false
-        val labels = domain.split('.').filter { it.isNotBlank() }
-        if (labels.size < 2 && !isLikelyIpAddress(domain)) return false
-        return true
-    }
-
-    private fun isLikelyIpAddress(value: String): Boolean {
-        val parts = value.split('.')
-        return parts.size == 4 && parts.all { part ->
-            part.isNotBlank() && part.all { it.isDigit() } && part.toIntOrNull() in 0..255
-        }
-    }
-
-    private fun isCookieNameAllowed(name: String): Boolean {
-        if (name.isBlank()) return false
-        if (name.length > MAX_COOKIE_NAME_LENGTH) return false
-        return COOKIE_NAME_REGEX.matches(name)
-    }
-
-    private fun isCookieValueAllowed(value: String): Boolean {
-        if (value.length > MAX_COOKIE_VALUE_LENGTH) return false
-        if (value.any { it == '\u0000' || it == '\r' || it == '\n' }) return false
-        return true
-    }
-
-    private fun isStoredCookieAllowed(stored: StoredCookie): Boolean {
-        if (!isDomainAllowedForCookies(stored.domain)) return false
-        if (!isCookieNameAllowed(stored.name)) return false
-        if (!isCookieValueAllowed(stored.value)) return false
-        return true
     }
 
     private fun enforceCookieCapacityLocked(now: Long) {
@@ -512,7 +422,7 @@ class PersistentCookieStorage(
                 .sortedBy { it.createdAtMillis }
                 .take(overflow)
                 .forEach { cookie ->
-                    cookies.remove(CookieKey(domain, normalizePath(cookie.path), cookie.name))
+                    cookies.remove(CookieKey(domain, normalizePersistentCookiePath(cookie.path), cookie.name))
                 }
         }
     }
@@ -545,11 +455,6 @@ class PersistentCookieStorage(
     companion object {
         private const val MAX_COOKIES_TOTAL = 256
         private const val MAX_COOKIES_PER_DOMAIN = 64
-        private const val MAX_COOKIE_NAME_LENGTH = 128
-        private const val MAX_COOKIE_VALUE_LENGTH = 2048
-        private const val MAX_COOKIE_DOMAIN_LENGTH = 253
         private const val MAX_COOKIE_FILE_BYTES = 1_048_576L // 1 MiB
-        private val COOKIE_NAME_REGEX = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
-        private val COOKIE_DOMAIN_REGEX = Regex("^[A-Za-z0-9.-]+$")
     }
 }

@@ -16,7 +16,6 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.ClientRequestException
 import io.ktor.http.Url
 import com.valoser.futacha.shared.network.NetworkException
 import kotlinx.coroutines.CoroutineScope
@@ -449,7 +448,7 @@ class HistoryRefresher(
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (e: Throwable) {
-                                        if (isNotFound(e)) {
+                                        if (isHistoryRefreshNotFound(e)) {
                                             when (val archiveResult = tryRefreshFromArchive(entry, board)) {
                                                 is ArchiveRefreshResult.Success -> {
                                                     statsMutex.withLock {
@@ -658,22 +657,13 @@ class HistoryRefresher(
         history: List<ThreadHistoryEntry>,
         maxThreadsPerRun: Int?
     ): List<ThreadHistoryEntry> {
-        val limit = maxThreadsPerRun?.coerceAtLeast(1) ?: history.size
-        if (limit >= history.size) return history
-
-        val size = history.size
-        val start = ((historyRefreshCursor % size) + size) % size
-        val endExclusive = start + limit
-        historyRefreshCursor = endExclusive % size
-
-        return if (endExclusive <= size) {
-            history.subList(start, endExclusive)
-        } else {
-            buildList(limit) {
-                addAll(history.subList(start, size))
-                addAll(history.subList(0, endExclusive - size))
-            }
-        }
+        val selection = selectHistoryRefreshWindow(
+            history = history,
+            maxThreadsPerRun = maxThreadsPerRun,
+            cursor = historyRefreshCursor
+        )
+        historyRefreshCursor = selection.nextCursor
+        return selection.entries
     }
 
     private suspend fun bestEffortFlushOnAbort(
@@ -704,11 +694,7 @@ class HistoryRefresher(
         boardById: Map<String, BoardSummary>,
         boardByBaseUrl: Map<String, BoardSummary>
     ): HistoryKey {
-        val board = resolveBoardForEntry(entry, boardById, boardByBaseUrl)
-        val boardKey = entry.boardId
-            .takeIf { it.isNotBlank() }
-            ?: board?.id?.takeIf { it.isNotBlank() }
-            ?: entry.boardUrl.ifBlank { board?.url.orEmpty() }
+        val boardKey = buildHistoryBoardKey(entry, boardById, boardByBaseUrl)
         return HistoryKey(boardKey = boardKey, threadId = entry.threadId)
     }
 
@@ -717,17 +703,11 @@ class HistoryRefresher(
         boardById: Map<String, BoardSummary>,
         boardByBaseUrl: Map<String, BoardSummary>
     ): BoardSummary? {
-        entry.boardId.takeIf { it.isNotBlank() }?.let { boardId ->
-            boardById[boardId]?.let { return it }
-        }
-        val key = normalizeBoardKey(entry.boardUrl) ?: return null
-        return boardByBaseUrl[key]
+        return resolveHistoryBoardForEntry(entry, boardById, boardByBaseUrl)
     }
 
     private fun normalizeBoardKey(url: String?): String? {
-        if (url.isNullOrBlank()) return null
-        val resolved = runCatching { BoardUrlResolver.resolveBoardBaseUrl(url) }.getOrDefault(url)
-        return resolved.trimEnd('/').lowercase().ifBlank { null }
+        return normalizeHistoryBoardKey(url)
     }
 
     private suspend fun tryRefreshFromArchive(
@@ -737,10 +717,10 @@ class HistoryRefresher(
         val client = httpClient ?: return ArchiveRefreshResult.NoMatch
         val scope = extractArchiveSearchScope(board?.url ?: entry.boardUrl)
         val queryCandidates = buildList {
-            normalizeArchiveQuery(entry.threadId, maxLength = 64)
+            normalizeHistoryArchiveQuery(entry.threadId, maxLength = 64)
                 .takeIf { it.isNotBlank() }
                 ?.let { add(it) }
-            normalizeArchiveQuery(entry.title, maxLength = 120)
+            normalizeHistoryArchiveQuery(entry.title, maxLength = 120)
                 .takeIf { it.isNotBlank() }
                 ?.let { add(it) }
         }.distinct()
@@ -801,7 +781,7 @@ class HistoryRefresher(
         }
         val page = pageResult.getOrNull()
         val pageError = pageResult.exceptionOrNull()
-        if (page == null && pageError != null && isNotFound(pageError)) {
+        if (page == null && pageError != null && isHistoryRefreshNotFound(pageError)) {
             Logger.i(HISTORY_REFRESH_TAG, "Archive thread missing for ${entry.threadId}")
             return ArchiveRefreshResult.NotFound
         }
@@ -823,74 +803,14 @@ class HistoryRefresher(
         }
     }
 
-    private fun resolveArchiveBaseUrl(threadUrl: String, fallbackBoardUrl: String?): String? {
-        if (threadUrl.isBlank()) return fallbackBoardUrl?.takeIf { it.isNotBlank() }
-        return runCatching {
-            val url = Url(threadUrl)
-            val segments = url.encodedPath.split('/').filter { it.isNotBlank() }
-            val boardSegments = segments.takeWhile { it.lowercase() != "res" }
-            if (boardSegments.isEmpty()) {
-                fallbackBoardUrl?.takeIf { it.isNotBlank() }
-            } else {
-                val path = "/" + boardSegments.joinToString("/")
-                buildString {
-                    append(url.protocol.name)
-                    append("://")
-                    append(url.host)
-                    if (url.port != url.protocol.defaultPort) {
-                        append(":${url.port}")
-                    }
-                    append(path.trimEnd('/'))
-                }
-            }
-        }.getOrElse { fallbackBoardUrl?.takeIf { it.isNotBlank() } }
-    }
-
-    private fun normalizeArchiveQuery(raw: String, maxLength: Int): String {
-        if (maxLength <= 0) return ""
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return ""
-        val builder = StringBuilder(minOf(trimmed.length, maxLength))
-        var previousWasWhitespace = false
-        for (ch in trimmed) {
-            val isWhitespace = ch.isWhitespace()
-            if (isWhitespace) {
-                if (!previousWasWhitespace && builder.isNotEmpty()) {
-                    builder.append(' ')
-                }
-            } else {
-                builder.append(ch)
-                if (builder.length >= maxLength) break
-            }
-            previousWasWhitespace = isWhitespace
-        }
-        return builder.toString().trim()
-    }
-
     private fun isRefreshAbortSignal(t: Throwable): Boolean {
-        return t is NetworkException && t.message?.startsWith(REFRESH_ABORT_REASON_PREFIX) == true
-    }
-
-    private fun isNotFound(t: Throwable): Boolean {
-        val status = (t as? ClientRequestException)?.response?.status?.value
-            ?: (t as? NetworkException)?.statusCode
-        return status == 404 || status == 410
+        return isHistoryRefreshAbortSignal(t, REFRESH_ABORT_REASON_PREFIX)
     }
 
     private fun buildRefreshError(
         totalThreads: Int,
         details: List<ErrorDetail>
     ): RefreshError {
-        val stageCounts = linkedMapOf<String, Int>()
-        details.forEach { detail ->
-            stageCounts[detail.stage] = (stageCounts[detail.stage] ?: 0) + 1
-        }
-        return RefreshError(
-            errorCount = details.size,
-            totalThreads = totalThreads,
-            timestamp = Clock.System.now().toEpochMilliseconds(),
-            errors = details.take(10), // 最初の10件のエラーのみ保存してメモリ節約
-            stageCounts = stageCounts
-        )
+        return buildHistoryRefreshError(totalThreads, details)
     }
 }
