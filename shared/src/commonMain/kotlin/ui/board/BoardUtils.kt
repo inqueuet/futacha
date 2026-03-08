@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import io.ktor.http.Url
 import kotlin.time.Clock
@@ -104,4 +105,51 @@ fun resolveEffectiveBoardUrl(threadUrlOverride: String?, fallbackBoardUrl: Strin
             append(path.trimEnd('/'))
         }
     }.getOrElse { fallbackBoardUrl }
+}
+
+data class RegisteredThreadNavigation(
+    val board: BoardSummary,
+    val threadId: String,
+    val threadUrl: String
+)
+
+private val registeredThreadUrlIdRegex = Regex("""/res/(\d+)\.html?""", RegexOption.IGNORE_CASE)
+
+fun resolveRegisteredThreadNavigation(
+    url: String,
+    registeredBoards: List<BoardSummary>
+): RegisteredThreadNavigation? {
+    val trimmedUrl = url.trim()
+    if (trimmedUrl.isBlank()) return null
+    val threadId = registeredThreadUrlIdRegex
+        .find(trimmedUrl)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?: return null
+    val targetBoardKey = normalizeBoardNavigationKey(resolveEffectiveBoardUrl(trimmedUrl, trimmedUrl))
+    val board = registeredBoards.firstOrNull { candidate ->
+        normalizeBoardNavigationKey(candidate.url) == targetBoardKey
+    } ?: return null
+    return RegisteredThreadNavigation(
+        board = board,
+        threadId = threadId,
+        threadUrl = trimmedUrl
+    )
+}
+
+private fun normalizeBoardNavigationKey(url: String): String {
+    val baseUrl = runCatching { BoardUrlResolver.resolveBoardBaseUrl(url) }
+        .getOrDefault(url)
+    return runCatching {
+        val parsed = Url(baseUrl)
+        val port = if (parsed.port == parsed.protocol.defaultPort) "" else ":${parsed.port}"
+        val path = parsed.encodedPath.trimEnd('/').lowercase()
+        "${parsed.host.lowercase()}$port$path"
+    }.getOrElse {
+        baseUrl
+            .trim()
+            .substringBefore('?')
+            .trimEnd('/')
+            .lowercase()
+    }
 }

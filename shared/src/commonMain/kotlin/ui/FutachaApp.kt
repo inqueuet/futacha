@@ -44,6 +44,7 @@ import com.valoser.futacha.shared.ui.board.ThreadScreen
 import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
+import com.valoser.futacha.shared.ui.board.resolveRegisteredThreadNavigation
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
@@ -645,6 +646,25 @@ fun FutachaApp(
                     val historyThreadUrl = selectedThreadUrl ?: currentBoard.url
                     val historyReplies = selectedThreadReplies ?: 0
                     val historyThumbnail = selectedThreadThumbnailUrl.orEmpty()
+                    val handleRegisteredThreadUrlClick: (String) -> Boolean = { url ->
+                        val target = resolveRegisteredThreadNavigation(url, persistedBoards)
+                        if (target == null) {
+                            false
+                        } else {
+                            val isSameTarget = selectedBoardId == target.board.id &&
+                                selectedThreadId == target.threadId &&
+                                selectedThreadUrl == target.threadUrl
+                            if (!isSameTarget) {
+                                selectedBoardId = target.board.id
+                                selectedThreadId = target.threadId
+                                selectedThreadTitle = null
+                                selectedThreadReplies = null
+                                selectedThreadThumbnailUrl = null
+                                selectedThreadUrl = target.threadUrl
+                            }
+                            true
+                        }
+                    }
                     // Keep dependencies limited to navigation context.
                     // History size changes should not retrigger this effect.
                     LaunchedEffect(activeThreadId, currentBoard.id) {
@@ -765,7 +785,8 @@ fun FutachaApp(
                                 coroutineScope.launch {
                                     stateStore.setCatalogNavEntries(updated)
                                 }
-                            }
+                            },
+                            onRegisteredThreadUrlClick = handleRegisteredThreadUrlClick
                         )
                     }
                 }

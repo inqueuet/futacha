@@ -187,6 +187,7 @@ fun ThreadScreen(
     onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
     catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
     onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {},
+    onRegisteredThreadUrlClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
     val activeRepository = remember(repository) {
@@ -204,6 +205,12 @@ fun ThreadScreen(
     val uiState = remember(board.id, threadId) { mutableStateOf<ThreadUiState>(ThreadUiState.Loading) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val externalUrlLauncher = rememberUrlLauncher()
+    val handleUrlClick: (String) -> Unit = { url ->
+        if (!onRegisteredThreadUrlClick(url)) {
+            externalUrlLauncher(url)
+        }
+    }
     val archiveSearchJson = remember {
         Json { ignoreUnknownKeys = true }
     }
@@ -383,8 +390,6 @@ fun ThreadScreen(
             fallbackNgWordsState.value = updated
         }
     }
-    val urlLauncher = rememberUrlLauncher()
-
     val handleThreadFilterToggle: (ThreadFilterOption) -> Unit = { option ->
         val currentlySelected = option in selectedThreadFilterOptions
         var updatedOptions = if (currentlySelected) {
@@ -868,7 +873,7 @@ fun ThreadScreen(
             ThreadMenuEntryId.ExternalApp -> {
                 val baseUrl = effectiveBoardUrl.trimEnd('/').removeSuffix("/futaba.php")
                 val threadUrl = "$baseUrl/res/${threadId}.htm"
-                urlLauncher(threadUrl)
+                externalUrlLauncher(threadUrl)
             }
             ThreadMenuEntryId.ReadAloud -> {
                 isReadAloudControlsVisible = true
@@ -1689,7 +1694,7 @@ fun ThreadScreen(
                             },
                             onSaidaneClick = handleSaidaneAction,
                             onMediaClick = handleMediaClick,
-                            onUrlClick = urlLauncher,
+                            onUrlClick = handleUrlClick,
                             onRefresh = performRefresh,
                             isRefreshing = isRefreshing,
                             modifier = Modifier.matchParentSize()
@@ -2058,7 +2063,7 @@ fun ThreadScreen(
                         // board.urlからfutaba.phpを削除してからres/xxx.htmを追加
                         val baseUrl = effectiveBoardUrl.trimEnd('/').removeSuffix("/futaba.php")
                         val threadUrl = "$baseUrl/res/${threadId}.htm"
-                        urlLauncher(threadUrl)
+                        externalUrlLauncher(threadUrl)
                     }
                     ThreadMenuEntryId.Privacy -> {
                         coroutineScope.launch {
