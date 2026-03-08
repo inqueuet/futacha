@@ -20,6 +20,7 @@ enum class CatalogMode(
 
     companion object {
         val default = Many
+        val watchSourceModes = listOf(Catalog, New, Old, Many, Few, Momentum, So)
     }
 
     fun applyClientTransform(

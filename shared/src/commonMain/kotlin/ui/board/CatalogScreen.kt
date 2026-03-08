@@ -232,6 +232,31 @@ fun CatalogScreen(
             }
         }
     }
+    suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): List<CatalogItem> {
+        if (mode != CatalogMode.WatchWords) {
+            return activeRepository.getCatalog(currentBoard.url, mode)
+        }
+
+        val fetchResults = coroutineScope {
+            CatalogMode.watchSourceModes.map { sourceMode ->
+                async(AppDispatchers.io) {
+                    runCatching {
+                        activeRepository.getCatalog(currentBoard.url, sourceMode)
+                    }
+                }
+            }.awaitAll()
+        }
+
+        val successfulCatalogs = fetchResults.mapNotNull { it.getOrNull() }
+        if (successfulCatalogs.isEmpty()) {
+            val firstError = fetchResults.firstNotNullOfOrNull { it.exceptionOrNull() }
+            throw firstError ?: IllegalStateException("監視モード用のカタログ取得に失敗しました")
+        }
+
+        return successfulCatalogs
+            .flatten()
+            .distinctBy { item -> item.id.ifBlank { item.threadUrl } }
+    }
     val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
         if (stateStore != null) {
             coroutineScope.launch {
@@ -342,9 +367,7 @@ fun CatalogScreen(
         catalogLoadJob = coroutineScope.launch {
             val runningJob = coroutineContext[Job]
             try {
-                val catalog = withContext(AppDispatchers.io) {
-                    activeRepository.getCatalog(currentBoard.url, catalogMode)
-                }
+                val catalog = loadCatalogItems(currentBoard, catalogMode)
                 if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
@@ -431,9 +454,7 @@ fun CatalogScreen(
         catalogLoadJob = coroutineScope.launch {
             val runningJob = coroutineContext[Job]
             try {
-                val catalog = withContext(AppDispatchers.io) {
-                    activeRepository.getCatalog(board.url, catalogMode)
-                }
+                val catalog = loadCatalogItems(board, catalogMode)
                 if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
@@ -2032,7 +2053,7 @@ private fun WatchWordsSheet(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "タイトルが一致したスレは「監視」モードでまとめて確認できます",
+                        text = "各カタログモードで見つかった一致スレを「監視」モードでまとめて確認できます",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2295,4 +2316,3 @@ internal fun rememberFutabaThreadColorScheme(
         )
     }
 }
-
