@@ -24,6 +24,7 @@ class FakeBoardRepository(
         onAccess()
         val base = MockBoardData.catalogItems()
         return when (mode) {
+            CatalogMode.WatchWords -> base
             CatalogMode.New -> base.sortedByDescending { it.numericId() }
             CatalogMode.Old -> base.sortedBy { it.numericId() }
             CatalogMode.Few -> base.sortedBy { it.replyCount }
