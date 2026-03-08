@@ -447,8 +447,8 @@ fun ThreadScreen(
     var replyComment by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replyPassword by rememberSaveable(board.id, threadId) { mutableStateOf("") }
     var replyImageData by remember { mutableStateOf<ImageData?>(null) }
-    LaunchedEffect(lastUsedDeleteKey) {
-        if (replyPassword.isBlank() && lastUsedDeleteKey.isNotBlank()) {
+    LaunchedEffect(isReplyDialogVisible, lastUsedDeleteKey) {
+        if (isReplyDialogVisible && replyPassword.isBlank() && lastUsedDeleteKey.isNotBlank()) {
             replyPassword = lastUsedDeleteKey
         }
     }

@@ -232,45 +232,6 @@ fun CatalogScreen(
             }
         }
     }
-    suspend fun handleWatchWordMatches(
-        catalog: List<CatalogItem>,
-        filters: List<String> = watchWords
-    ) {
-        val normalizedFilters = filters
-            .mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
-            .distinct()
-        if (normalizedFilters.isEmpty()) return
-        val currentBoard = board ?: return
-        val currentStateStore = stateStore ?: return
-
-        val timestamp = Clock.System.now().toEpochMilliseconds()
-        val matchedEntries = withContext(AppDispatchers.parsing) {
-            catalog.mapNotNull { item ->
-                val titleText = item.title?.lowercase().orEmpty()
-                if (titleText.isEmpty()) return@mapNotNull null
-                if (!normalizedFilters.any { titleText.contains(it) }) return@mapNotNull null
-                ThreadHistoryEntry(
-                    threadId = item.id,
-                    boardId = currentBoard.id,
-                    title = item.title?.takeIf { it.isNotBlank() } ?: "無題",
-                    titleImageUrl = item.thumbnailUrl ?: "",
-                    boardName = currentBoard.name,
-                    boardUrl = currentBoard.url,
-                    lastVisitedEpochMillis = timestamp,
-                    replyCount = item.replyCount
-                )
-            }
-        }
-        if (matchedEntries.isEmpty()) return
-
-        try {
-            currentStateStore.prependOrReplaceHistoryEntries(matchedEntries)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Logger.e(CATALOG_SCREEN_TAG, "Failed to append watch-word matched threads to history", e)
-        }
-    }
     val persistCatalogNgWords: (List<String>) -> Unit = { updated ->
         if (stateStore != null) {
             coroutineScope.launch {
@@ -316,9 +277,6 @@ fun CatalogScreen(
             else -> {
                 persistWatchWords(watchWords + trimmed)
                 showNgMessage("監視ワードを追加しました")
-                coroutineScope.launch {
-                    handleWatchWordMatches(lastCatalogItems, watchWords + trimmed)
-                }
             }
         }
     }
@@ -390,7 +348,6 @@ fun CatalogScreen(
                 if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
-                handleWatchWordMatches(catalog)
                 snackbarHostState.showSnackbar("カタログを更新しました")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -480,7 +437,6 @@ fun CatalogScreen(
                 if (!isActive || catalogLoadGeneration != requestGeneration) return@launch
                 uiState.value = CatalogUiState.Success(catalog)
                 lastCatalogItems = catalog
-                handleWatchWordMatches(catalog)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -624,11 +580,11 @@ fun CatalogScreen(
                     val visibleItems: List<CatalogItem> by produceState<List<CatalogItem>>(
                         initialValue = emptyList(),
                         key1 = state.items,
-                        key2 = listOf(catalogMode, catalogNgWords, catalogNgFilteringEnabled, debouncedSearchQuery)
+                        key2 = listOf(catalogMode, watchWords, catalogNgWords, catalogNgFilteringEnabled, debouncedSearchQuery)
                     ) {
                         value = withContext(AppDispatchers.parsing) {
                             state.items
-                                .let { catalogMode.applyLocalSort(it) }
+                                .let { catalogMode.applyClientTransform(it, watchWords) }
                                 .filterByCatalogNgWords(catalogNgWords, catalogNgFilteringEnabled)
                                 .filterByQuery(debouncedSearchQuery)
                         }
@@ -2076,7 +2032,7 @@ private fun WatchWordsSheet(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "タイトルが一致したスレを履歴に追加します",
+                        text = "タイトルが一致したスレは「監視」モードでまとめて確認できます",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2339,6 +2295,4 @@ internal fun rememberFutabaThreadColorScheme(
         )
     }
 }
-
-
 
