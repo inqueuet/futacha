@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class)
+
 package com.valoser.futacha.shared.util
 
 import com.valoser.futacha.shared.model.SaveLocation
@@ -11,7 +13,6 @@ import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.*
 import platform.posix.memcpy
@@ -110,7 +111,10 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+    private fun parentDirectory(path: String): String =
+        path.substringBeforeLast('/', "")
+
+    override suspend fun createDirectory(path: String): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
@@ -131,12 +135,12 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
-            val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
+            val parentDir = parentDirectory(absolutePath)
 
             // Create parent directory with error checking
             memScoped {
@@ -172,13 +176,13 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val contentBytes = content.encodeToByteArray()
             validateFileSize(contentBytes.size.toLong(), "content") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
-            val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
+            val parentDir = parentDirectory(absolutePath)
 
             // Create parent directory with error checking
             memScoped {
@@ -197,7 +201,7 @@ class IosFileSystem : FileSystem {
             // Write string with error checking
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
-                val success = (content as NSString).writeToFile(
+                val success = NSString.create(string = content).writeToFile(
                     absolutePath,
                     atomically = true,
                     encoding = NSUTF8StringEncoding,
@@ -211,7 +215,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+    override suspend fun readBytes(path: String): Result<ByteArray> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
@@ -233,7 +237,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun readString(path: String): Result<String> = withContext(Dispatchers.IO) {
+    override suspend fun readString(path: String): Result<String> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
@@ -251,12 +255,12 @@ class IosFileSystem : FileSystem {
                 if (content == null) {
                     throw Exception("Failed to read file: ${error.value?.localizedDescription ?: "File not found"}")
                 }
-                content as String
+                content
             }
         }
     }
 
-    override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun delete(path: String): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
@@ -275,7 +279,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
@@ -295,21 +299,21 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun exists(path: String): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun exists(path: String): Boolean = withContext(AppDispatchers.io) {
         val absolutePath = resolveAbsolutePath(path)
         fileManager.fileExistsAtPath(absolutePath)
     }
 
-    override suspend fun getFileSize(path: String): Long = withContext(Dispatchers.IO) {
+    override suspend fun getFileSize(path: String): Long = withContext(AppDispatchers.io) {
         val absolutePath = resolveAbsolutePath(path)
         val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
         (attributes?.get(NSFileSize) as? NSNumber)?.longValue ?: 0L
     }
 
-    override suspend fun listFiles(directory: String): List<String> = withContext(Dispatchers.IO) {
+    override suspend fun listFiles(directory: String): List<String> = withContext(AppDispatchers.io) {
         val absolutePath = resolveAbsolutePath(directory)
         val contents = fileManager.contentsOfDirectoryAtPath(absolutePath, error = null)
-        (contents as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+        contents?.filterIsInstance<String>() ?: emptyList()
     }
 
     override fun getAppDataDirectory(): String {
@@ -369,12 +373,12 @@ class IosFileSystem : FileSystem {
         return appDir
     }
 
-    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
             val absolutePath = resolveAbsolutePath(path)
-            val parentDir = (absolutePath as NSString).stringByDeletingLastPathComponent
+            val parentDir = parentDirectory(absolutePath)
 
             memScoped {
                 val error = alloc<ObjCObjectVar<NSError?>>()
@@ -424,7 +428,7 @@ class IosFileSystem : FileSystem {
     // SaveLocation-based implementations
     // ========================================
 
-    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(AppDispatchers.io) {
         // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
         if (relativePath.isNotEmpty()) {
             runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
@@ -461,7 +465,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
         // FIX: 入力検証
         runFsCatching {
             validatePath(relativePath, "relativePath")
@@ -495,7 +499,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
         // FIX: 入力検証
         runFsCatching {
             validatePath(relativePath, "relativePath")
@@ -534,7 +538,7 @@ class IosFileSystem : FileSystem {
         return writeBytes(base, relativePath, content.encodeToByteArray())
     }
 
-    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(AppDispatchers.io) {
         // FIX: 入力検証
         runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
             return@withContext Result.failure(it)
@@ -565,7 +569,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(AppDispatchers.io) {
         when (base) {
             is SaveLocation.Path -> {
                 val fullPath = resolveSaveLocationPath(base.path, relativePath)
@@ -601,7 +605,7 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(AppDispatchers.io) {
         // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
         if (relativePath.isNotEmpty()) {
             runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {

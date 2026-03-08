@@ -40,7 +40,7 @@ class CatalogHtmlParserCoreTest {
 
     @Test
     fun parseCatalog_decodesSupplementaryEntities() {
-        val expected = String(Character.toChars(0x2E81C))
+        val expected = "\uD878\uDCBC"
         val html = """
             <html>
             <body>

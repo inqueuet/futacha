@@ -24,7 +24,6 @@ import io.ktor.http.Url
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readAvailable
-import io.ktor.utils.io.errors.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
@@ -34,6 +33,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlinx.io.IOException
 import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlin.text.RegexOption
@@ -81,7 +81,7 @@ class HttpBoardApi(
     companion object {
         private const val TAG = "HttpBoardApi"
         private const val DEFAULT_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"
         private const val DEFAULT_ACCEPT =
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         private const val DEFAULT_ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"

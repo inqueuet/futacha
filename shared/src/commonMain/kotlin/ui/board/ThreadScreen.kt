@@ -469,12 +469,13 @@ fun ThreadScreen(
             }
         }
     }
-    val lazyListState = remember(threadId, initialHistoryEntry) {
+    val lazyListState = remember(threadId) {
         LazyListState(
             initialHistoryEntry?.lastReadItemIndex ?: 0,
             initialHistoryEntry?.lastReadItemOffset ?: 0
         )
     }
+    var hasRestoredInitialScroll by remember(threadId) { mutableStateOf(false) }
     suspend fun restoreScrollPositionSafely(savedIndex: Int, savedOffset: Int, totalItems: Int) {
         if (totalItems <= 0) return
         val clampedIndex = savedIndex.coerceIn(0, totalItems - 1)
@@ -654,7 +655,7 @@ fun ThreadScreen(
                 }
             }
             if (!allowOfflineFallback || !isOfflineFallbackCandidate(e)) throw e
-            val offlinePage = withContext(Dispatchers.IO) {
+            val offlinePage = withContext(AppDispatchers.io) {
                 withTimeoutOrNull(OFFLINE_FALLBACK_TIMEOUT_MS) {
                     loadOfflineThread()
                 }
@@ -1221,6 +1222,22 @@ fun ThreadScreen(
             emptyMap()
         }
     }
+    LaunchedEffect(
+        threadId,
+        initialHistoryEntry?.lastReadItemIndex,
+        initialHistoryEntry?.lastReadItemOffset,
+        currentPage?.posts?.size
+    ) {
+        if (hasRestoredInitialScroll) return@LaunchedEffect
+        val entry = initialHistoryEntry ?: return@LaunchedEffect
+        val totalItems = currentPage?.posts?.size ?: return@LaunchedEffect
+        restoreScrollPositionSafely(
+            savedIndex = entry.lastReadItemIndex,
+            savedOffset = entry.lastReadItemOffset,
+            totalItems = totalItems
+        )
+        hasRestoredInitialScroll = true
+    }
 
     LaunchedEffect(searchQuery, threadId) {
         currentSearchResultIndex = 0
@@ -1261,7 +1278,7 @@ fun ThreadScreen(
         scrollToSearchMatch(previousIndex)
     }
 
-    LaunchedEffect(threadId) {
+    LaunchedEffect(threadId, lazyListState) {
         snapshotFlow {
             lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
         }

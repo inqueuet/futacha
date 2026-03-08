@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class, ExperimentalForeignApi::class)
 
 package com.valoser.futacha.shared.util
 
@@ -23,7 +23,6 @@ import platform.PhotosUI.PHPickerViewControllerDelegateProtocol
 import platform.UIKit.UIApplication
 import platform.UIKit.UIViewController
 import platform.UIKit.UIWindow
-import platform.UIKit.UIWindowScene
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.darwin.NSObject
@@ -44,6 +43,13 @@ private const val MAX_PICKED_IMAGE_BYTES = 10L * 1024L * 1024L
  * UIDocumentPicker delegate の保持
  */
 private val activePickerDelegate = AtomicReference<NSObject?>(null)
+
+private class ResumeGate {
+    private val resumedMarker = Any()
+    private val state = AtomicReference<Any?>(null)
+
+    fun tryOpen(): Boolean = state.compareAndSet(null, resumedMarker)
+}
 
 private fun retainPickerDelegate(delegate: NSObject) {
     activePickerDelegate.value = delegate
@@ -71,10 +77,10 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
         continuation.resume(null)
         return@suspendCoroutine
     }
-    val hasResumed = AtomicReference(false)
+    val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
     fun complete(value: ImageData?) {
-        if (!hasResumed.compareAndSet(false, true)) return
+        if (!resumeGate.tryOpen()) return
         releasePickerDelegate(delegateRef)
         continuation.resume(value)
     }
@@ -163,10 +169,10 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
         continuation.resume(null)
         return@suspendCoroutine
     }
-    val hasResumed = AtomicReference(false)
+    val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
     fun complete(value: ImageData?) {
-        if (!hasResumed.compareAndSet(false, true)) return
+        if (!resumeGate.tryOpen()) return
         releasePickerDelegate(delegateRef)
         continuation.resume(value)
     }
@@ -251,10 +257,10 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
         continuation.resume(null)
         return@suspendCoroutine
     }
-    val hasResumed = AtomicReference(false)
+    val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
     fun complete(value: String?) {
-        if (!hasResumed.compareAndSet(false, true)) return
+        if (!resumeGate.tryOpen()) return
         releasePickerDelegate(delegateRef)
         continuation.resume(value)
     }
@@ -328,10 +334,10 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
         continuation.resume(null)
         return@suspendCoroutine
     }
-    val hasResumed = AtomicReference(false)
+    val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
     fun complete(value: SaveLocation?) {
-        if (!hasResumed.compareAndSet(false, true)) return
+        if (!resumeGate.tryOpen()) return
         releasePickerDelegate(delegateRef)
         continuation.resume(value)
     }
@@ -405,15 +411,8 @@ private fun createSecureBookmark(url: NSURL): SaveLocation.Bookmark? {
 
 private fun getRootViewController(): UIViewController? {
     val application = UIApplication.sharedApplication
-    val sceneWindows = application.connectedScenes.allObjects
-        .mapNotNull { it as? UIWindowScene }
-        .flatMap { scene ->
-            scene.windows.mapNotNull { it as? UIWindow }
-        }
-    val sceneKeyWindow = sceneWindows.firstOrNull { it.isKeyWindow } ?: sceneWindows.firstOrNull()
-    sceneKeyWindow?.rootViewController?.let { return it }
-
-    val keyWindow = application.windows.firstOrNull { it.isKeyWindow } ?: application.windows.firstOrNull()
+    val windows = application.windows.filterIsInstance<UIWindow>()
+    val keyWindow = windows.firstOrNull { it.isKeyWindow() } ?: windows.firstOrNull()
     return keyWindow?.rootViewController
 }
 

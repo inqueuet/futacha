@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import platform.Foundation.NSURL
 import platform.UIKit.UIApplication
-import platform.UIKit.UIApplicationOpenExternalURLOptionsKey
 
 @Composable
 actual fun rememberUrlLauncher(): (String) -> Unit {
@@ -15,7 +14,7 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                 if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
                     UIApplication.sharedApplication.openURL(
                         nsUrl,
-                        options = emptyMap<UIApplicationOpenExternalURLOptionsKey, Any>(),
+                        options = emptyMap<Any?, Any?>(),
                         completionHandler = null
                     )
                 } else {

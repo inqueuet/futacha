@@ -78,11 +78,11 @@ internal object ThreadHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val deletedNoticeRegex = Regex(
-        pattern = "<span\\s+id=['\"]ddel['\"]>",
+        pattern = "<span\\s+id=['\"]?ddel['\"]?>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val brEndRegex = Regex(
-        pattern = "<br></span>",
+        pattern = "<br\\s*/?>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     // FIX: ReDoS対策 - [^>]*に長さ制限を追加
@@ -609,6 +609,9 @@ internal object ThreadHtmlParserCore {
 
             lines.forEach { rawLine ->
                 val trimmedLine = rawLine.trimStart()
+                if (trimmedLine.isBlank()) {
+                    return@forEach
+                }
                 if (!(trimmedLine.startsWith(">") || trimmedLine.startsWith("＞"))) {
                     flushPendingContentBlock()
                     return@forEach
@@ -635,7 +638,13 @@ internal object ThreadHtmlParserCore {
                 }
 
                 if (resolution.targets.isEmpty()) {
-                    flushPendingContentBlock()
+                    if (pendingContentLines.isNotEmpty()) {
+                        pendingContentLines.add(trimmedLine.trim())
+                        pendingContentTargets = emptySet()
+                        isContentBlockInvalid = true
+                    } else {
+                        flushPendingContentBlock()
+                    }
                     return@forEach
                 }
 
@@ -646,11 +655,9 @@ internal object ThreadHtmlParserCore {
                 }
 
                 if (updatedTargets.isEmpty()) {
-                    // Targets changed mid-block; close previous block and start a new one
-                    flushPendingContentBlock()
                     pendingContentLines.add(trimmedLine.trim())
-                    pendingContentTargets = resolution.targets
-                    isContentBlockInvalid = false
+                    pendingContentTargets = emptySet()
+                    isContentBlockInvalid = true
                 } else {
                     pendingContentLines.add(trimmedLine.trim())
                     pendingContentTargets = updatedTargets
@@ -688,7 +695,7 @@ internal object ThreadHtmlParserCore {
         return when {
             path.startsWith("http://") || path.startsWith("https://") -> path
             path.startsWith("//") -> "${extractScheme(baseUrl)}:$path"
-            path.startsWith("/") -> baseUrl.trimEnd('/') + path
+            path.startsWith("/") -> (extractBaseUrl(baseUrl) ?: baseUrl).trimEnd('/') + path
             else -> baseUrl.trimEnd('/') + "/" + path
         }
     }

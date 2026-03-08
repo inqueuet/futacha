@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class)
+
 package com.valoser.futacha.shared.util
 
 import kotlinx.cinterop.BooleanVar
@@ -10,10 +12,7 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
-import platform.Foundation.NSData
-import platform.Foundation.NSError
-import platform.Foundation.NSURL
-import platform.Foundation.NSURLBookmarkResolutionWithSecurityScope
+import platform.Foundation.*
 
 @OptIn(ExperimentalForeignApi::class, ExperimentalEncodingApi::class)
 internal actual fun resolveBookmarkPathForDisplay(bookmarkData: String): String? {

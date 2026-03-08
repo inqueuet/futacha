@@ -1,9 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.kotlin.compose)
 }
@@ -11,15 +10,17 @@ plugins {
 kotlin {
     applyDefaultHierarchyTemplate()
 
-    tasks.withType<KotlinCompile>().configureEach {
-        compilerOptions.freeCompilerArgs.add("-Xexpect-actual-classes")
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
     }
 
-    androidTarget {
+    android {
+        namespace = "com.valoser.futacha.shared"
+        compileSdk = 36
+        minSdk = 24
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)
         }
-        publishLibraryVariants("debug", "release")
     }
 
     listOf(
@@ -61,7 +62,6 @@ kotlin {
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.jetbrains.compose.preview)
-                implementation(libs.jetbrains.compose.ui.tooling)
                 implementation(libs.androidx.media3.exoplayer)
                 implementation(libs.androidx.media3.ui)
                 implementation(libs.androidx.documentfile)
@@ -69,29 +69,15 @@ kotlin {
                 implementation(libs.coil3.gif)
             }
         }
-        val androidUnitTest by getting
 
         val iosMain by getting {
             dependencies {
                 implementation(libs.ktor.client.darwin)
             }
         }
-
-        val iosTest by getting
     }
 }
 
-android {
-    namespace = "com.valoser.futacha.shared"
-    compileSdk = 36
-    defaultConfig {
-        minSdk = 24
-    }
-    buildFeatures {
-        compose = true
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
+dependencies {
+    add("androidRuntimeClasspath", libs.jetbrains.compose.ui.tooling)
 }

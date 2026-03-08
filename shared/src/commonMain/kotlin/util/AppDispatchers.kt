@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.util
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 
+expect val platformIoDispatcher: CoroutineDispatcher
+
 /**
  * アプリケーション全体で使用するCoroutineDispatcherの集中管理
  *
@@ -52,7 +54,7 @@ object AppDispatchers {
     val mockData: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1)
 
     // FIX: I/O処理専用Dispatcher（ファイル、ネットワーク）
-    val io: CoroutineDispatcher = Dispatchers.IO
+    val io: CoroutineDispatcher = platformIoDispatcher
 
     /**
      * 画像フェッチ専用Dispatcherファクトリー

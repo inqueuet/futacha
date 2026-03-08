@@ -16,6 +16,7 @@ import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.releaseSecurityScopedResource
 import com.valoser.futacha.shared.util.createFileSystem
@@ -32,7 +33,7 @@ private object IosAppGraph {
     val stateStore by lazy { createAppStateStore() }
     val fileSystem by lazy { createFileSystem() }
     val autoSavedThreadRepository by lazy {
-        fileSystem?.let { SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY) }
+        SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
     }
     val cookieStorage by lazy { PersistentCookieStorage(fileSystem) }
     val cookieRepository by lazy { CookieRepository(cookieStorage) }
@@ -96,7 +97,7 @@ fun MainViewController(): UIViewController {
                         delay(backoffMillis)
                         true
                     }
-                    .collect()
+                    .collect { }
                 Logger.w("MainViewController", "Background refresh flow completed unexpectedly")
             } catch (e: CancellationException) {
                 throw e
@@ -158,7 +159,7 @@ private suspend fun runIosBackgroundRefresh(
         val refresher = HistoryRefresher(
             stateStore = stateStore,
             repository = repo,
-            dispatcher = kotlinx.coroutines.Dispatchers.IO,
+            dispatcher = AppDispatchers.io,
             autoSavedThreadRepository = autoSaveRepo,
             httpClient = httpClient,
             fileSystem = fileSystem

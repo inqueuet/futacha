@@ -1,13 +1,14 @@
 package com.valoser.futacha.shared.background
 
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.useContents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import platform.BackgroundTasks.BGAppRefreshTask
 import platform.BackgroundTasks.BGAppRefreshTaskRequest
 import platform.BackgroundTasks.BGTask
 import platform.BackgroundTasks.BGTaskScheduler
@@ -16,23 +17,25 @@ import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSLog
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
+import kotlin.time.Clock
 
 /**
  * Minimal BGTask scheduler helper. Note: actual execution timing is controlled by iOS.
  */
+@OptIn(ExperimentalForeignApi::class)
 object BackgroundRefreshManager {
     private const val TASK_ID = "com.valoser.futacha.refresh"
     private const val SCHEDULE_BACKOFF_MILLIS = 60_000L
     private const val MAX_SCHEDULE_RETRY_ATTEMPTS = 12
     private var registered = false
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    @Volatile private var isEnabled = false
-    @Volatile private var executeBlock: (suspend () -> Unit)? = null
-    @Volatile private var activeTaskJob: Job? = null
-    @Volatile private var retryScheduleJob: Job? = null
-    @Volatile private var nextScheduleAllowedAtMillis: Long = 0L
-    @Volatile private var hasPendingRefreshRequest: Boolean = false
-    @Volatile private var scheduleRetryAttempts: Int = 0
+    private val scope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+    private var isEnabled = false
+    private var executeBlock: (suspend () -> Unit)? = null
+    private var activeTaskJob: Job? = null
+    private var retryScheduleJob: Job? = null
+    private var nextScheduleAllowedAtMillis: Long = 0L
+    private var hasPendingRefreshRequest: Boolean = false
+    private var scheduleRetryAttempts: Int = 0
 
     fun registerAtLaunch() {
         if (!isSupported()) return
@@ -75,8 +78,12 @@ object BackgroundRefreshManager {
         registered = BGTaskScheduler.sharedScheduler().registerForTaskWithIdentifier(
             identifier = TASK_ID,
             usingQueue = null
-        ) { task: BGTask ->
-            handleTask(task)
+        ) { task: BGTask? ->
+            if (task != null) {
+                handleTask(task)
+            } else {
+                NSLog("BGTask registration callback received null task for $TASK_ID")
+            }
         }
         if (!registered) {
             NSLog("Failed to register BGTask for $TASK_ID")
@@ -212,13 +219,14 @@ object BackgroundRefreshManager {
         scheduleRetryAttempts = 0
         if (!isSupported()) return
         dispatch_async(dispatch_get_main_queue()) {
-            BGTaskScheduler.sharedScheduler().cancel(taskRequestWithIdentifier = TASK_ID)
+            BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(TASK_ID)
         }
     }
 
     private fun isSupported(): Boolean {
-        val version = NSProcessInfo.processInfo.operatingSystemVersion
-        return version.majorVersion.toInt() >= 13
+        return NSProcessInfo.processInfo.operatingSystemVersion.useContents {
+            majorVersion.toInt() >= 13
+        }
     }
 
     private fun isTaskIdentifierPermitted(): Boolean {
@@ -228,5 +236,5 @@ object BackgroundRefreshManager {
     }
 
     private fun currentEpochMillis(): Long =
-        kotlin.system.getTimeMillis()
+        Clock.System.now().toEpochMilliseconds()
 }

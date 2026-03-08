@@ -9,9 +9,9 @@ import com.valoser.futacha.shared.service.buildThreadStorageLockKey
 import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -164,7 +164,7 @@ class SavedThreadRepository(
      * スレッドメタデータを読み込み
      */
     suspend fun loadThreadMetadata(threadId: String, boardId: String? = null): Result<SavedThreadMetadata> = runSuspendCatchingNonCancellation {
-        withContext(Dispatchers.IO) {
+        withContext(AppDispatchers.io) {
             val normalizedThreadId = threadId.trim()
             if (normalizedThreadId.isBlank()) {
                 throw IllegalArgumentException("threadId must not be blank")
@@ -216,7 +216,7 @@ class SavedThreadRepository(
      * スレッドを削除
      */
     suspend fun deleteThread(threadId: String, boardId: String? = null): Result<Unit> = runSuspendCatchingNonCancellation {
-        withContext(Dispatchers.IO) {
+        withContext(AppDispatchers.io) {
             data class DeletePlan(
                 val backupIndexPath: String,
                 val backupIndexJson: String,
@@ -328,7 +328,7 @@ class SavedThreadRepository(
      * すべてのスレッドを削除
      */
     suspend fun deleteAllThreads(): Result<Unit> = runSuspendCatchingNonCancellation {
-        withContext(Dispatchers.IO) {
+        withContext(AppDispatchers.io) {
             data class DeleteAllPlan(
                 val backupIndexPath: String,
                 val backupIndexJson: String,
@@ -437,7 +437,7 @@ class SavedThreadRepository(
     /**
      * スレッドが存在するか確認
      */
-    suspend fun threadExists(threadId: String, boardId: String? = null): Boolean = withContext(Dispatchers.IO) {
+    suspend fun threadExists(threadId: String, boardId: String? = null): Boolean = withContext(AppDispatchers.io) {
         val threadPaths = withIndexLock {
             val currentIndex = readIndexUnlocked()
             val fromIndex = currentIndex.threads
@@ -522,7 +522,7 @@ class SavedThreadRepository(
         }
     }
 
-    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(Dispatchers.IO) {
+    private suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(AppDispatchers.io) {
         indexMutex.withLock {
             block()
         }
