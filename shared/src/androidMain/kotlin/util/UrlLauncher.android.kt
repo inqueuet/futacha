@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.util
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -24,16 +25,20 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                         Logger.w("UrlLauncher", "Invalid URL: $trimmed")
                         Toast.makeText(context, "リンクを開けません", Toast.LENGTH_SHORT).show()
                     } else {
-                        val intent = Intent(Intent.ACTION_VIEW, parsed)
+                        val intent = when (parsed.scheme?.lowercase()) {
+                            "mailto" -> Intent(Intent.ACTION_SENDTO, parsed)
+                            else -> Intent(Intent.ACTION_VIEW, parsed).apply {
+                                addCategory(Intent.CATEGORY_BROWSABLE)
+                            }
+                        }
                         if (context !is Activity) {
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        val canHandle = intent.resolveActivity(context.packageManager) != null
-                        if (!canHandle) {
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: ActivityNotFoundException) {
                             Logger.w("UrlLauncher", "No activity can handle URL: $trimmed")
                             Toast.makeText(context, "このリンクは開けません", Toast.LENGTH_SHORT).show()
-                        } else {
-                            context.startActivity(intent)
                         }
                     }
                 }
