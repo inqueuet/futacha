@@ -97,9 +97,11 @@ fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
 fun extractArchiveSearchScope(boardUrl: String?): ArchiveSearchScope? {
     if (boardUrl.isNullOrBlank()) return null
     return runCatching {
+        if (!boardUrl.contains("://")) return null
         val normalizedUrl = resolveBaseUrlFromThreadUrl(boardUrl) ?: boardUrl
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(normalizedUrl)
         val parsed = Url(baseUrl)
+        if (parsed.host.isBlank()) return null
         val server = parsed.host.substringBefore('.', parsed.host).ifBlank { return null }
         val boardSlug = BoardUrlResolver.resolveBoardSlug(normalizedUrl).ifBlank { return null }
         ArchiveSearchScope(server = server, board = boardSlug)
@@ -112,7 +114,7 @@ fun buildArchiveSearchUrl(
 ): String {
     val params = buildList<String> {
         if (query.isNotBlank()) {
-            add("q=${query.encodeURLParameter()}")
+            add("q=${query.encodeURLParameter().replace("%20", "+")}")
         }
         scope?.let {
             add("server=${it.server.encodeURLParameter()}")

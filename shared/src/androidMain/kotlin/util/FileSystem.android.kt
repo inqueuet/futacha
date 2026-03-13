@@ -35,12 +35,6 @@ class AndroidFileSystem(
 
     // FIX: 安全性チェックのための定数
     companion object {
-        // FIX: ファイルサイズ上限（100MB） - OOM防止
-        private const val MAX_FILE_SIZE = 100 * 1024 * 1024L
-        // FIX: ファイル名の最大長（Linuxの制限）
-        private const val MAX_FILENAME_LENGTH = 255
-        // FIX: パスの最大長（合理的な上限）
-        private const val MAX_PATH_LENGTH = 4096
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val SAF_READ_IDLE_TIMEOUT_MILLIS = 15_000L
     }
@@ -60,49 +54,16 @@ class AndroidFileSystem(
      *
      * @throws IllegalArgumentException パスが不正な場合
      */
-    private fun validatePath(path: String, paramName: String = "path") {
-        // FIX: 空文字列チェック
-        if (path.isEmpty()) {
-            throw IllegalArgumentException("$paramName must not be empty")
-        }
-
-        // FIX: null文字チェック（セキュリティ脆弱性防止）
-        if (path.contains('\u0000')) {
-            throw IllegalArgumentException("$paramName contains null character")
-        }
-
-        // FIX: パス長制限
-        if (path.length > MAX_PATH_LENGTH) {
-            throw IllegalArgumentException("$paramName exceeds maximum length ($MAX_PATH_LENGTH): ${path.length}")
-        }
-
-        // FIX: パストラバーサル攻撃防止
-        val normalized = path.replace('\\', '/')
-        if (normalized.contains("../") || normalized.contains("/..") || normalized == "..") {
-            throw IllegalArgumentException("$paramName contains path traversal sequence: $path")
-        }
-
-        // FIX: ファイル名の長さチェック（最後のセグメントのみ）
-        val fileName = normalized.substringAfterLast('/', normalized)
-        if (fileName.length > MAX_FILENAME_LENGTH) {
-            throw IllegalArgumentException("File name exceeds maximum length ($MAX_FILENAME_LENGTH): $fileName")
-        }
-    }
+    private fun validatePath(path: String, paramName: String = "path") =
+        validateFileSystemPath(path, paramName)
 
     /**
      * FIX: ファイルサイズ検証 - OOM防止
      *
      * @throws IllegalArgumentException サイズが上限を超える場合
      */
-    private fun validateFileSize(size: Long, paramName: String = "file") {
-        if (size > MAX_FILE_SIZE) {
-            throw IllegalArgumentException("$paramName size ($size bytes) exceeds maximum allowed ($MAX_FILE_SIZE bytes)")
-        }
-        // FIX: 負のサイズチェック
-        if (size < 0) {
-            throw IllegalArgumentException("$paramName size cannot be negative: $size")
-        }
-    }
+    private fun validateFileSize(size: Long, paramName: String = "file") =
+        validateFileSystemSize(size, paramName)
 
     private suspend fun backoffAfterZeroRead() {
         coroutineContext.ensureActive()
@@ -263,54 +224,13 @@ class AndroidFileSystem(
     }
 
     override fun resolveAbsolutePath(relativePath: String): String {
-        if (relativePath.startsWith("/")) {
-            return relativePath
-        }
-
-        val cleanedPath = relativePath.removePrefix("./")
-        val lower = cleanedPath.lowercase()
-
-        // 明示的にプライベート領域を使いたい場合のプレフィックス
-        if (cleanedPath.startsWith("private/")) {
-            val remainder = cleanedPath.removePrefix("private/").ifBlank { "" }
-            return File(getPrivateAppDataDirectory(), remainder).absolutePath
-        }
-
-        // AUTO_SAVE_DIRECTORY はアプリ専用の非公開領域に保存
-        if (cleanedPath.startsWith(AUTO_SAVE_DIRECTORY)) {
-            return File(getPrivateAppDataDirectory(), cleanedPath).absolutePath
-        }
-
-        // ユーザーが「Download」や「Documents」と入力した場合は futacha/saved_threads を自動付与
-        val isDownload = lower == "download" || lower == "downloads"
-        val isDownloadSubPath = lower.startsWith("download/") || lower.startsWith("downloads/")
-        val isDocuments = lower == "documents"
-        val isDocumentsSubPath = lower.startsWith("documents/")
-
-        return when {
-            isDownload -> {
-                File(getPublicDownloadsDirectory(), MANUAL_SAVE_DIRECTORY).absolutePath
-            }
-
-            isDownloadSubPath -> {
-                val remainder = cleanedPath.substringAfter('/').removePrefix("futacha/").ifBlank { MANUAL_SAVE_DIRECTORY }
-                File(getPublicDownloadsDirectory(), remainder).absolutePath
-            }
-
-            isDocuments -> {
-                File(getPublicDocumentsDirectory(), MANUAL_SAVE_DIRECTORY).absolutePath
-            }
-
-            isDocumentsSubPath -> {
-                val remainder = cleanedPath.substringAfter('/').removePrefix("futacha/").ifBlank { MANUAL_SAVE_DIRECTORY }
-                File(getPublicDocumentsDirectory(), remainder).absolutePath
-            }
-
-            else -> {
-                val baseDir = getAppDataDirectory()
-                File(baseDir, cleanedPath).absolutePath
-            }
-        }
+        return resolveAndroidAbsolutePath(
+            relativePath = relativePath,
+            appDataDirectory = getAppDataDirectory(),
+            privateAppDataDirectory = getPrivateAppDataDirectory(),
+            publicDocumentsDirectory = getPublicDocumentsDirectory(),
+            publicDownloadsDirectory = getPublicDownloadsDirectory()
+        )
     }
 
     /**

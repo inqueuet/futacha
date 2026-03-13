@@ -4,9 +4,7 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
-import com.valoser.futacha.shared.service.buildLegacyThreadStorageId
 import com.valoser.futacha.shared.service.buildThreadStorageLockKey
-import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -55,21 +53,6 @@ class SavedThreadRepository(
     private val backupCleanupMutex = Mutex()
     private var lastOperationBackupCleanupEpochMillis = 0L
 
-    // FIX: 整数オーバーフロー対策 - 安全なサイズ合計計算
-    private fun List<SavedThread>.safeTotalSize(): Long {
-        var total = 0L
-        for (thread in this) {
-            val newTotal = total + thread.totalSize
-            // オーバーフローチェック（符号反転を検出）
-            if (newTotal < total) {
-                Logger.w("SavedThreadRepository", "Total size overflow detected, capping at Long.MAX_VALUE")
-                return Long.MAX_VALUE
-            }
-            total = newTotal
-        }
-        return total
-    }
-
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
@@ -114,13 +97,13 @@ class SavedThreadRepository(
                     withIndexLock {
                         val currentIndex = readIndexUnlocked()
                         val updatedThreads = currentIndex.threads
-                            .filterNot { isSameThreadIdentity(it, thread.threadId, thread.boardId) }
+                            .filterNot { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
                             .plus(thread)
                             .sortedByDescending { it.savedAt }
 
                         val updatedIndex = SavedThreadIndex(
                             threads = updatedThreads,
-                            totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
+                            totalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow),
                             lastUpdated = Clock.System.now().toEpochMilliseconds()
                         )
                         saveIndexUnlocked(updatedIndex)
@@ -146,12 +129,12 @@ class SavedThreadRepository(
             withIndexLock {
                 val currentIndex = readIndexUnlocked()
                 val updatedThreads = currentIndex.threads.filterNot {
-                    isSameThreadIdentity(it, threadId, boardId)
+                    isSameSavedThreadIdentity(it, threadId, boardId)
                 }
 
                 val updatedIndex = SavedThreadIndex(
                     threads = updatedThreads,
-                    totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
+                    totalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow),
                     lastUpdated = Clock.System.now().toEpochMilliseconds()
                 )
 
@@ -189,9 +172,9 @@ class SavedThreadRepository(
             }
 
             val fastCandidates = buildList {
-                add("${resolveStorageId(normalizedThreadId, normalizedBoardId)}/metadata.json")
-                val legacyStorageId = resolveLegacyStorageId(normalizedThreadId, normalizedBoardId)
-                if (legacyStorageId != resolveStorageId(normalizedThreadId, normalizedBoardId)) {
+                add("${resolveSavedThreadStorageId(normalizedThreadId, normalizedBoardId)}/metadata.json")
+                val legacyStorageId = resolveLegacySavedThreadStorageId(normalizedThreadId, normalizedBoardId)
+                if (legacyStorageId != resolveSavedThreadStorageId(normalizedThreadId, normalizedBoardId)) {
                     add("$legacyStorageId/metadata.json")
                 }
                 add("$normalizedThreadId/metadata.json")
@@ -230,7 +213,7 @@ class SavedThreadRepository(
 
                     // 削除対象が存在するか確認
                     val threadsToDelete = currentIndex.threads
-                        .filter { isSameThreadIdentity(it, threadId, boardId) }
+                        .filter { isSameSavedThreadIdentity(it, threadId, boardId) }
                         .sortedByDescending { it.savedAt }
                     if (threadsToDelete.isEmpty()) {
                         return@withIndexLock null // 存在しない場合は正常終了
@@ -241,7 +224,7 @@ class SavedThreadRepository(
                     val currentIndexJson = json.encodeToString(currentIndex)
 
                     val cutoffSavedAtByStorageId = threadsToDelete
-                        .groupBy { resolveStorageId(it) }
+                        .groupBy { resolveSavedThreadStorageId(it) }
                         .mapValues { (_, threads) -> threads.maxOf { it.savedAt } }
                     DeletePlan(
                         backupIndexPath = backupIndexPath,
@@ -283,14 +266,14 @@ class SavedThreadRepository(
                         withIndexLock {
                             val latestIndex = readIndexUnlocked()
                             val updatedThreads = latestIndex.threads.filterNot { thread ->
-                                val storageId = resolveStorageId(thread)
+                                val storageId = resolveSavedThreadStorageId(thread)
                                 val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
                                 storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
                             }
-                            val updatedIndex = SavedThreadIndex(
+                            val updatedIndex = buildSavedThreadIndex(
                                 threads = updatedThreads,
-                                totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
-                                lastUpdated = Clock.System.now().toEpochMilliseconds()
+                                nowMillis = Clock.System.now().toEpochMilliseconds(),
+                                onOverflow = ::logTotalSizeOverflow
                             )
 
                             try {
@@ -347,7 +330,7 @@ class SavedThreadRepository(
                     val currentIndexJson = json.encodeToString(currentIndex)
 
                     val cutoffSavedAtByStorageId = currentIndex.threads
-                        .groupBy { resolveStorageId(it) }
+                        .groupBy { resolveSavedThreadStorageId(it) }
                         .mapValues { (_, threads) -> threads.maxOf { it.savedAt } }
                     DeleteAllPlan(
                         backupIndexPath = backupIndexPath,
@@ -390,15 +373,14 @@ class SavedThreadRepository(
                             val currentIndex = readIndexUnlocked()
                             // 成功した削除対象のうち、削除開始時点のエントリだけを除外
                             val remainingThreads = currentIndex.threads.filterNot { thread ->
-                                val storageId = resolveStorageId(thread)
+                                val storageId = resolveSavedThreadStorageId(thread)
                                 val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
                                 storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
                             }
-
-                            val updatedIndex = SavedThreadIndex(
+                            val updatedIndex = buildSavedThreadIndex(
                                 threads = remainingThreads,
-                                totalSize = remainingThreads.safeTotalSize(), // FIX: オーバーフロー対策
-                                lastUpdated = Clock.System.now().toEpochMilliseconds()
+                                nowMillis = Clock.System.now().toEpochMilliseconds(),
+                                onOverflow = ::logTotalSizeOverflow
                             )
                             saveIndexUnlocked(updatedIndex)
                         }
@@ -441,17 +423,17 @@ class SavedThreadRepository(
         val threadPaths = withIndexLock {
             val currentIndex = readIndexUnlocked()
             val fromIndex = currentIndex.threads
-                .filter { isSameThreadIdentity(it, threadId, boardId) }
+                .filter { isSameSavedThreadIdentity(it, threadId, boardId) }
                 .sortedByDescending { it.savedAt }
-                .map { resolveStorageId(it) }
+                .map { resolveSavedThreadStorageId(it) }
                 .distinct()
             if (fromIndex.isNotEmpty()) {
                 fromIndex
             } else {
                 buildList {
-                    val currentStorageId = resolveStorageId(threadId = threadId, boardId = boardId)
+                    val currentStorageId = resolveSavedThreadStorageId(threadId = threadId, boardId = boardId)
                     add(currentStorageId)
-                    val legacyStorageId = resolveLegacyStorageId(threadId = threadId, boardId = boardId)
+                    val legacyStorageId = resolveLegacySavedThreadStorageId(threadId = threadId, boardId = boardId)
                     if (legacyStorageId != currentStorageId) {
                         add(legacyStorageId)
                     }
@@ -491,7 +473,7 @@ class SavedThreadRepository(
      * スレッドHTMLパスを取得
      */
     fun getThreadHtmlPath(threadId: String, boardId: String? = null): String {
-        val storageId = resolveStorageId(threadId = threadId, boardId = boardId)
+        val storageId = resolveSavedThreadStorageId(threadId = threadId, boardId = boardId)
         val relativePath = "$storageId/$threadId.htm"
         return if (useSaveLocationApi) {
             relativePath
@@ -508,12 +490,12 @@ class SavedThreadRepository(
             withIndexLock {
                 val currentIndex = readIndexUnlocked()
                 val updatedThreads = currentIndex.threads.map {
-                    if (isSameThreadIdentity(it, thread.threadId, thread.boardId)) thread else it
+                    if (isSameSavedThreadIdentity(it, thread.threadId, thread.boardId)) thread else it
                 }
 
                 val updatedIndex = SavedThreadIndex(
                     threads = updatedThreads,
-                    totalSize = updatedThreads.safeTotalSize(), // FIX: オーバーフロー対策
+                    totalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow),
                     lastUpdated = Clock.System.now().toEpochMilliseconds()
                 )
 
@@ -623,32 +605,16 @@ class SavedThreadRepository(
             return index
         }
 
-        // インデックス読み込み中に重いファイル存在チェックを行うとロック競合が増えるため、
-        // ここではメモリ上で正規化できる項目（重複・totalSize）のみ修復する。
-        val dedupedByStorageId = linkedMapOf<String, SavedThread>()
-        index.threads.forEach { thread ->
-            val storageId = resolveStorageId(thread)
-            val current = dedupedByStorageId[storageId]
-            if (current == null || thread.savedAt > current.savedAt) {
-                dedupedByStorageId[storageId] = thread
-            }
-        }
-        val normalizedThreads = dedupedByStorageId.values.toList()
-
-        val recalculatedSize = normalizedThreads.safeTotalSize()
-        val needsRepair =
-            normalizedThreads.size != index.threads.size ||
-            recalculatedSize != index.totalSize
-        if (!needsRepair) {
+        val sanitized = sanitizeSavedThreadIndex(
+            index = index,
+            nowMillis = Clock.System.now().toEpochMilliseconds(),
+            onOverflow = ::logTotalSizeOverflow
+        )
+        val repaired = sanitized.index
+        val droppedCount = sanitized.droppedDuplicateCount
+        if (repaired == index) {
             return index
         }
-
-        val repaired = SavedThreadIndex(
-            threads = normalizedThreads,
-            totalSize = recalculatedSize,
-            lastUpdated = Clock.System.now().toEpochMilliseconds()
-        )
-        val droppedCount = index.threads.size - normalizedThreads.size
         if (droppedCount > 0) {
             Logger.w(
                 "SavedThreadRepository",
@@ -714,56 +680,9 @@ class SavedThreadRepository(
         isBaseDirectoryPrepared = true
     }
 
-    private fun isSameThreadIdentity(thread: SavedThread, threadId: String, boardId: String?): Boolean {
-        if (thread.threadId != threadId) return false
-        val normalizedBoardId = boardId?.trim().orEmpty()
-        val candidateBoardId = thread.boardId.trim()
-        if (normalizedBoardId.isBlank()) return candidateBoardId.isBlank()
-        return candidateBoardId.equals(normalizedBoardId, ignoreCase = true)
-    }
-
-    private fun resolveStorageId(thread: SavedThread): String {
-        return thread.storageId
-            ?.takeIf { it.isNotBlank() }
-            ?: resolveStorageId(thread.threadId, thread.boardId)
-    }
-
-    private fun resolveStorageId(threadId: String, boardId: String?): String {
-        return buildThreadStorageId(boardId, threadId)
-    }
-
-    private fun resolveLegacyStorageId(threadId: String, boardId: String?): String {
-        return buildLegacyThreadStorageId(boardId, threadId)
-    }
-
     private suspend fun resolveMetadataCandidatesUnlocked(threadId: String, boardId: String?): List<String> {
         val currentIndex = readIndexUnlocked()
-        val latestByStorageId = linkedMapOf<String, SavedThread>()
-        currentIndex.threads.forEach { thread ->
-            if (!isSameThreadIdentity(thread, threadId, boardId)) return@forEach
-            val storageId = resolveStorageId(thread)
-            val existing = latestByStorageId[storageId]
-            if (existing == null || thread.savedAt > existing.savedAt) {
-                latestByStorageId[storageId] = thread
-            }
-        }
-        val fromIndex = latestByStorageId.values
-            .asSequence()
-            .sortedByDescending { it.savedAt }
-            .map { thread -> "${resolveStorageId(thread)}/metadata.json" }
-            .toList()
-
-        val fallbackCurrent = "${resolveStorageId(threadId, boardId)}/metadata.json"
-        val fallbackLegacyStorageId = "${resolveLegacyStorageId(threadId, boardId)}/metadata.json"
-        val fallbackLegacy = "$threadId/metadata.json"
-        return buildList {
-            addAll(fromIndex)
-            add(fallbackCurrent)
-            if (fallbackLegacyStorageId != fallbackCurrent) {
-                add(fallbackLegacyStorageId)
-            }
-            add(fallbackLegacy)
-        }
+        return resolveSavedThreadMetadataCandidates(currentIndex.threads, threadId, boardId)
     }
 
     private fun buildPath(relativePath: String): String {
@@ -955,5 +874,9 @@ class SavedThreadRepository(
         } catch (e: Throwable) {
             Result.failure(e)
         }
+    }
+
+    private fun logTotalSizeOverflow() {
+        Logger.w("SavedThreadRepository", "Total size overflow detected, capping at Long.MAX_VALUE")
     }
 }

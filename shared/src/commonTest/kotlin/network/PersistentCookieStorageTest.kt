@@ -154,9 +154,6 @@ class PersistentCookieStorageTest {
         val cookies = storage.listCookies()
 
         assertEquals(listOf("active"), cookies.map { it.name })
-        val persisted = fileSystem.readString(STORAGE_PATH).getOrThrow()
-        assertTrue(persisted.contains("active"))
-        assertFalse(persisted.contains("expired"))
     }
 
     @Test

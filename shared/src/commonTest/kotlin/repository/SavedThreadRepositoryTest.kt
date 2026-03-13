@@ -65,6 +65,45 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
+    fun savedThreadRepositorySupport_resolvesMetadataCandidatesAndSanitizesIndex() {
+        val newer = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 200L,
+            totalSize = 20L
+        )
+        val older = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val sanitized = sanitizeSavedThreadIndex(
+            index = SavedThreadIndex(
+                threads = listOf(older, newer),
+                totalSize = 999L,
+                lastUpdated = 1L
+            ),
+            nowMillis = 300L
+        )
+
+        assertEquals(listOf(newer), sanitized.index.threads)
+        assertEquals(20L, sanitized.index.totalSize)
+        assertEquals(1, sanitized.droppedDuplicateCount)
+        assertEquals(
+            listOf(
+                "${buildThreadStorageId("b", "123")}/metadata.json",
+                "${buildThreadStorageId("b", "123")}/metadata.json",
+                "${buildLegacyThreadStorageId("b", "123")}/metadata.json",
+                "123/metadata.json"
+            ),
+            resolveSavedThreadMetadataCandidates(listOf(older, newer), "123", "b")
+        )
+    }
+
+    @Test
     fun loadThreadMetadata_fallsBackToLegacyStoragePath() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
@@ -112,7 +151,8 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
-    fun loadIndex_throwsWhenPrimaryAndBackupAreBothCorrupted() = runBlocking {
+    fun loadIndex_throwsWhenPrimaryAndBackupAreBothCorrupted() {
+        runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
 
@@ -121,6 +161,7 @@ class SavedThreadRepositoryTest {
 
         assertFailsWith<IllegalStateException> {
             repository.loadIndex()
+        }
         }
     }
 

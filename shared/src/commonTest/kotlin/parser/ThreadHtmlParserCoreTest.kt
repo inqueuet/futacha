@@ -399,6 +399,50 @@ class ThreadHtmlParserCoreTest {
 
         assertEquals("https://www.example.com/img/src/777.jpg", url)
     }
+
+    @Test
+    fun parseThread_resolvesProtocolRelativeVideoUrlsWithoutCanonical() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="701">
+            <span class="cnw">25/01/01(月)00:00:00 ID:VID</span><span class="cno">No.701</span>
+            画像ファイル名：<a href="//may.2chan.net/b/src/701.mp4?dl=1">701.mp4</a>
+            <img src="//may.2chan.net/b/thumb/701s.jpg?x=1">
+            <blockquote>動画つき本文</blockquote>
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertEquals("701", page.threadId)
+        assertEquals(1, page.posts.size)
+        val op = page.posts.single()
+        assertEquals("https://may.2chan.net/b/src/701.mp4?dl=1", op.imageUrl)
+        assertEquals("https://may.2chan.net/b/thumb/701s.jpg?x=1", op.thumbnailUrl)
+        assertEquals("ID:VID", op.posterId)
+        assertTrue(op.messageHtml.contains("動画つき本文"))
+    }
+
+    @Test
+    fun extractOpImageUrl_resolvesProtocolRelativeThumbnailForVideo() {
+        val snippet = """
+            <html>
+            <body>
+            <div class="thre" data-res="702">
+            画像ファイル名：<a href="//may.2chan.net/b/src/702.webm">702.webm</a>
+            <img src="//may.2chan.net/b/thumb/702s.jpg?foo=1">
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val url = ThreadHtmlParserCore.extractOpImageUrl(snippet, "https://may.2chan.net/b")
+
+        assertEquals("https://may.2chan.net/b/thumb/702s.jpg?foo=1", url)
+    }
 }
 
 private val sampleThreadHtml = """

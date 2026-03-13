@@ -26,7 +26,7 @@ class CatalogViewTransformerTest {
             query = "夏休み"
         )
 
-        assertEquals(listOf("100"), result.map { it.id })
+        assertEquals(listOf("100", "300"), result.map { it.id })
     }
 
     @Test

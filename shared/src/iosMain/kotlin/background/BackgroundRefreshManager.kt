@@ -43,10 +43,12 @@ object BackgroundRefreshManager {
             NSLog("Skipping BGTask registration: '$TASK_ID' is not listed in BGTaskSchedulerPermittedIdentifiers")
             return
         }
+        NSLog("Registering BGTask at launch for $TASK_ID")
         registerIfNeeded()
     }
 
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
+        NSLog("BGTask configure(enabled=$enabled)")
         isEnabled = enabled
         executeBlock = onExecute
         if (enabled) {
@@ -70,7 +72,10 @@ object BackgroundRefreshManager {
     }
 
     private fun registerIfNeeded() {
-        if (registered) return
+        if (registered) {
+            NSLog("BGTask already registered for $TASK_ID")
+            return
+        }
         if (!isTaskIdentifierPermitted()) {
             NSLog("Skipping BGTask registration: '$TASK_ID' is not listed in BGTaskSchedulerPermittedIdentifiers")
             return
@@ -87,10 +92,13 @@ object BackgroundRefreshManager {
         }
         if (!registered) {
             NSLog("Failed to register BGTask for $TASK_ID")
+        } else {
+            NSLog("Registered BGTask for $TASK_ID")
         }
     }
 
     private fun handleTask(task: BGTask) {
+        NSLog("BGTask handler invoked for $TASK_ID")
         hasPendingRefreshRequest = false
         var taskCompleted = false
         val completeTask: (Boolean) -> Unit = { success ->
@@ -127,9 +135,12 @@ object BackgroundRefreshManager {
                     completeTask(false)
                     return@launch
                 }
+                NSLog("BGTask execution started")
                 block()
+                NSLog("BGTask execution finished successfully")
                 completeTask(true)
             } catch (e: CancellationException) {
+                NSLog("BGTask execution cancelled: ${e.message}")
                 completeTask(false)
                 throw e
             } catch (t: Throwable) {
@@ -145,19 +156,38 @@ object BackgroundRefreshManager {
         activeTaskJob = job
         // Expiration handler: cancel work if iOS cuts us off
         task.expirationHandler = {
+            NSLog("BGTask expired; cancelling active job")
             job.cancel(CancellationException("BGTask expired"))
             completeTask(false)
         }
     }
 
     private fun scheduleRefresh() {
-        if (!isEnabled) return
-        if (hasPendingRefreshRequest) return
-        val now = currentEpochMillis()
-        val remainingBackoff = nextScheduleAllowedAtMillis - now
-        if (remainingBackoff > 0L) {
-            scheduleRetryAttempt(remainingBackoff)
-            return
+        when (
+            val action = resolveBackgroundRefreshScheduleAction(
+                enabled = isEnabled,
+                hasPendingRefreshRequest = hasPendingRefreshRequest,
+                nextScheduleAllowedAtMillis = nextScheduleAllowedAtMillis,
+                nowEpochMillis = currentEpochMillis()
+            )
+        ) {
+            BackgroundRefreshScheduleAction.SkipDisabled,
+            BackgroundRefreshScheduleAction.SkipPending -> {
+                NSLog("BGTask schedule skipped: refresh request is already pending")
+                return
+            }
+            BackgroundRefreshScheduleAction.SkipDisabled -> {
+                NSLog("BGTask schedule skipped: manager is disabled")
+                return
+            }
+            is BackgroundRefreshScheduleAction.DelayRetry -> {
+                NSLog("BGTask schedule delayed by ${action.delayMillis}ms due to backoff")
+                scheduleRetryAttempt(action.delayMillis)
+                return
+            }
+            BackgroundRefreshScheduleAction.SubmitNow -> {
+                NSLog("BGTask schedule submitting request now")
+            }
         }
         hasPendingRefreshRequest = true
         dispatch_async(dispatch_get_main_queue()) {
@@ -171,35 +201,50 @@ object BackgroundRefreshManager {
                 if (!submitted) {
                     throw IllegalStateException("submitTaskRequest returned false")
                 }
+                NSLog("BGTask request submitted successfully for $TASK_ID")
                 nextScheduleAllowedAtMillis = 0L
                 scheduleRetryAttempts = 0
                 retryScheduleJob?.cancel()
                 retryScheduleJob = null
             }.onFailure {
                 NSLog("BGTask schedule failed: ${it.message}")
-                val failureNow = currentEpochMillis()
                 hasPendingRefreshRequest = false
-                nextScheduleAllowedAtMillis = failureNow + SCHEDULE_BACKOFF_MILLIS
-                scheduleRetryAttempts += 1
-                if (scheduleRetryAttempts > MAX_SCHEDULE_RETRY_ATTEMPTS) {
+                val failureState = resolveBackgroundRefreshSubmitFailureState(
+                    failureNowEpochMillis = currentEpochMillis(),
+                    currentRetryAttempts = scheduleRetryAttempts,
+                    scheduleBackoffMillis = SCHEDULE_BACKOFF_MILLIS,
+                    maxRetryAttempts = MAX_SCHEDULE_RETRY_ATTEMPTS
+                )
+                nextScheduleAllowedAtMillis = failureState.nextScheduleAllowedAtMillis
+                scheduleRetryAttempts = failureState.nextRetryAttempts
+                if (!failureState.shouldScheduleRetry) {
                     NSLog(
                         "BGTask schedule retry limit reached ($MAX_SCHEDULE_RETRY_ATTEMPTS); waiting for next explicit enable/event"
                     )
                     return@onFailure
                 }
-                scheduleRetryAttempt(SCHEDULE_BACKOFF_MILLIS)
+                scheduleRetryAttempt(failureState.retryDelayMillis)
             }
         }
     }
 
     private fun scheduleRetryAttempt(delayMillis: Long) {
-        if (!isEnabled) return
-        if (scheduleRetryAttempts > MAX_SCHEDULE_RETRY_ATTEMPTS) return
-        val activeRetry = retryScheduleJob
-        if (activeRetry?.isActive == true) return
-        val safeDelay = delayMillis.coerceAtLeast(1L)
+        if (
+            !shouldScheduleBackgroundRefreshRetry(
+                enabled = isEnabled,
+                retryAttempts = scheduleRetryAttempts,
+                maxRetryAttempts = MAX_SCHEDULE_RETRY_ATTEMPTS,
+                hasActiveRetryJob = retryScheduleJob?.isActive == true
+            )
+        ) {
+            NSLog(
+                "BGTask retry scheduling skipped (enabled=$isEnabled, retryAttempts=$scheduleRetryAttempts, hasActiveRetry=${retryScheduleJob?.isActive == true})"
+            )
+            return
+        }
+        NSLog("BGTask retry scheduled in ${normalizeBackgroundRefreshRetryDelay(delayMillis)}ms")
         retryScheduleJob = scope.launch {
-            delay(safeDelay)
+            delay(normalizeBackgroundRefreshRetryDelay(delayMillis))
             retryScheduleJob = null
             if (isEnabled) {
                 scheduleRefresh()
@@ -208,6 +253,7 @@ object BackgroundRefreshManager {
     }
 
     fun cancel() {
+        NSLog("Cancelling BGTask manager state for $TASK_ID")
         isEnabled = false
         executeBlock = null
         activeTaskJob?.cancel(CancellationException("Background refresh disabled"))

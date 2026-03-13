@@ -9,6 +9,39 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
 
+internal enum class SaveProgressDismissAction {
+    Dismiss,
+    Cancel,
+    None
+}
+
+internal fun isSaveProgressCompleted(progress: SaveProgress?): Boolean {
+    return progress != null &&
+        progress.phase == SavePhase.FINALIZING &&
+        progress.current == progress.total
+}
+
+internal fun resolveSaveProgressDismissAction(
+    progress: SaveProgress?,
+    hasCancelRequest: Boolean
+): SaveProgressDismissAction {
+    return when {
+        isSaveProgressCompleted(progress) -> SaveProgressDismissAction.Dismiss
+        hasCancelRequest -> SaveProgressDismissAction.Cancel
+        else -> SaveProgressDismissAction.None
+    }
+}
+
+internal fun saveProgressPhaseTitle(phase: SavePhase): String {
+    return when (phase) {
+        SavePhase.PREPARING -> "準備中"
+        SavePhase.DOWNLOADING -> "ダウンロード中"
+        SavePhase.CONVERTING -> "変換中"
+        SavePhase.FINALIZING -> "完了処理中"
+    }
+}
+
+
 /**
  * スレッド保存進捗ダイアログ
  */
@@ -20,18 +53,18 @@ fun SaveProgressDialog(
 ) {
     if (progress == null) return
 
-    val isCompleted = progress.phase == SavePhase.FINALIZING && progress.current == progress.total
+    val isCompleted = isSaveProgressCompleted(progress)
 
     AlertDialog(
         onDismissRequest = {
-            if (isCompleted) {
-                onDismissRequest()
-            } else {
-                onCancelRequest?.invoke()
+            when (resolveSaveProgressDismissAction(progress, hasCancelRequest = onCancelRequest != null)) {
+                SaveProgressDismissAction.Dismiss -> onDismissRequest()
+                SaveProgressDismissAction.Cancel -> onCancelRequest?.invoke()
+                SaveProgressDismissAction.None -> Unit
             }
         },
         title = {
-            Text(text = getPhaseTitle(progress.phase))
+            Text(text = saveProgressPhaseTitle(progress.phase))
         },
         text = {
             Column(
@@ -84,16 +117,4 @@ fun SaveProgressDialog(
             }
         }
     )
-}
-
-/**
- * フェーズタイトルを取得
- */
-private fun getPhaseTitle(phase: SavePhase): String {
-    return when (phase) {
-        SavePhase.PREPARING -> "準備中"
-        SavePhase.DOWNLOADING -> "ダウンロード中"
-        SavePhase.CONVERTING -> "変換中"
-        SavePhase.FINALIZING -> "完了処理中"
-    }
 }

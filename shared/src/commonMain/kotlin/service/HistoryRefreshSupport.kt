@@ -48,6 +48,9 @@ internal fun resolveArchiveBaseUrl(
     fallbackBoardUrl: String?
 ): String? {
     if (threadUrl.isBlank()) return fallbackBoardUrl?.takeIf { it.isNotBlank() }
+    if (!threadUrl.contains("://")) {
+        return fallbackBoardUrl?.takeIf { it.isNotBlank() }
+    }
     return runCatching {
         val url = Url(threadUrl)
         val segments = url.encodedPath.split('/').filter { it.isNotBlank() }

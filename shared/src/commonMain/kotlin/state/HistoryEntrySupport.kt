@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.network.BoardUrlResolver
 
 private const val HISTORY_ENTRY_DELIMITER = "::"
 
@@ -78,11 +79,12 @@ internal fun matchesHistoryEntryIdentity(
 }
 
 internal fun normalizeHistoryBoardUrlForIdentity(boardUrl: String): String {
-    val normalized = boardUrl
-        .trim()
+    val candidate = boardUrl.trim()
+    if (candidate.isBlank()) return ""
+    return runCatching {
+        BoardUrlResolver.resolveBoardBaseUrl(candidate)
+    }.getOrDefault(candidate)
         .substringBefore('?')
         .trimEnd('/')
         .lowercase()
-    if (normalized.isBlank()) return ""
-    return normalized.substringBefore("/res/")
 }

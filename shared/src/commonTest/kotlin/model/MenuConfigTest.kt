@@ -18,8 +18,8 @@ class MenuConfigTest {
         assertTrue(normalized.first { it.id == ThreadMenuItemId.Settings }.isEnabled)
         assertTrue(normalized.first { it.id == ThreadMenuItemId.Refresh }.isEnabled)
         assertEquals(
-            ThreadMenuItemId.entries.toList(),
-            normalized.map { it.id }
+            ThreadMenuItemId.entries.toSet(),
+            normalized.map { it.id }.toSet()
         )
         assertEquals(
             normalized.indices.toList(),

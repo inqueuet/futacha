@@ -97,15 +97,16 @@ internal object BoardUrlResolver {
         val segments = url.encodedPath
             .split('/')
             .filter { it.isNotBlank() }
-        
-        // If the path ends with a file (e.g. futaba.php), drop it.
-        // If it looks like a directory, keep it.
-        // Heuristic: extensions imply files.
-        val lastSegment = segments.lastOrNull()
-        val directorySegments = when {
-            lastSegment == null -> emptyList()
-            lastSegment.contains('.') -> segments.dropLast(1)
-            else -> segments
+
+        // Thread URLs look like `/board/res/123.htm`; strip both the thread file and `res`.
+        // Board URLs like `/board/futaba.php` still only drop the trailing file segment.
+        val directorySegments = segments.toMutableList().apply {
+            if (lastOrNull()?.contains('.') == true) {
+                removeAt(lastIndex)
+            }
+            if (lastOrNull()?.equals("res", ignoreCase = true) == true) {
+                removeAt(lastIndex)
+            }
         }
         
         val path = when {

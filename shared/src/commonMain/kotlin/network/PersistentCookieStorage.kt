@@ -58,7 +58,7 @@ class PersistentCookieStorage(
     private val fileSystem: FileSystem,
     private val storagePath: String = "private/cookies/cookies.json"
 ) : CookiesStorage {
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
+    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
     private val mutex = Mutex()
     private val transactionMutex = Mutex()
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
@@ -341,7 +341,9 @@ class PersistentCookieStorage(
                 }
             }
         }
-        purgeExpiredLocked(currentTimeMillis(), force = true)
+        if (purgeExpiredLocked(currentTimeMillis(), force = true)) {
+            persistSnapshot(encodeSnapshotLocked())
+        }
         isLoaded = true
     }
 

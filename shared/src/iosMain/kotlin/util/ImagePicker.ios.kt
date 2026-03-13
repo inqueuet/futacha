@@ -37,8 +37,6 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-private const val MAX_PICKED_IMAGE_BYTES = 10L * 1024L * 1024L
-
 /**
  * UIDocumentPicker delegate の保持
  */
@@ -120,22 +118,22 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
                         null
                     } else {
                         val dataLength = data.length.toLong()
-                        if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                        if (!isPickedImagePayloadSizeValid(dataLength)) {
                             Logger.w(
                                 "ImagePicker.ios",
-                                "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                                if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                                    "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                                } else {
+                                    "Selected image payload is empty"
+                                }
                             )
-                            null
-                        } else if (dataLength <= 0L) {
-                            Logger.w("ImagePicker.ios", "Selected image payload is empty")
                             null
                         } else {
                             val bytes = ByteArray(dataLength.toInt())
                             bytes.usePinned { pinned ->
                                 memcpy(pinned.addressOf(0), data.bytes, data.length)
                             }
-                            val fileName = url.lastPathComponent ?: "image.jpg"
-                            ImageData(bytes, fileName)
+                            buildPickedImageData(bytes, url.lastPathComponent)
                         }
                     }
                 }
@@ -204,16 +202,15 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                     return@loadDataRepresentationForTypeIdentifier
                 }
                 val dataLength = data.length.toLong()
-                if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                if (!isPickedImagePayloadSizeValid(dataLength)) {
                     Logger.w(
                         "ImagePicker.ios",
-                        "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                        if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                            "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                        } else {
+                            "Selected image payload is empty"
+                        }
                     )
-                    complete(null)
-                    return@loadDataRepresentationForTypeIdentifier
-                }
-                if (dataLength <= 0L) {
-                    Logger.w("ImagePicker.ios", "Selected image payload is empty")
                     complete(null)
                     return@loadDataRepresentationForTypeIdentifier
                 }
@@ -223,7 +220,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                     memcpy(pinned.addressOf(0), data.bytes, data.length)
                 }
 
-                complete(ImageData(bytes, "image.jpg"))
+                complete(buildPickedImageData(bytes, null))
             }
         }
     }

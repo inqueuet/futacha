@@ -23,6 +23,12 @@ kotlin {
         }
     }
 
+    jvm {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_11)
+        }
+    }
+
     listOf(
         iosX64(),
         iosArm64(),
@@ -74,6 +80,12 @@ kotlin {
         val iosMain by getting {
             dependencies {
                 implementation(libs.ktor.client.darwin)
+            }
+        }
+
+        val jvmMain by getting {
+            dependencies {
+                implementation(libs.ktor.client.okhttp)
             }
         }
     }

@@ -28,16 +28,6 @@ class IosFileSystem : FileSystem {
 
     private val fileManager = NSFileManager.defaultManager
 
-    // FIX: 安全性チェックのための定数
-    companion object {
-        // FIX: ファイルサイズ上限（100MB） - OOM防止
-        private const val MAX_FILE_SIZE = 100 * 1024 * 1024L
-        // FIX: ファイル名の最大長（iOSの制限）
-        private const val MAX_FILENAME_LENGTH = 255
-        // FIX: パスの最大長（合理的な上限）
-        private const val MAX_PATH_LENGTH = 4096
-    }
-
     private inline fun <T> runFsCatching(block: () -> T): Result<T> {
         return try {
             Result.success(block())
@@ -53,49 +43,16 @@ class IosFileSystem : FileSystem {
      *
      * @throws IllegalArgumentException パスが不正な場合
      */
-    private fun validatePath(path: String, paramName: String = "path") {
-        // FIX: 空文字列チェック
-        if (path.isEmpty()) {
-            throw IllegalArgumentException("$paramName must not be empty")
-        }
-
-        // FIX: null文字チェック（セキュリティ脆弱性防止）
-        if (path.contains('\u0000')) {
-            throw IllegalArgumentException("$paramName contains null character")
-        }
-
-        // FIX: パス長制限
-        if (path.length > MAX_PATH_LENGTH) {
-            throw IllegalArgumentException("$paramName exceeds maximum length ($MAX_PATH_LENGTH): ${path.length}")
-        }
-
-        // FIX: パストラバーサル攻撃防止
-        val normalized = path.replace('\\', '/')
-        if (normalized.contains("../") || normalized.contains("/..") || normalized == "..") {
-            throw IllegalArgumentException("$paramName contains path traversal sequence: $path")
-        }
-
-        // FIX: ファイル名の長さチェック（最後のセグメントのみ）
-        val fileName = normalized.substringAfterLast('/', normalized)
-        if (fileName.length > MAX_FILENAME_LENGTH) {
-            throw IllegalArgumentException("File name exceeds maximum length ($MAX_FILENAME_LENGTH): $fileName")
-        }
-    }
+    private fun validatePath(path: String, paramName: String = "path") =
+        validateFileSystemPath(path, paramName)
 
     /**
      * FIX: ファイルサイズ検証 - OOM防止
      *
      * @throws IllegalArgumentException サイズが上限を超える場合
      */
-    private fun validateFileSize(size: Long, paramName: String = "file") {
-        if (size > MAX_FILE_SIZE) {
-            throw IllegalArgumentException("$paramName size ($size bytes) exceeds maximum allowed ($MAX_FILE_SIZE bytes)")
-        }
-        // FIX: 負のサイズチェック
-        if (size < 0) {
-            throw IllegalArgumentException("$paramName size cannot be negative: $size")
-        }
-    }
+    private fun validateFileSize(size: Long, paramName: String = "file") =
+        validateFileSystemSize(size, paramName)
 
     private fun isNoSuchFileError(error: NSError?): Boolean {
         // NSFileNoSuchFileError
@@ -326,21 +283,11 @@ class IosFileSystem : FileSystem {
     }
 
     override fun resolveAbsolutePath(relativePath: String): String {
-        return if (relativePath.startsWith("/")) {
-            relativePath
-        } else {
-            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY) || relativePath.startsWith("private/")) {
-                getPrivateAppDataDirectory()
-            } else {
-                getAppDataDirectory()
-            }
-            val cleaned = if (relativePath.startsWith("private/")) {
-                relativePath.removePrefix("private/").ifBlank { "" }
-            } else {
-                relativePath
-            }
-            "$baseDir/$cleaned"
-        }
+        return resolveIosAbsolutePath(
+            relativePath = relativePath,
+            appDataDirectory = getAppDataDirectory(),
+            privateAppDataDirectory = getPrivateAppDataDirectory()
+        )
     }
 
     /**

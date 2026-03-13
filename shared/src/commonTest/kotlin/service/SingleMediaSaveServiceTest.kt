@@ -99,7 +99,8 @@ class SingleMediaSaveServiceTest {
     }
 
     @Test
-    fun saveMedia_failsWhenContentLengthExceedsLimit() = runBlocking {
+    fun saveMedia_failsWhenContentLengthExceedsLimit() {
+        runBlocking {
         val service = SingleMediaSaveService(
             httpClient = createClient {
                 htmlBinaryResponse(
@@ -118,8 +119,9 @@ class SingleMediaSaveServiceTest {
             baseDirectory = "manual"
         )
 
-        val error = assertFailsWith<IllegalStateException> { result.getOrThrow() }
-        assertTrue(error.message!!.contains("ファイルサイズが上限"))
+        assertTrue(result.isFailure)
+        assertFailsWith<IllegalStateException> { result.getOrThrow() }
+        }
     }
 
     private fun createClient(

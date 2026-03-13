@@ -4,6 +4,9 @@ import com.valoser.futacha.shared.network.StoredCookie
 import kotlinx.datetime.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class CookieManagementSupportTest {
     @Test
@@ -34,6 +37,73 @@ class CookieManagementSupportTest {
                 expiresAtMillis = 1767323040000L,
                 timeZone = TimeZone.UTC
             )
+        )
+    }
+
+    @Test
+    fun cookieReloadHelpers_onlyApplyLatestGeneration() {
+        assertEquals(
+            CookieReloadState(
+                reloadGeneration = 4L,
+                isLoading = true
+            ),
+            beginCookieReload(3L)
+        )
+        assertEquals(
+            listOf(cookie(name = "fresh")) to false,
+            applyCookieReloadResult(
+                currentGeneration = 4L,
+                requestGeneration = 4L,
+                cookies = listOf(cookie(name = "fresh")),
+                isLoading = true
+            )
+        )
+        assertEquals(
+            listOf(cookie(name = "stale")) to true,
+            applyCookieReloadResult(
+                currentGeneration = 5L,
+                requestGeneration = 4L,
+                cookies = listOf(cookie(name = "stale")),
+                isLoading = true
+            )
+        )
+    }
+
+    @Test
+    fun cookieManagementContentState_andMessages_followUiRules() {
+        assertIs<CookieManagementContentState.Loading>(
+            resolveCookieManagementContentState(
+                isLoading = true,
+                cookies = listOf(cookie())
+            )
+        )
+        assertIs<CookieManagementContentState.Empty>(
+            resolveCookieManagementContentState(
+                isLoading = false,
+                cookies = emptyList()
+            )
+        )
+        val dataState = resolveCookieManagementContentState(
+            isLoading = false,
+            cookies = listOf(cookie(domain = "may.2chan.net"), cookie(name = "b", domain = "dec.2chan.net"))
+        )
+        assertIs<CookieManagementContentState.Data>(dataState)
+        assertEquals(listOf("may.2chan.net", "dec.2chan.net"), dataState.sections.map { it.domain })
+        assertFalse(shouldShowCookieClearAllAction(emptyList()))
+        assertTrue(shouldShowCookieClearAllAction(listOf(cookie())))
+        assertEquals("削除しました: cxyl", buildCookieDeleteMessage("cxyl"))
+        assertEquals("すべてのCookieを削除しました", buildCookieClearAllMessage())
+    }
+
+    private fun cookie(
+        name: String = "a",
+        domain: String = "may.2chan.net"
+    ): StoredCookie {
+        return StoredCookie(
+            name = name,
+            value = "value-$name",
+            domain = domain,
+            path = "/"
         )
     }
 }

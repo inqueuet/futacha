@@ -1,7 +1,46 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
+
+internal data class SavedThreadsSnapshot(
+    val threads: List<SavedThread>,
+    val totalSize: Long
+)
+
+internal suspend fun loadSavedThreadsSnapshot(
+    repository: SavedThreadRepository,
+    timeoutMillis: Long = 15_000L
+): Result<SavedThreadsSnapshot> {
+    return runCatching {
+        withTimeout(timeoutMillis) {
+            val index = repository.loadIndex()
+            SavedThreadsSnapshot(
+                threads = index.threads,
+                totalSize = index.totalSize
+            )
+        }
+    }
+}
+
+internal suspend fun deleteSavedThreadAndReload(
+    repository: SavedThreadRepository,
+    thread: SavedThread,
+    timeoutMillis: Long = 15_000L
+): Result<SavedThreadsSnapshot> {
+    return runCatching {
+        repository.deleteThread(
+            threadId = thread.threadId,
+            boardId = thread.boardId.ifBlank { null }
+        ).getOrThrow()
+        loadSavedThreadsSnapshot(
+            repository = repository,
+            timeoutMillis = timeoutMillis
+        ).getOrThrow()
+    }
+}
 
 internal sealed interface SavedThreadsContentState {
     data object Loading : SavedThreadsContentState

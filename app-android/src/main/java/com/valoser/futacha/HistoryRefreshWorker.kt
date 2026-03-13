@@ -13,14 +13,12 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class HistoryRefreshWorker(
@@ -38,7 +36,7 @@ class HistoryRefreshWorker(
             throw e
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to read background refresh setting", e)
-            return if (runAttemptCount < MAX_SETTING_READ_RETRIES) {
+            return if (shouldRetryBackgroundSettingRead(runAttemptCount, MAX_SETTING_READ_RETRIES)) {
                 Result.retry()
             } else {
                 Logger.e(TAG, "Aborting after repeated setting read failures (attempt=$runAttemptCount)")
@@ -63,7 +61,7 @@ class HistoryRefreshWorker(
             Result.success()
         } catch (e: TimeoutCancellationException) {
             Logger.w(TAG, "Background refresh timed out after ${REFRESH_TIMEOUT_MILLIS}ms")
-            if (runAttemptCount < MAX_TIMEOUT_RETRIES) {
+            if (shouldRetryBackgroundRefreshTimeout(runAttemptCount, MAX_TIMEOUT_RETRIES)) {
                 Result.retry()
             } else {
                 Logger.e(TAG, "Timeout retry limit reached; marking run as failure (attempt=$runAttemptCount)")
@@ -73,20 +71,11 @@ class HistoryRefreshWorker(
             throw e
         } catch (t: Exception) {
             Logger.e(TAG, "Background history refresh failed", t)
-            if (isRetriable(t) && runAttemptCount < MAX_RETRY_ATTEMPTS) {
+            if (shouldRetryBackgroundRefreshFailure(t, runAttemptCount, MAX_RETRY_ATTEMPTS)) {
                 Result.retry()
             } else {
                 Result.failure()
             }
-        }
-    }
-
-    private fun isRetriable(t: Throwable): Boolean {
-        return when (t) {
-            is IOException,
-            is NetworkException,
-            is TimeoutCancellationException -> true
-            else -> false
         }
     }
 

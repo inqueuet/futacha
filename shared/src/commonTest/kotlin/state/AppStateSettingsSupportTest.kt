@@ -2,6 +2,14 @@ package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -15,6 +23,11 @@ import kotlin.test.assertEquals
 class AppStateSettingsSupportTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val selfPostSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+    private val stringListSerializer = ListSerializer(String.serializer())
+    private val threadMenuConfigSerializer = ListSerializer(ThreadMenuItemConfig.serializer())
+    private val threadSettingsMenuConfigSerializer = ListSerializer(ThreadSettingsMenuItemConfig.serializer())
+    private val threadMenuEntriesSerializer = ListSerializer(ThreadMenuEntryConfig.serializer())
+    private val catalogNavEntriesSerializer = ListSerializer(CatalogNavEntryConfig.serializer())
 
     @Test
     fun decodeCatalogDisplayStyleValue_fallsBackToGrid() {
@@ -59,6 +72,38 @@ class AppStateSettingsSupportTest {
         val aggregated = aggregateSelfPostIdentifiers(decoded, maxEntries = 10)
 
         assertEquals(listOf("ID:abc", "ID:def"), aggregated)
+    }
+
+    @Test
+    fun decodeStringListValue_returnsDecodedValues_orEmptyOnInvalidJson() {
+        assertEquals(
+            listOf("one", "two"),
+            decodeStringListValue("""["one","two"]""", json, stringListSerializer)
+        )
+        assertEquals(
+            emptyList(),
+            decodeStringListValue("not-json", json, stringListSerializer)
+        )
+    }
+
+    @Test
+    fun menuConfigDecoders_fallBackToDefaultsWhenInputIsMissingOrInvalid() {
+        assertEquals(
+            defaultThreadMenuConfig(),
+            decodeThreadMenuConfigValue(null, json, threadMenuConfigSerializer)
+        )
+        assertEquals(
+            defaultThreadSettingsMenuConfig(),
+            decodeThreadSettingsMenuConfigValue("invalid", json, threadSettingsMenuConfigSerializer)
+        )
+        assertEquals(
+            defaultThreadMenuEntries(),
+            decodeThreadMenuEntriesValue("", json, threadMenuEntriesSerializer)
+        )
+        assertEquals(
+            defaultCatalogNavEntries(),
+            decodeCatalogNavEntriesValue("invalid", json, catalogNavEntriesSerializer)
+        )
     }
 
     @Test
@@ -113,7 +158,7 @@ class AppStateSettingsSupportTest {
     fun sanitizeManualSaveDirectoryValue_normalizesBlankAndCurrentDirectoryValues() {
         assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue(null))
         assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue("  "))
-        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue("./manual_saved_threads"))
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sanitizeManualSaveDirectoryValue("./saved_threads"))
         assertEquals("Documents/futacha", sanitizeManualSaveDirectoryValue("./Documents/futacha"))
         assertEquals("/storage/emulated/0/futacha", sanitizeManualSaveDirectoryValue(" /storage/emulated/0/futacha "))
     }

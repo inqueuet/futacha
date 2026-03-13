@@ -1,16 +1,26 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class SavedThreadsScreenTest {
+    private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
+
     @Test
     fun formatSize_formatsByteRanges() {
         assertEquals("999 B", formatSize(999))
@@ -107,19 +117,168 @@ class SavedThreadsScreenTest {
         )
     }
 
-    private fun savedThread(): SavedThread {
-        return SavedThread(
+    @Test
+    fun loadSavedThreadsSnapshot_readsThreadsAndTotalSizeFromRepository() = runBlocking {
+        val repository = SavedThreadRepository(InMemoryFileSystem(), baseDirectory = "saved_threads")
+        val first = savedThread(threadId = "1", totalSize = 10L, savedAt = 100L)
+        val second = savedThread(threadId = "2", totalSize = 20L, savedAt = 200L)
+        repository.addThreadToIndex(first).getOrThrow()
+        repository.addThreadToIndex(second).getOrThrow()
+
+        val snapshot = loadSavedThreadsSnapshot(repository).getOrThrow()
+
+        assertEquals(listOf(second, first), snapshot.threads)
+        assertEquals(30L, snapshot.totalSize)
+    }
+
+    @Test
+    fun loadSavedThreadsSnapshot_propagatesRepositoryLoadFailure() {
+        runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        fileSystem.writeString("saved_threads/index.json", "{invalid").getOrThrow()
+
+        val result = loadSavedThreadsSnapshot(repository)
+
+        assertTrue(result.isFailure)
+        assertIs<IllegalStateException>(result.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun loadSavedThreadsSnapshot_recoversFromBackupIndex() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val thread = savedThread(
+            threadId = "42",
+            boardId = "img",
+            storageId = buildThreadStorageId("img", "42"),
+            totalSize = 64L,
+            savedAt = 420L
+        )
+        fileSystem.writeString("saved_threads/index.json", "{broken").getOrThrow()
+        fileSystem.writeString(
+            "saved_threads/index.json.backup",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(thread),
+                    totalSize = 64L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        val snapshot = loadSavedThreadsSnapshot(repository).getOrThrow()
+
+        assertEquals(listOf(thread), snapshot.threads)
+        assertEquals(64L, snapshot.totalSize)
+    }
+
+    @Test
+    fun deleteSavedThreadAndReload_returnsUpdatedSnapshot() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
             threadId = "1",
-            boardId = "b",
+            totalSize = 10L,
+            savedAt = 100L,
+            storageId = buildThreadStorageId("b", "1")
+        )
+        val other = savedThread(
+            threadId = "2",
+            totalSize = 20L,
+            savedAt = 200L,
+            storageId = buildThreadStorageId("b", "2")
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        repository.addThreadToIndex(other).getOrThrow()
+        fileSystem.writeString("saved_threads/${target.storageId}/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("saved_threads/${other.storageId}/metadata.json", "{}").getOrThrow()
+
+        val snapshot = deleteSavedThreadAndReload(repository, target).getOrThrow()
+
+        assertEquals(listOf(other), snapshot.threads)
+        assertEquals(20L, snapshot.totalSize)
+        assertFalse(repository.threadExists(target.threadId, target.boardId))
+        assertFalse(fileSystem.exists("saved_threads/${target.storageId}"))
+        assertTrue(fileSystem.exists("saved_threads/${other.storageId}"))
+    }
+
+    @Test
+    fun deleteSavedThreadAndReload_deletesOnlyMatchingBoardWhenThreadIdsOverlap() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "100",
+            boardId = "img",
+            totalSize = 10L,
+            savedAt = 100L,
+            storageId = buildThreadStorageId("img", "100")
+        )
+        val otherBoard = savedThread(
+            threadId = "100",
+            boardId = "dat",
+            totalSize = 20L,
+            savedAt = 200L,
+            storageId = buildThreadStorageId("dat", "100")
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        repository.addThreadToIndex(otherBoard).getOrThrow()
+        fileSystem.writeString("saved_threads/${target.storageId}/metadata.json", "{}").getOrThrow()
+        fileSystem.writeString("saved_threads/${otherBoard.storageId}/metadata.json", "{}").getOrThrow()
+
+        val snapshot = deleteSavedThreadAndReload(repository, target).getOrThrow()
+
+        assertEquals(listOf(otherBoard), snapshot.threads)
+        assertEquals(20L, snapshot.totalSize)
+        assertFalse(fileSystem.exists("saved_threads/${target.storageId}"))
+        assertTrue(fileSystem.exists("saved_threads/${otherBoard.storageId}"))
+    }
+
+    @Test
+    fun deleteSavedThreadAndReload_returnsFailureWhenDeleteFails() = runBlocking {
+        val fileSystem = DeleteFailingFileSystem(InMemoryFileSystem())
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(threadId = "1", totalSize = 10L, savedAt = 100L)
+        repository.addThreadToIndex(target).getOrThrow()
+
+        val result = deleteSavedThreadAndReload(repository, target)
+
+        assertTrue(result.isFailure)
+        assertTrue(
+            buildSavedThreadsDeleteMessage(Result.failure<Unit>(result.exceptionOrNull() ?: error("expected failure")))
+                .contains("cannot delete")
+        )
+    }
+
+    private fun savedThread(
+        threadId: String = "1",
+        boardId: String = "b",
+        totalSize: Long = 1L,
+        savedAt: Long = 0L,
+        storageId: String? = null
+    ): SavedThread {
+        return SavedThread(
+            threadId = threadId,
+            boardId = boardId,
             boardName = "board",
-            title = "title",
+            title = "title-$threadId",
+            storageId = storageId,
             thumbnailPath = null,
-            savedAt = 0L,
+            savedAt = savedAt,
             postCount = 1,
             imageCount = 0,
             videoCount = 0,
-            totalSize = 1L,
+            totalSize = totalSize,
             status = SaveStatus.COMPLETED
         )
+    }
+}
+
+private class DeleteFailingFileSystem(
+    private val delegate: InMemoryFileSystem
+) : FileSystem by delegate {
+    override suspend fun deleteRecursively(path: String): Result<Unit> {
+        return Result.failure(IllegalStateException("cannot delete"))
     }
 }

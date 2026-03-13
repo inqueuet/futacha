@@ -29,11 +29,7 @@ actual fun PlatformVideoPlayer(
     volume: Float,
     isMuted: Boolean
 ) {
-    val extension = remember(videoUrl) {
-        videoUrl.substringBefore('?')
-            .substringAfterLast('.', "")
-            .lowercase()
-    }
+    val extension = remember(videoUrl) { extractVideoUrlExtension(videoUrl) }
     val currentCallback = rememberUpdatedState(onStateChanged).value
     val currentSizeCallback = rememberUpdatedState(onVideoSizeKnown).value
     if (extension == "webm") {
@@ -68,31 +64,7 @@ private fun WebVideoPlayer(
     isMuted: Boolean
 ) {
     val delegate = remember { WebVideoNavigationDelegate() }
-    // FIX: XSS対策 - HTML属性インジェクションを防ぐ
-    // Note: &はURLのクエリパラメータで正当に使用されるためエスケープしない
-    // <, >, " をエスケープしてHTMLタグ挿入と属性脱出を防止
-    val sanitizedUrl = remember(videoUrl) {
-        videoUrl
-            .replace("<", "%3C")
-            .replace(">", "%3E")
-            .replace("\"", "%22")
-    }
-    val html = remember(sanitizedUrl) {
-        """
-        <html>
-        <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <style>
-        body,html { margin:0; padding:0; background-color:black; height:100%; }
-        video { width:100%; height:100%; object-fit:contain; background-color:black; }
-        </style>
-        </head>
-        <body>
-        <video controls playsinline autoplay src="$sanitizedUrl"></video>
-        </body>
-        </html>
-        """.trimIndent()
-    }
+    val html = remember(videoUrl) { buildEmbeddedVideoHtml(videoUrl) }
     SideEffect {
         delegate.onStateChanged = onStateChanged
         delegate.onVideoSizeKnown = onVideoSizeKnown
@@ -124,7 +96,7 @@ private fun WebVideoPlayer(
                 view.loadHTMLString(html, baseURL = null)
             } else {
                 val mutedFlag = if (isMuted) "true" else "false"
-                val volumeValue = volume.coerceIn(0f, 1f)
+                val volumeValue = normalizeVideoPlayerVolume(volume, isMuted)
                 view.evaluateJavaScript(
                     "var v=document.querySelector('video'); if(v){ v.muted=$mutedFlag; v.volume=$volumeValue; }",
                     completionHandler = null

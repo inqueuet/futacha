@@ -1,0 +1,265 @@
+package com.valoser.futacha.shared.ui.board
+
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
+
+@Composable
+internal fun ThreadContent(
+    page: ThreadPage,
+    listState: LazyListState,
+    saidaneOverrides: Map<String, String>,
+    selfPostIdentifiers: Set<String> = emptySet(),
+    searchHighlightRanges: Map<String, List<IntRange>>,
+    onPostLongPress: (Post) -> Unit,
+    onQuoteRequestedForPost: (Post) -> Unit,
+    onSaidaneClick: (Post) -> Unit,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onUrlClick: (String) -> Unit,
+    onRefresh: () -> Unit,
+    isRefreshing: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val derivedPostData by produceState(
+        initialValue = ThreadPostDerivedData(),
+        key1 = page.posts
+    ) {
+        value = withContext(AppDispatchers.parsing) {
+            buildThreadPostDerivedData(page.posts)
+        }
+    }
+    val posterIdLabels = derivedPostData.posterIdLabels
+    val postIndex = derivedPostData.postIndex
+    val referencedByMap = derivedPostData.referencedByMap
+    val postsByPosterId = derivedPostData.postsByPosterId
+    var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
+    val density = LocalDensity.current
+    val maxOverscrollPx = remember(density) { with(density) { 64.dp.toPx() } }
+    val refreshTriggerPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val edgeOffsetTolerancePx = remember(density) { with(density) { 24.dp.toPx() } }
+    val isScrolling by remember {
+        derivedStateOf { listState.isScrollInProgress }
+    }
+    val showQuotePreview = buildThreadScreenQuotePreviewPresenter(
+        isScrolling = { isScrolling },
+        posterIdLabels = posterIdLabels,
+        setState = { quotePreviewState = it }
+    )
+
+    var overscrollTarget by remember { mutableFloatStateOf(0f) }
+    val overscrollOffset by animateFloatAsState(
+        targetValue = overscrollTarget,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "threadOverscroll"
+    )
+
+    val isAtTop by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
+            firstVisibleItem != null &&
+                firstVisibleItem.index == 0 &&
+                firstVisibleItem.offset.toFloat() <= edgeOffsetTolerancePx
+        }
+    }
+
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            val totalItems = layoutInfo.totalItemsCount
+            if (lastVisibleItem == null || totalItems == 0) return@derivedStateOf false
+            if (lastVisibleItem.index < totalItems - 1) return@derivedStateOf false
+            val viewportEnd = layoutInfo.viewportEndOffset
+            val lastItemEnd = lastVisibleItem.offset + lastVisibleItem.size
+            val remainingSpace = viewportEnd - lastItemEnd
+            remainingSpace.toFloat() <= edgeOffsetTolerancePx ||
+                layoutInfo.visibleItemsInfo.size >= totalItems
+        }
+    }
+    val latestIsAtTop by rememberUpdatedState(isAtTop)
+    val latestIsAtBottom by rememberUpdatedState(isAtBottom)
+
+    LaunchedEffect(isRefreshing) {
+        if (!isRefreshing) {
+            overscrollTarget = 0f
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(0, overscrollOffset.toInt()) }
+                    .pointerInput(isRefreshing, refreshTriggerPx, maxOverscrollPx) {
+                        var totalDrag = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                totalDrag = 0f
+                            },
+                            onVerticalDrag = { change, dragAmount ->
+                                if (isRefreshing) return@detectVerticalDragGestures
+                                when {
+                                    latestIsAtTop && dragAmount > 0f -> {
+                                        totalDrag += dragAmount
+                                        overscrollTarget = (totalDrag * 0.4f).coerceIn(0f, maxOverscrollPx)
+                                        change.consume()
+                                    }
+
+                                    latestIsAtBottom && dragAmount < 0f -> {
+                                        totalDrag += dragAmount
+                                        overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f)
+                                        change.consume()
+                                    }
+                                }
+                            },
+                            onDragEnd = {
+                                if (abs(totalDrag) > refreshTriggerPx) {
+                                    onRefresh()
+                                }
+                                totalDrag = 0f
+                                overscrollTarget = 0f
+                            },
+                            onDragCancel = {
+                                totalDrag = 0f
+                                overscrollTarget = 0f
+                            }
+                        )
+                    },
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                contentPadding = PaddingValues(
+                    top = 8.dp,
+                    bottom = 24.dp
+                )
+            ) {
+                page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+                    item(key = "thread-notice") {
+                        ThreadNoticeCard(message = notice)
+                    }
+                }
+                itemsIndexed(
+                    items = page.posts,
+                    key = { _, post -> post.id }
+                ) { index, post ->
+                    val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
+                    val normalizedPosterId = normalizePosterIdValue(post.posterId)
+                    val postCardCallbacks = buildThreadScreenPostCardCallbacks(
+                        post = post,
+                        normalizedPosterId = normalizedPosterId,
+                        postIndex = postIndex,
+                        referencedByMap = referencedByMap,
+                        postsByPosterId = postsByPosterId,
+                        quotePreviewState = quotePreviewState,
+                        onShowQuotePreview = showQuotePreview,
+                        onQuoteRequestedForPost = onQuoteRequestedForPost,
+                        onSaidaneClick = onSaidaneClick,
+                        onMediaClick = onMediaClick,
+                        onPostLongPress = onPostLongPress
+                    )
+                    ThreadPostCard(
+                        post = post,
+                        isOp = index == 0,
+                        isSelfPost = isSelfPost,
+                        posterIdLabel = posterIdLabels[post.id],
+                        posterIdValue = normalizedPosterId,
+                        saidaneLabelOverride = saidaneOverrides[post.id],
+                        highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
+                        onQuoteClick = postCardCallbacks.onQuoteClick,
+                        onUrlClick = onUrlClick,
+                        onQuoteRequested = postCardCallbacks.onQuoteRequested,
+                        onPosterIdClick = postCardCallbacks.onPosterIdClick,
+                        onReferencedByClick = postCardCallbacks.onReferencedByClick,
+                        onSaidaneClick = postCardCallbacks.onSaidaneClick,
+                        onMediaClick = postCardCallbacks.onMediaClick,
+                        onLongPress = postCardCallbacks.onLongPress,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (index != page.posts.lastIndex) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                )
+                        )
+                    }
+                }
+                page.expiresAtLabel?.takeIf { it.isNotBlank() }?.let { footerLabel ->
+                    item(key = "thread-expires-label") {
+                        Text(
+                            text = footerLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp, horizontal = 16.dp)
+                        )
+                    }
+                }
+            }
+
+            ThreadScrollbar(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(vertical = 12.dp, horizontal = 4.dp)
+            )
+        }
+    }
+    quotePreviewState?.let { state ->
+        val quotePreviewCallbacks = buildThreadScreenQuotePreviewCallbacks(
+            postIndex = postIndex,
+            onDismiss = { quotePreviewState = null },
+            onShowQuotePreview = showQuotePreview
+        )
+        QuotePreviewDialog(
+            state = state,
+            onDismiss = quotePreviewCallbacks.onDismiss,
+            onMediaClick = onMediaClick,
+            onUrlClick = onUrlClick,
+            onQuoteClick = quotePreviewCallbacks.onQuoteClick
+        )
+    }
+}

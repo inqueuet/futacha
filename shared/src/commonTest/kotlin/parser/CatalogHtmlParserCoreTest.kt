@@ -113,4 +113,35 @@ class CatalogHtmlParserCoreTest {
         assertEquals("6000000001", items.single().id)
         assertEquals(4, items.single().replyCount)
     }
+
+    @Test
+    fun parseCatalog_resolvesProtocolRelativeAndQueryMediaUrls() {
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='//may.2chan.net/b/res/7000000000.htm'>thread</a>
+                        <a href='//may.2chan.net/b/src/7000000000.mp4?dl=1'>media</a>
+                        <img src='//may.2chan.net/b/cat/7000000000s.webp?x=1'>
+                        <br><small>動画テスト</small>
+                        <br><font size=2>9</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val items = runBlocking { CatalogHtmlParserCore.parseCatalog(html, baseUrl = "https://may.2chan.net/b") }
+
+        assertEquals(1, items.size)
+        assertEquals("7000000000", items[0].id)
+        assertEquals("https://may.2chan.net/b/res/7000000000.htm", items[0].threadUrl)
+        assertEquals("https://may.2chan.net/b/thumb/7000000000s.webp?x=1", items[0].thumbnailUrl)
+        assertEquals("https://may.2chan.net/b/src/7000000000.mp4?dl=1", items[0].fullImageUrl)
+        assertEquals("動画テスト", items[0].title)
+        assertEquals(9, items[0].replyCount)
+    }
 }

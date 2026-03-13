@@ -47,6 +47,7 @@ private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 fun registerIosBackgroundRefreshTask() {
     BackgroundRefreshManager.registerAtLaunch()
     val enabled = NSUserDefaults.standardUserDefaults().boolForKey(IOS_BACKGROUND_REFRESH_KEY)
+    Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabled=$enabled)")
     configureIosBackgroundRefresh(
         enabled = enabled,
         stateStore = IosAppGraph.stateStore,
@@ -66,9 +67,11 @@ fun MainViewController(): UIViewController {
         val httpClient = remember { IosAppGraph.httpClient }
         LaunchedEffect(stateStore, httpClient, fileSystem, autoSavedThreadRepository) {
             try {
+                Logger.d("MainViewController", "Starting background refresh enabled-state collector")
                 stateStore.isBackgroundRefreshEnabled
                     .distinctUntilChanged()
                     .onEach { enabled ->
+                        Logger.d("MainViewController", "Background refresh enabled state changed: $enabled")
                         configureIosBackgroundRefresh(
                             enabled = enabled,
                             stateStore = stateStore,
@@ -79,8 +82,11 @@ fun MainViewController(): UIViewController {
                     }
                     .retryWhen { cause, attempt ->
                         if (cause is CancellationException) throw cause
-                        val shouldRetry = attempt < IOS_BACKGROUND_FLOW_MAX_RETRIES
-                        if (!shouldRetry) {
+                        val retryState = resolveIosBackgroundRefreshFlowRetryState(
+                            attempt = attempt,
+                            maxRetries = IOS_BACKGROUND_FLOW_MAX_RETRIES
+                        )
+                        if (!retryState.shouldRetry) {
                             Logger.e(
                                 "MainViewController",
                                 "Background refresh flow failed too many times; stopping collector",
@@ -88,7 +94,7 @@ fun MainViewController(): UIViewController {
                             )
                             return@retryWhen false
                         }
-                        val backoffMillis = (1_000L shl attempt.toInt().coerceAtMost(5)).coerceAtMost(30_000L)
+                        val backoffMillis = retryState.backoffMillis ?: return@retryWhen false
                         Logger.e(
                             "MainViewController",
                             "Background refresh flow failed; retrying in ${backoffMillis}ms (attempt=${attempt + 1})",
@@ -132,6 +138,10 @@ private fun configureIosBackgroundRefresh(
     fileSystem: com.valoser.futacha.shared.util.FileSystem?,
     autoSaveRepo: SavedThreadRepository?
 ) {
+    Logger.d(
+        "MainViewController",
+        "configureIosBackgroundRefresh(enabled=$enabled, hasFileSystem=${fileSystem != null}, hasAutoSaveRepo=${autoSaveRepo != null})"
+    )
     BackgroundRefreshManager.configure(enabled) {
         runIosBackgroundRefresh(
             stateStore = stateStore,
@@ -156,6 +166,7 @@ private suspend fun runIosBackgroundRefresh(
         parser = createHtmlParser()
     )
     try {
+        Logger.d("BackgroundRefresh", "Starting iOS background refresh run (maxThreadsPerRun=$IOS_BG_MAX_THREADS_PER_RUN)")
         val refresher = HistoryRefresher(
             stateStore = stateStore,
             repository = repo,
@@ -165,11 +176,14 @@ private suspend fun runIosBackgroundRefresh(
             fileSystem = fileSystem
         )
         refresher.refresh(maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN)
+        Logger.d("BackgroundRefresh", "Completed iOS background refresh run successfully")
     } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
         Logger.d("BackgroundRefresh", "Refresh already running; skipping duplicate iOS background run")
     } catch (e: CancellationException) {
+        Logger.w("BackgroundRefresh", "iOS background refresh run cancelled")
         throw e
     } finally {
+        Logger.d("BackgroundRefresh", "Closing temporary iOS background repository")
         repo.closeAsync().join()
     }
 }

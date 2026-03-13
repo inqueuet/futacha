@@ -47,8 +47,7 @@ actual fun PlatformVideoPlayer(
     }
 
     LaunchedEffect(volume, isMuted, player) {
-        val clampedVolume = volume.coerceIn(0f, 1f)
-        player.volume = if (isMuted) 0f else clampedVolume
+        player.volume = normalizeVideoPlayerVolume(volume, isMuted)
     }
 
     AndroidView(
@@ -72,19 +71,13 @@ actual fun PlatformVideoPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> currentCallback(VideoPlayerState.Buffering)
-                    Player.STATE_READY -> {
-                        if (player.isPlaying) {
-                            currentCallback(VideoPlayerState.Ready)
-                        } else {
-                            currentCallback(VideoPlayerState.Idle)
-                        }
-                    }
+                    Player.STATE_READY -> currentCallback(resolveReadyVideoPlayerState(player.isPlaying))
                     Player.STATE_ENDED -> currentCallback(VideoPlayerState.Idle)
                 }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                currentCallback(if (isPlaying) VideoPlayerState.Ready else VideoPlayerState.Idle)
+                currentCallback(resolveReadyVideoPlayerState(isPlaying))
             }
 
             override fun onPlayerError(error: PlaybackException) {

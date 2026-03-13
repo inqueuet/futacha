@@ -4,12 +4,9 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.SaveLocation
-import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
-import com.valoser.futacha.shared.model.ThreadMenuEntryId
-import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
@@ -32,7 +29,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -44,135 +40,13 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
 /**
- * Represents a storage error that occurred during DataStore operations
+ * Central state store for shared preferences, boards, and thread history.
+ * Large helper types and persistence utilities live in sibling support files.
  */
-data class StorageError(
-    val operation: String,
-    val message: String,
-    val timestamp: Long
-)
-
-/**
- * FIX: アーキテクチャと依存関係について
- *
- * ## レイヤー構造：
- * UI層 → Store層 → Repository層 → Service層 → Network/Storage層
- *
- * ## 依存方向（循環依存の防止）：
- * - UI → AppStateStore (状態管理)
- * - AppStateStore → PlatformStateStorage (永続化)
- * - BoardRepository → CookieRepository (認証)
- * - Repository → Service → API/FileSystem
- *
- * ## 設計原則：
- * 1. 上位レイヤーは下位レイヤーに依存可能
- * 2. 下位レイヤーは上位レイヤーに依存禁止（循環依存防止）
- * 3. 同一レイヤー内の依存は最小限に
- * 4. インターフェースによる抽象化を優先
- *
- * ## 既知の大規模クラス：
- * - AppStateStore: 多くの責務を持つが、状態管理の中心として機能
- *   将来的な分割案: UserPreferencesStore, ThreadStateStore, BoardStateStore
- *
- * ## エラーハンドリングのベストプラクティス：
- *
- * ### 1. 例外の種類と処理
- * - **CancellationException**: 必ず再スローすること（正常なキャンセル）
- * - **NetworkException**: ユーザーに通知してリトライを提案
- * - **IllegalArgumentException**: 入力検証エラー、ユーザーに修正を促す
- * - **IOException**: ファイル/ネットワークエラー、リトライ可能
- *
- * ### 2. Result型の使用
- * - I/O操作は必ずResult<T>を返す（FileSystem、Repository層）
- * - .getOrThrow()、.getOrElse()、.onFailure()で明示的に処理
- * - Resultを無視すると、エラーが見逃され、データ破損の原因となる
- *
- * ### 3. ログ出力
- * - エラーログには必ず例外オブジェクトを含める
- * - ユーザー操作のエラーはw (Warning)レベル
- * - システムエラーはe (Error)レベル
- * - 個人情報・機密情報をログに出力しない
- *
- * ## パフォーマンスのベストプラクティス：
- *
- * ### 1. スレッド/Dispatcher使用
- * - UI更新: Dispatchers.Main（自動）
- * - CPU集約的処理: AppDispatchers.parsing または Dispatchers.Default
- * - I/O処理: AppDispatchers.io または Dispatchers.IO
- * - メインスレッドでの重い処理は厳禁
- *
- * ### 2. メモリ管理
- * - LRUキャッシュのサイズ制限を設定（20-100エントリ）
- * - 大量リストはLazyColumn/LazyRowを使用
- * - 画像は適切にキャッシュしてメモリ使用を制御
- *
- * ### 3. リソースリーク防止
- * - Flowのcollectは必ずLaunchedEffect/LaunchedEffectKeyで管理
- * - CoroutineScopeは必ずライフサイクルに紐付ける
- * - 一時ファイルは確実にクリーンアップ
- *
- * ## セキュリティのベストプラクティス：
- *
- * ### 1. 入力検証
- * - ユーザー入力は必ず検証（長さ、null文字、パストラバーサル）
- * - ファイルサイズは上限チェック（100MB推奨）
- * - ReDoS攻撃防止のため、正規表現に長さ制限を追加
- *
- * ### 2. データ保護
- * - パスワードは平文でログに出力しない
- * - 一時ファイルは削除前に確実にクリーンアップ
- * - アトミック書き込みでデータ破損を防止
- *
- * ### 3. 権限管理
- * - ファイルアクセスは必要最小限に
- * - Android 10+ではSAF（Storage Access Framework）を使用
- * - 権限喪失時は適切なエラーメッセージを表示
- */
-
-private const val DEFAULT_CATALOG_GRID_COLUMNS = 5
-private const val MIN_CATALOG_GRID_COLUMNS = 2
-private const val MAX_CATALOG_GRID_COLUMNS = 8
-
-// FIX: KMP対応のスレッドセーフJobマップクラス
-private class AtomicJobMap {
-    private val mutex = Mutex()
-    private val map = mutableMapOf<String, Job>()
-
-    suspend fun putAndCancelOld(key: String, newJob: Job): Job? {
-        return mutex.withLock {
-            val oldJob = map.put(key, newJob)
-            oldJob
-        }
-    }
-
-    suspend fun removeIfSame(key: String, job: Job?) {
-        mutex.withLock {
-            if (map[key] == job) {
-                map.remove(key)
-            }
-        }
-    }
-}
-
-private data class Quadruple<A, B, C, D>(
-    val first: A,
-    val second: B,
-    val third: C,
-    val fourth: D
-)
-
-private data class Quintuple<A, B, C, D, E>(
-    val first: A,
-    val second: B,
-    val third: C,
-    val fourth: D,
-    val fifth: E
-)
 
 @OptIn(ExperimentalTime::class)
 class AppStateStore internal constructor(
@@ -181,9 +55,6 @@ class AppStateStore internal constructor(
         ignoreUnknownKeys = true
     }
 ) {
-    private val boardsSerializer = ListSerializer(BoardSummary.serializer())
-    private val historySerializer = ListSerializer(ThreadHistoryEntry.serializer())
-
     // FIX: 複数のMutexを使用する際のデッドロック防止ガイドライン
     // - 各Mutexは独立したデータを保護しており、ネストしたロックは避けること
     // - もしネストが必要な場合は、常に以下の順序でロックすること:
@@ -213,6 +84,55 @@ class AppStateStore internal constructor(
     private var historyRevision: Long = 0L
     private var cachedCatalogModeMap: Map<String, CatalogMode>? = null
     private var cachedSelfPostIdentifierMap: Map<String, List<String>>? = null
+    private val boardsFacade = buildAppStateBoardsFacade(
+        setBoardsImpl = ::setBoardsInternal
+    )
+    private val preferenceFacade = buildAppStatePreferenceFacade(
+        setBackgroundRefreshEnabledImpl = ::setBackgroundRefreshEnabledInternal,
+        setLastUsedDeleteKeyImpl = ::setLastUsedDeleteKeyInternal,
+        setLightweightModeEnabledImpl = ::setLightweightModeEnabledInternal,
+        setManualSaveDirectoryImpl = ::setManualSaveDirectoryInternal,
+        setManualSaveLocationImpl = ::setManualSaveLocationInternal,
+        setAttachmentPickerPreferenceImpl = ::setAttachmentPickerPreferenceInternal,
+        setSaveDirectorySelectionImpl = ::setSaveDirectorySelectionInternal,
+        setPreferredFileManagerImpl = ::setPreferredFileManagerInternal,
+        setPrivacyFilterEnabledImpl = ::setPrivacyFilterEnabledInternal,
+        setCatalogDisplayStyleImpl = ::setCatalogDisplayStyleInternal,
+        setCatalogGridColumnsImpl = ::setCatalogGridColumnsInternal,
+        setCatalogModeImpl = ::setCatalogModeInternal,
+        setNgHeadersImpl = ::setNgHeadersInternal,
+        setNgWordsImpl = ::setNgWordsInternal,
+        setCatalogNgWordsImpl = ::setCatalogNgWordsInternal,
+        setWatchWordsImpl = ::setWatchWordsInternal,
+        setThreadMenuConfigImpl = ::setThreadMenuConfigInternal,
+        setThreadSettingsMenuConfigImpl = ::setThreadSettingsMenuConfigInternal,
+        setThreadMenuEntriesImpl = ::setThreadMenuEntriesInternal,
+        setCatalogNavEntriesImpl = ::setCatalogNavEntriesInternal,
+        addSelfPostIdentifierImpl = ::addSelfPostIdentifierInternal,
+        removeSelfPostIdentifiersForThreadImpl = ::removeSelfPostIdentifiersForThreadInternal,
+        clearSelfPostIdentifiersImpl = ::clearSelfPostIdentifiersInternal
+    )
+    private val historyFacade = buildAppStateHistoryFacade(
+        setHistoryImpl = ::setHistoryInternal,
+        upsertHistoryEntryImpl = ::upsertHistoryEntryInternal,
+        prependOrReplaceHistoryEntryImpl = ::prependOrReplaceHistoryEntryInternal,
+        prependOrReplaceHistoryEntriesImpl = ::prependOrReplaceHistoryEntriesInternal,
+        mergeHistoryEntriesImpl = ::mergeHistoryEntriesInternal,
+        removeHistoryEntryImpl = ::removeHistoryEntryInternal,
+        updateHistoryScrollPositionImpl = ::updateHistoryScrollPositionInternal,
+        setScrollDebounceScopeImpl = ::setScrollDebounceScopeInternal
+    )
+    private val preferenceFlows = buildAppStatePreferenceFlows(
+        storage = storage,
+        json = json,
+        stringListSerializer = stringListSerializer,
+        selfPostIdentifierMapSerializer = selfPostIdentifierMapSerializer,
+        threadMenuConfigSerializer = threadMenuConfigSerializer,
+        threadSettingsMenuConfigSerializer = threadSettingsMenuConfigSerializer,
+        threadMenuEntriesSerializer = threadMenuEntriesSerializer,
+        catalogNavEntriesSerializer = catalogNavEntriesSerializer,
+        selfIdentifierMaxEntries = SELF_IDENTIFIER_MAX_ENTRIES
+    )
 
     // Error propagation
     private val _lastStorageError = MutableStateFlow<StorageError?>(null)
@@ -227,22 +147,20 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setScrollDebounceScope(scope: CoroutineScope) {
+        historyFacade.setScrollDebounceScope(scope)
+    }
+
+    private suspend fun setScrollDebounceScopeInternal(scope: CoroutineScope) {
         scrollPositionMutex.withLock {
             scrollDebounceScope = scope
         }
     }
 
-    val boards: Flow<List<BoardSummary>> = storage.boardsJson
-        .distinctUntilChanged()
-        .map { stored ->
-            if (stored == null) {
-                emptyList()
-            } else {
-                withContext(AppDispatchers.parsing) {
-                    decodeBoards(stored)
-                }
-            }
-        }
+    val boards: Flow<List<BoardSummary>> = buildAppStateBoardsFlow(
+        storage = storage,
+        json = json,
+        tag = TAG
+    )
 
     val history: Flow<List<ThreadHistoryEntry>> = storage.historyJson
         .distinctUntilChanged()
@@ -250,9 +168,7 @@ class AppStateStore internal constructor(
             if (stored == null) {
                 emptyList()
             } else {
-                withContext(AppDispatchers.parsing) {
-                    decodeHistory(stored)
-                }
+                decodeAppStateHistory(stored, json, TAG)
             }
         }
 
@@ -263,125 +179,40 @@ class AppStateStore internal constructor(
     /**
      * Manual save directory as string (legacy support).
      */
-    val manualSaveDirectory: Flow<String> = storage.manualSaveDirectory
-        .map { manualPath ->
-            sanitizeManualSaveDirectory(manualPath)
-        }
-        .distinctUntilChanged()
+    val manualSaveDirectory: Flow<String> = preferenceFlows.manualSaveDirectory
 
     /**
      * Manual save location as SaveLocation (supports paths, content URIs, and bookmarks).
      * Legacy string paths are automatically converted via SaveLocation.fromString().
      */
-    val manualSaveLocation: Flow<SaveLocation> = manualSaveDirectory
-        .map(SaveLocation::fromString)
-        .distinctUntilChanged()
+    val manualSaveLocation: Flow<SaveLocation> = preferenceFlows.manualSaveLocation
 
-    val attachmentPickerPreference: Flow<AttachmentPickerPreference> = storage.attachmentPickerPreference
-        .map { raw -> decodeAttachmentPickerPreference(raw) }
-        .distinctUntilChanged()
-    val saveDirectorySelection: Flow<SaveDirectorySelection> = storage.saveDirectorySelection
-        .map { raw -> decodeSaveDirectorySelection(raw) }
-        .distinctUntilChanged()
-    val lastUsedDeleteKey: Flow<String> = storage.lastUsedDeleteKey
-        .map { raw -> raw?.take(8).orEmpty() }
-        .distinctUntilChanged()
+    val attachmentPickerPreference: Flow<AttachmentPickerPreference> = preferenceFlows.attachmentPickerPreference
+    val saveDirectorySelection: Flow<SaveDirectorySelection> = preferenceFlows.saveDirectorySelection
+    val lastUsedDeleteKey: Flow<String> = preferenceFlows.lastUsedDeleteKey
 
-    val catalogModes: Flow<Map<String, CatalogMode>> = storage.catalogModeMapJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeCatalogModeMap(raw)
-            }
-        }
-    val catalogDisplayStyle: Flow<CatalogDisplayStyle> = storage.catalogDisplayStyle
-        .map { raw ->
-            decodeCatalogDisplayStyle(raw)
-        }
-        .distinctUntilChanged()
-    val catalogGridColumns: Flow<Int> = storage.catalogGridColumns
-        .map { raw ->
-            decodeCatalogGridColumns(raw)
-        }
-        .distinctUntilChanged()
-    val ngHeaders: Flow<List<String>> = storage.ngHeadersJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeStringList(raw)
-            }
-        }
-    val ngWords: Flow<List<String>> = storage.ngWordsJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeStringList(raw)
-            }
-        }
-    val catalogNgWords: Flow<List<String>> = storage.catalogNgWordsJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeStringList(raw)
-            }
-        }
-    val watchWords: Flow<List<String>> = storage.watchWordsJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeStringList(raw)
-            }
-        }
-    private val selfPostIdentifierMapFlow: Flow<Map<String, List<String>>> = storage.selfPostIdentifiersJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeSelfPostIdentifierMap(raw)
-            }
-        }
+    val catalogModes: Flow<Map<String, CatalogMode>> = preferenceFlows.catalogModes
+    val catalogDisplayStyle: Flow<CatalogDisplayStyle> = preferenceFlows.catalogDisplayStyle
+    val catalogGridColumns: Flow<Int> = preferenceFlows.catalogGridColumns
+    val ngHeaders: Flow<List<String>> = preferenceFlows.ngHeaders
+    val ngWords: Flow<List<String>> = preferenceFlows.ngWords
+    val catalogNgWords: Flow<List<String>> = preferenceFlows.catalogNgWords
+    val watchWords: Flow<List<String>> = preferenceFlows.watchWords
+    private val selfPostIdentifierMapFlow: Flow<Map<String, List<String>>> = preferenceFlows.selfPostIdentifierMapFlow
     val selfPostIdentifiersByThread: Flow<Map<String, List<String>>> = selfPostIdentifierMapFlow
-    val selfPostIdentifiers: Flow<List<String>> = selfPostIdentifierMapFlow
-        .map { decoded -> aggregateIdentifiers(decoded) }
-        .distinctUntilChanged()
-    private val preferredFileManagerFlow: Flow<PreferredFileManager?> =
-        storage.preferredFileManagerPackage.combine(storage.preferredFileManagerLabel) { pkg, label ->
-            if (pkg.isBlank()) {
-                null
-            } else {
-                PreferredFileManager(pkg, label)
-            }
-        }.distinctUntilChanged()
-    val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = storage.threadMenuConfigJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeThreadMenuConfig(raw)
-            }
-        }
-    val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = storage.threadSettingsMenuConfigJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeThreadSettingsMenuConfig(raw)
-            }
-        }
-    val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = storage.threadMenuEntriesConfigJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeThreadMenuEntries(raw)
-            }
-        }
-    val catalogNavEntries: Flow<List<CatalogNavEntryConfig>> = storage.catalogNavEntriesConfigJson
-        .distinctUntilChanged()
-        .map { raw ->
-            withContext(AppDispatchers.parsing) {
-                decodeCatalogNavEntries(raw)
-            }
-        }
+    val selfPostIdentifiers: Flow<List<String>> = preferenceFlows.selfPostIdentifiers
+    private val preferredFileManagerFlow: Flow<PreferredFileManager?> = preferenceFlows.preferredFileManagerFlow
+    val threadMenuConfig: Flow<List<ThreadMenuItemConfig>> = preferenceFlows.threadMenuConfig
+    val threadSettingsMenuConfig: Flow<List<ThreadSettingsMenuItemConfig>> = preferenceFlows.threadSettingsMenuConfig
+    val threadMenuEntries: Flow<List<ThreadMenuEntryConfig>> = preferenceFlows.threadMenuEntries
+    val catalogNavEntries: Flow<List<CatalogNavEntryConfig>> = preferenceFlows.catalogNavEntries
 
     suspend fun setBoards(boards: List<BoardSummary>) {
-        val encoded = encodeBoards(boards)
+        boardsFacade.setBoards(boards)
+    }
+
+    private suspend fun setBoardsInternal(boards: List<BoardSummary>) {
+        val encoded = encodeAppStateBoards(boards, json)
         boardsMutex.withLock {
             try {
                 storage.updateBoardsJson(encoded)
@@ -399,6 +230,10 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
+        historyFacade.setHistory(history)
+    }
+
+    private suspend fun setHistoryInternal(history: List<ThreadHistoryEntry>) {
         val (revision, previousRevision, previousHistory) = historyMutex.withLock {
             val beforeRevision = historyRevision
             val beforeHistory = cachedHistory
@@ -422,43 +257,55 @@ class AppStateStore internal constructor(
     }
 
     suspend fun setBackgroundRefreshEnabled(enabled: Boolean) {
-        try {
-            storage.updateBackgroundRefreshEnabled(enabled)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save background refresh state: $enabled", e)
-            // Log error but don't crash
-        }
+        preferenceFacade.setBackgroundRefreshEnabled(enabled)
+    }
+
+    private suspend fun setBackgroundRefreshEnabledInternal(enabled: Boolean) {
+        setAppStateBackgroundRefreshEnabled(
+            storage = storage,
+            enabled = enabled,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setLastUsedDeleteKey(deleteKey: String) {
-        val sanitized = deleteKey.trim().take(8)
-        try {
-            storage.updateLastUsedDeleteKey(sanitized)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save last used delete key", e)
-        }
+        preferenceFacade.setLastUsedDeleteKey(deleteKey)
+    }
+
+    private suspend fun setLastUsedDeleteKeyInternal(deleteKey: String) {
+        setAppStateLastUsedDeleteKey(
+            storage = storage,
+            deleteKey = deleteKey,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setLightweightModeEnabled(enabled: Boolean) {
-        try {
-            storage.updateLightweightModeEnabled(enabled)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save lightweight mode state: $enabled", e)
-        }
+        preferenceFacade.setLightweightModeEnabled(enabled)
+    }
+
+    private suspend fun setLightweightModeEnabledInternal(enabled: Boolean) {
+        setAppStateLightweightModeEnabled(
+            storage = storage,
+            enabled = enabled,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setManualSaveDirectory(directory: String) {
-        val sanitized = sanitizeManualSaveDirectory(directory)
-        try {
-            storage.updateManualSaveDirectory(sanitized)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save manual save directory: $sanitized", e)
-            // Log error but don't crash
-        }
+        preferenceFacade.setManualSaveDirectory(directory)
+    }
+
+    private suspend fun setManualSaveDirectoryInternal(directory: String) {
+        setAppStateManualSaveDirectory(
+            storage = storage,
+            directory = directory,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     /**
@@ -466,267 +313,260 @@ class AppStateStore internal constructor(
      * Persists the raw string representation internally.
      */
     suspend fun setManualSaveLocation(location: SaveLocation) {
-        val rawString = location.toRawString()
-        try {
-            storage.updateManualSaveDirectory(rawString)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save manual save location: $rawString", e)
-        }
+        preferenceFacade.setManualSaveLocation(location)
+    }
+
+    private suspend fun setManualSaveLocationInternal(location: SaveLocation) {
+        setAppStateManualSaveLocation(
+            storage = storage,
+            location = location,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setAttachmentPickerPreference(preference: AttachmentPickerPreference) {
-        try {
-            storage.updateAttachmentPickerPreference(preference.name)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save attachment picker preference: $preference", e)
-        }
+        preferenceFacade.setAttachmentPickerPreference(preference)
+    }
+
+    private suspend fun setAttachmentPickerPreferenceInternal(preference: AttachmentPickerPreference) {
+        setAppStateAttachmentPickerPreference(
+            storage = storage,
+            preference = preference,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) {
-        try {
-            storage.updateSaveDirectorySelection(selection.name)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save save directory selection: $selection", e)
-        }
+        preferenceFacade.setSaveDirectorySelection(selection)
+    }
+
+    private suspend fun setSaveDirectorySelectionInternal(selection: SaveDirectorySelection) {
+        setAppStateSaveDirectorySelection(
+            storage = storage,
+            selection = selection,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) {
-        try {
-            storage.updatePreferredFileManager(packageName ?: "", label ?: "")
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save preferred file manager: $packageName", e)
-            throw e
-        }
+        preferenceFacade.setPreferredFileManager(packageName, label)
+    }
+
+    private suspend fun setPreferredFileManagerInternal(packageName: String?, label: String?) {
+        setAppStatePreferredFileManager(
+            storage = storage,
+            packageName = packageName,
+            label = label,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     // Flowインスタンスを固定化して、UI再コンポーズ時の再生成を防ぐ
     fun getPreferredFileManager(): Flow<PreferredFileManager?> = preferredFileManagerFlow
 
     suspend fun setPrivacyFilterEnabled(enabled: Boolean) {
-        try {
-            storage.updatePrivacyFilterEnabled(enabled)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save privacy filter state: $enabled", e)
-            // Log error but don't crash
-        }
+        preferenceFacade.setPrivacyFilterEnabled(enabled)
+    }
+
+    private suspend fun setPrivacyFilterEnabledInternal(enabled: Boolean) {
+        setAppStatePrivacyFilterEnabled(
+            storage = storage,
+            enabled = enabled,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setCatalogDisplayStyle(style: CatalogDisplayStyle) {
-        try {
-            storage.updateCatalogDisplayStyle(style.name)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save catalog display style: ${style.name}", e)
-        }
+        preferenceFacade.setCatalogDisplayStyle(style)
+    }
+
+    private suspend fun setCatalogDisplayStyleInternal(style: CatalogDisplayStyle) {
+        setAppStateCatalogDisplayStyle(
+            storage = storage,
+            style = style,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setCatalogGridColumns(columns: Int) {
-        val clamped = columns.coerceIn(MIN_CATALOG_GRID_COLUMNS, MAX_CATALOG_GRID_COLUMNS)
-        try {
-            storage.updateCatalogGridColumns(clamped.toString())
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save catalog grid columns: $clamped", e)
-        }
+        preferenceFacade.setCatalogGridColumns(columns)
+    }
+
+    private suspend fun setCatalogGridColumnsInternal(columns: Int) {
+        setAppStateCatalogGridColumns(
+            storage = storage,
+            columns = columns,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) {
-        val normalizedBoardId = boardId.trim()
-        if (normalizedBoardId.isBlank()) {
-            Logger.w(TAG, "Ignoring catalog mode update with blank boardId")
-            return
-        }
-        val loadedSnapshot = runCatching {
-            val currentRaw = storage.catalogModeMapJson.first()
-            withContext(AppDispatchers.parsing) {
-                decodeCatalogModeMap(currentRaw)
-            }
-        }.getOrElse { error ->
-            rethrowIfCancellation(error)
-            Logger.e(TAG, "Failed to read catalog mode map snapshot", error)
-            emptyMap()
-        }
+        preferenceFacade.setCatalogMode(boardId, mode)
+    }
 
-        catalogModeMutex.withLock {
-            val current = cachedCatalogModeMap ?: loadedSnapshot
-            if (current[normalizedBoardId] == mode) {
-                return@withLock
-            }
-            val updated = current + (normalizedBoardId to mode)
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(catalogModeMapSerializer, encodeCatalogModeMap(updated))
-            }
-            try {
-                storage.updateCatalogModeMapJson(encoded)
-                cachedCatalogModeMap = updated
-            } catch (e: Exception) {
-                cachedCatalogModeMap = current
-                rethrowIfCancellation(e)
-                Logger.e(TAG, "Failed to save catalog mode for $normalizedBoardId: ${mode.name}", e)
-            }
-        }
+    private suspend fun setCatalogModeInternal(boardId: String, mode: CatalogMode) {
+        setAppStateCatalogMode(boardId, mode, TAG, ::mutateCatalogModeMap)
     }
 
     suspend fun setNgHeaders(headers: List<String>) {
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(stringListSerializer, headers)
-            }
-            storage.updateNgHeadersJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save NG headers (${headers.size})", e)
-        }
+        preferenceFacade.setNgHeaders(headers)
+    }
+
+    private suspend fun setNgHeadersInternal(headers: List<String>) {
+        setAppStateNgHeaders(
+            storage = storage,
+            headers = headers,
+            serializer = stringListSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setNgWords(words: List<String>) {
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(stringListSerializer, words)
-            }
-            storage.updateNgWordsJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save NG words (${words.size})", e)
-        }
+        preferenceFacade.setNgWords(words)
+    }
+
+    private suspend fun setNgWordsInternal(words: List<String>) {
+        setAppStateNgWords(
+            storage = storage,
+            words = words,
+            serializer = stringListSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setCatalogNgWords(words: List<String>) {
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(stringListSerializer, words)
-            }
-            storage.updateCatalogNgWordsJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save catalog NG words (${words.size})", e)
-        }
+        preferenceFacade.setCatalogNgWords(words)
+    }
+
+    private suspend fun setCatalogNgWordsInternal(words: List<String>) {
+        setAppStateCatalogNgWords(
+            storage = storage,
+            words = words,
+            serializer = stringListSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setWatchWords(words: List<String>) {
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(stringListSerializer, words)
-            }
-            storage.updateWatchWordsJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save watch words (${words.size})", e)
-        }
+        preferenceFacade.setWatchWords(words)
+    }
+
+    private suspend fun setWatchWordsInternal(words: List<String>) {
+        setAppStateWatchWords(
+            storage = storage,
+            words = words,
+            serializer = stringListSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) {
-        val normalized = normalizeThreadMenuConfig(config)
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(threadMenuConfigSerializer, normalized)
-            }
-            storage.updateThreadMenuConfigJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save thread menu config (${normalized.size} items)", e)
-        }
+        preferenceFacade.setThreadMenuConfig(config)
+    }
+
+    private suspend fun setThreadMenuConfigInternal(config: List<ThreadMenuItemConfig>) {
+        setAppStateThreadMenuConfig(
+            storage = storage,
+            config = config,
+            serializer = threadMenuConfigSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setThreadSettingsMenuConfig(config: List<ThreadSettingsMenuItemConfig>) {
-        val normalized = normalizeThreadSettingsMenuConfig(config)
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(threadSettingsMenuConfigSerializer, normalized)
-            }
-            storage.updateThreadSettingsMenuConfigJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save thread settings menu config (${normalized.size} items)", e)
-        }
+        preferenceFacade.setThreadSettingsMenuConfig(config)
+    }
+
+    private suspend fun setThreadSettingsMenuConfigInternal(config: List<ThreadSettingsMenuItemConfig>) {
+        setAppStateThreadSettingsMenuConfig(
+            storage = storage,
+            config = config,
+            serializer = threadSettingsMenuConfigSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setThreadMenuEntries(config: List<ThreadMenuEntryConfig>) {
-        val normalized = normalizeThreadMenuEntries(config)
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(threadMenuEntriesSerializer, normalized)
-            }
-            storage.updateThreadMenuEntriesConfigJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save thread menu entries (${normalized.size} items)", e)
-        }
+        preferenceFacade.setThreadMenuEntries(config)
+    }
+
+    private suspend fun setThreadMenuEntriesInternal(config: List<ThreadMenuEntryConfig>) {
+        setAppStateThreadMenuEntries(
+            storage = storage,
+            config = config,
+            serializer = threadMenuEntriesSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun setCatalogNavEntries(config: List<CatalogNavEntryConfig>) {
-        val normalized = normalizeCatalogNavEntries(config)
-        try {
-            val encoded = withContext(AppDispatchers.parsing) {
-                json.encodeToString(catalogNavEntriesSerializer, normalized)
-            }
-            storage.updateCatalogNavEntriesConfigJson(encoded)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to save catalog nav entries (${normalized.size} items)", e)
-        }
+        preferenceFacade.setCatalogNavEntries(config)
+    }
+
+    private suspend fun setCatalogNavEntriesInternal(config: List<CatalogNavEntryConfig>) {
+        setAppStateCatalogNavEntries(
+            storage = storage,
+            config = config,
+            serializer = catalogNavEntriesSerializer,
+            json = json,
+            tag = TAG,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     suspend fun addSelfPostIdentifier(threadId: String, identifier: String, boardId: String? = null) {
-        val trimmed = identifier.trim().takeIf { it.isNotBlank() } ?: return
-        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
-        selfPostIdentifiersMutex.withLock {
-            val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
-            val updatedMap = mergeSelfPostIdentifierMap(
-                currentMap = currentMap,
-                threadId = threadId,
-                identifier = trimmed,
-                boardId = boardId,
-                maxEntries = SELF_IDENTIFIER_MAX_ENTRIES
-            )
-            try {
-                persistSelfPostIdentifierMap(updatedMap)
-                cachedSelfPostIdentifierMap = updatedMap
-            } catch (e: Exception) {
-                cachedSelfPostIdentifierMap = currentMap
-                rethrowIfCancellation(e)
-                throw e
-            }
-        }
+        preferenceFacade.addSelfPostIdentifier(threadId, identifier, boardId)
+    }
+
+    private suspend fun addSelfPostIdentifierInternal(threadId: String, identifier: String, boardId: String? = null) {
+        addAppStateSelfPostIdentifier(
+            threadId = threadId,
+            identifier = identifier,
+            boardId = boardId,
+            maxEntries = SELF_IDENTIFIER_MAX_ENTRIES,
+            mutateSelfPostIdentifierMap = ::mutateSelfPostIdentifierMap
+        )
     }
 
     suspend fun removeSelfPostIdentifiersForThread(threadId: String, boardId: String? = null) {
-        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
-        selfPostIdentifiersMutex.withLock {
-            val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
-            val updatedMap = removeSelfPostIdentifiersFromMap(currentMap, threadId, boardId)
-            if (updatedMap === currentMap) {
-                return@withLock
-            }
-            try {
-                persistSelfPostIdentifierMap(updatedMap)
-                cachedSelfPostIdentifierMap = updatedMap
-            } catch (e: Exception) {
-                cachedSelfPostIdentifierMap = currentMap
-                rethrowIfCancellation(e)
-                throw e
-            }
-        }
+        preferenceFacade.removeSelfPostIdentifiersForThread(threadId, boardId)
+    }
+
+    private suspend fun removeSelfPostIdentifiersForThreadInternal(threadId: String, boardId: String? = null) {
+        removeAppStateSelfPostIdentifiersForThread(
+            threadId = threadId,
+            boardId = boardId,
+            mutateSelfPostIdentifierMap = ::mutateSelfPostIdentifierMap
+        )
     }
 
     suspend fun clearSelfPostIdentifiers() {
-        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
-        selfPostIdentifiersMutex.withLock {
-            val currentMap = cachedSelfPostIdentifierMap ?: loadedSnapshot
-            try {
-                persistSelfPostIdentifierMap(emptyMap())
-                cachedSelfPostIdentifierMap = emptyMap()
-            } catch (e: Exception) {
-                cachedSelfPostIdentifierMap = currentMap
-                rethrowIfCancellation(e)
-                throw e
-            }
-        }
+        preferenceFacade.clearSelfPostIdentifiers()
+    }
+
+    private suspend fun clearSelfPostIdentifiersInternal() {
+        clearAppStateSelfPostIdentifiers(::mutateSelfPostIdentifierMap)
     }
 
     /**
@@ -735,214 +575,162 @@ class AppStateStore internal constructor(
      * requiring the caller to manage the whole list manually.
      */
     suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) {
+        historyFacade.upsertHistoryEntry(entry)
+    }
+
+    private suspend fun upsertHistoryEntryInternal(entry: ThreadHistoryEntry) {
         val historySnapshot = readHistorySnapshot() ?: run {
             Logger.w(TAG, "Skipping history upsert due to missing snapshot")
             return
         }
-        val (revision, updatedHistory, previousRevision, previousHistory) = historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
-            val existingIndex = currentHistory.indexOfFirst {
-                matchesHistoryEntry(it, entry.threadId, entry.boardId, entry.boardUrl)
+        val mutation = buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = { currentHistory ->
+                resolveAppStateHistoryUpsertPlan(currentHistory, entry)
             }
-            val updatedHistory = if (existingIndex >= 0) {
-                currentHistory.toMutableList().also { it[existingIndex] = entry }
-            } else {
-                buildList {
-                    addAll(currentHistory)
-                    add(entry)
-                }
-            }
-            val beforeRevision = historyRevision
-            val beforeHistory = cachedHistory
-            cachedHistory = updatedHistory
-            historyRevision = beforeRevision + 1L
-            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
-        }
-
-        try {
-            persistHistory(revision, updatedHistory)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            rollbackHistoryMutation(revision, previousRevision, previousHistory)
-            Logger.e(TAG, "Failed to upsert history entry ${entry.threadId}", e)
-            throw e
+        ) ?: return
+        persistHistoryMutation(mutation) { threadId ->
+            "Failed to upsert history entry $threadId"
         }
     }
 
     suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry) {
+        historyFacade.prependOrReplaceHistoryEntry(entry)
+    }
+
+    private suspend fun prependOrReplaceHistoryEntryInternal(entry: ThreadHistoryEntry) {
         val historySnapshot = readHistorySnapshot() ?: run {
             Logger.w(TAG, "Skipping history prepend due to missing snapshot")
             return
         }
-        val updateResult = historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
-            val targetKey = historyIdentity(entry)
-            if (targetKey.isBlank()) {
-                Logger.w(TAG, "Skipping history prepend due to invalid identity")
-                return@withLock null
+        val updateResult = buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = { currentHistory ->
+                resolveAppStateHistoryPrependPlan(currentHistory, entry) ?: run {
+                    Logger.w(TAG, "Skipping history prepend due to invalid identity")
+                    null
+                }
             }
-            val updatedHistory = buildList {
-                add(entry)
-                addAll(
-                    currentHistory.filterNot {
-                        historyIdentity(it) == targetKey
-                    }
-                )
-            }
-            val beforeRevision = historyRevision
-            val beforeHistory = cachedHistory
-            cachedHistory = updatedHistory
-            historyRevision = beforeRevision + 1L
-            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
-        } ?: return
-        val (revision, updatedHistory, previousRevision, previousHistory) = updateResult
-        try {
-            persistHistory(revision, updatedHistory)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            rollbackHistoryMutation(revision, previousRevision, previousHistory)
-            Logger.e(TAG, "Failed to prepend history entry ${entry.threadId}", e)
-            throw e
+        ) ?: return
+        persistHistoryMutation(updateResult) { threadId ->
+            "Failed to prepend history entry $threadId"
         }
     }
 
     suspend fun prependOrReplaceHistoryEntries(entries: List<ThreadHistoryEntry>) {
+        historyFacade.prependOrReplaceHistoryEntries(entries)
+    }
+
+    private suspend fun prependOrReplaceHistoryEntriesInternal(entries: List<ThreadHistoryEntry>) {
         if (entries.isEmpty()) return
         val historySnapshot = readHistorySnapshot() ?: run {
             Logger.w(TAG, "Skipping history prepend batch due to missing snapshot")
             return
         }
-        val updateResult = historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
-            val dedupedByKey = linkedMapOf<String, ThreadHistoryEntry>()
-            entries.forEach { candidate ->
-                val key = historyIdentity(candidate)
-                if (key.isNotBlank() && key !in dedupedByKey) {
-                    dedupedByKey[key] = candidate
-                }
+        val updateResult = buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = { currentHistory ->
+                resolveAppStateHistoryBatchPrependPlan(currentHistory, entries)
             }
-            val dedupedEntries = dedupedByKey.values.toList()
-            if (dedupedEntries.isEmpty()) return@withLock null
-            val dedupedKeys = dedupedByKey.keys
-            val updatedHistory = buildList {
-                addAll(dedupedEntries)
-                addAll(
-                    currentHistory.filterNot { existing ->
-                        historyIdentity(existing) in dedupedKeys
-                    }
-                )
-            }
-            val beforeRevision = historyRevision
-            val beforeHistory = cachedHistory
-            cachedHistory = updatedHistory
-            historyRevision = beforeRevision + 1L
-            Quintuple(historyRevision, updatedHistory, dedupedEntries.size, beforeRevision, beforeHistory)
-        } ?: return
-        val (revision, updatedHistory, dedupedSize, previousRevision, previousHistory) = updateResult
-        try {
-            persistHistory(revision, updatedHistory)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            rollbackHistoryMutation(revision, previousRevision, previousHistory)
-            Logger.e(TAG, "Failed to prepend ${dedupedSize} history entries", e)
-            throw e
+        ) ?: return
+        persistHistoryMutation(updateResult) { dedupedSize ->
+            "Failed to prepend $dedupedSize history entries"
         }
     }
 
     suspend fun mergeHistoryEntries(entries: Collection<ThreadHistoryEntry>) {
+        historyFacade.mergeHistoryEntries(entries)
+    }
+
+    private suspend fun mergeHistoryEntriesInternal(entries: Collection<ThreadHistoryEntry>) {
         if (entries.isEmpty()) return
         val historySnapshot = readHistorySnapshot() ?: run {
             Logger.w(TAG, "Skipping history merge due to missing snapshot")
             return
         }
-        val mergeResult = historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
-            val updatesByKey = linkedMapOf<String, ThreadHistoryEntry>()
-            entries.forEach { candidate ->
-                val key = historyIdentity(candidate)
-                if (key.isNotBlank()) {
-                    updatesByKey[key] = candidate
+        val mergeResult = buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = { currentHistory ->
+                resolveAppStateHistoryMergePlan(currentHistory, entries)?.let { plan ->
+                    AppStateHistoryMutationPlan(
+                    updatedHistory = plan.updatedHistory,
+                    metadata = plan.droppedUpdateCount
+                )
                 }
             }
-            if (updatesByKey.isEmpty()) return@withLock null
-
-            var changed = false
-            val remainingUpdates = updatesByKey.toMutableMap()
-            val merged = currentHistory.map { existing ->
-                val key = historyIdentity(existing)
-                val replacement = remainingUpdates.remove(key)
-                if (replacement != null) {
-                    val mergedEntry = mergeHistoryEntry(existing, replacement)
-                    if (mergedEntry != existing) changed = true
-                    mergedEntry
-                } else {
-                    existing
+        ) ?: return
+        persistHistoryMutation(
+            mutation = mergeResult,
+            onCommitted = { appendedSize ->
+                if (appendedSize > 0) {
+                    Logger.i(TAG, "Dropped $appendedSize stale history update(s) during merge")
                 }
             }
-
-            val appended = remainingUpdates.values.toList()
-            if (!changed) return@withLock null
-            val beforeRevision = historyRevision
-            val beforeHistory = cachedHistory
-            cachedHistory = merged
-            historyRevision = beforeRevision + 1L
-            Quintuple(historyRevision, merged, appended.size, beforeRevision, beforeHistory)
-        } ?: return
-        val (revision, merged, appendedSize, previousRevision, previousHistory) = mergeResult
-        try {
-            // Drop stale updates that no longer exist in current history.
-            // This avoids resurrecting entries removed while refresh was running.
-            persistHistory(revision, merged)
-            if (appendedSize > 0) {
-                Logger.i(TAG, "Dropped $appendedSize stale history update(s) during merge")
-            }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            rollbackHistoryMutation(revision, previousRevision, previousHistory)
-            Logger.e(TAG, "Failed to merge ${entries.size} history entries", e)
-            throw e
+        ) { _ ->
+            "Failed to merge ${entries.size} history entries"
         }
     }
 
-    private fun mergeHistoryEntry(
-        existing: ThreadHistoryEntry,
-        incoming: ThreadHistoryEntry
-    ): ThreadHistoryEntry {
-        return mergeAppStateHistoryEntry(existing, incoming)
+    suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) {
+        historyFacade.removeHistoryEntry(entry)
     }
 
-    suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) {
+    private suspend fun removeHistoryEntryInternal(entry: ThreadHistoryEntry) {
         val historySnapshot = readHistorySnapshot() ?: run {
             Logger.w(TAG, "Skipping history removal due to missing snapshot")
             return
         }
-        val removeResult = historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
-            val targetKey = historyIdentity(entry)
-            if (targetKey.isBlank()) {
-                Logger.w(TAG, "Skipping history removal due to invalid identity")
-                return@withLock null
+        val removeResult = buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = { currentHistory ->
+                resolveAppStateHistoryRemovalPlan(currentHistory, entry) ?: run {
+                    Logger.w(TAG, "Skipping history removal due to invalid identity")
+                    null
+                }
             }
-            val updatedHistory = currentHistory.filterNot {
-                historyIdentity(it) == targetKey
-            }
-            if (updatedHistory.size == currentHistory.size) {
-                return@withLock null
-            }
-            val beforeRevision = historyRevision
-            val beforeHistory = cachedHistory
-            cachedHistory = updatedHistory
-            historyRevision = beforeRevision + 1L
-            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
-        } ?: return
-        val (revision, updatedHistory, previousRevision, previousHistory) = removeResult
-        try {
-            persistHistory(revision, updatedHistory)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            rollbackHistoryMutation(revision, previousRevision, previousHistory)
-            Logger.e(TAG, "Failed to remove history entry ${entry.threadId}", e)
-            throw e
+        ) ?: return
+        persistHistoryMutation(removeResult) { threadId ->
+            "Failed to remove history entry $threadId"
         }
     }
 
@@ -963,47 +751,56 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
-        var runImmediate = false
-        var oldJob: Job? = null
-        scrollPositionMutex.withLock {
-            val scope = scrollDebounceScope
-            val scopeJob = scope?.coroutineContext?.get(Job)
-            val isScopeInactive = scopeJob != null && !scopeJob.isActive
-            if (scope == null || isScopeInactive) {
-                if (isScopeInactive) {
-                    scrollDebounceScope = null
+        historyFacade.updateHistoryScrollPosition(
+            threadId = threadId,
+            index = index,
+            offset = offset,
+            boardId = boardId,
+            title = title,
+            titleImageUrl = titleImageUrl,
+            boardName = boardName,
+            boardUrl = boardUrl,
+            replyCount = replyCount
+        )
+    }
+
+    private suspend fun updateHistoryScrollPositionInternal(
+        threadId: String,
+        index: Int,
+        offset: Int,
+        boardId: String,
+        title: String,
+        titleImageUrl: String,
+        boardName: String,
+        boardUrl: String,
+        replyCount: Int
+    ) {
+        scheduleAppStateHistoryScrollPersistence(
+            scrollPositionMutex = scrollPositionMutex,
+            currentScope = { scrollDebounceScope },
+            clearScope = { scrollDebounceScope = null },
+            scrollPositionJobs = scrollPositionJobs,
+            scrollKey = buildHistoryScrollJobKey(threadId, boardId, boardUrl),
+            startDebouncedJob = { scope, scrollKey ->
+                scope.launch {
+                    delay(SCROLL_DEBOUNCE_DELAY_MS)
+                    try {
+                        updateHistoryScrollPositionImmediate(
+                            threadId, index, offset, boardId, title,
+                            titleImageUrl, boardName, boardUrl, replyCount
+                        )
+                    } finally {
+                        scrollPositionJobs.removeIfSame(scrollKey, this.coroutineContext[Job])
+                    }
                 }
-                runImmediate = true
-                return@withLock
+            },
+            performImmediateUpdate = {
+                updateHistoryScrollPositionImmediate(
+                    threadId, index, offset, boardId, title,
+                    titleImageUrl, boardName, boardUrl, replyCount
+                )
             }
-
-            val scrollKey = buildScrollJobKey(threadId, boardId, boardUrl)
-            val newJob = scope.launch {
-                delay(SCROLL_DEBOUNCE_DELAY_MS)
-
-                try {
-                    updateHistoryScrollPositionImmediate(
-                        threadId, index, offset, boardId, title,
-                        titleImageUrl, boardName, boardUrl, replyCount
-                    )
-                } finally {
-                    scrollPositionJobs.removeIfSame(scrollKey, this.coroutineContext[Job])
-                }
-            }
-            if (!newJob.isActive) {
-                runImmediate = true
-                return@withLock
-            }
-
-            oldJob = scrollPositionJobs.putAndCancelOld(scrollKey, newJob)
-        }
-        oldJob?.cancel()
-        if (runImmediate) {
-            updateHistoryScrollPositionImmediate(
-                threadId, index, offset, boardId, title,
-                titleImageUrl, boardName, boardUrl, replyCount
-            )
-        }
+        )
     }
 
     /**
@@ -1023,59 +820,34 @@ class AppStateStore internal constructor(
         replyCount: Int
     ) {
         val historySnapshot = readHistorySnapshot() ?: return
-        val updateResult = historyMutex.withLock {
-            val currentHistory = readHistorySnapshotLocked() ?: historySnapshot
-            val existingEntry = currentHistory.firstOrNull {
-                matchesHistoryEntry(it, threadId, boardId, boardUrl)
+        val updateResult = buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = { currentHistory ->
+                resolveAppStateHistoryScrollUpdatePlan(
+                    currentHistory = currentHistory,
+                    threadId = threadId,
+                    index = index,
+                    offset = offset,
+                    boardId = boardId,
+                    title = title,
+                    titleImageUrl = titleImageUrl,
+                    boardName = boardName,
+                    boardUrl = boardUrl,
+                    replyCount = replyCount,
+                    nowMillis = Clock.System.now().toEpochMilliseconds()
+                )
             }
-            val nowMillis = Clock.System.now().toEpochMilliseconds()
-
-            // Skip tiny offset movements in the same item to avoid excessive JSON writes.
-            if (shouldSkipHistoryScrollUpdate(existingEntry, index, offset, nowMillis)) {
-                return@withLock null
-            }
-
-            val updatedHistory = if (existingEntry != null) {
-                // Update existing entry's scroll position while preserving other fields
-                currentHistory.map { entry ->
-                    if (matchesHistoryEntry(entry, threadId, boardId, boardUrl)) {
-                        applyHistoryScrollUpdate(entry, index, offset, nowMillis)
-                    } else {
-                        entry
-                    }
-                }
-            } else {
-                // Entry doesn't exist yet - create a new one
-                buildList {
-                    add(buildNewHistoryScrollEntry(
-                        threadId = threadId,
-                        index = index,
-                        offset = offset,
-                        boardId = boardId,
-                        title = title,
-                        titleImageUrl = titleImageUrl,
-                        boardName = boardName,
-                        boardUrl = boardUrl,
-                        replyCount = replyCount,
-                        nowMillis = nowMillis
-                    ))
-                    addAll(currentHistory)
-                }
-            }
-            val beforeRevision = historyRevision
-            val beforeHistory = cachedHistory
-            cachedHistory = updatedHistory
-            historyRevision = beforeRevision + 1L
-            Quadruple(historyRevision, updatedHistory, beforeRevision, beforeHistory)
-        } ?: return
-        val (revision, updatedHistory, previousRevision, previousHistory) = updateResult
-        try {
-            persistHistory(revision, updatedHistory)
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            rollbackHistoryMutation(revision, previousRevision, previousHistory)
-            Logger.e(TAG, "Failed to persist updated history for thread $threadId", e)
-            throw e
+        ) ?: return
+        persistHistoryMutation(updateResult) { targetThreadId ->
+            "Failed to persist updated history for thread $targetThreadId"
         }
     }
 
@@ -1095,22 +867,42 @@ class AppStateStore internal constructor(
         defaultLastUsedDeleteKey: String = ""
     ) {
         try {
+            val seedBundles = buildAppStateSeedPayload(
+                defaultBoards = defaultBoards,
+                defaultHistory = defaultHistory,
+                defaultNgHeaders = defaultNgHeaders,
+                defaultNgWords = defaultNgWords,
+                defaultCatalogNgWords = defaultCatalogNgWords,
+                defaultWatchWords = defaultWatchWords,
+                defaultSelfPostIdentifierMap = defaultSelfPostIdentifierMap,
+                defaultCatalogModeMap = defaultCatalogModeMap,
+                defaultThreadMenuConfig = defaultThreadMenuConfig,
+                defaultThreadSettingsMenuConfig = defaultThreadSettingsMenuConfig,
+                defaultThreadMenuEntries = defaultThreadMenuEntries,
+                defaultCatalogNavEntries = defaultCatalogNavEntries,
+                defaultLastUsedDeleteKey = defaultLastUsedDeleteKey,
+                json = json,
+                threadMenuConfig = normalizeThreadMenuConfig(defaultThreadMenuConfig),
+                threadSettingsMenuConfig = normalizeThreadSettingsMenuConfig(defaultThreadSettingsMenuConfig),
+                threadMenuEntries = normalizeThreadMenuEntries(defaultThreadMenuEntries),
+                catalogNavEntries = normalizeCatalogNavEntries(defaultCatalogNavEntries)
+            ).toSeedBundles()
             storage.seedIfEmpty(
-                json.encodeToString(boardsSerializer, defaultBoards),
-                json.encodeToString(historySerializer, defaultHistory),
-                json.encodeToString(stringListSerializer, defaultNgHeaders),
-                json.encodeToString(stringListSerializer, defaultNgWords),
-                json.encodeToString(stringListSerializer, defaultCatalogNgWords),
-                json.encodeToString(stringListSerializer, defaultWatchWords),
-                json.encodeToString(selfPostIdentifierMapSerializer, defaultSelfPostIdentifierMap),
-                json.encodeToString(encodeCatalogModeMap(defaultCatalogModeMap)),
-                AttachmentPickerPreference.MEDIA.name,
-                SaveDirectorySelection.MANUAL_INPUT.name,
-                defaultLastUsedDeleteKey.take(8),
-                json.encodeToString(threadMenuConfigSerializer, normalizeThreadMenuConfig(defaultThreadMenuConfig)),
-                json.encodeToString(threadSettingsMenuConfigSerializer, normalizeThreadSettingsMenuConfig(defaultThreadSettingsMenuConfig)),
-                json.encodeToString(threadMenuEntriesSerializer, normalizeThreadMenuEntries(defaultThreadMenuEntries)),
-                json.encodeToString(catalogNavEntriesSerializer, normalizeCatalogNavEntries(defaultCatalogNavEntries))
+                seedBundles.boards.boardsJson,
+                seedBundles.history.historyJson,
+                seedBundles.preferences.ngHeadersJson,
+                seedBundles.preferences.ngWordsJson,
+                seedBundles.preferences.catalogNgWordsJson,
+                seedBundles.preferences.watchWordsJson,
+                seedBundles.preferences.selfPostIdentifiersJson,
+                seedBundles.preferences.catalogModeMapJson,
+                seedBundles.preferences.attachmentPickerPreference,
+                seedBundles.preferences.saveDirectorySelection,
+                seedBundles.preferences.lastUsedDeleteKey,
+                seedBundles.preferences.threadMenuConfigJson,
+                seedBundles.preferences.threadSettingsMenuConfigJson,
+                seedBundles.preferences.threadMenuEntriesConfigJson,
+                seedBundles.preferences.catalogNavEntriesJson
             )
         } catch (e: Exception) {
             rethrowIfCancellation(e)
@@ -1119,41 +911,24 @@ class AppStateStore internal constructor(
         }
     }
 
-    private fun decodeBoards(raw: String): List<BoardSummary> = runCatching {
-        json.decodeFromString(boardsSerializer, raw)
-    }.getOrElse { e ->
-        Logger.e(TAG, "Failed to decode boards from JSON", e)
-        emptyList()
-    }
-
     private suspend fun readHistorySnapshot(): List<ThreadHistoryEntry>? {
-        val cached = historyMutex.withLock { cachedHistory }
-        if (cached != null) {
-            return cached
-        }
-        val decoded = try {
-            val raw = storage.historyJson.first()
-            if (raw == null) {
-                emptyList()
-            } else {
-                withContext(AppDispatchers.parsing) {
-                    decodeHistory(raw)
+        return readAppStateHistorySnapshot(
+            historyMutex = historyMutex,
+            currentCachedHistory = { cachedHistory },
+            readStorageHistory = {
+                val raw = storage.historyJson.first()
+                if (raw == null) {
+                    emptyList()
+                } else {
+                    decodeAppStateHistory(raw, json, TAG)
                 }
-            }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to read history state", e)
-            return null
-        }
-        return historyMutex.withLock {
-            val latest = cachedHistory
-            if (latest != null) {
-                latest
-            } else {
-                cachedHistory = decoded
-                decoded
-            }
-        }
+            },
+            setCachedHistory = { cachedHistory = it },
+            onReadFailure = { error ->
+                Logger.e(TAG, "Failed to read history state", error)
+            },
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     /**
@@ -1169,33 +944,55 @@ class AppStateStore internal constructor(
         previousRevision: Long,
         previousHistory: List<ThreadHistoryEntry>?
     ) {
-        historyMutex.withLock {
-            if (historyRevision == failedRevision) {
-                historyRevision = previousRevision
-                cachedHistory = previousHistory
+        rollbackAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            failedRevision = failedRevision,
+            previousRevision = previousRevision,
+            previousHistory = previousHistory,
+            currentHistoryRevision = { historyRevision },
+            restoreHistoryState = { restoredRevision, restoredHistory ->
+                historyRevision = restoredRevision
+                cachedHistory = restoredHistory
             }
-        }
+        )
+    }
+
+    private suspend fun <T> persistHistoryMutation(
+        mutation: HistoryMutation<T>,
+        onCommitted: (T) -> Unit = {},
+        buildFailureMessage: (T) -> String
+    ) {
+        persistAppStateHistoryMutation(
+            mutation = mutation,
+            persistHistory = ::persistHistory,
+            rollbackHistoryMutation = ::rollbackHistoryMutation,
+            onPersistFailure = { message, error ->
+                Logger.e(TAG, message, error)
+            },
+            rethrowIfCancellation = ::rethrowIfCancellation,
+            onCommitted = onCommitted,
+            buildFailureMessage = buildFailureMessage
+        )
     }
 
     private suspend fun persistHistory(revision: Long, history: List<ThreadHistoryEntry>) {
-        historyPersistMutex.withLock {
-            var targetRevision = revision
-            var targetHistory = history
-            var passCount = 0
-            while (true) {
-                passCount += 1
-                if (passCount > HISTORY_PERSIST_MAX_PASSES) {
-                    throw IllegalStateException(
-                        "History persistence exceeded $HISTORY_PERSIST_MAX_PASSES passes; aborting to prevent lock starvation"
-                    )
-                }
-                storage.updateHistoryJson(encodeHistory(targetHistory))
-                val nextHistory = historyMutex.withLock {
+        persistAppStateHistory(
+            historyPersistMutex = historyPersistMutex,
+            revision = revision,
+            history = history,
+            maxPasses = HISTORY_PERSIST_MAX_PASSES,
+            writeHistoryJson = { updatedHistory ->
+                storage.updateHistoryJson(encodeAppStateHistory(updatedHistory, json))
+            },
+            readLatestHistoryContinuation = { targetRevision ->
+                historyMutex.withLock {
                     if (historyRevision > targetRevision) {
                         val latest = cachedHistory
                         if (latest != null) {
-                            targetRevision = historyRevision
-                            latest
+                            AppStatePersistedHistoryContinuation(
+                                revision = historyRevision,
+                                history = latest
+                            )
                         } else {
                             null
                         }
@@ -1203,179 +1000,104 @@ class AppStateStore internal constructor(
                         null
                     }
                 }
-                if (nextHistory == null) {
-                    break
-                }
-                targetHistory = nextHistory
             }
-        }
-    }
-
-    private suspend fun encodeBoards(boards: List<BoardSummary>): String {
-        return withContext(AppDispatchers.parsing) {
-            json.encodeToString(boardsSerializer, boards)
-        }
-    }
-
-    private suspend fun encodeHistory(history: List<ThreadHistoryEntry>): String {
-        return withContext(AppDispatchers.parsing) {
-            json.encodeToString(historySerializer, history)
-        }
-    }
-
-    private fun decodeHistory(raw: String): List<ThreadHistoryEntry> = runCatching {
-        json.decodeFromString(historySerializer, raw)
-    }.getOrElse { e ->
-        Logger.e(TAG, "Failed to decode history from JSON", e)
-        emptyList()
-    }
-
-    private fun matchesHistoryEntry(
-        entry: ThreadHistoryEntry,
-        threadId: String,
-        boardId: String,
-        boardUrl: String
-    ): Boolean {
-        return matchesHistoryEntryIdentity(entry, threadId, boardId, boardUrl)
-    }
-
-    private fun decodeCatalogDisplayStyle(raw: String?): CatalogDisplayStyle {
-        return decodeCatalogDisplayStyleValue(raw)
-    }
-
-    private fun decodeCatalogGridColumns(raw: String?): Int {
-        return decodeCatalogGridColumnsValue(raw)
-    }
-
-    private fun decodeCatalogModeMap(raw: String?): Map<String, CatalogMode> {
-        return decodeCatalogModeMapValue(raw)
-    }
-
-    private fun encodeCatalogModeMap(map: Map<String, CatalogMode>): Map<String, String> {
-        return encodeCatalogModeMapValue(map)
-    }
-
-    private fun decodeStringList(raw: String?): List<String> {
-        if (raw == null) return emptyList()
-        return runCatching {
-            json.decodeFromString(stringListSerializer, raw)
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode NG list", e)
-            emptyList()
-        }
-    }
-
-    private fun decodeSelfPostIdentifierMap(raw: String?): Map<String, List<String>> {
-        return decodeSelfPostIdentifierMapValue(raw, json, selfPostIdentifierMapSerializer)
-    }
-
-    private fun aggregateIdentifiers(map: Map<String, List<String>>): List<String> {
-        return aggregateSelfPostIdentifiers(map, SELF_IDENTIFIER_MAX_ENTRIES)
-    }
-
-    private fun decodeThreadMenuConfig(raw: String?): List<ThreadMenuItemConfig> {
-        if (raw.isNullOrBlank()) return defaultThreadMenuConfig()
-        return runCatching {
-            json.decodeFromString(threadMenuConfigSerializer, raw)
-        }.map { stored ->
-            normalizeThreadMenuConfig(stored)
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode thread menu config", e)
-            defaultThreadMenuConfig()
-        }
-    }
-
-    private fun decodeThreadSettingsMenuConfig(raw: String?): List<ThreadSettingsMenuItemConfig> {
-        if (raw.isNullOrBlank()) return defaultThreadSettingsMenuConfig()
-        return runCatching {
-            json.decodeFromString(threadSettingsMenuConfigSerializer, raw)
-        }.map { stored ->
-            normalizeThreadSettingsMenuConfig(stored)
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode thread settings menu config", e)
-            defaultThreadSettingsMenuConfig()
-        }
-    }
-
-    private fun decodeThreadMenuEntries(raw: String?): List<ThreadMenuEntryConfig> {
-        if (raw.isNullOrBlank()) return defaultThreadMenuEntries()
-        return runCatching {
-            json.decodeFromString(threadMenuEntriesSerializer, raw)
-        }.map { stored ->
-            normalizeThreadMenuEntries(stored)
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode thread menu entries", e)
-            defaultThreadMenuEntries()
-        }
-    }
-
-    private fun decodeCatalogNavEntries(raw: String?): List<CatalogNavEntryConfig> {
-        if (raw.isNullOrBlank()) return defaultCatalogNavEntries()
-        return runCatching {
-            json.decodeFromString(catalogNavEntriesSerializer, raw)
-        }.map { stored ->
-            normalizeCatalogNavEntries(stored)
-        }.getOrElse { e ->
-            Logger.e(TAG, "Failed to decode catalog nav entries", e)
-            defaultCatalogNavEntries()
-        }
+        )
     }
 
     private suspend fun readSelfPostIdentifierMapSnapshot(): Map<String, List<String>> {
-        val cached = selfPostIdentifiersMutex.withLock { cachedSelfPostIdentifierMap }
-        if (cached != null) {
-            return cached
-        }
-        return try {
-            val raw = storage.selfPostIdentifiersJson.first()
-            val decoded = withContext(AppDispatchers.parsing) {
-                decodeSelfPostIdentifierMap(raw)
-            }
-            selfPostIdentifiersMutex.withLock {
-                val latest = cachedSelfPostIdentifierMap
-                if (latest != null) {
-                    latest
-                } else {
-                    cachedSelfPostIdentifierMap = decoded
-                    decoded
+        return readAppStateCachedSnapshot(
+            mutex = selfPostIdentifiersMutex,
+            currentCachedValue = { cachedSelfPostIdentifierMap },
+            readStorageSnapshot = {
+                val raw = storage.selfPostIdentifiersJson.first()
+                withContext(AppDispatchers.parsing) {
+                    decodeSelfPostIdentifierMapValue(raw, json, selfPostIdentifierMapSerializer)
                 }
-            }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e(TAG, "Failed to read self post identifier map", e)
-            emptyMap()
-        }
+            },
+            setCachedValue = { cachedSelfPostIdentifierMap = it },
+            onReadFailure = { error ->
+                Logger.e(TAG, "Failed to read self post identifier map", error)
+                emptyMap()
+            },
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     private suspend fun persistSelfPostIdentifierMap(map: Map<String, List<String>>) {
-        val encoded = withContext(AppDispatchers.parsing) {
-            json.encodeToString(selfPostIdentifierMapSerializer, map)
-        }
-        storage.updateSelfPostIdentifiersJson(encoded)
+        persistAppStateSelfPostIdentifierMap(
+            map = map,
+            json = json,
+            update = storage::updateSelfPostIdentifiersJson
+        )
     }
 
-    private fun buildSelfPostKey(threadId: String, boardId: String?): String {
-        return buildSelfPostStorageKey(threadId, boardId)
+    private suspend fun readCatalogModeSnapshot(): Map<String, CatalogMode> {
+        return readAppStateCachedSnapshot(
+            mutex = catalogModeMutex,
+            currentCachedValue = { cachedCatalogModeMap },
+            readStorageSnapshot = {
+                val raw = storage.catalogModeMapJson.first()
+                withContext(AppDispatchers.parsing) {
+                    decodeCatalogModeMapValue(raw)
+                }
+            },
+            setCachedValue = { cachedCatalogModeMap = it },
+            onReadFailure = { error ->
+                throw error
+            },
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
+    }
+
+    private suspend fun persistCatalogModeMap(map: Map<String, CatalogMode>) {
+        persistAppStateCatalogModeMap(
+            map = map,
+            json = json,
+            update = storage::updateCatalogModeMapJson
+        )
+    }
+
+    private suspend fun mutateCatalogModeMap(
+        onReadFailure: (Throwable) -> Unit,
+        onWriteFailure: (Throwable) -> Unit,
+        transform: (Map<String, CatalogMode>) -> Map<String, CatalogMode>
+    ) {
+        val loadedSnapshot = runCatching {
+            readCatalogModeSnapshot()
+        }.getOrElse { error ->
+            onReadFailure(error)
+            return
+        }
+        mutateAppStateCachedSnapshot(
+            mutex = catalogModeMutex,
+            loadedSnapshot = loadedSnapshot,
+            currentCachedValue = { cachedCatalogModeMap },
+            setCachedValue = { cachedCatalogModeMap = it },
+            transform = transform,
+            persistUpdatedValue = ::persistCatalogModeMap,
+            onWriteFailure = onWriteFailure,
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
+    }
+
+    private suspend fun mutateSelfPostIdentifierMap(
+        transform: (Map<String, List<String>>) -> Map<String, List<String>>
+    ) {
+        val loadedSnapshot = readSelfPostIdentifierMapSnapshot()
+        mutateAppStateCachedSnapshot(
+            mutex = selfPostIdentifiersMutex,
+            loadedSnapshot = loadedSnapshot,
+            currentCachedValue = { cachedSelfPostIdentifierMap },
+            setCachedValue = { cachedSelfPostIdentifierMap = it },
+            transform = transform,
+            persistUpdatedValue = ::persistSelfPostIdentifierMap,
+            onWriteFailure = { error -> throw error },
+            rethrowIfCancellation = ::rethrowIfCancellation
+        )
     }
 
     private fun rethrowIfCancellation(error: Throwable) {
-        if (error is CancellationException) throw error
-    }
-
-    private fun historyIdentity(entry: ThreadHistoryEntry): String {
-        return historyEntryIdentity(entry)
-    }
-
-    private fun historyIdentity(threadId: String, boardId: String, boardUrl: String): String {
-        return historyEntryIdentity(threadId, boardId, boardUrl)
-    }
-
-    private fun normalizeHistoryBoardUrlForIdentity(boardUrl: String): String {
-        return com.valoser.futacha.shared.state.normalizeHistoryBoardUrlForIdentity(boardUrl)
-    }
-
-    private fun buildScrollJobKey(threadId: String, boardId: String, boardUrl: String): String {
-        return buildHistoryScrollJobKey(threadId, boardId, boardUrl)
+        if (error is kotlinx.coroutines.CancellationException) throw error
     }
 }
 
@@ -1453,15 +1175,3 @@ internal interface PlatformStateStorage {
 }
 
 internal expect fun createPlatformStateStorage(platformContext: Any? = null): PlatformStateStorage
-
-private fun sanitizeManualSaveDirectory(input: String?): String {
-    return sanitizeManualSaveDirectoryValue(input)
-}
-
-private fun decodeAttachmentPickerPreference(raw: String?): AttachmentPickerPreference {
-    return decodeAttachmentPickerPreferenceValue(raw)
-}
-
-private fun decodeSaveDirectorySelection(raw: String?): SaveDirectorySelection {
-    return decodeSaveDirectorySelectionValue(raw)
-}

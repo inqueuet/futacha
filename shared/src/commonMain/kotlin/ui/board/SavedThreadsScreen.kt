@@ -32,7 +32,6 @@ import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import kotlin.math.pow
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -65,10 +64,9 @@ fun SavedThreadsScreen(
             loadError = null
         }
         try {
-            withTimeout(15_000L) { // 15秒のタイムアウト
-                val index = repository.loadIndex()
-                threads = index.threads
-                totalSize = index.totalSize
+            loadSavedThreadsSnapshot(repository).getOrThrow().let { snapshot ->
+                threads = snapshot.threads
+                totalSize = snapshot.totalSize
             }
             return true
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -91,12 +89,6 @@ fun SavedThreadsScreen(
     // FIX: データ読み込みにタイムアウトとエラーハンドリングを追加
     LaunchedEffect(Unit) {
         reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
-    }
-
-    val refreshList: () -> Unit = {
-        coroutineScope.launch {
-            reloadSavedThreads(showLoadingState = false, showAsScreenError = false)
-        }
     }
 
     Scaffold(
@@ -199,15 +191,16 @@ fun SavedThreadsScreen(
                     TextButton(
                         onClick = {
                             coroutineScope.launch {
-                                repository.deleteThread(
-                                    threadId = thread.threadId,
-                                    boardId = thread.boardId.ifBlank { null }
+                                deleteSavedThreadAndReload(
+                                    repository = repository,
+                                    thread = thread
                                 )
-                                    .onSuccess {
+                                    .onSuccess { snapshot ->
+                                        threads = snapshot.threads
+                                        totalSize = snapshot.totalSize
                                         snackbarHostState.showSnackbar(
                                             buildSavedThreadsDeleteMessage(Result.success(Unit))
                                         )
-                                        refreshList()
                                     }
                                     .onFailure { e ->
                                         snackbarHostState.showSnackbar(

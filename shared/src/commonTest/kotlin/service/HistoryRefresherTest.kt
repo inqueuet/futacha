@@ -177,6 +177,159 @@ class HistoryRefresherTest {
         assertTrue(updated.hasAutoSave)
         assertEquals("auto saved title", updated.title)
     }
+
+    @Test
+    fun refresh_skipListIsScopedPerBoardForSameThreadId() = runBlocking {
+        val missingBoard = boardSummary(id = "b1", name = "board-1", url = "https://may.2chan.net/b/futaba.php")
+        val activeBoard = boardSummary(id = "b2", name = "board-2", url = "https://dat.2chan.net/img/futaba.php")
+        val missingEntry = historyEntry(
+            threadId = "900",
+            boardId = missingBoard.id,
+            boardName = missingBoard.name,
+            boardUrl = "https://may.2chan.net/b/res/900.htm"
+        )
+        val activeEntry = historyEntry(
+            threadId = "900",
+            boardId = activeBoard.id,
+            boardName = activeBoard.name,
+            boardUrl = "https://dat.2chan.net/img/res/900.htm"
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(missingEntry, activeEntry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[missingBoard.url to "900"] = NetworkException("gone", statusCode = 404)
+            threadPages[activeBoard.url to "900"] = threadPage(
+                threadId = "900",
+                boardTitle = "active-board",
+                titleLine = "active title",
+                thumbnailUrl = "active-thumb",
+                replyCount = 3
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(missingBoard, activeBoard),
+            historySnapshot = listOf(missingEntry, activeEntry)
+        )
+        refresher.refresh(
+            boardsSnapshot = listOf(missingBoard, activeBoard),
+            historySnapshot = store.history.first()
+        )
+
+        assertEquals(3, repository.getThreadCalls)
+        val updated = store.history.first()
+        assertEquals("title-900", updated.first { it.boardId == missingBoard.id }.title)
+        assertEquals("active title", updated.first { it.boardId == activeBoard.id }.title)
+    }
+
+    @Test
+    fun clearSkippedThreads_allowsRetryAfter404() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "404")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "404"] = NetworkException("gone", statusCode = 404)
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+        refresher.clearSkippedThreads()
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        assertEquals(2, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_recordsPartialFailuresWithoutDiscardingSuccessfulUpdates() = runBlocking {
+        val okBoard = boardSummary(id = "ok", name = "ok-board", url = "https://may.2chan.net/ok/futaba.php")
+        val failingBoard = boardSummary(id = "ng", name = "ng-board", url = "https://may.2chan.net/ng/futaba.php")
+        val okEntry = historyEntry(threadId = "101", boardId = okBoard.id, boardName = okBoard.name, boardUrl = "https://may.2chan.net/ok/res/101.htm")
+        val failingEntry = historyEntry(threadId = "202", boardId = failingBoard.id, boardName = failingBoard.name, boardUrl = "https://may.2chan.net/ng/res/202.htm")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(okEntry, failingEntry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[okBoard.url to "101"] = threadPage(
+                threadId = "101",
+                boardTitle = "ok-board-new",
+                titleLine = "updated ok title",
+                thumbnailUrl = "ok-thumb",
+                replyCount = 4
+            )
+            threadErrors[failingBoard.url to "202"] = IllegalStateException("backend down")
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(okBoard, failingBoard),
+            historySnapshot = listOf(okEntry, failingEntry)
+        )
+
+        val updated = store.history.first()
+        assertEquals("updated ok title", updated.first { it.threadId == "101" }.title)
+        assertEquals("title-202", updated.first { it.threadId == "202" }.title)
+        val error = refresher.lastRefreshError.first()
+        assertEquals(1, error?.errorCount)
+        assertEquals(2, error?.totalThreads)
+        assertEquals(1, error?.stageCounts?.get("thread_refresh"))
+        assertEquals("202", error?.errors?.single()?.threadId)
+    }
+
+    @Test
+    fun refresh_recordsArchiveLookupFailuresAsPartialErrors() = runBlocking {
+        val archiveBoard = boardSummary(id = "b", name = "archive-board", url = "https://may.2chan.net/b/futaba.php")
+        val okBoard = boardSummary(id = "img", name = "img-board", url = "https://dat.2chan.net/img/futaba.php")
+        val archiveEntry = historyEntry(threadId = "404", boardId = archiveBoard.id, boardName = archiveBoard.name, boardUrl = "https://may.2chan.net/b/res/404.htm")
+        val okEntry = historyEntry(threadId = "505", boardId = okBoard.id, boardName = okBoard.name, boardUrl = "https://dat.2chan.net/img/res/505.htm")
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(archiveEntry, okEntry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[archiveBoard.url to "404"] = NetworkException("gone", statusCode = 404)
+            threadPages[okBoard.url to "505"] = threadPage(
+                threadId = "505",
+                boardTitle = "img-new",
+                titleLine = "ok title",
+                thumbnailUrl = "ok-thumb",
+                replyCount = 2
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createFailingArchiveClient("archive unavailable"),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(archiveBoard, okBoard),
+            historySnapshot = listOf(archiveEntry, okEntry)
+        )
+
+        val updated = store.history.first()
+        assertEquals("ok title", updated.first { it.threadId == "505" }.title)
+        assertEquals("title-404", updated.first { it.threadId == "404" }.title)
+        val error = refresher.lastRefreshError.first()
+        assertEquals(1, error?.stageCounts?.get("archive_lookup"))
+        assertEquals("404", error?.errors?.single()?.threadId)
+    }
 }
 
 private class FakeHistoryBoardRepository : BoardRepository {
@@ -269,6 +422,17 @@ private fun createThreadHtmlClient(
     return HttpClient(engine)
 }
 
+private fun createFailingArchiveClient(
+    message: String
+): HttpClient {
+    val engine = MockEngine(
+        MockEngineConfig().apply {
+            addHandler { throw IllegalStateException(message) }
+        }
+    )
+    return HttpClient(engine)
+}
+
 private fun MockRequestHandleScope.archiveJsonResponse(
     body: String
 ): HttpResponseData = respond(
@@ -291,26 +455,41 @@ private fun MockRequestHandleScope.threadHtmlResponse(
 )
 
 private fun boardSummary(): BoardSummary {
-    return BoardSummary(
+    return boardSummary(
         id = "b",
         name = "board",
+        url = "https://may.2chan.net/b/futaba.php"
+    )
+}
+
+private fun boardSummary(
+    id: String,
+    name: String,
+    url: String
+): BoardSummary {
+    return BoardSummary(
+        id = id,
+        name = name,
         category = "",
-        url = "https://may.2chan.net/b/futaba.php",
+        url = url,
         description = ""
     )
 }
 
 private fun historyEntry(
     threadId: String,
-    title: String = "title-$threadId"
+    title: String = "title-$threadId",
+    boardId: String = "b",
+    boardName: String = "board-old",
+    boardUrl: String = "https://may.2chan.net/b/res/$threadId.htm"
 ): ThreadHistoryEntry {
     return ThreadHistoryEntry(
         threadId = threadId,
-        boardId = "b",
+        boardId = boardId,
         title = title,
         titleImageUrl = "thumb-old",
-        boardName = "board-old",
-        boardUrl = "https://may.2chan.net/b/res/$threadId.htm",
+        boardName = boardName,
+        boardUrl = boardUrl,
         lastVisitedEpochMillis = 1L,
         replyCount = 1
     )

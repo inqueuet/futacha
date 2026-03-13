@@ -41,6 +41,7 @@ import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.CatalogScreen
 import com.valoser.futacha.shared.ui.board.SavedThreadsScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
+import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
 import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
@@ -48,7 +49,6 @@ import com.valoser.futacha.shared.ui.board.resolveRegisteredThreadNavigation
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
-import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
@@ -58,27 +58,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import io.ktor.http.URLBuilder
-import io.ktor.http.Url
-import io.ktor.http.encodedPath
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import com.valoser.futacha.shared.version.VersionChecker
 import com.valoser.futacha.shared.version.UpdateInfo
 
 private const val TAG = "FutachaApp"
-
-private fun isDefaultManualSaveRoot(directory: String): Boolean {
-    val normalized = directory.trim().removePrefix("./").trimEnd('/')
-    return normalized.equals(DEFAULT_MANUAL_SAVE_ROOT, ignoreCase = true)
-}
-
-@OptIn(ExperimentalTime::class)
-// FIX: リソース所有権を明確にするデータクラス
-private data class RepositoryHolder(
-    val repository: BoardRepository,
-    val ownsRepository: Boolean
-)
 
 @OptIn(ExperimentalTime::class)
 @Composable
@@ -354,20 +339,14 @@ fun FutachaApp(
             }
             val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
                 coroutineScope.launch {
-                    val resolvedBoardId = entry.boardId
-                        .ifBlank { runCatching { BoardUrlResolver.resolveBoardSlug(entry.boardUrl) }.getOrDefault("") }
-                    stateStore.removeSelfPostIdentifiersForThread(
-                        threadId = entry.threadId,
-                        boardId = resolvedBoardId.ifBlank { null }
-                    )
-                    stateStore.removeHistoryEntry(entry)
-                    effectiveAutoSavedThreadRepository?.deleteThread(
-                        threadId = entry.threadId,
-                        boardId = resolvedBoardId.ifBlank { null }
-                    )
-                        ?.onFailure {
+                    dismissHistoryEntry(
+                        stateStore = stateStore,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                        entry = entry,
+                        onAutoSavedThreadDeleteFailure = {
                             Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
                         }
+                    )
                 }
             }
             val updateHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
@@ -377,13 +356,14 @@ fun FutachaApp(
             }
             val clearHistory: () -> Unit = {
                 coroutineScope.launch {
-                    stateStore.clearSelfPostIdentifiers()
-                    stateStore.setHistory(emptyList())
-                    historyRefresher.clearSkippedThreads()
-                    effectiveAutoSavedThreadRepository?.deleteAllThreads()
-                        ?.onFailure {
+                    clearHistory(
+                        stateStore = stateStore,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                        onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
+                        onAutoSavedThreadDeleteFailure = {
                             Logger.e(TAG, "Failed to clear auto saved threads", it)
                         }
+                    )
                 }
             }
             val directoryPickerLauncher = rememberDirectoryPickerLauncher(
@@ -400,25 +380,13 @@ fun FutachaApp(
                 )
             }
             val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
-                val entryBoardUrlKey = entry.boardUrl
-                    .trim()
-                    .substringBefore('?')
-                    .trimEnd('/')
-                    .lowercase()
-                val targetBoard = persistedBoards.firstOrNull { entry.boardId.isNotBlank() && it.id == entry.boardId }
-                    ?: persistedBoards.firstOrNull {
-                        it.url.trim().substringBefore('?').trimEnd('/').lowercase() == entryBoardUrlKey
-                    }
-                    ?: persistedBoards.firstOrNull { it.name == entry.boardName }
-                targetBoard?.let { board ->
-                    selectedBoardId = board.id
-                    selectedThreadId = entry.threadId
-                    selectedThreadTitle = entry.title
-                    selectedThreadReplies = entry.replyCount
-                    selectedThreadThumbnailUrl = entry.titleImageUrl
-                    selectedThreadUrl = entry.boardUrl.takeIf { url ->
-                        Regex("""/res/\d+\.html?""", RegexOption.IGNORE_CASE).containsMatchIn(url)
-                    }
+                resolveHistoryEntrySelection(entry, persistedBoards)?.let { selection ->
+                    selectedBoardId = selection.boardId
+                    selectedThreadId = selection.threadId
+                    selectedThreadTitle = selection.threadTitle
+                    selectedThreadReplies = selection.threadReplies
+                    selectedThreadThumbnailUrl = selection.threadThumbnailUrl
+                    selectedThreadUrl = selection.threadUrl
                 }
             }
 
@@ -429,16 +397,14 @@ fun FutachaApp(
                         SavedThreadsScreen(
                             repository = manualRepository,
                             onThreadClick = { savedThread ->
-                                val targetBoard = persistedBoards.firstOrNull { it.id == savedThread.boardId }
-                                    ?: persistedBoards.firstOrNull { it.name == savedThread.boardName }
-                                if (targetBoard != null) {
-                                    selectedBoardId = targetBoard.id
-                                    selectedThreadId = savedThread.threadId
-                                    selectedThreadTitle = savedThread.title
-                                    selectedThreadReplies = savedThread.postCount
-                                    selectedThreadThumbnailUrl = null
-                                    selectedThreadUrl = null
-                                    isSavedThreadsVisible = false
+                                resolveSavedThreadSelection(savedThread, persistedBoards)?.let { selection ->
+                                    selectedBoardId = selection.boardId
+                                    selectedThreadId = selection.threadId
+                                    selectedThreadTitle = selection.threadTitle
+                                    selectedThreadReplies = selection.threadReplies
+                                    selectedThreadThumbnailUrl = selection.threadThumbnailUrl
+                                    selectedThreadUrl = selection.threadUrl
+                                    isSavedThreadsVisible = selection.isSavedThreadsVisible
                                 }
                             },
                             onBack = { isSavedThreadsVisible = false }
@@ -468,7 +434,7 @@ fun FutachaApp(
                         onAddBoard = { name, url ->
                             val normalizedUrl = normalizeBoardUrl(url)
                             if (persistedBoards.none { it.url.equals(normalizedUrl, ignoreCase = true) }) {
-                                val newBoard = createCustomBoard(
+                                val newBoard = createCustomBoardSummary(
                                     name = name,
                                     url = normalizedUrl,
                                     existingBoards = persistedBoards
@@ -544,8 +510,11 @@ fun FutachaApp(
                     LaunchedEffect(selectedBoardId, selectedThreadId, persistedBoards) {
                         val missingBoardId = selectedBoardId ?: return@LaunchedEffect
                         delay(2_000L)
-                        val stillMissing = selectedBoardId == missingBoardId &&
-                            persistedBoards.none { it.id == missingBoardId }
+                        val stillMissing = isSelectedBoardStillMissing(
+                            selectedBoardId = selectedBoardId,
+                            missingBoardId = missingBoardId,
+                            boards = persistedBoards
+                        )
                         if (stillMissing) {
                             selectedThreadId = null
                             selectedThreadTitle = null
@@ -651,10 +620,13 @@ fun FutachaApp(
                         if (target == null) {
                             false
                         } else {
-                            val isSameTarget = selectedBoardId == target.board.id &&
-                                selectedThreadId == target.threadId &&
-                                selectedThreadUrl == target.threadUrl
-                            if (!isSameTarget) {
+                            if (shouldApplyRegisteredThreadNavigation(
+                                    currentBoardId = selectedBoardId,
+                                    currentThreadId = selectedThreadId,
+                                    currentThreadUrl = selectedThreadUrl,
+                                    target = target
+                                )
+                            ) {
                                 selectedBoardId = target.board.id
                                 selectedThreadId = target.threadId
                                 selectedThreadTitle = null
@@ -790,136 +762,6 @@ fun FutachaApp(
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-private fun BoardSummary.isMockBoard(): Boolean {
-    return url.contains("example.com", ignoreCase = true)
-}
-
-private fun createCustomBoard(
-    name: String,
-    url: String,
-    existingBoards: List<BoardSummary>
-): BoardSummary {
-    val trimmedName = name.trim().ifBlank { "新しい板" }
-    val normalizedUrl = url.trim()
-    val boardId = generateBoardId(normalizedUrl, trimmedName, existingBoards)
-    return BoardSummary(
-        id = boardId,
-        name = trimmedName,
-        category = "",
-        url = normalizedUrl,
-        description = "$trimmedName のユーザー追加板",
-        pinned = false
-    )
-}
-
-private fun generateBoardId(
-    url: String,
-    fallbackName: String,
-    existingBoards: List<BoardSummary>
-): String {
-    val candidates = buildList {
-        extractPathSegment(url)?.let { add(it) }
-        extractSubdomain(url)?.let { add(it) }
-        val nameSlug = slugify(fallbackName)
-        if (nameSlug.isNotBlank()) add(nameSlug)
-    }
-    val base = candidates.firstOrNull { it.isNotBlank() } ?: "board"
-    var candidate = base
-    var suffix = 1
-    while (existingBoards.any { it.id.equals(candidate, ignoreCase = true) }) {
-        candidate = "$base$suffix"
-        suffix += 1
-    }
-    return candidate
-}
-
-private fun extractPathSegment(url: String): String? {
-    val withoutScheme = url.substringAfter("//", url)
-    val slashIndex = withoutScheme.indexOf('/')
-    if (slashIndex == -1) return null
-    val path = withoutScheme.substring(slashIndex + 1)
-        .substringBefore('?')
-        .substringBefore('#')
-    if (path.isBlank()) return null
-    val firstSegment = path.split('/')
-        .firstOrNull { it.isNotBlank() }
-        ?: return null
-    return slugify(firstSegment)
-}
-
-private fun extractSubdomain(url: String): String? {
-    val withoutScheme = url.substringAfter("//", url)
-    val host = withoutScheme.substringBefore('/')
-    if (host.isBlank()) return null
-    val parts = host.split('.')
-    if (parts.isEmpty()) return null
-    val candidate = when {
-        parts.size >= 3 -> parts.first()
-        else -> parts.first()
-    }
-    return slugify(candidate)
-}
-
-private fun slugify(value: String): String {
-    val normalized = value.lowercase()
-    val builder = StringBuilder()
-    normalized.forEach { ch ->
-        when {
-            ch.isLetterOrDigit() -> builder.append(ch)
-            ch == '-' || ch == '_' -> builder.append(ch)
-        }
-    }
-    return builder.toString()
-}
-
-internal fun normalizeBoardUrl(raw: String): String {
-    val trimmed = raw.trim()
-
-    // Keep user's protocol choice - don't force HTTPS conversion
-    // The network security config will handle cleartext traffic restrictions
-    val withScheme = when {
-        trimmed.startsWith("https://", ignoreCase = true) -> trimmed
-        trimmed.startsWith("http://", ignoreCase = true) -> {
-            // Log warning but keep HTTP if user explicitly specified it
-            Logger.w(TAG, "HTTP URL detected. Connection may fail if cleartext traffic is disabled: $trimmed")
-            trimmed
-        }
-        else -> "https://$trimmed"  // Default to HTTPS for security
-    }
-
-    if (withScheme.contains("futaba.php", ignoreCase = true)) {
-        return withScheme
-    }
-
-    return runCatching {
-        val parsed = Url(withScheme)
-        val normalizedPath = when {
-            parsed.encodedPath.isBlank() || parsed.encodedPath == "/" -> "/futaba.php"
-            parsed.encodedPath.endsWith("/") -> "${parsed.encodedPath}futaba.php"
-            else -> "${parsed.encodedPath}/futaba.php"
-        }
-        URLBuilder(parsed).apply { encodedPath = normalizedPath }.buildString()
-    }.getOrElse {
-        // Fallback: append futaba.php manually without dropping query/fragment
-        val fragment = withScheme.substringAfter('#', missingDelimiterValue = "")
-        val withoutFragment = withScheme.substringBefore('#')
-        val base = withoutFragment.substringBefore('?').trimEnd('/')
-        val query = withoutFragment.substringAfter('?', missingDelimiterValue = "")
-        buildString {
-            append(base)
-            append("/futaba.php")
-            if (query.isNotEmpty()) {
-                append('?')
-                append(query)
-            }
-            if (fragment.isNotEmpty()) {
-                append('#')
-                append(fragment)
             }
         }
     }

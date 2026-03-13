@@ -2,6 +2,18 @@ package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
+import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
+import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
+import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -44,6 +56,17 @@ internal fun decodeCatalogModeMapValue(raw: String?): Map<String, CatalogMode> {
 
 internal fun encodeCatalogModeMapValue(map: Map<String, CatalogMode>): Map<String, String> {
     return map.mapValues { it.value.name }
+}
+
+internal fun decodeStringListValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<String>>
+): List<String> {
+    if (raw == null) return emptyList()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.getOrDefault(emptyList())
 }
 
 internal fun decodeSelfPostIdentifierMapValue(
@@ -92,12 +115,12 @@ internal fun buildSelfPostStorageKey(threadId: String, boardId: String?): String
 internal fun sanitizeManualSaveDirectoryValue(input: String?): String {
     val trimmed = input?.trim().orEmpty()
     if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
-    if (trimmed == MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
     val withoutCurrentDirPrefix = if (trimmed.startsWith("./")) {
         trimmed.removePrefix("./")
     } else {
         trimmed
     }
+    if (withoutCurrentDirPrefix == MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
     return withoutCurrentDirPrefix.ifBlank { DEFAULT_MANUAL_SAVE_ROOT }
 }
 
@@ -111,6 +134,54 @@ internal fun decodeSaveDirectorySelectionValue(raw: String?): SaveDirectorySelec
     return runCatching {
         raw?.let { SaveDirectorySelection.valueOf(it) }
     }.getOrNull() ?: SaveDirectorySelection.MANUAL_INPUT
+}
+
+internal fun decodeThreadMenuConfigValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<ThreadMenuItemConfig>>
+): List<ThreadMenuItemConfig> {
+    if (raw.isNullOrBlank()) return defaultThreadMenuConfig()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeThreadMenuConfig)
+        .getOrDefault(defaultThreadMenuConfig())
+}
+
+internal fun decodeThreadSettingsMenuConfigValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<ThreadSettingsMenuItemConfig>>
+): List<ThreadSettingsMenuItemConfig> {
+    if (raw.isNullOrBlank()) return defaultThreadSettingsMenuConfig()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeThreadSettingsMenuConfig)
+        .getOrDefault(defaultThreadSettingsMenuConfig())
+}
+
+internal fun decodeThreadMenuEntriesValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<ThreadMenuEntryConfig>>
+): List<ThreadMenuEntryConfig> {
+    if (raw.isNullOrBlank()) return defaultThreadMenuEntries()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeThreadMenuEntries)
+        .getOrDefault(defaultThreadMenuEntries())
+}
+
+internal fun decodeCatalogNavEntriesValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<CatalogNavEntryConfig>>
+): List<CatalogNavEntryConfig> {
+    if (raw.isNullOrBlank()) return defaultCatalogNavEntries()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeCatalogNavEntries)
+        .getOrDefault(defaultCatalogNavEntries())
 }
 
 internal fun mergeSelfPostIdentifierMap(

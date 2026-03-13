@@ -18,9 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -99,14 +97,14 @@ class DefaultBoardRepository(
     private val boardInitMutex = Mutex()
 
     private val opImageCacheMutex = Mutex()
-    private val opImageCache = createOpImageCache()
+    private val opImageCache = createDefaultBoardRepositoryOpImageCache(opImageCacheMaxEntries)
 
     // Scope used by async close.
     private val closeScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
 
     // Protect close state and prevent duplicate close.
     private val closeMutex = Mutex()
-    private var isClosed = false
+    private val closeState = DefaultBoardRepositoryCloseState()
 
     companion object {
         private const val TAG = "DefaultBoardRepository"
@@ -126,48 +124,14 @@ class DefaultBoardRepository(
      * This should be called before any operations that require cookies.
      */
     private suspend fun ensureCookiesInitialized(board: String) {
-        var shouldInitialize = false
-        boardInitMutex.withLock {
-            if (!initializedBoards.contains(board)) {
-                val hasExistingCookies = cookieRepository?.let { repository ->
-                    // Prefer known futaba cookies, but fall back to any matching cookie for the host/path.
-                    repository.hasValidCookieFor(board, preferredNames = setOf("posttime", "cxyl")) ||
-                        repository.hasValidCookieFor(board)
-                } ?: false
-                if (hasExistingCookies) {
-                    initializedBoards.add(board)
-                    Logger.d(TAG, "Skipping catalog setup for board $board (existing cookies found)")
-                } else {
-                    shouldInitialize = true
-                }
-            }
-        }
-
-        if (!shouldInitialize) return
-
-        var fetchedSetup = false
-        try {
-            api.fetchCatalogSetup(board)
-            fetchedSetup = true
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Logger.e(TAG, "Failed to initialize cookies for board $board", e)
-            // Continue anyway - the operation might still work
-        }
-
-        val hasCookies = cookieRepository?.let { repository ->
-            repository.hasValidCookieFor(board, preferredNames = setOf("posttime", "cxyl")) ||
-                repository.hasValidCookieFor(board)
-        } ?: false
-
-        if (fetchedSetup || hasCookies) {
-            boardInitMutex.withLock {
-                initializedBoards.add(board)
-            }
-        } else {
-            Logger.w(TAG, "Cookie initialization incomplete for board $board; will retry on next request")
-        }
+        initializeDefaultBoardRepositoryCookies(
+            board = board,
+            logTag = TAG,
+            initializedBoards = initializedBoards,
+            cookieRepository = cookieRepository,
+            boardInitMutex = boardInitMutex,
+            fetchCatalogSetup = { api.fetchCatalogSetup(it) }
+        )
     }
 
     override suspend fun invalidateCookies(board: String) {
@@ -177,38 +141,25 @@ class DefaultBoardRepository(
     }
 
     private suspend fun <T> withRetryOnAuthFailure(board: String, block: suspend () -> T): T {
-        try {
-            ensureCookiesInitialized(board)
-            return block()
-        } catch (e: Exception) {
-            // If it looks like an auth/cookie issue (e.g. 403 or redirect loop), retry once
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            if (!isLikelyCookieAuthFailure(e)) throw e
-
-            Logger.w(TAG, "Operation failed for board $board, retrying with fresh cookies: ${e.message}")
-            invalidateCookies(board)
-            ensureCookiesInitialized(board)
-            return block()
-        }
-    }
-
-    private fun isLikelyCookieAuthFailure(error: Exception): Boolean {
-        val statusCode = (error as? NetworkException)?.statusCode
-        if (statusCode == 401 || statusCode == 403) return true
-        val message = error.message?.lowercase().orEmpty()
-        return message.contains("cookie") ||
-            message.contains("forbidden") ||
-            message.contains("auth") ||
-            message.contains("認証")
+        return withDefaultBoardRepositoryAuthRetry(
+            board = board,
+            logTag = TAG,
+            ensureCookiesInitialized = ::ensureCookiesInitialized,
+            invalidateCookies = ::invalidateCookies,
+            block = block
+        )
     }
 
     private suspend fun runWithInitializedCookies(
         board: String,
         block: suspend () -> Unit
     ) {
-        ensureCookiesInitialized(board)
-        val exec: suspend () -> Unit = { block() }
-        cookieRepository?.commitOnSuccess { exec() } ?: exec()
+        runDefaultBoardRepositoryWithInitializedCookies(
+            board = board,
+            cookieRepository = cookieRepository,
+            ensureCookiesInitialized = ::ensureCookiesInitialized,
+            block = block
+        )
     }
 
     override suspend fun getCatalog(
@@ -228,24 +179,24 @@ class DefaultBoardRepository(
 
     override suspend fun fetchOpImageUrl(board: String, threadId: String): String? {
         if (threadId.isBlank()) return null
-        val key = OpImageKey(board, threadId)
-        getCachedOpImageUrl(key)?.let { return it }
+        val key = DefaultBoardRepositoryOpImageKey(board, threadId)
+        getCachedOpImageUrl(key)?.let { return it.url }
 
-        // Apply timeout only to permit acquisition wait.
-        val resolvedUrl = withTimeoutOrNull(SEMAPHORE_TIMEOUT_MILLIS) {
-            opImageSemaphore.withPermit {
-                withRetryOnAuthFailure(board) {
-                    resolveOpImageUrl(board, threadId)
-                }
+        val fetchResult = fetchDefaultBoardRepositoryOpImageWithPermit(
+            threadId = threadId,
+            semaphoreTimeoutMillis = SEMAPHORE_TIMEOUT_MILLIS,
+            semaphore = opImageSemaphore,
+            logTag = TAG
+        ) {
+            withRetryOnAuthFailure(board) {
+                resolveOpImageUrl(board, threadId)
             }
         }
-        if (resolvedUrl == null) {
-            Logger.w(TAG, "Timeout waiting for image fetch permit for thread $threadId")
-            // Do not cache timeout-derived nulls.
+        if (fetchResult == null) {
             return null
         }
-        saveOpImageUrlToCache(key, resolvedUrl)
-        return resolvedUrl
+        saveOpImageUrlToCache(key, fetchResult.url)
+        return fetchResult.url
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
@@ -306,11 +257,13 @@ class DefaultBoardRepository(
     ): String? {
         // Post operations are sensitive, maybe don't auto-retry if side effects occurred?
         // For now, we'll use standard init check but not full retry loop to avoid double-posting risk
-        ensureCookiesInitialized(board)
-        val exec: suspend () -> String? = {
+        return runDefaultBoardRepositoryWithInitializedCookies(
+            board = board,
+            cookieRepository = cookieRepository,
+            ensureCookiesInitialized = ::ensureCookiesInitialized
+        ) {
             api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
         }
-        return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
     override suspend fun createThread(
@@ -324,11 +277,13 @@ class DefaultBoardRepository(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        ensureCookiesInitialized(board)
-        val exec: suspend () -> String? = {
+        return runDefaultBoardRepositoryWithInitializedCookies(
+            board = board,
+            cookieRepository = cookieRepository,
+            ensureCookiesInitialized = ::ensureCookiesInitialized
+        ) {
             api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
         }
-        return cookieRepository?.commitOnSuccess { exec() } ?: exec()
     }
 
     // Keep synchronous close lightweight and safe from main thread.
@@ -345,14 +300,10 @@ class DefaultBoardRepository(
     // Async close for callers that need to await cleanup.
     override fun closeAsync(): Job {
         return closeScope.launch {
-            val shouldClose = closeMutex.withLock {
-                if (isClosed) {
-                    false
-                } else {
-                    isClosed = true
-                    true
-                }
-            }
+            val shouldClose = beginDefaultBoardRepositoryClose(
+                closeMutex = closeMutex,
+                closeState = closeState
+            )
             if (!shouldClose) return@launch
             try {
                 (api as? AutoCloseable)?.close()
@@ -368,107 +319,38 @@ class DefaultBoardRepository(
     }
 
     override suspend fun clearOpImageCache(board: String?, threadId: String?) {
-        opImageCacheMutex.withLock {
-            if (board == null && threadId == null) {
-                opImageCache.clear()
-                return
-            }
-            opImageCache.removeIf { key, _ ->
-                val boardMatches = board == null || key.board == board
-                val threadMatches = threadId == null || key.threadId == threadId
-                boardMatches && threadMatches
-            }
-        }
+        clearDefaultBoardRepositoryOpImageCache(
+            cacheMutex = opImageCacheMutex,
+            cache = opImageCache,
+            board = board,
+            threadId = threadId
+        )
     }
-
-    private data class OpImageKey(val board: String, val threadId: String)
-
-    private data class OpImageCacheEntry(
-        val url: String?,
-        val recordedAtMillis: Long,
-        val ttlMillis: Long
-    )
-
-    // Simple access-order LRU cache. Not thread-safe by itself.
-    // All access must be guarded by opImageCacheMutex.
-    private class LruCache<K, V>(private val maxEntries: Int) {
-        private val cache = LinkedHashMap<K, V>()
-
-        operator fun get(key: K): V? {
-            val value = cache[key] ?: return null
-            // Emulate access-order in commonMain by moving key to the end.
-            cache.remove(key)
-            cache[key] = value
-            return value
-        }
-
-        operator fun set(key: K, value: V) {
-            // Keep insertion order stable by re-inserting existing keys.
-            cache.remove(key)
-            cache[key] = value
-            while (cache.size > maxEntries) {
-                val eldestKey = cache.entries.firstOrNull()?.key ?: break
-                cache.remove(eldestKey)
-            }
-        }
-
-        fun remove(key: K): V? = cache.remove(key)
-
-        fun clear() {
-            cache.clear()
-        }
-
-        fun removeIf(predicate: (K, V) -> Boolean) {
-            val iterator = cache.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (predicate(entry.key, entry.value)) {
-                    iterator.remove()
-                }
-            }
-        }
-
-        fun forEach(action: (K, V) -> Unit) {
-            cache.forEach { (key, value) -> action(key, value) }
-        }
-
-        val size: Int
-            get() = cache.size
-    }
-
-    private fun createOpImageCache() = LruCache<OpImageKey, OpImageCacheEntry>(opImageCacheMaxEntries)
 
     @OptIn(ExperimentalTime::class)
-    private suspend fun getCachedOpImageUrl(key: OpImageKey): String? {
+    private suspend fun getCachedOpImageUrl(key: DefaultBoardRepositoryOpImageKey): DefaultBoardRepositoryOpImageCacheEntry? {
         val now = Clock.System.now().toEpochMilliseconds()
         return opImageCacheMutex.withLock {
-            val entry = opImageCache[key]
-            if (entry == null) return@withLock null
-            if (now - entry.recordedAtMillis <= entry.ttlMillis) {
-                return@withLock entry.url
-            }
-            opImageCache.remove(key)
-            return@withLock null
+            resolveDefaultBoardRepositoryCachedOpImageUrl(
+                cache = opImageCache,
+                key = key,
+                now = now
+            )
         }
     }
 
     @OptIn(ExperimentalTime::class)
-    private suspend fun saveOpImageUrlToCache(key: OpImageKey, url: String?) {
+    private suspend fun saveOpImageUrlToCache(key: DefaultBoardRepositoryOpImageKey, url: String?) {
         val now = Clock.System.now().toEpochMilliseconds()
         opImageCacheMutex.withLock {
-            val ttl = if (url == null) {
-                DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS
-            } else {
-                opImageCacheTtlMillis
-            }
-            opImageCache[key] = OpImageCacheEntry(url = url, recordedAtMillis = now, ttlMillis = ttl)
-            purgeExpiredEntriesLocked(now)
-        }
-    }
-
-    private fun purgeExpiredEntriesLocked(now: Long) {
-        opImageCache.removeIf { _, entry ->
-            now - entry.recordedAtMillis > entry.ttlMillis
+            saveDefaultBoardRepositoryOpImageUrlToCache(
+                cache = opImageCache,
+                key = key,
+                url = url,
+                now = now,
+                hitTtlMillis = opImageCacheTtlMillis,
+                missTtlMillis = DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS
+            )
         }
     }
 
@@ -477,21 +359,19 @@ class DefaultBoardRepository(
         threadId: String
     ): String? {
         val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-        return try {
-            val snippet = withContext(AppDispatchers.io) {
-                api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+        return resolveDefaultBoardRepositoryOpImageUrl(
+            threadId = threadId,
+            logTag = TAG,
+            fetchThreadHead = {
+                withContext(AppDispatchers.io) {
+                    api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+                }
+            },
+            extractOpImageUrl = { snippet ->
+                withContext(AppDispatchers.parsing) {
+                    parser.extractOpImageUrl(snippet, baseUrl)
+                }
             }
-            // Parse on background dispatcher.
-            withContext(AppDispatchers.parsing) {
-                parser.extractOpImageUrl(snippet, baseUrl)
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            Logger.w(TAG, "Failed to resolve OP image for thread $threadId: ${e.message}")
-            null
-        }
+        )
     }
 }
-
-

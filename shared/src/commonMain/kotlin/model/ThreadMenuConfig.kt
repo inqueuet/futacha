@@ -48,6 +48,7 @@ fun normalizeThreadMenuConfig(config: List<ThreadMenuItemConfig>): List<ThreadMe
         val existing = config.firstOrNull { it.id == id }
         val enabled = when {
             id == ThreadMenuItemId.Settings -> true
+            id == ThreadMenuItemId.Refresh -> true
             existing != null -> existing.isEnabled
             else -> true
         }
@@ -226,7 +227,11 @@ fun normalizeThreadMenuEntries(
     val barItems = merged.filter { it.placement == ThreadMenuEntryPlacement.BAR }
         .sortedWith(compareBy<ThreadMenuEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
     if (barItems.size > maxBarItems) {
-        val overflow = barItems.drop(maxBarItems)
+        val preservedBarIds = setOf(ThreadMenuEntryId.Settings)
+        val lockedBarItems = barItems.filter { it.id in preservedBarIds }
+        val availableSlots = (maxBarItems - lockedBarItems.size).coerceAtLeast(0)
+        val movableBarItems = barItems.filterNot { it.id in preservedBarIds }
+        val overflow = movableBarItems.drop(availableSlots)
         overflow.forEach { item ->
             val idx = merged.indexOfFirst { it.id == item.id }
             if (idx >= 0) {
