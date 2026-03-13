@@ -799,307 +799,124 @@ fun ThreadScreen(
         typography = MaterialTheme.typography,
         shapes = MaterialTheme.shapes
     ) {
-    val historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = true,
-        drawerContent = {
-            HistoryDrawerContent(
+        val historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks
+        val readAloudIndicatorSegment = (readAloudStatus as? ReadAloudStatus.Speaking)?.segment
+        ThreadScreenScaffoldHost(
+            bindings = ThreadScreenScaffoldBindings(
+                modifier = modifier,
+                drawerState = drawerState,
+                snackbarHostState = snackbarHostState,
                 history = history,
-                onHistoryEntryDismissed = historyDrawerCallbacks.onHistoryEntryDismissed,
-                onHistoryEntrySelected = historyDrawerCallbacks.onHistoryEntrySelected,
-                onBoardClick = historyDrawerCallbacks.onBoardClick,
-                onRefreshClick = historyDrawerCallbacks.onRefreshClick,
-                onBatchDeleteClick = historyDrawerCallbacks.onBatchDeleteClick,
-                onSettingsClick = historyDrawerCallbacks.onSettingsClick
+                historyDrawerCallbacks = historyDrawerCallbacks,
+                boardName = board.name,
+                resolvedThreadTitle = resolvedThreadTitle,
+                resolvedReplyCount = resolvedReplyCount,
+                statusLabel = statusLabel,
+                isSearchActive = isSearchActive,
+                searchQuery = searchQuery,
+                currentSearchResultIndex = currentSearchResultIndex,
+                totalSearchMatches = searchMatches.size,
+                topBarCallbacks = uiBindings.topBarCallbacks,
+                threadMenuEntries = preferencesState.threadMenuEntries,
+                actionBarCallbacks = uiBindings.actionBarCallbacks,
+                isDrawerOpen = isDrawerOpen,
+                backSwipeEdgePx = backSwipeEdgePx,
+                backSwipeTriggerPx = backSwipeTriggerPx,
+                onDismissDrawerTap = {
+                    coroutineScope.launch { drawerState.close() }
+                },
+                onBackSwipe = onBack,
+                actionInProgress = actionInProgress,
+                readAloudIndicatorSegment = readAloudIndicatorSegment,
+                appColorScheme = appColorScheme
             )
+        ) {
+                ThreadScreenContentHost(
+                    bindings = ThreadScreenContentHostBindings(
+                        uiState = uiState.value,
+                        refreshThread = refreshThread,
+                        threadFilterBinding = threadFilterBinding,
+                        persistedSelfPostIdentifiers = persistedSelfPostIdentifiers,
+                        ngHeaders = ngHeaders,
+                        ngWords = ngWords,
+                        ngFilteringEnabled = ngFilteringEnabled,
+                        threadFilterCache = threadFilterCache,
+                        lazyListState = lazyListState,
+                        saidaneOverrides = saidaneOverrides,
+                        selfPostIdentifierSet = selfPostIdentifierSet,
+                        postHighlightRanges = postHighlightRanges,
+                        postOverlayState = postOverlayState,
+                        setPostOverlayState = { postOverlayState = it },
+                        onSaidaneClick = handleSaidaneAction,
+                        onMediaClick = mediaBindings.onMediaClick,
+                        onUrlClick = handleUrlClick,
+                        onRefresh = performRefresh,
+                        isRefreshing = isRefreshing
+                    ),
+                    modifier = Modifier.matchParentSize()
+                )
         }
-    ) {
-        Scaffold(
-            modifier = modifier,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
-                MaterialTheme(
-                    colorScheme = appColorScheme,
-                    typography = MaterialTheme.typography,
-                    shapes = MaterialTheme.shapes
-                ) {
-                    ThreadTopBar(
-                        boardName = board.name,
-                        threadTitle = resolvedThreadTitle,
-                        replyCount = resolvedReplyCount,
-                        statusLabel = statusLabel,
-                        isSearchActive = isSearchActive,
-                        searchQuery = searchQuery,
-                        currentSearchIndex = currentSearchResultIndex,
-                        totalSearchMatches = searchMatches.size,
-                        onSearchQueryChange = uiBindings.topBarCallbacks.onSearchQueryChange,
-                        onSearchPrev = uiBindings.topBarCallbacks.onSearchPrev,
-                        onSearchNext = uiBindings.topBarCallbacks.onSearchNext,
-                        onSearchSubmit = uiBindings.topBarCallbacks.onSearchSubmit,
-                        onSearchClose = uiBindings.topBarCallbacks.onSearchClose,
-                        onBack = uiBindings.topBarCallbacks.onBack,
-                        onOpenHistory = uiBindings.topBarCallbacks.onOpenHistory,
-                        onSearch = uiBindings.topBarCallbacks.onSearch,
-                        onMenuSettings = uiBindings.topBarCallbacks.onMenuSettings
-                    )
-                }
-            },
-            bottomBar = {
-                MaterialTheme(
-                    colorScheme = appColorScheme,
-                    typography = MaterialTheme.typography,
-                    shapes = MaterialTheme.shapes
-                ) {
-                    ThreadActionBar(
-                        menuEntries = preferencesState.threadMenuEntries,
-                        onAction = uiBindings.actionBarCallbacks.onAction
-                    )
-                }
-            }
-        ) { innerPadding ->
-            val contentModifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .pointerInput(isDrawerOpen) {
-                    if (!isDrawerOpen) return@pointerInput
-                    awaitPointerEventScope {
-                        awaitFirstDown()
-                        coroutineScope.launch { drawerState.close() }
-                    }
-                }
-                .pointerInput(onBack, isDrawerOpen, backSwipeEdgePx, backSwipeTriggerPx) {
-                    if (isDrawerOpen) return@pointerInput
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.position.x > backSwipeEdgePx) {
-                            waitForUpOrCancellation()
-                            return@awaitEachGesture
-                        }
-                        var totalDx = 0f
-                        var totalDy = 0f
-                        val pointerId = down.id
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == pointerId }
-                                ?: event.changes.firstOrNull()
-                                ?: continue
-                            if (event.changes.none { it.pressed } || !change.pressed) break
-                            val delta = change.positionChange()
-                            totalDx = (totalDx + delta.x).coerceAtLeast(0f)
-                            totalDy += abs(delta.y)
-                            if (totalDy > backSwipeTriggerPx && totalDy > totalDx) {
-                                break
-                            }
-                            if (totalDx > backSwipeTriggerPx && totalDx > totalDy) {
-                                change.consume()
-                                onBack()
-                                break
-                            }
-                        }
-                    }
-                }
-                .background(MaterialTheme.colorScheme.background)
-                .padding(horizontal = 0.dp)
 
-            Box(modifier = contentModifier) {
-                when (val state = uiState.value) {
-                    ThreadUiState.Loading -> ThreadLoading(modifier = Modifier.matchParentSize())
-                    is ThreadUiState.Error -> ThreadError(
-                        message = state.message,
-                        modifier = Modifier.matchParentSize(),
-                        onRetry = refreshThread
-                    )
-
-                    is ThreadUiState.Success -> {
-                        val threadFilterUiState = threadFilterBinding.currentState()
-                        val threadFilterComputationState = remember(
-                            threadFilterUiState,
-                            persistedSelfPostIdentifiers,
-                            ngHeaders,
-                            ngWords,
-                            ngFilteringEnabled
-                        ) {
-                            resolveThreadFilterComputationState(
-                                uiState = threadFilterUiState,
-                                selfPostIdentifiers = persistedSelfPostIdentifiers,
-                                ngHeaders = ngHeaders,
-                                ngWords = ngWords,
-                                ngFilteringEnabled = ngFilteringEnabled
-                            )
-                        }
-                        val hasNgFilters = threadFilterComputationState.hasNgFilters
-                        val hasThreadFilters = threadFilterComputationState.hasThreadFilters
-                        val postsFingerprint by produceState(
-                            initialValue = buildLightweightThreadPostListFingerprint(state.page.posts),
-                            key1 = state.page.posts,
-                            key2 = threadFilterComputationState.shouldComputeFullPostFingerprint
-                        ) {
-                            value = if (threadFilterComputationState.shouldComputeFullPostFingerprint) {
-                                withContext(AppDispatchers.parsing) {
-                                    buildThreadPostListFingerprint(state.page.posts)
-                                }
-                            } else {
-                                buildLightweightThreadPostListFingerprint(state.page.posts)
-                            }
-                        }
-                        val filterCacheKey = remember(
-                            postsFingerprint,
-                            hasNgFilters,
-                            ngHeaders,
-                            ngWords,
-                            threadFilterComputationState
-                        ) {
-                            buildThreadFilterCacheKey(
-                                postsFingerprint = postsFingerprint,
-                                computationState = threadFilterComputationState,
-                                ngHeaders = ngHeaders,
-                                ngWords = ngWords
-                            )
-                        }
-                        val cachedFilteredPage = remember(filterCacheKey, hasNgFilters, hasThreadFilters) {
-                            if (!hasNgFilters && !hasThreadFilters) {
-                                null
-                            } else {
-                                threadFilterCache[filterCacheKey]
-                            }
-                        }
-                        val filteredPage by produceState(
-                            initialValue = cachedFilteredPage ?: state.page,
-                            key1 = filterCacheKey
-                        ) {
-                            threadFilterCache[filterCacheKey]?.let {
-                                value = it
-                                return@produceState
-                            }
-                            if (!hasNgFilters && !hasThreadFilters) {
-                                value = state.page
-                                return@produceState
-                            }
-                            // Keyword filtering can be expensive in large threads.
-                            if (threadFilterComputationState.criteria.options.contains(ThreadFilterOption.Keyword)) {
-                                delay(THREAD_FILTER_DEBOUNCE_MILLIS)
-                            }
-                            value = withContext(AppDispatchers.parsing) {
-                                val hasNgWordFilters = hasNgFilters && ngWords.any { it.isNotBlank() }
-                                val hasThreadLowerBodyFilters = threadFilterComputationState.criteria.options.any {
-                                    it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
-                                }
-                                val precomputedLowerBodyByPostId = if (hasNgWordFilters || hasThreadLowerBodyFilters) {
-                                    buildLowerBodyByPostId(state.page.posts)
-                                } else {
-                                    emptyMap()
-                                }
-                                val ngFiltered = applyNgFilters(
-                                    page = state.page,
-                                    ngHeaders = ngHeaders,
-                                    ngWords = ngWords,
-                                    enabled = hasNgFilters,
-                                    precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
-                                )
-                                applyThreadFilters(
-                                    page = ngFiltered,
-                                    criteria = threadFilterComputationState.criteria,
-                                    precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
-                                )
-                            }
-                            if (threadFilterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
-                                val iterator = threadFilterCache.entries.iterator()
-                                if (iterator.hasNext()) {
-                                    iterator.next()
-                                    iterator.remove()
-                                }
-                            }
-                            threadFilterCache[filterCacheKey] = value
-                        }
-                        ThreadContent(
-                            page = filteredPage,
-                            listState = lazyListState,
-                            saidaneOverrides = saidaneOverrides,
-                            selfPostIdentifiers = selfPostIdentifierSet,
-                            searchHighlightRanges = postHighlightRanges,
-                            onPostLongPress = { post ->
-                                postOverlayState = openThreadPostActionOverlay(
-                                    currentState = postOverlayState,
-                                    post = post
-                                )
-                            },
-                            onQuoteRequestedForPost = { post ->
-                                postOverlayState = openThreadQuoteOverlay(
-                                    currentState = postOverlayState,
-                                    post = post
-                                )
-                            },
-                            onSaidaneClick = handleSaidaneAction,
-                            onMediaClick = mediaBindings.onMediaClick,
-                            onUrlClick = handleUrlClick,
-                            onRefresh = performRefresh,
-                            isRefreshing = isRefreshing,
-                            modifier = Modifier.matchParentSize()
-                        )
-                    }
-                }
-
-                if (actionInProgress) {
-                    LinearProgressIndicator(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .fillMaxWidth()
-                    )
-                }
-                if (readAloudStatus is ReadAloudStatus.Speaking) {
-                    val segment = (readAloudStatus as ReadAloudStatus.Speaking).segment
-                    ReadAloudIndicator(
-                        segment = segment,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 80.dp)
-                    )
-                }
-            }
-        }
-    }
-
-    val sheetTarget = postOverlayState.actionSheetState.targetPost
-    if (postOverlayState.actionSheetState.isActionSheetVisible && sheetTarget != null) {
-        ThreadPostActionSheet(
-            post = sheetTarget,
-            onDismiss = {
+    val replyDialogState = replyDialogBinding.currentState()
+    val currentFilterUiState = threadFilterBinding.currentState()
+    ThreadScreenOverlayHost(
+        bindings = ThreadScreenOverlayHostBindings(
+            postOverlayState = postOverlayState,
+            sheetOverlayState = sheetOverlayState,
+            modalOverlayState = modalOverlayState,
+            history = history,
+            boardName = board.name,
+            resolvedThreadTitle = resolvedThreadTitle,
+            replyDialogState = replyDialogState,
+            mediaPreviewState = mediaPreviewState,
+            mediaPreviewEntries = mediaPreviewEntries,
+            galleryPosts = currentSuccessState?.page?.posts,
+            isSingleMediaSaveInProgress = isSingleMediaSaveInProgress,
+            ngHeaders = ngHeaders,
+            ngWords = ngWords,
+            ngFilteringEnabled = ngFilteringEnabled,
+            readAloudSegments = readAloudSegments,
+            currentReadAloudIndex = currentReadAloudIndex,
+            firstVisibleSegmentIndex = firstVisibleSegmentIndex,
+            readAloudStatus = readAloudStatus,
+            isPrivacyFilterEnabled = isPrivacyFilterEnabled,
+            saveProgress = saveProgress,
+            preferencesState = preferencesState,
+            uiBindings = uiBindings,
+            filterUiState = currentFilterUiState,
+            fileSystem = fileSystem,
+            autoSavedThreadRepository = autoSaveRepository,
+            cookieRepository = cookieRepository,
+            appColorScheme = appColorScheme,
+            onDismissPostActionSheet = {
                 postOverlayState = dismissThreadPostActionOverlay(postOverlayState)
             },
-            onQuote = { openQuoteSelection(sheetTarget) },
-            onNgRegister = { handleNgRegistration(sheetTarget) },
-            onSaidane = { handleSaidaneAction(sheetTarget) },
-            isSaidaneEnabled = resolveThreadPostActionSheetState(
-                isSelfPost = isSelfPost(sheetTarget)
-            ).isSaidaneEnabled,
-            onDelRequest = { handleDelRequest(sheetTarget) },
-            onDelete = { openDeleteDialog(sheetTarget) }
-        )
-    }
-
-    val deleteTarget = postOverlayState.deleteDialogState.targetPost
-    if (deleteTarget != null) {
-        DeleteByUserDialog(
-            post = deleteTarget,
-            password = postOverlayState.deleteDialogState.password,
-            onPasswordChange = { value ->
+            isSaidaneEnabled = { post ->
+                resolveThreadPostActionSheetState(
+                    isSelfPost = isSelfPost(post)
+                ).isSaidaneEnabled
+            },
+            onQuoteFromActionSheet = openQuoteSelection,
+            onNgRegisterFromActionSheet = handleNgRegistration,
+            onSaidaneFromActionSheet = handleSaidaneAction,
+            onDelRequestFromActionSheet = handleDelRequest,
+            onDeleteFromActionSheet = openDeleteDialog,
+            onDeleteDialogPasswordChange = { value ->
                 postOverlayState = updateThreadDeleteOverlayInput(
                     currentState = postOverlayState,
                     password = value
                 )
             },
-            imageOnly = postOverlayState.deleteDialogState.imageOnly,
-            onImageOnlyChange = { value ->
+            onDeleteDialogImageOnlyChange = { value ->
                 postOverlayState = updateThreadDeleteOverlayInput(
                     currentState = postOverlayState,
                     imageOnly = value
                 )
             },
-            onDismiss = {
+            onDeleteDialogDismiss = {
                 postOverlayState = dismissThreadDeleteOverlay(postOverlayState)
             },
-            onConfirm = {
+            onDeleteDialogConfirm = { deleteTarget ->
                 val submitOutcome = resolveThreadScreenDeleteSubmitOutcome(
                     overlayState = postOverlayState,
                     targetPost = deleteTarget,
@@ -1108,228 +925,73 @@ fun ThreadScreen(
                 )
                 if (submitOutcome.validationMessage != null) {
                     showMessage(submitOutcome.validationMessage)
-                    return@DeleteByUserDialog
+                } else {
+                    val deleteActionConfig = submitOutcome.actionConfig
+                    if (deleteActionConfig != null) {
+                        postOverlayState = submitOutcome.nextOverlayState ?: postOverlayState
+                        submitOutcome.normalizedPassword?.let(updateLastUsedDeleteKey)
+                        actionBindings.launch(
+                            successMessage = "本人削除を実行しました",
+                            failurePrefix = "本人削除に失敗しました",
+                            onSuccess = { refreshThread() }
+                        ) {
+                            performThreadDeleteByUserAction(
+                                config = deleteActionConfig,
+                                callbacks = threadDeleteByUserActionCallbacks
+                            )
+                        }
+                    }
                 }
-                val deleteActionConfig = submitOutcome.actionConfig ?: return@DeleteByUserDialog
-                postOverlayState = submitOutcome.nextOverlayState ?: postOverlayState
-                submitOutcome.normalizedPassword?.let(updateLastUsedDeleteKey)
-                actionBindings.launch(
-                    successMessage = "本人削除を実行しました",
-                    failurePrefix = "本人削除に失敗しました",
-                    onSuccess = { refreshThread() }
-                ) {
-                    performThreadDeleteByUserAction(
-                        config = deleteActionConfig,
-                        callbacks = threadDeleteByUserActionCallbacks
-                    )
+            },
+            onQuoteSelectionDismiss = {
+                postOverlayState = dismissThreadQuoteOverlay(postOverlayState)
+            },
+            onReplySubmit = {
+                val submitState = replyDialogBinding.currentState()
+                val submitOutcome = resolveThreadScreenReplySubmitOutcome(
+                    state = submitState,
+                    boardUrl = effectiveBoardUrl,
+                    threadId = threadId
+                )
+                if (submitOutcome.validationMessage != null) {
+                    showMessage(submitOutcome.validationMessage)
+                } else {
+                    val replyActionConfig = submitOutcome.actionConfig
+                    val dismissedState = submitOutcome.dismissedState
+                    if (replyActionConfig != null && dismissedState != null) {
+                        replyDialogBinding.setState(dismissedState)
+                        submitOutcome.normalizedPassword?.let(updateLastUsedDeleteKey)
+                        actionBindings.launch(
+                            successMessage = "返信を送信しました",
+                            failurePrefix = "返信の送信に失敗しました",
+                            onSuccess = { thisNo ->
+                                if (!thisNo.isNullOrBlank()) {
+                                    stateStore?.let { store ->
+                                        coroutineScope.launch {
+                                            store.addSelfPostIdentifier(
+                                                threadId = threadId,
+                                                identifier = thisNo,
+                                                boardId = board.id.ifBlank { null }
+                                            )
+                                        }
+                                    }
+                                }
+                                val completedState = submitOutcome.completedState
+                                if (completedState != null) {
+                                    replyDialogBinding.setState(completedState)
+                                    refreshThread()
+                                }
+                            }
+                        ) {
+                            performThreadReplyAction(
+                                config = replyActionConfig,
+                                callbacks = threadReplyActionCallbacks
+                            )
+                        }
+                    }
                 }
             }
         )
-    }
-
-    val quoteTarget = postOverlayState.quoteSelectionState.targetPost
-    if (quoteTarget != null) {
-        QuoteSelectionDialog(
-            post = quoteTarget,
-            onDismiss = { postOverlayState = dismissThreadQuoteOverlay(postOverlayState) },
-            onConfirm = uiBindings.quoteSelectionConfirm
-        )
-    }
-
-    val replyDialogState = replyDialogBinding.currentState()
-    if (replyDialogState.isVisible) {
-        val emailPresets = remember { listOf("ID表示", "IP表示", "sage") }
-        val subtitle = remember(board.name, resolvedThreadTitle) {
-            listOfNotNull(
-                board.name.takeIf { it.isNotBlank() },
-                resolvedThreadTitle.takeIf { it.isNotBlank() }
-            ).joinToString(" · ").ifBlank { null }
-        }
-        MaterialTheme(
-            colorScheme = appColorScheme,
-            typography = MaterialTheme.typography,
-            shapes = MaterialTheme.shapes
-        ) {
-            ThreadFormDialog(
-                title = "返信",
-                subtitle = subtitle,
-                barColorScheme = appColorScheme,
-                attachmentPickerPreference = preferencesState.attachmentPickerPreference,
-                preferredFileManagerPackage = preferencesState.preferredFileManagerPackage,
-                emailPresets = emailPresets,
-                comment = replyDialogState.draft.comment,
-                onCommentChange = uiBindings.replyDialogCallbacks.onCommentChange,
-                name = replyDialogState.draft.name,
-                onNameChange = uiBindings.replyDialogCallbacks.onNameChange,
-                email = replyDialogState.draft.email,
-                onEmailChange = uiBindings.replyDialogCallbacks.onEmailChange,
-                subject = replyDialogState.draft.subject,
-                onSubjectChange = uiBindings.replyDialogCallbacks.onSubjectChange,
-                password = replyDialogState.draft.password,
-                onPasswordChange = uiBindings.replyDialogCallbacks.onPasswordChange,
-                selectedImage = replyDialogState.draft.imageData,
-                onImageSelected = uiBindings.replyDialogCallbacks.onImageSelected,
-                onDismiss = uiBindings.replyDialogCallbacks.onDismiss,
-                onSubmit = {
-                    val submitState = replyDialogBinding.currentState()
-                    val submitOutcome = resolveThreadScreenReplySubmitOutcome(
-                        state = submitState,
-                        boardUrl = effectiveBoardUrl,
-                        threadId = threadId
-                    )
-                    if (submitOutcome.validationMessage != null) {
-                        showMessage(submitOutcome.validationMessage)
-                        return@ThreadFormDialog
-                    }
-                    val replyActionConfig = submitOutcome.actionConfig ?: return@ThreadFormDialog
-                    replyDialogBinding.setState(submitOutcome.dismissedState ?: return@ThreadFormDialog)
-                    submitOutcome.normalizedPassword?.let(updateLastUsedDeleteKey)
-                    actionBindings.launch(
-                        successMessage = "返信を送信しました",
-                        failurePrefix = "返信の送信に失敗しました",
-                        onSuccess = { thisNo ->
-                            if (!thisNo.isNullOrBlank()) {
-                                stateStore?.let { store ->
-                                    coroutineScope.launch {
-                                        store.addSelfPostIdentifier(
-                                            threadId = threadId,
-                                            identifier = thisNo,
-                                            boardId = board.id.ifBlank { null }
-                                        )
-                                    }
-                                }
-                            }
-                            val completedState = submitOutcome.completedState
-                            if (completedState != null) {
-                                replyDialogBinding.setState(completedState)
-                                refreshThread()
-                            }
-                        }
-                    ) {
-                        performThreadReplyAction(
-                            config = replyActionConfig,
-                            callbacks = threadReplyActionCallbacks
-                        )
-                    }
-                },
-                onClear = uiBindings.replyDialogCallbacks.onClear,
-                isSubmitEnabled = replyDialogState.draft.comment.trim().isNotBlank() &&
-                    hasDeleteKeyForSubmit(replyDialogState.draft.password),
-                sendDescription = "返信",
-                showSubject = true,
-                showPassword = true
-            )
-        }
-    }
-
-    val mediaPreviewDialogState = resolveThreadMediaPreviewDialogState(
-        state = mediaPreviewState,
-        entries = mediaPreviewEntries,
-        isSaveInProgress = isSingleMediaSaveInProgress
     )
-    mediaPreviewDialogState?.let { dialogState ->
-        ThreadMediaPreviewDialog(
-            state = dialogState,
-            onDismiss = uiBindings.mediaPreviewDialogCallbacks.onDismiss,
-            onNavigateNext = uiBindings.mediaPreviewDialogCallbacks.onNavigateNext,
-            onNavigatePrevious = uiBindings.mediaPreviewDialogCallbacks.onNavigatePrevious,
-            onSave = uiBindings.mediaPreviewDialogCallbacks.onSave
-        )
-    }
-
-    if (modalOverlayState.isGalleryVisible && currentSuccessState != null) {
-        uiBindings.galleryCallbacks?.let { galleryCallbacks ->
-            ThreadImageGallery(
-                posts = currentSuccessState.page.posts,
-                onDismiss = galleryCallbacks.onDismiss,
-                onImageClick = galleryCallbacks.onImageClick
-            )
-        }
-    }
-    if (sheetOverlayState.isSettingsVisible) {
-        ThreadSettingsSheet(
-            onDismiss = uiBindings.settingsSheetCallbacks.onDismiss,
-            menuEntries = preferencesState.threadMenuEntries,
-            onAction = uiBindings.settingsSheetCallbacks.onAction
-        )
-    }
-
-    if (sheetOverlayState.isFilterVisible) {
-        val filterUiState = threadFilterBinding.currentState()
-        ThreadFilterSheet(
-            selectedOptions = filterUiState.options,
-            activeSortOption = filterUiState.sortOption,
-            keyword = filterUiState.keyword,
-            onOptionToggle = uiBindings.filterSheetCallbacks.onOptionToggle,
-            onKeywordChange = uiBindings.filterSheetCallbacks.onKeywordChange,
-            onClear = uiBindings.filterSheetCallbacks.onClear,
-            onDismiss = uiBindings.filterSheetCallbacks.onDismiss
-        )
-    }
-
-    if (sheetOverlayState.isReadAloudControlsVisible) {
-        ReadAloudControlSheet(
-            segments = readAloudSegments,
-            currentIndex = currentReadAloudIndex,
-            visibleSegmentIndex = firstVisibleSegmentIndex,
-            status = readAloudStatus,
-            onSeek = uiBindings.readAloudControlCallbacks.onSeek,
-            onSeekToVisible = uiBindings.readAloudControlCallbacks.onSeekToVisible,
-            onPlay = uiBindings.readAloudControlCallbacks.onPlay,
-            onPause = uiBindings.readAloudControlCallbacks.onPause,
-            onStop = uiBindings.readAloudControlCallbacks.onStop,
-            onDismiss = uiBindings.readAloudControlCallbacks.onDismiss
-        )
-    }
-
-    if (postOverlayState.isNgManagementVisible) {
-        NgManagementSheet(
-            onDismiss = uiBindings.ngManagementCallbacks.onDismiss,
-            ngHeaders = ngHeaders,
-            ngWords = ngWords,
-            ngFilteringEnabled = ngFilteringEnabled,
-            onAddHeader = uiBindings.ngManagementCallbacks.onAddHeader,
-            onAddWord = uiBindings.ngManagementCallbacks.onAddWord,
-            onRemoveHeader = uiBindings.ngManagementCallbacks.onRemoveHeader,
-            onRemoveWord = uiBindings.ngManagementCallbacks.onRemoveWord,
-            onToggleFiltering = uiBindings.ngManagementCallbacks.onToggleFiltering,
-            initialInput = postOverlayState.ngHeaderPrefill
-        )
-    }
-
-    // Privacy filter overlay - allows interactions to pass through
-    if (isPrivacyFilterEnabled) {
-        Canvas(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            drawRect(color = Color.White.copy(alpha = 0.5f))
-        }
-    }
-
-    // 保存進捗ダイアログ
-    SaveProgressDialog(
-        progress = saveProgress,
-        onDismissRequest = uiBindings.saveProgressDialogCallbacks.onDismissRequest,
-        onCancelRequest = uiBindings.saveProgressDialogCallbacks.onCancelRequest
-    )
-
-    if (modalOverlayState.isGlobalSettingsVisible) {
-        GlobalSettingsScreen(
-            onBack = uiBindings.globalSettingsCallbacks.onBack,
-            preferencesState = preferencesState,
-            preferencesCallbacks = uiBindings.globalSettingsCallbacks.preferencesCallbacks,
-            onOpenCookieManager = uiBindings.globalSettingsCallbacks.onOpenCookieManager,
-            historyEntries = history,
-            fileSystem = fileSystem,
-            autoSavedThreadRepository = autoSaveRepository
-        )
-    }
-
-    if (modalOverlayState.isCookieManagementVisible && cookieRepository != null) {
-        CookieManagementScreen(
-            onBack = uiBindings.cookieManagementCallbacks.onBack,
-            repository = cookieRepository
-        )
-    }
 }
 }

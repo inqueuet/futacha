@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -127,6 +129,31 @@ internal data class CreateThreadDraft(
     val title: String = "",
     val comment: String = "",
     val password: String = ""
+)
+
+internal fun saveCreateThreadDraft(draft: CreateThreadDraft): List<String> {
+    return listOf(
+        draft.name,
+        draft.email,
+        draft.title,
+        draft.comment,
+        draft.password
+    )
+}
+
+internal fun restoreCreateThreadDraft(saved: List<Any?>): CreateThreadDraft {
+    return CreateThreadDraft(
+        name = saved.getOrNull(0) as? String ?: "",
+        email = saved.getOrNull(1) as? String ?: "",
+        title = saved.getOrNull(2) as? String ?: "",
+        comment = saved.getOrNull(3) as? String ?: "",
+        password = saved.getOrNull(4) as? String ?: ""
+    )
+}
+
+internal val CreateThreadDraftSaver: Saver<CreateThreadDraft, Any> = listSaver(
+    save = { draft -> saveCreateThreadDraft(draft) },
+    restore = ::restoreCreateThreadDraft
 )
 
 internal fun emptyCreateThreadDraft(): CreateThreadDraft = CreateThreadDraft()

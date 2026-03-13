@@ -15,6 +15,8 @@ internal fun buildVisibleCatalogItems(
     query: String
 ): List<CatalogItem> {
     return items
+        // Guard Lazy* item keys from parser/network duplicates while keeping server order.
+        .deduplicateByIdentity()
         .let { mode.applyClientTransform(it, watchWords) }
         .filterByCatalogNgWords(catalogNgWords, catalogNgFilteringEnabled)
         .filterByQuery(query)
@@ -25,7 +27,11 @@ internal fun mergeWatchSourceCatalogItems(
 ): List<CatalogItem> {
     return catalogs
         .flatten()
-        .distinctBy { item -> item.id.ifBlank { item.threadUrl } }
+        .deduplicateByIdentity()
+}
+
+internal fun List<CatalogItem>.deduplicateByIdentity(): List<CatalogItem> {
+    return distinctBy { item -> item.id.ifBlank { item.threadUrl } }
 }
 
 internal fun List<CatalogItem>.filterByQuery(query: String): List<CatalogItem> {

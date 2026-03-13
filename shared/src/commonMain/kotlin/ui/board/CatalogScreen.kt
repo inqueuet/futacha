@@ -311,15 +311,14 @@ fun CatalogScreen(
     LaunchedEffect(board?.url, catalogMode) {
         lifecycleBindings.onInitialLoad()
     }
-
-    CatalogScreenScaffold(
+    val overlayBindings = interactionBindings.overlayBindings
+    val hostBindings = buildCatalogScreenHostBindings(
         history = history,
         onHistoryEntryDismissed = onHistoryEntryDismissed,
         historyDrawerCallbacks = historyDrawerCallbacks,
         drawerState = drawerState,
         isDrawerOpen = isDrawerOpen,
         coroutineScope = coroutineScope,
-        modifier = modifier,
         snackbarHostState = snackbarHostState,
         board = board,
         catalogMode = catalogMode,
@@ -340,11 +339,7 @@ fun CatalogScreen(
         catalogDisplayStyle = catalogDisplayStyle,
         catalogGridColumns = catalogGridColumns,
         catalogGridState = catalogGridState,
-        catalogListState = catalogListState
-    )
-
-    val overlayBindings = interactionBindings.overlayBindings
-    CatalogScreenOverlayHost(
+        catalogListState = catalogListState,
         overlayState = overlayState,
         overlayBindings = overlayBindings,
         createThreadDraft = createThreadDraft,
@@ -354,25 +349,20 @@ fun CatalogScreen(
         setCreateThreadDialogVisible = { isVisible ->
             overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
         },
-        board = board,
         archiveSearchQuery = archiveSearchQuery,
-        searchQuery = searchQuery,
-        catalogMode = catalogMode,
-        catalogDisplayStyle = catalogDisplayStyle,
-        catalogGridColumns = catalogGridColumns,
         pastSearchRuntimeState = pastSearchRuntimeState,
-        watchWords = watchWords,
-        catalogNgWords = catalogNgWords,
-        catalogNgFilteringEnabled = catalogNgFilteringEnabled,
         isPrivacyFilterEnabled = isPrivacyFilterEnabled,
         createThreadBindings = createThreadBindings,
         preferencesState = preferencesState,
         preferencesCallbacks = preferencesCallbacks,
-        history = history,
         fileSystem = fileSystem,
         autoSavedThreadRepository = autoSavedThreadRepository,
         cookieRepository = cookieRepository
     )
+
+    CatalogScreenScaffold(bindings = hostBindings.scaffold, modifier = modifier)
+
+    CatalogScreenOverlayHost(bindings = hostBindings.overlay)
 }
 
 

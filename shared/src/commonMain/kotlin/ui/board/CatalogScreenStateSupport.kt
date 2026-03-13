@@ -122,7 +122,10 @@ internal fun rememberCatalogScreenMutableStateBundle(
         searchQuery = rememberSaveable(boardId) { mutableStateOf("") },
         debouncedSearchQuery = rememberSaveable(boardId) { mutableStateOf("") },
         overlayState = remember { mutableStateOf(CatalogOverlayState()) },
-        createThreadDraft = rememberSaveable(boardId) { mutableStateOf(emptyCreateThreadDraft()) },
+        createThreadDraft = rememberSaveable(
+            boardId,
+            stateSaver = CreateThreadDraftSaver
+        ) { mutableStateOf(emptyCreateThreadDraft()) },
         createThreadImage = remember(boardId) { mutableStateOf(null as ImageData?) },
         archiveSearchQuery = rememberSaveable(boardId) { mutableStateOf("") },
         catalogNgFilteringEnabled = rememberSaveable(boardId) { mutableStateOf(true) },

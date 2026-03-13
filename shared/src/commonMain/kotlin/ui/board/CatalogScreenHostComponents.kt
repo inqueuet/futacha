@@ -12,13 +12,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -28,123 +26,88 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import com.valoser.futacha.shared.model.BoardSummary
-import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
-import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.repository.CookieRepository
-import com.valoser.futacha.shared.repository.SavedThreadRepository
-import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.util.FileSystem
-import com.valoser.futacha.shared.util.ImageData
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun CatalogScreenScaffold(
-    history: List<ThreadHistoryEntry>,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    historyDrawerCallbacks: CatalogHistoryDrawerCallbacks,
-    drawerState: DrawerState,
-    isDrawerOpen: Boolean,
-    coroutineScope: CoroutineScope,
-    modifier: Modifier,
-    snackbarHostState: SnackbarHostState,
-    board: BoardSummary?,
-    catalogMode: CatalogMode,
-    searchQuery: String,
-    isSearchActive: Boolean,
-    topBarCallbacks: CatalogTopBarCallbacks,
-    catalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig>,
-    navigationCallbacks: CatalogNavigationCallbacks,
-    uiState: CatalogUiState,
-    watchWords: List<String>,
-    catalogNgWords: List<String>,
-    catalogNgFilteringEnabled: Boolean,
-    debouncedSearchQuery: String,
-    activeRepository: BoardRepository,
-    onThreadSelected: (CatalogItem) -> Unit,
-    performRefresh: () -> Unit,
-    isRefreshing: Boolean,
-    catalogDisplayStyle: com.valoser.futacha.shared.model.CatalogDisplayStyle,
-    catalogGridColumns: Int,
-    catalogGridState: androidx.compose.foundation.lazy.grid.LazyGridState,
-    catalogListState: androidx.compose.foundation.lazy.LazyListState
+    bindings: CatalogScreenScaffoldBindings,
+    modifier: Modifier = Modifier
 ) {
     ModalNavigationDrawer(
-        drawerState = drawerState,
+        drawerState = bindings.drawerState,
         gesturesEnabled = true,
         drawerContent = {
             HistoryDrawerContent(
-                history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = historyDrawerCallbacks.onHistoryEntrySelected,
-                onBoardClick = historyDrawerCallbacks.onBoardClick,
-                onRefreshClick = historyDrawerCallbacks.onRefreshClick,
-                onBatchDeleteClick = historyDrawerCallbacks.onBatchDeleteClick,
-                onSettingsClick = historyDrawerCallbacks.onSettingsClick
+                history = bindings.history,
+                onHistoryEntryDismissed = bindings.onHistoryEntryDismissed,
+                onHistoryEntrySelected = bindings.historyDrawerCallbacks.onHistoryEntrySelected,
+                onBoardClick = bindings.historyDrawerCallbacks.onBoardClick,
+                onRefreshClick = bindings.historyDrawerCallbacks.onRefreshClick,
+                onBatchDeleteClick = bindings.historyDrawerCallbacks.onBatchDeleteClick,
+                onSettingsClick = bindings.historyDrawerCallbacks.onSettingsClick
             )
         }
     ) {
         Scaffold(
             modifier = modifier,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { SnackbarHost(bindings.snackbarHostState) },
             topBar = {
                 CatalogTopBar(
-                    board = board,
-                    mode = catalogMode,
-                    searchQuery = searchQuery,
-                    isSearchActive = isSearchActive,
-                    onSearchQueryChange = topBarCallbacks.onSearchQueryChange,
-                    onSearchActiveChange = topBarCallbacks.onSearchActiveChange,
-                    onNavigationClick = topBarCallbacks.onNavigationClick,
-                    onModeSelected = topBarCallbacks.onModeSelected,
-                    onMenuAction = topBarCallbacks.onMenuAction
+                    board = bindings.board,
+                    mode = bindings.catalogMode,
+                    searchQuery = bindings.searchQuery,
+                    isSearchActive = bindings.isSearchActive,
+                    onSearchQueryChange = bindings.topBarCallbacks.onSearchQueryChange,
+                    onSearchActiveChange = bindings.topBarCallbacks.onSearchActiveChange,
+                    onNavigationClick = bindings.topBarCallbacks.onNavigationClick,
+                    onModeSelected = bindings.topBarCallbacks.onModeSelected,
+                    onMenuAction = bindings.topBarCallbacks.onMenuAction
                 )
             },
             bottomBar = {
                 CatalogNavigationBar(
-                    menuEntries = catalogNavEntries,
-                    onNavigate = navigationCallbacks.onNavigate
+                    menuEntries = bindings.catalogNavEntries,
+                    onNavigate = bindings.navigationCallbacks.onNavigate
                 )
             }
         ) { innerPadding ->
             val contentModifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .pointerInput(isDrawerOpen) {
-                    if (!isDrawerOpen) return@pointerInput
+                .pointerInput(bindings.isDrawerOpen) {
+                    if (!bindings.isDrawerOpen) return@pointerInput
                     awaitPointerEventScope {
                         awaitFirstDown()
-                        coroutineScope.launch { drawerState.close() }
+                        bindings.coroutineScope.launch { bindings.drawerState.close() }
                     }
                 }
-            when (val state = uiState) {
+            when (val state = bindings.uiState) {
                 CatalogUiState.Loading -> LoadingCatalog(modifier = contentModifier)
                 is CatalogUiState.Error -> CatalogError(message = state.message, modifier = contentModifier)
                 is CatalogUiState.Success -> {
                     val visibleItems by rememberCatalogVisibleItemsState(
                         buildCatalogVisibleItemsRequest(
                             items = state.items,
-                            mode = catalogMode,
-                            watchWords = watchWords,
-                            catalogNgWords = catalogNgWords,
-                            catalogNgFilteringEnabled = catalogNgFilteringEnabled,
-                            query = debouncedSearchQuery
+                            mode = bindings.catalogMode,
+                            watchWords = bindings.watchWords,
+                            catalogNgWords = bindings.catalogNgWords,
+                            catalogNgFilteringEnabled = bindings.catalogNgFilteringEnabled,
+                            query = bindings.debouncedSearchQuery
                         )
                     )
                     CatalogSuccessContent(
                         items = visibleItems,
-                        board = board,
-                        repository = activeRepository,
-                        isSearching = searchQuery.isNotBlank(),
-                        onThreadSelected = onThreadSelected,
-                        onRefresh = performRefresh,
-                        isRefreshing = isRefreshing,
-                        displayStyle = catalogDisplayStyle,
-                        gridColumns = catalogGridColumns,
-                        gridState = catalogGridState,
-                        listState = catalogListState,
+                        board = bindings.board,
+                        repository = bindings.activeRepository,
+                        isSearching = bindings.searchQuery.isNotBlank(),
+                        onThreadSelected = bindings.onThreadSelected,
+                        onRefresh = bindings.performRefresh,
+                        isRefreshing = bindings.isRefreshing,
+                        displayStyle = bindings.catalogDisplayStyle,
+                        gridColumns = bindings.catalogGridColumns,
+                        gridState = bindings.catalogGridState,
+                        listState = bindings.catalogListState,
                         modifier = contentModifier
                     )
                 }
@@ -155,57 +118,36 @@ internal fun CatalogScreenScaffold(
 
 @Composable
 internal fun CatalogScreenOverlayHost(
-    overlayState: CatalogOverlayState,
-    overlayBindings: CatalogScreenOverlayBindingsBundle,
-    createThreadDraft: CreateThreadDraft,
-    setCreateThreadDraft: (CreateThreadDraft) -> Unit,
-    createThreadImage: ImageData?,
-    setCreateThreadImage: (ImageData?) -> Unit,
-    setCreateThreadDialogVisible: (Boolean) -> Unit,
-    board: BoardSummary?,
-    archiveSearchQuery: String,
-    searchQuery: String,
-    catalogMode: CatalogMode,
-    catalogDisplayStyle: com.valoser.futacha.shared.model.CatalogDisplayStyle,
-    catalogGridColumns: Int,
-    pastSearchRuntimeState: CatalogPastSearchRuntimeState,
-    watchWords: List<String>,
-    catalogNgWords: List<String>,
-    catalogNgFilteringEnabled: Boolean,
-    isPrivacyFilterEnabled: Boolean,
-    createThreadBindings: CatalogCreateThreadBindings,
-    preferencesState: ScreenPreferencesState,
-    preferencesCallbacks: ScreenPreferencesCallbacks,
-    history: List<ThreadHistoryEntry>,
-    fileSystem: FileSystem?,
-    autoSavedThreadRepository: SavedThreadRepository?,
-    cookieRepository: CookieRepository?
+    bindings: CatalogScreenOverlayHostBindings
 ) {
-    if (overlayState.showCreateThreadDialog) {
-        val isCreateThreadSubmitEnabled = canSubmitCreateThread(createThreadDraft.title, createThreadDraft.comment)
+    if (bindings.overlayState.showCreateThreadDialog) {
+        val isCreateThreadSubmitEnabled = canSubmitCreateThread(
+            bindings.createThreadDraft.title,
+            bindings.createThreadDraft.comment
+        )
         val createThreadDialogCallbacks = buildCatalogCreateThreadDialogCallbacks(
-            currentDraft = { createThreadDraft },
-            setDraft = setCreateThreadDraft,
-            setImage = setCreateThreadImage,
-            setShowCreateThreadDialog = setCreateThreadDialogVisible,
-            onSubmit = createThreadBindings.submitCreateThread,
-            onClear = createThreadBindings.resetCreateThreadDraft
+            currentDraft = { bindings.createThreadDraft },
+            setDraft = bindings.setCreateThreadDraft,
+            setImage = bindings.setCreateThreadImage,
+            setShowCreateThreadDialog = bindings.setCreateThreadDialogVisible,
+            onSubmit = bindings.createThreadBindings.submitCreateThread,
+            onClear = bindings.createThreadBindings.resetCreateThreadDraft
         )
         CreateThreadDialog(
-            boardName = board?.name,
-            attachmentPickerPreference = preferencesState.attachmentPickerPreference,
-            preferredFileManagerPackage = preferencesState.preferredFileManagerPackage,
-            name = createThreadDraft.name,
+            boardName = bindings.board?.name,
+            attachmentPickerPreference = bindings.preferencesState.attachmentPickerPreference,
+            preferredFileManagerPackage = bindings.preferencesState.preferredFileManagerPackage,
+            name = bindings.createThreadDraft.name,
             onNameChange = createThreadDialogCallbacks.onNameChange,
-            email = createThreadDraft.email,
+            email = bindings.createThreadDraft.email,
             onEmailChange = createThreadDialogCallbacks.onEmailChange,
-            title = createThreadDraft.title,
+            title = bindings.createThreadDraft.title,
             onTitleChange = createThreadDialogCallbacks.onTitleChange,
-            comment = createThreadDraft.comment,
+            comment = bindings.createThreadDraft.comment,
             onCommentChange = createThreadDialogCallbacks.onCommentChange,
-            password = createThreadDraft.password,
+            password = bindings.createThreadDraft.password,
             onPasswordChange = createThreadDialogCallbacks.onPasswordChange,
-            selectedImage = createThreadImage,
+            selectedImage = bindings.createThreadImage,
             onImageSelected = createThreadDialogCallbacks.onImageSelected,
             isSubmitEnabled = isCreateThreadSubmitEnabled,
             onDismiss = createThreadDialogCallbacks.onDismiss,
@@ -214,15 +156,15 @@ internal fun CatalogScreenOverlayHost(
         )
     }
 
-    if (isPrivacyFilterEnabled) {
+    if (bindings.isPrivacyFilterEnabled) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawRect(color = Color.White.copy(alpha = 0.5f))
         }
     }
 
-    if (overlayState.showModeDialog) {
+    if (bindings.overlayState.showModeDialog) {
         AlertDialog(
-            onDismissRequest = overlayBindings.modeDialogCallbacks.onDismiss,
+            onDismissRequest = bindings.overlayBindings.modeDialogCallbacks.onDismiss,
             title = { Text("モード選択") },
             text = {
                 Column {
@@ -231,14 +173,14 @@ internal fun CatalogScreenOverlayHost(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    overlayBindings.modeDialogCallbacks.onModeSelected(mode)
+                                    bindings.overlayBindings.modeDialogCallbacks.onModeSelected(mode)
                                 }
                                 .padding(vertical = 12.dp, horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
-                                selected = catalogMode == mode,
-                                onClick = { overlayBindings.modeDialogCallbacks.onModeSelected(mode) }
+                                selected = bindings.catalogMode == mode,
+                                onClick = { bindings.overlayBindings.modeDialogCallbacks.onModeSelected(mode) }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
@@ -250,94 +192,94 @@ internal fun CatalogScreenOverlayHost(
                 }
             },
             confirmButton = {
-                TextButton(onClick = overlayBindings.modeDialogCallbacks.onDismiss) {
+                TextButton(onClick = bindings.overlayBindings.modeDialogCallbacks.onDismiss) {
                     Text("閉じる")
                 }
             }
         )
     }
 
-    if (overlayState.showDisplayStyleDialog) {
+    if (bindings.overlayState.showDisplayStyleDialog) {
         DisplayStyleDialog(
-            currentStyle = catalogDisplayStyle,
-            currentGridColumns = catalogGridColumns,
-            onStyleSelected = overlayBindings.displayStyleDialogCallbacks.onStyleSelected,
-            onGridColumnsSelected = overlayBindings.displayStyleDialogCallbacks.onGridColumnsSelected,
-            onDismiss = overlayBindings.displayStyleDialogCallbacks.onDismiss
+            currentStyle = bindings.catalogDisplayStyle,
+            currentGridColumns = bindings.catalogGridColumns,
+            onStyleSelected = bindings.overlayBindings.displayStyleDialogCallbacks.onStyleSelected,
+            onGridColumnsSelected = bindings.overlayBindings.displayStyleDialogCallbacks.onGridColumnsSelected,
+            onDismiss = bindings.overlayBindings.displayStyleDialogCallbacks.onDismiss
         )
     }
 
-    if (overlayState.showPastThreadSearchDialog) {
+    if (bindings.overlayState.showPastThreadSearchDialog) {
         PastThreadSearchDialog(
             initialQuery = buildPastThreadSearchDialogInitialQuery(
-                archiveSearchQuery = archiveSearchQuery,
-                searchQuery = searchQuery
+                archiveSearchQuery = bindings.archiveSearchQuery,
+                searchQuery = bindings.searchQuery
             ),
-            onDismiss = overlayBindings.pastThreadSearchDialogCallbacks.onDismiss,
-            onSearch = overlayBindings.pastThreadSearchDialogCallbacks.onSearch
+            onDismiss = bindings.overlayBindings.pastThreadSearchDialogCallbacks.onDismiss,
+            onSearch = bindings.overlayBindings.pastThreadSearchDialogCallbacks.onSearch
         )
     }
 
-    if (overlayState.isPastSearchSheetVisible) {
+    if (bindings.overlayState.isPastSearchSheetVisible) {
         PastThreadSearchResultSheet(
-            state = pastSearchRuntimeState.state,
-            onDismiss = overlayBindings.pastThreadSearchResultCallbacks.onDismiss,
-            onRetry = overlayBindings.pastThreadSearchResultCallbacks.onRetry,
-            onItemSelected = overlayBindings.pastThreadSearchResultCallbacks.onItemSelected
+            state = bindings.pastSearchRuntimeState.state,
+            onDismiss = bindings.overlayBindings.pastThreadSearchResultCallbacks.onDismiss,
+            onRetry = bindings.overlayBindings.pastThreadSearchResultCallbacks.onRetry,
+            onItemSelected = bindings.overlayBindings.pastThreadSearchResultCallbacks.onItemSelected
         )
     }
 
-    if (overlayState.showSettingsMenu) {
+    if (bindings.overlayState.showSettingsMenu) {
         CatalogSettingsSheet(
-            onDismiss = overlayBindings.settingsMenuCallbacks.onDismiss,
-            onAction = overlayBindings.settingsMenuCallbacks.onAction
+            onDismiss = bindings.overlayBindings.settingsMenuCallbacks.onDismiss,
+            onAction = bindings.overlayBindings.settingsMenuCallbacks.onAction
         )
     }
 
-    if (overlayState.isGlobalSettingsVisible) {
+    if (bindings.overlayState.isGlobalSettingsVisible) {
         GlobalSettingsScreen(
-            onBack = overlayBindings.globalSettingsCallbacks.onBack,
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks,
-            onOpenCookieManager = overlayBindings.globalSettingsCallbacks.onOpenCookieManager,
-            historyEntries = history,
-            fileSystem = fileSystem,
-            autoSavedThreadRepository = autoSavedThreadRepository,
+            onBack = bindings.overlayBindings.globalSettingsCallbacks.onBack,
+            preferencesState = bindings.preferencesState,
+            preferencesCallbacks = bindings.preferencesCallbacks,
+            onOpenCookieManager = bindings.overlayBindings.globalSettingsCallbacks.onOpenCookieManager,
+            historyEntries = bindings.history,
+            fileSystem = bindings.fileSystem,
+            autoSavedThreadRepository = bindings.autoSavedThreadRepository,
         )
     }
 
-    if (overlayState.isCookieManagementVisible && cookieRepository != null) {
+    if (bindings.overlayState.isCookieManagementVisible && bindings.cookieRepository != null) {
         CookieManagementScreen(
-            onBack = overlayBindings.onCookieManagementBack,
-            repository = cookieRepository
+            onBack = bindings.overlayBindings.onCookieManagementBack,
+            repository = bindings.cookieRepository
         )
     }
 
-    if (overlayState.isNgManagementVisible) {
+    if (bindings.overlayState.isNgManagementVisible) {
         val ngSheetState = resolveCatalogNgManagementSheetState(
-            ngWords = catalogNgWords,
-            ngFilteringEnabled = catalogNgFilteringEnabled
+            ngWords = bindings.catalogNgWords,
+            ngFilteringEnabled = bindings.catalogNgFilteringEnabled
         )
         NgManagementSheet(
             ngHeaders = ngSheetState.ngHeaders,
             ngWords = ngSheetState.ngWords,
             ngFilteringEnabled = ngSheetState.ngFilteringEnabled,
-            onDismiss = overlayBindings.ngManagementCallbacks.onDismiss,
+            onDismiss = bindings.overlayBindings.ngManagementCallbacks.onDismiss,
             onAddHeader = {},
-            onAddWord = overlayBindings.ngManagementCallbacks.onAddWord,
+            onAddWord = bindings.overlayBindings.ngManagementCallbacks.onAddWord,
             onRemoveHeader = {},
-            onRemoveWord = overlayBindings.ngManagementCallbacks.onRemoveWord,
-            onToggleFiltering = overlayBindings.ngManagementCallbacks.onToggleFiltering,
+            onRemoveWord = bindings.overlayBindings.ngManagementCallbacks.onRemoveWord,
+            onToggleFiltering = bindings.overlayBindings.ngManagementCallbacks.onToggleFiltering,
             includeHeaderSection = ngSheetState.includeHeaderSection
         )
     }
 
-    if (overlayState.isWatchWordsVisible) {
+    if (bindings.overlayState.isWatchWordsVisible) {
         WatchWordsSheet(
-            watchWords = watchWords,
-            onAddWord = overlayBindings.watchWordsCallbacks.onAddWord,
-            onRemoveWord = overlayBindings.watchWordsCallbacks.onRemoveWord,
-            onDismiss = overlayBindings.watchWordsCallbacks.onDismiss
+            watchWords = bindings.watchWords,
+            onAddWord = bindings.overlayBindings.watchWordsCallbacks.onAddWord,
+            onRemoveWord = bindings.overlayBindings.watchWordsCallbacks.onRemoveWord,
+            onDismiss = bindings.overlayBindings.watchWordsCallbacks.onDismiss
         )
     }
 }

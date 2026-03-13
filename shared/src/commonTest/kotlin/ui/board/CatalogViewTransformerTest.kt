@@ -50,6 +50,27 @@ class CatalogViewTransformerTest {
     }
 
     @Test
+    fun buildVisibleCatalogItems_deduplicatesDuplicateThreadIdsBeforeRendering() {
+        val items = listOf(
+            catalogItem(id = "100", title = "先頭"),
+            catalogItem(id = "100", title = "重複"),
+            catalogItem(id = "200", title = "別スレ")
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Catalog,
+            watchWords = emptyList(),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(listOf("100", "200"), result.map { it.id })
+        assertEquals("先頭", result.first().title)
+    }
+
+    @Test
     fun mergeWatchSourceCatalogItems_deduplicatesByThreadId() {
         val merged = mergeWatchSourceCatalogItems(
             listOf(

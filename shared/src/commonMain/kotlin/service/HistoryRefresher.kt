@@ -3,24 +3,18 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.BoardUrlResolver
-import com.valoser.futacha.shared.network.ArchiveSearchItem
-import com.valoser.futacha.shared.network.extractArchiveSearchScope
-import com.valoser.futacha.shared.network.fetchArchiveSearchResults
-import com.valoser.futacha.shared.network.selectLatestArchiveMatch
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.FileSystem
-import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.resolveThreadTitle
 import io.ktor.client.HttpClient
-import io.ktor.http.Url
 import com.valoser.futacha.shared.network.NetworkException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -36,7 +30,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
@@ -88,7 +81,7 @@ class HistoryRefresher(
     class RefreshAlreadyRunningException :
         IllegalStateException("History refresh is already running")
 
-    private val skipThreadIds = MutableStateFlow<Map<HistoryKey, Long>>(emptyMap())
+    private val skipThreadIds = MutableStateFlow<Map<HistoryRefreshKey, Long>>(emptyMap())
     private val refreshMutex = Mutex()
     private val updatesMutex = Mutex()
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
@@ -113,14 +106,6 @@ class HistoryRefresher(
         val message: String,
         val stage: String = ERROR_STAGE_THREAD_REFRESH
     )
-
-    private data class HistoryKey(val boardKey: String, val threadId: String)
-    private sealed interface ArchiveRefreshResult {
-        data class Success(val entry: ThreadHistoryEntry) : ArchiveRefreshResult
-        data object NotFound : ArchiveRefreshResult
-        data object NoMatch : ArchiveRefreshResult
-        data class Error(val message: String) : ArchiveRefreshResult
-    }
 
     @OptIn(ExperimentalTime::class)
     suspend fun refresh(
@@ -157,7 +142,7 @@ class HistoryRefresher(
                 .toMap()
             val activeHistoryKeys = fullHistory
                 .mapTo(mutableSetOf()) { entry ->
-                    historyKeyForEntry(entry, boardById, boardByBaseUrl)
+                    buildHistoryRefreshKey(entry, boardById, boardByBaseUrl)
                 }
             skipThreadIds.update { existing ->
                 existing.filter { (key, skippedAtMillis) ->
@@ -178,7 +163,7 @@ class HistoryRefresher(
             } else {
                 null
             }
-            val updates = mutableMapOf<HistoryKey, ThreadHistoryEntry>()
+            val updates = mutableMapOf<HistoryRefreshKey, ThreadHistoryEntry>()
             val errors = mutableListOf<ErrorDetail>()
             var attemptedCount = 0
             var successfulCount = 0
@@ -325,7 +310,7 @@ class HistoryRefresher(
                         async {
                             try {
                                 val board = resolveBoardForEntry(entry, boardById, boardByBaseUrl)
-                                val key = historyKeyForEntry(entry, boardById, boardByBaseUrl)
+                                val key = buildHistoryRefreshKey(entry, boardById, boardByBaseUrl)
                                 if (isThreadSkipped(key, refreshStartedAt)) return@async
                                 val baseUrl = board?.url
                                     ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
@@ -449,7 +434,17 @@ class HistoryRefresher(
                                         throw e
                                     } catch (e: Throwable) {
                                         if (isHistoryRefreshNotFound(e)) {
-                                            when (val archiveResult = tryRefreshFromArchive(entry, board)) {
+                                            when (
+                                                val archiveResult = tryRefreshHistoryEntryFromArchive(
+                                                    entry = entry,
+                                                    board = board,
+                                                    httpClient = httpClient,
+                                                    repository = repository,
+                                                    fetchTimeoutMillis = effectiveThreadFetchTimeoutMillis,
+                                                    archiveSearchJson = archiveSearchJson,
+                                                    tag = HISTORY_REFRESH_TAG
+                                                )
+                                            ) {
                                                 is ArchiveRefreshResult.Success -> {
                                                     statsMutex.withLock {
                                                         successfulCount += 1
@@ -461,7 +456,7 @@ class HistoryRefresher(
                                                 }
                                                 ArchiveRefreshResult.NotFound,
                                                 ArchiveRefreshResult.NoMatch -> {
-                                                    markSkipped(key)
+                                                    markHistoryThreadSkipped(skipThreadIds, key)
                                                 }
                                                 is ArchiveRefreshResult.Error -> {
                                                     recordError(
@@ -578,7 +573,7 @@ class HistoryRefresher(
             val errorsSnapshot = errorsMutex.withLock { errors.toList() }
             if (errorsSnapshot.isNotEmpty()) {
                 val errorRate = (errorsSnapshot.size.toFloat() / history.size * 100).toInt()
-                val refreshError = buildRefreshError(
+                val refreshError = buildHistoryRefreshError(
                     totalThreads = history.size,
                     details = errorsSnapshot
                 )
@@ -610,12 +605,22 @@ class HistoryRefresher(
                 throw NetworkException("History refresh failed for all $attempted attempted threads")
             }
         } catch (e: CancellationException) {
-            bestEffortFlushOnAbort(flushOnExit, "cancelled")
+            bestEffortHistoryRefreshFlushOnAbort(
+                flush = flushOnExit,
+                reason = "cancelled",
+                abortFlushTimeoutMillis = ABORT_FLUSH_TIMEOUT_MILLIS,
+                tag = HISTORY_REFRESH_TAG
+            )
             throw e
         } catch (error: Throwable) {
-            bestEffortFlushOnAbort(flushOnExit, "failed: ${error.message.orEmpty()}")
+            bestEffortHistoryRefreshFlushOnAbort(
+                flush = flushOnExit,
+                reason = "failed: ${error.message.orEmpty()}",
+                abortFlushTimeoutMillis = ABORT_FLUSH_TIMEOUT_MILLIS,
+                tag = HISTORY_REFRESH_TAG
+            )
             if (!publishedDetailedError) {
-                _lastRefreshError.value = buildRefreshError(
+                _lastRefreshError.value = buildHistoryRefreshError(
                     totalThreads = totalThreadsInRun,
                     details = listOf(
                         ErrorDetail(
@@ -643,15 +648,8 @@ class HistoryRefresher(
         _lastRefreshError.value = null
     }
 
-    private fun markSkipped(key: HistoryKey) {
-        val nowMillis = Clock.System.now().toEpochMilliseconds()
-        skipThreadIds.update { it + (key to nowMillis) }
-    }
-
-    private fun isThreadSkipped(key: HistoryKey, nowMillis: Long): Boolean {
-        val skippedAtMillis = skipThreadIds.value[key] ?: return false
-        return (nowMillis - skippedAtMillis) < SKIP_THREAD_TTL_MILLIS
-    }
+    private fun isThreadSkipped(key: HistoryRefreshKey, nowMillis: Long): Boolean =
+        isHistoryThreadSkipped(skipThreadIds, key, nowMillis, SKIP_THREAD_TTL_MILLIS)
 
     private fun selectHistoryWindow(
         history: List<ThreadHistoryEntry>,
@@ -666,38 +664,6 @@ class HistoryRefresher(
         return selection.entries
     }
 
-    private suspend fun bestEffortFlushOnAbort(
-        flush: (suspend (Boolean) -> Boolean)?,
-        reason: String
-    ) {
-        if (flush == null) return
-        val flushed = runCatching {
-            withContext(NonCancellable) {
-                withTimeout(ABORT_FLUSH_TIMEOUT_MILLIS) {
-                    flush(true)
-                }
-            }
-        }.onFailure { error ->
-            Logger.w(
-                HISTORY_REFRESH_TAG,
-                "Best-effort flush on abort failed ($reason): ${error.message}"
-            )
-        }.getOrNull()
-
-        if (flushed == false) {
-            Logger.w(HISTORY_REFRESH_TAG, "Best-effort flush on abort did not persist all updates ($reason)")
-        }
-    }
-
-    private fun historyKeyForEntry(
-        entry: ThreadHistoryEntry,
-        boardById: Map<String, BoardSummary>,
-        boardByBaseUrl: Map<String, BoardSummary>
-    ): HistoryKey {
-        val boardKey = buildHistoryBoardKey(entry, boardById, boardByBaseUrl)
-        return HistoryKey(boardKey = boardKey, threadId = entry.threadId)
-    }
-
     private fun resolveBoardForEntry(
         entry: ThreadHistoryEntry,
         boardById: Map<String, BoardSummary>,
@@ -710,107 +676,7 @@ class HistoryRefresher(
         return normalizeHistoryBoardKey(url)
     }
 
-    private suspend fun tryRefreshFromArchive(
-        entry: ThreadHistoryEntry,
-        board: BoardSummary?
-    ): ArchiveRefreshResult {
-        val client = httpClient ?: return ArchiveRefreshResult.NoMatch
-        val scope = extractArchiveSearchScope(board?.url ?: entry.boardUrl)
-        val queryCandidates = buildList {
-            normalizeHistoryArchiveQuery(entry.threadId, maxLength = 64)
-                .takeIf { it.isNotBlank() }
-                ?.let { add(it) }
-            normalizeHistoryArchiveQuery(entry.title, maxLength = 120)
-                .takeIf { it.isNotBlank() }
-                ?.let { add(it) }
-        }.distinct()
-        if (queryCandidates.isEmpty()) return ArchiveRefreshResult.NoMatch
-
-        var lastErrorMessage: String? = null
-        var hadSuccessfulSearch = false
-        queryCandidates.forEach { query ->
-            val results = try {
-                withTimeoutOrNull(effectiveThreadFetchTimeoutMillis) {
-                    fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
-                } ?: run {
-                    val detail = "Archive search timed out"
-                    lastErrorMessage = detail
-                    Logger.w(HISTORY_REFRESH_TAG, "Archive search timed out for ${entry.threadId}")
-                    return@forEach
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (error: Throwable) {
-                val detail = error.message ?: "Archive search failed"
-                lastErrorMessage = detail
-                Logger.w(HISTORY_REFRESH_TAG, "Archive search failed for ${entry.threadId}: $detail")
-                return@forEach
-            }
-            hadSuccessfulSearch = true
-            val matched = selectLatestArchiveMatch(results, entry.threadId) ?: return@forEach
-            return resolveArchiveEntry(entry, board, matched)
-        }
-        if (hadSuccessfulSearch) return ArchiveRefreshResult.NoMatch
-        return lastErrorMessage?.let { ArchiveRefreshResult.Error(it) } ?: ArchiveRefreshResult.NoMatch
-    }
-
-    private suspend fun resolveArchiveEntry(
-        entry: ThreadHistoryEntry,
-        board: BoardSummary?,
-        match: ArchiveSearchItem
-    ): ArchiveRefreshResult {
-        val baseUrl = resolveArchiveBaseUrl(match.htmlUrl, board?.url ?: entry.boardUrl)
-        val boardName = entry.boardName.ifBlank { board?.name.orEmpty() }
-        val pageResult = try {
-            val page = withTimeoutOrNull(effectiveThreadFetchTimeoutMillis) {
-                if (match.htmlUrl.isNotBlank()) {
-                    repository.getThreadByUrl(match.htmlUrl)
-                } else {
-                    baseUrl?.let { repository.getThread(it, entry.threadId) }
-                }
-            }
-            if (page == null) {
-                Result.failure(NetworkException("Archive thread fetch timed out"))
-            } else {
-                Result.success(page)
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Result.failure(t)
-        }
-        val page = pageResult.getOrNull()
-        val pageError = pageResult.exceptionOrNull()
-        if (page == null && pageError != null && isHistoryRefreshNotFound(pageError)) {
-            Logger.i(HISTORY_REFRESH_TAG, "Archive thread missing for ${entry.threadId}")
-            return ArchiveRefreshResult.NotFound
-        }
-        return if (page != null) {
-            val opPost = page.posts.firstOrNull()
-            val resolvedTitle = resolveThreadTitle(opPost, match.title ?: entry.title)
-            val resolvedImage = opPost?.thumbnailUrl ?: match.thumbUrl ?: entry.titleImageUrl
-            Logger.i(HISTORY_REFRESH_TAG, "Archive refresh succeeded for ${entry.threadId}")
-            ArchiveRefreshResult.Success(entry.copy(
-                title = resolvedTitle,
-                titleImageUrl = resolvedImage,
-                boardName = page.boardTitle ?: boardName,
-                boardUrl = baseUrl ?: entry.boardUrl,
-                replyCount = page.posts.size
-            ))
-        } else {
-            val detail = pageError?.message?.takeIf { it.isNotBlank() } ?: "Archive thread fetch failed"
-            ArchiveRefreshResult.Error(detail)
-        }
-    }
-
     private fun isRefreshAbortSignal(t: Throwable): Boolean {
         return isHistoryRefreshAbortSignal(t, REFRESH_ABORT_REASON_PREFIX)
-    }
-
-    private fun buildRefreshError(
-        totalThreads: Int,
-        details: List<ErrorDetail>
-    ): RefreshError {
-        return buildHistoryRefreshError(totalThreads, details)
     }
 }

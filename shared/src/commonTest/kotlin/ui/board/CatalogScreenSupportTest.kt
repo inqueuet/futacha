@@ -1,5 +1,10 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
@@ -7,6 +12,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.PersistentCookieStorage
@@ -20,12 +26,28 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CatalogScreenSupportTest {
+    @Test
+    fun createThreadDraftSaver_roundTripsDraftState() {
+        val draft = CreateThreadDraft(
+            name = "name",
+            email = "sage",
+            title = "title",
+            comment = "comment",
+            password = "pass"
+        )
+
+        val restored = restoreCreateThreadDraft(saveCreateThreadDraft(draft))
+
+        assertEquals(draft, restored)
+    }
+
     @Test
     fun catalogExecutionSupport_buildsExpectedMessages() {
         assertEquals("履歴を更新しました", buildCatalogHistoryRefreshSuccessMessage())
@@ -288,6 +310,192 @@ class CatalogScreenSupportTest {
         assertTrue(showPastThreadSearchDialog)
         assertTrue(showModeDialog)
         assertTrue(showSettingsMenu)
+    }
+
+    @Test
+    fun catalogHostBindingsSupport_buildsScaffoldAndOverlayContracts() = runBlocking {
+        val board = BoardSummary(
+            id = "may",
+            name = "may",
+            category = "cat",
+            url = "https://may.2chan.net/b/futaba.php",
+            description = ""
+        )
+        val history = listOf(
+            ThreadHistoryEntry(
+                threadId = "123",
+                title = "sample",
+                titleImageUrl = "",
+                boardName = "board",
+                boardUrl = board.url,
+                lastVisitedEpochMillis = 0L,
+                replyCount = 1
+            )
+        )
+        val drawerState = DrawerState(initialValue = DrawerValue.Closed)
+        val snackbarHostState = SnackbarHostState()
+        val gridState = LazyGridState()
+        val listState = LazyListState()
+        val runtimeBindings = buildCatalogScreenRuntimeBindingsBundle(
+            coroutineScope = this,
+            drawerState = drawerState,
+            currentBoard = { board },
+            currentCatalogMode = { CatalogMode.Many },
+            currentCatalogLoadGeneration = { 0L },
+            setCatalogLoadGeneration = {},
+            currentCatalogLoadJob = { null },
+            setCatalogLoadJob = {},
+            currentIsRefreshing = { false },
+            setIsRefreshing = {},
+            setCatalogUiState = {},
+            setLastCatalogItems = {},
+            loadCatalogItems = { _, _ -> emptyList() },
+            activeRepository = FakeBoardRepository(),
+            currentCreateThreadDraft = { emptyCreateThreadDraft() },
+            currentCreateThreadImage = { null },
+            setCreateThreadDraft = {},
+            setCreateThreadImage = {},
+            setShowCreateThreadDialog = {},
+            updateLastUsedDeleteKey = {},
+            showSnackbar = {},
+            currentIsHistoryRefreshing = { false },
+            setIsHistoryRefreshing = {},
+            onHistoryRefresh = {},
+            currentPastSearchRuntimeState = { CatalogPastSearchRuntimeState() },
+            setPastSearchRuntimeState = {},
+            httpClient = null,
+            archiveSearchJson = Json { ignoreUnknownKeys = true },
+            onHistoryEntrySelected = {},
+            onBack = {},
+            onHistoryCleared = {},
+            onShowGlobalSettings = {},
+            setSearchQuery = {},
+            setSearchActive = {},
+            persistCatalogMode = {},
+            lastUsedDeleteKey = "del",
+            currentCreateThreadPassword = { "" },
+            setCreateThreadPassword = {},
+            scrollCatalogToTop = {},
+            setShowPastThreadSearchDialog = {},
+            setShowModeDialog = {},
+            setShowSettingsMenu = {}
+        )
+        val overlayBindings = buildCatalogScreenOverlayBindingsBundle(
+            persistCatalogMode = {},
+            updateCatalogDisplayStyle = {},
+            updateCatalogGridColumns = {},
+            currentArchiveSearchScope = { null },
+            setLastArchiveSearchScope = {},
+            setArchiveSearchQuery = {},
+            setShowPastThreadSearchDialog = {},
+            setIsPastSearchSheetVisible = {},
+            runPastThreadSearch = { _, _ -> true },
+            currentPastSearchGeneration = { 0L },
+            currentPastSearchJob = { null },
+            setPastSearchGeneration = {},
+            setPastSearchJob = {},
+            currentArchiveSearchQuery = { "" },
+            currentLastArchiveSearchScope = { null },
+            onThreadSelected = {},
+            board = { board },
+            catalogMode = { CatalogMode.Many },
+            urlLauncher = {},
+            stateStore = null,
+            isPrivacyFilterEnabled = { false },
+            coroutineScope = this,
+            scrollCatalogToTop = {},
+            setShowModeDialog = {},
+            setShowDisplayStyleDialog = {},
+            setIsNgManagementVisible = {},
+            setIsWatchWordsVisible = {},
+            setShowSettingsMenu = {},
+            cookieRepository = null,
+            setIsGlobalSettingsVisible = {},
+            setIsCookieManagementVisible = {},
+            onAddNgWord = {},
+            onRemoveNgWord = {},
+            onToggleNgFiltering = {},
+            onAddWatchWord = {},
+            onRemoveWatchWord = {}
+        )
+        val setDraft: (CreateThreadDraft) -> Unit = {}
+        val setImage: (ImageData?) -> Unit = {}
+        val setDialogVisible: (Boolean) -> Unit = {}
+
+        val bindings = buildCatalogScreenHostBindings(
+            history = history,
+            onHistoryEntryDismissed = {},
+            historyDrawerCallbacks = runtimeBindings.historyDrawerCallbacks,
+            drawerState = drawerState,
+            isDrawerOpen = true,
+            coroutineScope = this,
+            snackbarHostState = snackbarHostState,
+            board = board,
+            catalogMode = CatalogMode.Many,
+            searchQuery = "cat",
+            isSearchActive = true,
+            topBarCallbacks = runtimeBindings.topBarCallbacks,
+            catalogNavEntries = listOf(
+                CatalogNavEntryConfig(
+                    id = CatalogNavEntryId.RefreshCatalog,
+                    placement = CatalogNavEntryPlacement.BAR,
+                    order = 0
+                )
+            ),
+            navigationCallbacks = runtimeBindings.navigationCallbacks,
+            uiState = CatalogUiState.Success(emptyList()),
+            watchWords = listOf("watch"),
+            catalogNgWords = listOf("ng"),
+            catalogNgFilteringEnabled = true,
+            debouncedSearchQuery = "cat",
+            activeRepository = FakeBoardRepository(),
+            onThreadSelected = {},
+            performRefresh = {},
+            isRefreshing = false,
+            catalogDisplayStyle = CatalogDisplayStyle.Grid,
+            catalogGridColumns = 5,
+            catalogGridState = gridState,
+            catalogListState = listState,
+            overlayState = CatalogOverlayState(
+                showCreateThreadDialog = true,
+                isGlobalSettingsVisible = true
+            ),
+            overlayBindings = overlayBindings,
+            createThreadDraft = emptyCreateThreadDraft(),
+            setCreateThreadDraft = setDraft,
+            createThreadImage = null,
+            setCreateThreadImage = setImage,
+            setCreateThreadDialogVisible = setDialogVisible,
+            archiveSearchQuery = "foo",
+            pastSearchRuntimeState = CatalogPastSearchRuntimeState(),
+            isPrivacyFilterEnabled = true,
+            createThreadBindings = runtimeBindings.createThreadBindings,
+            preferencesState = ScreenPreferencesState(appVersion = "1.0.0"),
+            preferencesCallbacks = ScreenPreferencesCallbacks(),
+            fileSystem = null,
+            autoSavedThreadRepository = null,
+            cookieRepository = null
+        )
+
+        assertEquals(history, bindings.scaffold.history)
+        assertTrue(bindings.scaffold.isDrawerOpen)
+        assertTrue(bindings.scaffold.isSearchActive)
+        assertEquals(listOf("watch"), bindings.scaffold.watchWords)
+        assertEquals(listOf("ng"), bindings.scaffold.catalogNgWords)
+        assertTrue(bindings.scaffold.topBarCallbacks === runtimeBindings.topBarCallbacks)
+        assertTrue(bindings.scaffold.navigationCallbacks === runtimeBindings.navigationCallbacks)
+        assertTrue(bindings.scaffold.drawerState === drawerState)
+        assertTrue(bindings.scaffold.snackbarHostState === snackbarHostState)
+        assertTrue(bindings.scaffold.catalogGridState === gridState)
+        assertTrue(bindings.scaffold.catalogListState === listState)
+        assertTrue(bindings.overlay.overlayBindings === overlayBindings)
+        assertTrue(bindings.overlay.overlayState.showCreateThreadDialog)
+        assertTrue(bindings.overlay.overlayState.isGlobalSettingsVisible)
+        assertTrue(bindings.overlay.setCreateThreadDraft === setDraft)
+        assertTrue(bindings.overlay.setCreateThreadImage === setImage)
+        assertTrue(bindings.overlay.setCreateThreadDialogVisible === setDialogVisible)
+        assertTrue(bindings.overlay.createThreadBindings === runtimeBindings.createThreadBindings)
+        assertTrue(bindings.overlay.isPrivacyFilterEnabled)
     }
 
     @Test
