@@ -71,7 +71,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
-import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -81,15 +80,12 @@ import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.HistoryRefresher
-import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.FileSystem
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import kotlinx.coroutines.*
@@ -108,40 +104,22 @@ fun ThreadScreen(
     initialReplyCount: Int?,
     threadUrlOverride: String? = null,
     onBack: () -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryCleared: () -> Unit = {},
-    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryRefresh: suspend () -> Unit = {},
+    historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
+    onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
+    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
-    repository: BoardRepository? = null,
-    httpClient: io.ktor.client.HttpClient? = null,
-    fileSystem: FileSystem? = null,
-    cookieRepository: CookieRepository? = null,
-    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
-    autoSavedThreadRepository: SavedThreadRepository? = null,
-    appVersion: String,
-    isBackgroundRefreshEnabled: Boolean = false,
-    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
-    isLightweightModeEnabled: Boolean = false,
-    onLightweightModeChanged: (Boolean) -> Unit = {},
-    manualSaveDirectory: String = MANUAL_SAVE_DIRECTORY,
-    manualSaveLocation: SaveLocation? = null,
-    resolvedManualSaveDirectory: String? = null,
-    onManualSaveDirectoryChanged: (String) -> Unit = {},
-    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
-    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
-    preferredFileManagerPackage: String? = null,
-    preferredFileManagerLabel: String? = null,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
-    onClearPreferredFileManager: (() -> Unit)? = null,
-    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
-    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {},
+    dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
+    repository: BoardRepository? = dependencies.repository,
+    httpClient: io.ktor.client.HttpClient? = dependencies.httpClient,
+    fileSystem: FileSystem? = dependencies.fileSystem,
+    cookieRepository: CookieRepository? = dependencies.cookieRepository,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = dependencies.stateStore,
+    autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
@@ -157,52 +135,31 @@ fun ThreadScreen(
             incomingThreadUrlOverride = threadUrlOverride
         )?.let { resolvedThreadUrlOverride = it }
     }
-    val environmentBundle = remember(
-        repository,
-        autoSavedThreadRepository,
-        fileSystem,
-        manualSaveDirectory,
-        manualSaveLocation,
-        history,
-        threadId,
-        board,
-        resolvedThreadUrlOverride
-    ) {
-        buildThreadScreenEnvironmentBundle(
-            repository = repository,
-            autoSavedThreadRepository = autoSavedThreadRepository,
-            fileSystem = fileSystem,
-            manualSaveDirectory = manualSaveDirectory,
-            manualSaveLocation = manualSaveLocation,
-            history = history,
-            threadId = threadId,
-            board = board,
-            resolvedThreadUrlOverride = resolvedThreadUrlOverride
-        )
-    }
+    val coreSetupBundle = rememberThreadScreenCoreSetupBundle(
+        board = board,
+        history = history,
+        threadId = threadId,
+        repository = repository,
+        fileSystem = fileSystem,
+        stateStore = stateStore,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        manualSaveDirectory = preferencesState.manualSaveDirectory,
+        manualSaveLocation = preferencesState.manualSaveLocation,
+        resolvedThreadUrlOverride = resolvedThreadUrlOverride,
+        onRegisteredThreadUrlClick = onRegisteredThreadUrlClick
+    )
+    val environmentBundle = coreSetupBundle.environmentBundle
     val activeRepository = environmentBundle.activeRepository
     val effectiveBoardUrl = environmentBundle.effectiveBoardUrl
     val uiState = mutableStateBundle.uiState
-    val runtimeObjectBundle = rememberThreadScreenRuntimeObjectBundle(
-        threadId = threadId,
-        initialHistoryEntry = environmentBundle.initialHistoryEntry
-    )
+    val runtimeObjectBundle = coreSetupBundle.runtimeObjectBundle
     val snackbarHostState = runtimeObjectBundle.snackbarHostState
     val coroutineScope = runtimeObjectBundle.coroutineScope
-    val platformContext = LocalPlatformContext.current
-    val platformRuntimeBindings = rememberThreadScreenPlatformRuntimeBindings(
-        platformContext = platformContext,
-        onRegisteredThreadUrlClick = onRegisteredThreadUrlClick
-    )
+    val platformRuntimeBindings = coreSetupBundle.platformRuntimeBindings
     val externalUrlLauncher = platformRuntimeBindings.externalUrlLauncher
     val handleUrlClick = platformRuntimeBindings.handleUrlClick
     val archiveSearchJson = platformRuntimeBindings.archiveSearchJson
-    val persistentBindings = rememberThreadScreenPersistentBindings(
-        stateStore = stateStore,
-        coroutineScope = coroutineScope,
-        boardId = board.id,
-        threadId = threadId
-    )
+    val persistentBindings = coreSetupBundle.persistentBindings
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
     val textSpeaker = platformRuntimeBindings.textSpeaker
@@ -278,9 +235,9 @@ fun ThreadScreen(
         },
         coroutineScope = coroutineScope,
         showSnackbar = snackbarHostState::showSnackbar,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+        onManualSaveDirectoryChanged = preferencesCallbacks.onManualSaveDirectoryChanged,
+        onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+        onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
         stateStore = stateStore,
         onFallbackHeadersChanged = persistentBindings.onFallbackHeadersChanged,
         onFallbackWordsChanged = persistentBindings.onFallbackWordsChanged,
@@ -331,8 +288,7 @@ fun ThreadScreen(
     var manualRefreshGeneration by mutableStateBundle.manualRefreshGeneration
     var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
     var saveProgress by mutableStateBundle.saveProgress
-    val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
-        ?: remember { mutableStateOf(false) }
+    val isPrivacyFilterEnabled = coreSetupBundle.isPrivacyFilterEnabled
     val currentState = uiState.value
     val initialHistoryEntry = environmentBundle.initialHistoryEntry
     val lazyListState = runtimeObjectBundle.lazyListState
@@ -354,7 +310,7 @@ fun ThreadScreen(
         currentUiState = { uiState.value },
         showMessage = showMessage,
         applySaveErrorState = applyThreadSaveErrorState,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+        onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
         currentSingleMediaSaveJob = { singleMediaSaveJob },
         setSingleMediaSaveJob = { singleMediaSaveJob = it },
         setIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress = it },
@@ -395,9 +351,9 @@ fun ThreadScreen(
         offlineLookupContext,
         offlineSources,
         history,
-        manualSaveDirectory,
-        manualSaveLocation,
-        resolvedManualSaveDirectory
+        preferencesState.manualSaveDirectory,
+        preferencesState.manualSaveLocation,
+        preferencesState.resolvedManualSaveDirectory
     ) {
         buildThreadScreenAsyncBindingsBundle(
             coroutineScope = coroutineScope,
@@ -420,12 +376,12 @@ fun ThreadScreen(
             minAutoSaveIntervalMillis = AUTO_SAVE_INTERVAL_MS,
             autoSaveStateBindings = asyncRuntimeBindingsBundle.autoSaveStateBindings,
             manualSaveStateBindings = asyncRuntimeBindingsBundle.manualSaveStateBindings,
-            manualSaveDirectory = manualSaveDirectory,
-            manualSaveLocation = manualSaveLocation,
-            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+            manualSaveDirectory = preferencesState.manualSaveDirectory,
+            manualSaveLocation = preferencesState.manualSaveLocation,
+            resolvedManualSaveDirectory = preferencesState.resolvedManualSaveDirectory,
             requiresManualLocationSelection = requiresThreadManualSaveLocationSelection(
                 isAndroidPlatform,
-                manualSaveLocation
+                preferencesState.manualSaveLocation
             ),
             manualSaveCallbacks = asyncRuntimeBindingsBundle.manualSaveCallbacks,
             singleMediaSaveStateBindings = asyncRuntimeBindingsBundle.singleMediaSaveStateBindings,
@@ -802,20 +758,12 @@ fun ThreadScreen(
         onDismissGlobalSettings = {
             modalOverlayState = dismissThreadGlobalSettingsOverlay(modalOverlayState)
         },
-        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-        onLightweightModeChanged = onLightweightModeChanged,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+        screenPreferencesCallbacks = preferencesCallbacks,
         onOpenCookieManager = cookieRepository?.let {
             {
                 modalOverlayState = openThreadCookieManagementOverlay(modalOverlayState)
             }
         },
-        onFileManagerSelected = onFileManagerSelected,
-        onClearPreferredFileManager = onClearPreferredFileManager,
-        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-        onCatalogNavEntriesChanged = onCatalogNavEntriesChanged,
         onDismissCookieManagement = {
             modalOverlayState = dismissThreadCookieManagementOverlay(modalOverlayState)
         }
@@ -904,7 +852,7 @@ fun ThreadScreen(
                     shapes = MaterialTheme.shapes
                 ) {
                     ThreadActionBar(
-                        menuEntries = threadMenuEntries,
+                        menuEntries = preferencesState.threadMenuEntries,
                         onAction = uiBindings.actionBarCallbacks.onAction
                     )
                 }
@@ -1206,8 +1154,8 @@ fun ThreadScreen(
                 title = "返信",
                 subtitle = subtitle,
                 barColorScheme = appColorScheme,
-                attachmentPickerPreference = attachmentPickerPreference,
-                preferredFileManagerPackage = preferredFileManagerPackage,
+                attachmentPickerPreference = preferencesState.attachmentPickerPreference,
+                preferredFileManagerPackage = preferencesState.preferredFileManagerPackage,
                 emailPresets = emailPresets,
                 comment = replyDialogState.draft.comment,
                 onCommentChange = uiBindings.replyDialogCallbacks.onCommentChange,
@@ -1301,7 +1249,7 @@ fun ThreadScreen(
     if (sheetOverlayState.isSettingsVisible) {
         ThreadSettingsSheet(
             onDismiss = uiBindings.settingsSheetCallbacks.onDismiss,
-            menuEntries = threadMenuEntries,
+            menuEntries = preferencesState.threadMenuEntries,
             onAction = uiBindings.settingsSheetCallbacks.onAction
         )
     }
@@ -1368,28 +1316,12 @@ fun ThreadScreen(
     if (modalOverlayState.isGlobalSettingsVisible) {
         GlobalSettingsScreen(
             onBack = uiBindings.globalSettingsCallbacks.onBack,
-            appVersion = appVersion,
-            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-            onBackgroundRefreshChanged = uiBindings.globalSettingsCallbacks.onBackgroundRefreshChanged,
-            isLightweightModeEnabled = isLightweightModeEnabled,
-            onLightweightModeChanged = uiBindings.globalSettingsCallbacks.onLightweightModeChanged,
-            manualSaveDirectory = manualSaveDirectory,
-            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-            onManualSaveDirectoryChanged = uiBindings.globalSettingsCallbacks.onManualSaveDirectoryChanged,
-            saveDirectorySelection = saveDirectorySelection,
-            onSaveDirectorySelectionChanged = uiBindings.globalSettingsCallbacks.onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = uiBindings.globalSettingsCallbacks.onOpenSaveDirectoryPicker,
+            preferencesState = preferencesState,
+            preferencesCallbacks = uiBindings.globalSettingsCallbacks.preferencesCallbacks,
             onOpenCookieManager = uiBindings.globalSettingsCallbacks.onOpenCookieManager,
-            preferredFileManagerLabel = preferredFileManagerLabel,
-            onFileManagerSelected = uiBindings.globalSettingsCallbacks.onFileManagerSelected,
-            onClearPreferredFileManager = uiBindings.globalSettingsCallbacks.onClearPreferredFileManager,
             historyEntries = history,
             fileSystem = fileSystem,
-            autoSavedThreadRepository = autoSaveRepository,
-            threadMenuEntries = threadMenuEntries,
-            onThreadMenuEntriesChanged = uiBindings.globalSettingsCallbacks.onThreadMenuEntriesChanged,
-            catalogNavEntries = catalogNavEntries,
-            onCatalogNavEntriesChanged = uiBindings.globalSettingsCallbacks.onCatalogNavEntriesChanged
+            autoSavedThreadRepository = autoSaveRepository
         )
     }
 

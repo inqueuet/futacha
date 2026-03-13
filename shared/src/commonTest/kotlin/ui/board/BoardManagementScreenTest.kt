@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.runBlocking
@@ -547,6 +550,96 @@ class BoardManagementScreenTest {
 
         bundle.boardListCallbacks.onMoveDown(boards, 0)
         assertEquals(listOf("b", "a"), reorderedBoards?.map { it.id })
+    }
+
+    @Test
+    fun boardManagementScreenBindings_bundleScaffoldAndOverlayContracts() = runBlocking {
+        val drawerState = DrawerState(initialValue = DrawerValue.Closed)
+        val snackbarHostState = SnackbarHostState()
+        val boards = listOf(board(id = "a", name = "A"))
+        val history = listOf(
+            ThreadHistoryEntry(
+                threadId = "123",
+                title = "title",
+                titleImageUrl = "",
+                boardName = "board",
+                boardUrl = "https://may.2chan.net/b/futaba.php",
+                lastVisitedEpochMillis = 0L,
+                replyCount = 1
+            )
+        )
+        val preferencesState = ScreenPreferencesState(appVersion = "1.0.0")
+        val preferencesCallbacks = ScreenPreferencesCallbacks()
+        val interactionBindings = buildBoardManagementInteractionBindingsBundle(
+            coroutineScope = this,
+            closeDrawer = {},
+            openDrawer = {},
+            onExternalMenuAction = {},
+            onHistoryEntrySelected = {},
+            onHistoryRefresh = {},
+            onHistoryCleared = {},
+            onAddBoard = { _, _ -> },
+            onBoardDeleted = {},
+            showSnackbar = {},
+            currentIsDeleteMode = { false },
+            currentIsReorderMode = { true },
+            currentIsHistoryRefreshing = { false },
+            setIsDeleteMode = {},
+            setIsReorderMode = {},
+            setIsHistoryRefreshing = {},
+            currentOverlayState = { BoardManagementOverlayState(isGlobalSettingsVisible = true) },
+            setOverlayState = {},
+            hasCookieRepository = false,
+            currentIsMenuExpanded = { true },
+            setIsMenuExpanded = {},
+            onBoardSelected = {},
+            onBoardsReordered = {}
+        )
+        val onHistoryDismissed: (ThreadHistoryEntry) -> Unit = {}
+        val onDismissDrawerTap = {}
+
+        val bindings = buildBoardManagementScreenBindings(
+            boards = boards,
+            history = history,
+            isDeleteMode = false,
+            isReorderMode = true,
+            isDrawerOpen = false,
+            chromeState = resolveBoardManagementChromeState(
+                isDeleteMode = false,
+                isReorderMode = true
+            ),
+            isMenuExpanded = true,
+            drawerState = drawerState,
+            snackbarHostState = snackbarHostState,
+            onHistoryEntryDismissed = onHistoryDismissed,
+            onDismissDrawerTap = onDismissDrawerTap,
+            interactionBindings = interactionBindings,
+            overlayState = BoardManagementOverlayState(isGlobalSettingsVisible = true),
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            autoSavedThreadRepository = null,
+            fileSystem = null,
+            cookieRepository = null
+        )
+
+        assertEquals(boards, bindings.scaffold.boards)
+        assertEquals(history, bindings.scaffold.history)
+        assertTrue(bindings.scaffold.isReorderMode)
+        assertTrue(bindings.scaffold.isMenuExpanded)
+        assertTrue(bindings.scaffold.topBarCallbacks === interactionBindings.topBarCallbacks)
+        assertTrue(bindings.scaffold.boardListCallbacks === interactionBindings.boardListCallbacks)
+        assertTrue(bindings.scaffold.historyDrawerCallbacks === interactionBindings.historyDrawerCallbacks)
+        assertTrue(bindings.scaffold.onHistoryEntryDismissed === onHistoryDismissed)
+        assertTrue(bindings.scaffold.onDismissDrawerTap === onDismissDrawerTap)
+        assertTrue(bindings.scaffold.drawerState === drawerState)
+        assertTrue(bindings.scaffold.snackbarHostState === snackbarHostState)
+        assertEquals(boards, bindings.overlay.boards)
+        assertEquals(history, bindings.overlay.history)
+        assertTrue(bindings.overlay.overlayState.isGlobalSettingsVisible)
+        assertEquals(preferencesState, bindings.overlay.preferencesState)
+        assertEquals(preferencesCallbacks, bindings.overlay.preferencesCallbacks)
+        assertTrue(bindings.overlay.onAddBoardSubmitted === interactionBindings.dialogCallbacks.onAddBoardSubmitted)
+        assertTrue(bindings.overlay.onGlobalSettingsBack === interactionBindings.onGlobalSettingsBack)
     }
 
     private fun board(

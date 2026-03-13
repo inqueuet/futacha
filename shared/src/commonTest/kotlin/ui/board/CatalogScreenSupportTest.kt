@@ -55,6 +55,36 @@ class CatalogScreenSupportTest {
     }
 
     @Test
+    fun catalogCoreBindingsSupport_resolvesDisplaySettingsFromStorePresence() {
+        assertEquals(
+            CatalogScreenDisplaySettings(
+                displayStyle = CatalogDisplayStyle.List,
+                gridColumns = 3
+            ),
+            resolveCatalogScreenDisplaySettings(
+                hasStateStore = true,
+                persistentDisplayStyle = CatalogDisplayStyle.List,
+                localDisplayStyle = CatalogDisplayStyle.Grid,
+                persistentGridColumns = 3,
+                localGridColumns = 5
+            )
+        )
+        assertEquals(
+            CatalogScreenDisplaySettings(
+                displayStyle = CatalogDisplayStyle.Grid,
+                gridColumns = 6
+            ),
+            resolveCatalogScreenDisplaySettings(
+                hasStateStore = false,
+                persistentDisplayStyle = CatalogDisplayStyle.List,
+                localDisplayStyle = CatalogDisplayStyle.Grid,
+                persistentGridColumns = 3,
+                localGridColumns = 6
+            )
+        )
+    }
+
+    @Test
     fun catalogExecutionSupport_persistsNgWordsAndWatchWordsWithoutStore() = runBlocking {
         var ngWords = emptyList<String>()
         var watchWords = emptyList<String>()

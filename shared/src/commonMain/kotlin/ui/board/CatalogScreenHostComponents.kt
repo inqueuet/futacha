@@ -35,10 +35,8 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.ImageData
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -164,8 +162,6 @@ internal fun CatalogScreenOverlayHost(
     createThreadImage: ImageData?,
     setCreateThreadImage: (ImageData?) -> Unit,
     setCreateThreadDialogVisible: (Boolean) -> Unit,
-    attachmentPickerPreference: AttachmentPickerPreference,
-    preferredFileManagerPackage: String?,
     board: BoardSummary?,
     archiveSearchQuery: String,
     searchQuery: String,
@@ -178,27 +174,11 @@ internal fun CatalogScreenOverlayHost(
     catalogNgFilteringEnabled: Boolean,
     isPrivacyFilterEnabled: Boolean,
     createThreadBindings: CatalogCreateThreadBindings,
-    appVersion: String,
-    isBackgroundRefreshEnabled: Boolean,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    isLightweightModeEnabled: Boolean,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    manualSaveDirectory: String,
-    resolvedManualSaveDirectory: String?,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    saveDirectorySelection: SaveDirectorySelection,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks,
     history: List<ThreadHistoryEntry>,
     fileSystem: FileSystem?,
     autoSavedThreadRepository: SavedThreadRepository?,
-    threadMenuEntries: List<com.valoser.futacha.shared.model.ThreadMenuEntryConfig>,
-    onThreadMenuEntriesChanged: (List<com.valoser.futacha.shared.model.ThreadMenuEntryConfig>) -> Unit,
-    catalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig>,
-    onCatalogNavEntriesChanged: (List<com.valoser.futacha.shared.model.CatalogNavEntryConfig>) -> Unit,
-    preferredFileManagerLabel: String?,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    onClearPreferredFileManager: (() -> Unit)?,
     cookieRepository: CookieRepository?
 ) {
     if (overlayState.showCreateThreadDialog) {
@@ -213,8 +193,8 @@ internal fun CatalogScreenOverlayHost(
         )
         CreateThreadDialog(
             boardName = board?.name,
-            attachmentPickerPreference = attachmentPickerPreference,
-            preferredFileManagerPackage = preferredFileManagerPackage,
+            attachmentPickerPreference = preferencesState.attachmentPickerPreference,
+            preferredFileManagerPackage = preferencesState.preferredFileManagerPackage,
             name = createThreadDraft.name,
             onNameChange = createThreadDialogCallbacks.onNameChange,
             email = createThreadDraft.email,
@@ -317,28 +297,12 @@ internal fun CatalogScreenOverlayHost(
     if (overlayState.isGlobalSettingsVisible) {
         GlobalSettingsScreen(
             onBack = overlayBindings.globalSettingsCallbacks.onBack,
-            appVersion = appVersion,
-            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-            isLightweightModeEnabled = isLightweightModeEnabled,
-            onLightweightModeChanged = onLightweightModeChanged,
-            manualSaveDirectory = manualSaveDirectory,
-            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            saveDirectorySelection = saveDirectorySelection,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
             onOpenCookieManager = overlayBindings.globalSettingsCallbacks.onOpenCookieManager,
             historyEntries = history,
             fileSystem = fileSystem,
             autoSavedThreadRepository = autoSavedThreadRepository,
-            threadMenuEntries = threadMenuEntries,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-            catalogNavEntries = catalogNavEntries,
-            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged,
-            preferredFileManagerLabel = preferredFileManagerLabel,
-            onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager
         )
     }
 

@@ -253,17 +253,13 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
-import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.HistoryRefresher
-import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.ui.normalizeBoardUrl
@@ -322,42 +318,23 @@ import com.valoser.futacha.shared.ui.board.resolveEffectiveBoardUrl
 fun BoardManagementScreen(
     boards: List<BoardSummary>,
     history: List<ThreadHistoryEntry>,
-    cookieRepository: CookieRepository? = null,
     onBoardSelected: (BoardSummary) -> Unit,
     onAddBoard: (String, String) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryRefresh: suspend () -> Unit = {},
+    historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
     modifier: Modifier = Modifier,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryCleared: () -> Unit = {},
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
+    onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
-    appVersion: String,
-    isBackgroundRefreshEnabled: Boolean = false,
-    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
-    isLightweightModeEnabled: Boolean = false,
-    onLightweightModeChanged: (Boolean) -> Unit = {},
-    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
-    manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
-    resolvedManualSaveDirectory: String? = null,
-    onManualSaveDirectoryChanged: (String) -> Unit = {},
-    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
-    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
-    httpClient: io.ktor.client.HttpClient? = null,
-    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
-    autoSavedThreadRepository: SavedThreadRepository? = null,
-    preferredFileManagerPackage: String? = null,
-    preferredFileManagerLabel: String? = null,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
-    onClearPreferredFileManager: (() -> Unit)? = null,
-    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
-    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {}
+    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies(),
+    cookieRepository: CookieRepository? = dependencies.cookieRepository,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
+    autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
 ) {
     val runtimeObjects = rememberBoardManagementRuntimeObjectsBundle()
     val mutableStateBundle = rememberBoardManagementMutableStateBundle()
@@ -370,10 +347,6 @@ fun BoardManagementScreen(
     var isReorderMode by mutableStateBundle.isReorderMode
     var overlayState by mutableStateBundle.overlayState
     var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
-    val isAddDialogVisible = overlayState.isAddDialogVisible
-    val boardToDelete = overlayState.boardToDelete
-    val isGlobalSettingsVisible = overlayState.isGlobalSettingsVisible
-    val isCookieManagementVisible = overlayState.isCookieManagementVisible
     val chromeState = resolveBoardManagementChromeState(
         isDeleteMode = isDeleteMode,
         isReorderMode = isReorderMode
@@ -434,14 +407,9 @@ fun BoardManagementScreen(
             }
         )
     }
-
-    PlatformBackHandler(enabled = lifecycleBindings.backAction != BoardManagementBackAction.NONE) {
-        lifecycleBindings.onBack()
-    }
-
-    BoardManagementScaffold(
-        history = history,
+    val screenBindings = buildBoardManagementScreenBindings(
         boards = boards,
+        history = history,
         isDeleteMode = isDeleteMode,
         isReorderMode = isReorderMode,
         isDrawerOpen = isDrawerOpen,
@@ -451,44 +419,20 @@ fun BoardManagementScreen(
         snackbarHostState = snackbarHostState,
         onHistoryEntryDismissed = onHistoryEntryDismissed,
         onDismissDrawerTap = { scope.launch { drawerState.close() } },
-        historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks,
-        topBarCallbacks = interactionBindings.topBarCallbacks,
-        boardListCallbacks = interactionBindings.boardListCallbacks,
-        onHistorySettingsClick = interactionBindings.onHistorySettingsClick,
-        modifier = modifier
+        interactionBindings = interactionBindings,
+        overlayState = overlayState,
+        preferencesState = preferencesState,
+        preferencesCallbacks = preferencesCallbacks,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        fileSystem = fileSystem,
+        cookieRepository = cookieRepository
     )
 
-    BoardManagementOverlayHost(
-        boards = boards,
-        history = history,
-        overlayState = overlayState,
-        appVersion = appVersion,
-        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-        isLightweightModeEnabled = isLightweightModeEnabled,
-        onLightweightModeChanged = onLightweightModeChanged,
-        manualSaveDirectory = manualSaveDirectory,
-        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        saveDirectorySelection = saveDirectorySelection,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-        autoSavedThreadRepository = autoSavedThreadRepository,
-        preferredFileManagerLabel = preferredFileManagerLabel,
-        onFileManagerSelected = onFileManagerSelected,
-        onClearPreferredFileManager = onClearPreferredFileManager,
-        threadMenuEntries = threadMenuEntries,
-        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-        catalogNavEntries = catalogNavEntries,
-        onCatalogNavEntriesChanged = onCatalogNavEntriesChanged,
-        fileSystem = fileSystem,
-        cookieRepository = cookieRepository,
-        onDismissAddDialog = interactionBindings.onDismissAddDialog,
-        onAddBoardSubmitted = interactionBindings.dialogCallbacks.onAddBoardSubmitted,
-        onDismissDeleteDialog = interactionBindings.onDismissDeleteDialog,
-        onDeleteBoardConfirmed = interactionBindings.dialogCallbacks.onDeleteBoardConfirmed,
-        onGlobalSettingsBack = interactionBindings.onGlobalSettingsBack,
-        onOpenCookieManagement = interactionBindings.onOpenCookieManagement,
-        onCookieManagementBack = interactionBindings.onCookieManagementBack
-    )
+    PlatformBackHandler(enabled = lifecycleBindings.backAction != BoardManagementBackAction.NONE) {
+        lifecycleBindings.onBack()
+    }
+
+    BoardManagementScaffold(bindings = screenBindings.scaffold, modifier = modifier)
+
+    BoardManagementOverlayHost(bindings = screenBindings.overlay)
 }

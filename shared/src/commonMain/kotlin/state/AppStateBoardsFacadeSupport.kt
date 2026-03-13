@@ -7,15 +7,23 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 
 internal class AppStateBoardsFacade(
-    private val setBoardsImpl: suspend (List<BoardSummary>) -> Unit
+    private val setBoardsImpl: suspend (List<BoardSummary>) -> Unit,
+    private val updateBoardsImpl: suspend (((List<BoardSummary>) -> List<BoardSummary>)) -> Unit
 ) {
     suspend fun setBoards(boards: List<BoardSummary>) = setBoardsImpl(boards)
+
+    suspend fun updateBoards(transform: (List<BoardSummary>) -> List<BoardSummary>) =
+        updateBoardsImpl(transform)
 }
 
 internal fun buildAppStateBoardsFacade(
-    setBoardsImpl: suspend (List<BoardSummary>) -> Unit
+    setBoardsImpl: suspend (List<BoardSummary>) -> Unit,
+    updateBoardsImpl: suspend (((List<BoardSummary>) -> List<BoardSummary>)) -> Unit
 ): AppStateBoardsFacade {
-    return AppStateBoardsFacade(setBoardsImpl = setBoardsImpl)
+    return AppStateBoardsFacade(
+        setBoardsImpl = setBoardsImpl,
+        updateBoardsImpl = updateBoardsImpl
+    )
 }
 
 internal fun buildAppStateBoardsFlow(

@@ -239,56 +239,42 @@ internal fun BoardManagementBoardList(
 
 @Composable
 internal fun BoardManagementScaffold(
-    history: List<ThreadHistoryEntry>,
-    boards: List<BoardSummary>,
-    isDeleteMode: Boolean,
-    isReorderMode: Boolean,
-    isDrawerOpen: Boolean,
-    chromeState: BoardManagementChromeState,
-    isMenuExpanded: Boolean,
-    drawerState: DrawerState,
-    snackbarHostState: SnackbarHostState,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    onDismissDrawerTap: () -> Unit,
-    historyDrawerCallbacks: BoardManagementHistoryDrawerCallbacks,
-    topBarCallbacks: BoardManagementTopBarCallbacks,
-    boardListCallbacks: BoardManagementBoardListCallbacks,
-    onHistorySettingsClick: () -> Unit,
+    bindings: BoardManagementScaffoldBindings,
     modifier: Modifier = Modifier
 ) {
     ModalNavigationDrawer(
-        drawerState = drawerState,
+        drawerState = bindings.drawerState,
         gesturesEnabled = true,
         drawerContent = {
             HistoryDrawerContent(
-                history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = historyDrawerCallbacks.onHistoryEntrySelected,
-                onBoardClick = historyDrawerCallbacks.onBoardClick,
-                onRefreshClick = historyDrawerCallbacks.onRefreshClick,
-                onBatchDeleteClick = historyDrawerCallbacks.onBatchDeleteClick,
-                onSettingsClick = onHistorySettingsClick
+                history = bindings.history,
+                onHistoryEntryDismissed = bindings.onHistoryEntryDismissed,
+                onHistoryEntrySelected = bindings.historyDrawerCallbacks.onHistoryEntrySelected,
+                onBoardClick = bindings.historyDrawerCallbacks.onBoardClick,
+                onRefreshClick = bindings.historyDrawerCallbacks.onRefreshClick,
+                onBatchDeleteClick = bindings.historyDrawerCallbacks.onBatchDeleteClick,
+                onSettingsClick = bindings.onHistorySettingsClick
             )
         }
     ) {
         Scaffold(
             modifier = modifier,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { SnackbarHost(bindings.snackbarHostState) },
             topBar = {
                 BoardManagementTopBar(
-                    chromeState = chromeState,
-                    isMenuExpanded = isMenuExpanded,
-                    topBarCallbacks = topBarCallbacks
+                    chromeState = bindings.chromeState,
+                    isMenuExpanded = bindings.isMenuExpanded,
+                    topBarCallbacks = bindings.topBarCallbacks
                 )
             }
         ) { innerPadding ->
             BoardManagementBoardList(
-                boards = boards,
-                isDeleteMode = isDeleteMode,
-                isReorderMode = isReorderMode,
-                isDrawerOpen = isDrawerOpen,
-                onDismissDrawerTap = onDismissDrawerTap,
-                boardListCallbacks = boardListCallbacks,
+                boards = bindings.boards,
+                isDeleteMode = bindings.isDeleteMode,
+                isReorderMode = bindings.isReorderMode,
+                isDrawerOpen = bindings.isDrawerOpen,
+                onDismissDrawerTap = bindings.onDismissDrawerTap,
+                boardListCallbacks = bindings.boardListCallbacks,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
@@ -300,86 +286,40 @@ internal fun BoardManagementScaffold(
 
 @Composable
 internal fun BoardManagementOverlayHost(
-    boards: List<BoardSummary>,
-    history: List<ThreadHistoryEntry>,
-    overlayState: BoardManagementOverlayState,
-    appVersion: String,
-    isBackgroundRefreshEnabled: Boolean,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    isLightweightModeEnabled: Boolean,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    manualSaveDirectory: String,
-    resolvedManualSaveDirectory: String?,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    saveDirectorySelection: SaveDirectorySelection,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    autoSavedThreadRepository: SavedThreadRepository?,
-    preferredFileManagerLabel: String?,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    onClearPreferredFileManager: (() -> Unit)?,
-    threadMenuEntries: List<ThreadMenuEntryConfig>,
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    catalogNavEntries: List<CatalogNavEntryConfig>,
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit,
-    fileSystem: FileSystem?,
-    cookieRepository: CookieRepository?,
-    onDismissAddDialog: () -> Unit,
-    onAddBoardSubmitted: (String, String) -> Unit,
-    onDismissDeleteDialog: () -> Unit,
-    onDeleteBoardConfirmed: (BoardSummary) -> Unit,
-    onGlobalSettingsBack: () -> Unit,
-    onOpenCookieManagement: (() -> Unit)?,
-    onCookieManagementBack: () -> Unit
+    bindings: BoardManagementOverlayBindings
 ) {
-    if (overlayState.isAddDialogVisible) {
+    if (bindings.overlayState.isAddDialogVisible) {
         AddBoardDialog(
-            existingBoards = boards,
-            onDismiss = onDismissAddDialog,
-            onSubmit = onAddBoardSubmitted
+            existingBoards = bindings.boards,
+            onDismiss = bindings.onDismissAddDialog,
+            onSubmit = bindings.onAddBoardSubmitted
         )
     }
 
-    overlayState.boardToDelete?.let { board ->
+    bindings.overlayState.boardToDelete?.let { board ->
         DeleteBoardDialog(
             board = board,
-            onDismiss = onDismissDeleteDialog,
-            onConfirm = { onDeleteBoardConfirmed(board) }
+            onDismiss = bindings.onDismissDeleteDialog,
+            onConfirm = { bindings.onDeleteBoardConfirmed(board) }
         )
     }
 
-    if (overlayState.isGlobalSettingsVisible) {
+    if (bindings.overlayState.isGlobalSettingsVisible) {
         GlobalSettingsScreen(
-            onBack = onGlobalSettingsBack,
-            appVersion = appVersion,
-            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-            isLightweightModeEnabled = isLightweightModeEnabled,
-            onLightweightModeChanged = onLightweightModeChanged,
-            manualSaveDirectory = manualSaveDirectory,
-            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            saveDirectorySelection = saveDirectorySelection,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-            onOpenCookieManager = onOpenCookieManagement,
-            preferredFileManagerLabel = preferredFileManagerLabel,
-            onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager,
-            historyEntries = history,
-            fileSystem = fileSystem,
-            autoSavedThreadRepository = autoSavedThreadRepository,
-            threadMenuEntries = threadMenuEntries,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-            catalogNavEntries = catalogNavEntries,
-            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
+            onBack = bindings.onGlobalSettingsBack,
+            preferencesState = bindings.preferencesState,
+            preferencesCallbacks = bindings.preferencesCallbacks,
+            onOpenCookieManager = bindings.onOpenCookieManagement,
+            historyEntries = bindings.history,
+            fileSystem = bindings.fileSystem,
+            autoSavedThreadRepository = bindings.autoSavedThreadRepository
         )
     }
 
-    if (overlayState.isCookieManagementVisible && cookieRepository != null) {
+    if (bindings.overlayState.isCookieManagementVisible && bindings.cookieRepository != null) {
         CookieManagementScreen(
-            onBack = onCookieManagementBack,
-            repository = cookieRepository
+            onBack = bindings.onCookieManagementBack,
+            repository = bindings.cookieRepository
         )
     }
 }

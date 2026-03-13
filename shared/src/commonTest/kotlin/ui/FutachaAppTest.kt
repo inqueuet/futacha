@@ -1,24 +1,1101 @@
 package com.valoser.futacha.shared.ui
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.FakePlatformStateStorage
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
+import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
+import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.version.UpdateInfo
+import com.valoser.futacha.shared.version.VersionChecker
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class FutachaAppTest {
+    @Test
+    fun futachaMutationCallbackBuilders_launchExpectedActions() = runBlocking {
+        var backgroundRefreshEnabled: Boolean? = null
+        var lightweightEnabled: Boolean? = null
+        var manualSaveDirectory: String? = null
+        var attachmentPickerPreference: AttachmentPickerPreference? = null
+        var saveDirectorySelection: SaveDirectorySelection? = null
+        var manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null
+        var preferredFileManager: Pair<String?, String?>? = null
+        var threadMenuEntries: List<ThreadMenuEntryConfig>? = null
+        var catalogNavEntries: List<CatalogNavEntryConfig>? = null
+        var dismissedEntry: ThreadHistoryEntry? = null
+        var updatedEntry: ThreadHistoryEntry? = null
+        var historyCleared = false
+        val entry = historyEntry()
+        val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
+            coroutineScope = this,
+            setBackgroundRefreshEnabled = { backgroundRefreshEnabled = it },
+            setLightweightModeEnabled = { lightweightEnabled = it },
+            setManualSaveDirectory = { manualSaveDirectory = it },
+            setAttachmentPickerPreference = { attachmentPickerPreference = it },
+            setSaveDirectorySelection = { saveDirectorySelection = it },
+            setManualSaveLocation = { manualSaveLocation = it },
+            setPreferredFileManager = { packageName, label -> preferredFileManager = packageName to label },
+            setThreadMenuEntries = { threadMenuEntries = it },
+            setCatalogNavEntries = { catalogNavEntries = it }
+        )
+        val historyMutations = buildFutachaHistoryMutationCallbacks(
+            coroutineScope = this,
+            dismissHistoryEntry = { dismissedEntry = it },
+            updateHistoryEntry = { updatedEntry = it },
+            clearHistory = { historyCleared = true }
+        )
+        var pickerOpened = false
+        val screenPreferencesCallbacks = buildFutachaScreenPreferencesCallbacks(
+            mutations = preferenceMutations,
+            onOpenSaveDirectoryPicker = { pickerOpened = true }
+        )
+
+        preferenceMutations.onBackgroundRefreshChanged(true)
+        preferenceMutations.onLightweightModeChanged(false)
+        preferenceMutations.onManualSaveDirectoryChanged("/tmp/save")
+        preferenceMutations.onAttachmentPickerPreferenceChanged(AttachmentPickerPreference.DOCUMENT)
+        preferenceMutations.onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
+        preferenceMutations.onManualSaveLocationChanged(com.valoser.futacha.shared.model.SaveLocation.Path("/tmp"))
+        preferenceMutations.onFileManagerSelected("pkg", "label")
+        preferenceMutations.onClearPreferredFileManager()
+        preferenceMutations.onThreadMenuEntriesChanged(emptyList())
+        preferenceMutations.onCatalogNavEntriesChanged(emptyList())
+        historyMutations.onDismissHistoryEntry(entry)
+        historyMutations.onUpdateHistoryEntry(entry)
+        historyMutations.onClearHistory()
+        screenPreferencesCallbacks.onOpenSaveDirectoryPicker?.invoke()
+        yield()
+        delay(1)
+
+        assertEquals(true, backgroundRefreshEnabled)
+        assertEquals(false, lightweightEnabled)
+        assertEquals("/tmp/save", manualSaveDirectory)
+        assertEquals(AttachmentPickerPreference.DOCUMENT, attachmentPickerPreference)
+        assertEquals(SaveDirectorySelection.PICKER, saveDirectorySelection)
+        assertEquals(com.valoser.futacha.shared.model.SaveLocation.Path("/tmp"), manualSaveLocation)
+        assertEquals(null to null, preferredFileManager)
+        assertEquals(emptyList(), threadMenuEntries)
+        assertEquals(emptyList(), catalogNavEntries)
+        assertEquals(entry, dismissedEntry)
+        assertEquals(entry, updatedEntry)
+        assertTrue(historyCleared)
+        assertTrue(pickerOpened)
+        assertEquals(preferenceMutations.onBackgroundRefreshChanged, screenPreferencesCallbacks.onBackgroundRefreshChanged)
+    }
+
+    @Test
+    fun futachaHistoryCallbacks_builder_mapsNavigationHistoryAndRefreshActions() = runBlocking {
+        var selectedEntry: ThreadHistoryEntry? = null
+        var dismissedEntry: ThreadHistoryEntry? = null
+        var updatedEntry: ThreadHistoryEntry? = null
+        var refreshCount = 0
+        var clearCount = 0
+        val entry = historyEntry()
+        val historyCallbacks = buildFutachaScreenHistoryCallbacks(
+            navigationCallbacks = FutachaNavigationCallbacks(
+                onHistoryEntrySelected = { selectedEntry = it },
+                onSavedThreadSelected = {},
+                onCatalogThreadSelected = { _, _, _, _, _ -> },
+                onSavedThreadsDismissed = {},
+                onBoardSelectionCleared = {},
+                onThreadDismissed = {},
+                onRegisteredThreadUrlClick = { false }
+            ),
+            historyMutations = FutachaHistoryMutationCallbacks(
+                onDismissHistoryEntry = { dismissedEntry = it },
+                onUpdateHistoryEntry = { updatedEntry = it },
+                onClearHistory = { clearCount += 1 }
+            ),
+            onHistoryRefresh = { refreshCount += 1 }
+        )
+
+        historyCallbacks.onHistoryEntrySelected(entry)
+        historyCallbacks.onHistoryEntryDismissed(entry)
+        historyCallbacks.onHistoryEntryUpdated(entry)
+        historyCallbacks.onHistoryRefresh()
+        historyCallbacks.onHistoryCleared()
+
+        assertEquals(entry, selectedEntry)
+        assertEquals(entry, dismissedEntry)
+        assertEquals(entry, updatedEntry)
+        assertEquals(1, refreshCount)
+        assertEquals(1, clearCount)
+        assertEquals(ScreenHistoryCallbacks()::class, historyCallbacks::class)
+    }
+
+    @Test
+    fun futachaRuntimeHelpers_buildRepositoryHolderAndCloseOwnedRepository() {
+        val sharedRepository = TestBoardRepository()
+        val ownedRepository = TestBoardRepository()
+        val sharedHolder = buildFutachaRepositoryHolder(
+            httpClient = null,
+            cookieRepository = null,
+            createSharedRepository = { _, _ -> error("should not create shared repository") },
+            createOwnedRepository = { ownedRepository }
+        )
+        val explicitSharedHolder = buildFutachaRepositoryHolder(
+            httpClient = io.ktor.client.HttpClient(),
+            cookieRepository = null,
+            createSharedRepository = { _, _ -> sharedRepository },
+            createOwnedRepository = { error("should not create owned repository") }
+        )
+
+        assertTrue(sharedHolder.ownsRepository)
+        assertSame(ownedRepository, sharedHolder.repository)
+        assertFalse(explicitSharedHolder.ownsRepository)
+        assertSame(sharedRepository, explicitSharedHolder.repository)
+
+        closeOwnedFutachaRepository(explicitSharedHolder) { error("unexpected: $it") }
+        closeOwnedFutachaRepository(sharedHolder) { error("unexpected: $it") }
+
+        assertEquals(0, sharedRepository.closeAsyncCalls)
+        assertEquals(1, ownedRepository.closeAsyncCalls)
+    }
+
+    @Test
+    fun futachaRuntimeHelpers_fetchUpdateInfoHandlesSuccessFailureAndNull() = runBlocking {
+        val updateInfo = UpdateInfo(
+            currentVersion = "1.0.0",
+            latestVersion = "1.1.0",
+            message = "update"
+        )
+        var failure: Throwable? = null
+
+        assertNull(fetchFutachaUpdateInfo(null))
+        assertEquals(
+            updateInfo,
+            fetchFutachaUpdateInfo(
+                versionChecker = TestVersionChecker(updateInfo = updateInfo)
+            )
+        )
+        assertNull(
+            fetchFutachaUpdateInfo(
+                versionChecker = TestVersionChecker(failure = IllegalStateException("boom")),
+                onFailure = { failure = it }
+            )
+        )
+        assertEquals("boom", failure?.message)
+    }
+
+    @Test
+    fun futachaUiAssemblyHelpers_buildPreferencesResolveRepositoryAndRecoverMissingBoard() {
+        val screenPreferencesState = buildFutachaScreenPreferencesState(
+            appVersion = "1.2.3",
+            isBackgroundRefreshEnabled = true,
+            isLightweightModeEnabled = false,
+            manualSaveDirectory = "custom",
+            manualSaveLocation = SaveLocation.Path("custom"),
+            resolvedManualSaveDirectory = "/virtual/custom",
+            attachmentPickerPreference = AttachmentPickerPreference.DOCUMENT,
+            saveDirectorySelection = SaveDirectorySelection.PICKER,
+            preferredFileManagerPackage = "pkg",
+            preferredFileManagerLabel = "Files",
+            threadMenuEntries = emptyList(),
+            catalogNavEntries = emptyList()
+        )
+        assertEquals("1.2.3", screenPreferencesState.appVersion)
+        assertEquals("/virtual/custom", screenPreferencesState.resolvedManualSaveDirectory)
+        assertEquals(AttachmentPickerPreference.DOCUMENT, screenPreferencesState.attachmentPickerPreference)
+
+        val repository = TestBoardRepository()
+        assertSame(
+            repository,
+            resolveFutachaBoardRepository(
+                board = board(id = "img", url = "https://may.2chan.net/img/futaba.php"),
+                sharedRepository = repository
+            )
+        )
+        assertNull(
+            resolveFutachaBoardRepository(
+                board = board(id = "mock", url = "https://example.com/mock/futaba.php"),
+                sharedRepository = repository
+            )
+        )
+
+        val baseState = FutachaNavigationState(
+            selectedBoardId = "img",
+            selectedThreadId = "123",
+            selectedThreadTitle = "title",
+            isSavedThreadsVisible = true
+        )
+        assertEquals(
+            FutachaNavigationState(isSavedThreadsVisible = true),
+            resolveMissingBoardRecoveryState(
+                state = baseState,
+                missingBoardId = "img",
+                boards = emptyList()
+            )
+        )
+        assertNull(
+            resolveMissingBoardRecoveryState(
+                state = baseState,
+                missingBoardId = "img",
+                boards = listOf(board(id = "img"))
+            )
+        )
+    }
+
+    @Test
+    fun futachaAppScreenBindings_builder_wiresScreenCallbacksAndState() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val entry = historyEntry(boardId = "img", boardName = "img")
+        store.setHistory(listOf(entry))
+        var navigationState = FutachaNavigationState()
+        var pickerOpened = false
+        var refreshCount = 0
+        var skippedCleared = false
+        val bindings = buildFutachaAppScreenBindings(
+            coroutineScope = this,
+            stateStore = store,
+            autoSavedThreadRepository = null,
+            currentBoards = { listOf(board(id = "img", name = "img")) },
+            currentNavigationState = { navigationState },
+            setNavigationState = { navigationState = it },
+            appVersion = "1.2.3",
+            isBackgroundRefreshEnabled = false,
+            isLightweightModeEnabled = true,
+            manualSaveDirectory = "custom",
+            manualSaveLocation = SaveLocation.Path("custom"),
+            resolvedManualSaveDirectory = "/virtual/custom",
+            attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+            saveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+            preferredFileManagerPackage = "pkg",
+            preferredFileManagerLabel = "Files",
+            threadMenuEntries = emptyList(),
+            catalogNavEntries = emptyList(),
+            onOpenSaveDirectoryPicker = { pickerOpened = true },
+            onHistoryRefresh = { refreshCount += 1 },
+            onSkippedThreadsCleared = { skippedCleared = true },
+            onAutoSavedThreadDeleteFailure = { _, _ -> },
+            onAutoSavedThreadClearFailure = {}
+        )
+
+        bindings.boardScreenCallbacks.onMenuAction(BoardManagementMenuAction.SAVED_THREADS)
+        bindings.screenPreferencesCallbacks.onBackgroundRefreshChanged(true)
+        bindings.screenPreferencesCallbacks.onOpenSaveDirectoryPicker?.invoke()
+        bindings.screenHistoryCallbacks.onHistoryRefresh()
+        bindings.screenHistoryCallbacks.onHistoryCleared()
+        yield()
+        delay(1)
+
+        assertTrue(navigationState.isSavedThreadsVisible)
+        assertTrue(store.isBackgroundRefreshEnabled.first())
+        assertTrue(pickerOpened)
+        assertEquals(1, refreshCount)
+        assertTrue(skippedCleared)
+        assertEquals("1.2.3", bindings.screenPreferencesState.appVersion)
+    }
+
+    @Test
+    fun futachaDestinationProps_builders_mapScreenContractsAndRepositories() {
+        val manualRepository = SavedThreadRepository(InMemoryFileSystem())
+        val sharedRepository = TestBoardRepository()
+        val board = board(id = "img", name = "img", url = "https://may.2chan.net/img/futaba.php")
+        val mockBoard = board(id = "mock", name = "mock", url = "https://example.com/mock/futaba.php")
+        val history = listOf(historyEntry(boardId = "img", boardName = "img"))
+        val preferencesState = buildFutachaScreenPreferencesState(
+            appVersion = "1.2.3",
+            isBackgroundRefreshEnabled = false,
+            isLightweightModeEnabled = true,
+            manualSaveDirectory = "custom",
+            manualSaveLocation = SaveLocation.Path("custom"),
+            resolvedManualSaveDirectory = "/virtual/custom",
+            attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+            saveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+            preferredFileManagerPackage = null,
+            preferredFileManagerLabel = null,
+            threadMenuEntries = emptyList(),
+            catalogNavEntries = emptyList()
+        )
+        val preferencesCallbacks = ScreenPreferencesCallbacks()
+        val historyCallbacks = ScreenHistoryCallbacks()
+        var selectedBoard: BoardSummary? = null
+        val boardCallbacks = FutachaBoardScreenCallbacks(
+            onBoardSelected = { selectedBoard = it },
+            onAddBoard = { _, _ -> },
+            onMenuAction = {},
+            onBoardDeleted = {},
+            onBoardsReordered = {}
+        )
+        var selectedSavedThread: SavedThread? = null
+        var savedThreadsDismissed = false
+        var catalogSelection: List<Any?>? = null
+        var threadDismissed = false
+        var registeredUrl: String? = null
+        val navigationCallbacks = FutachaNavigationCallbacks(
+            onHistoryEntrySelected = {},
+            onSavedThreadSelected = { selectedSavedThread = it },
+            onCatalogThreadSelected = { threadId, title, replies, thumbnailUrl, threadUrl ->
+                catalogSelection = listOf(threadId, title, replies, thumbnailUrl, threadUrl)
+            },
+            onSavedThreadsDismissed = { savedThreadsDismissed = true },
+            onBoardSelectionCleared = {},
+            onThreadDismissed = { threadDismissed = true },
+            onRegisteredThreadUrlClick = { url ->
+                registeredUrl = url
+                true
+            }
+        )
+
+        val savedProps = buildFutachaSavedThreadsDestinationProps(
+            repository = manualRepository,
+            navigationCallbacks = navigationCallbacks
+        )
+        val savedThread = savedThread(threadId = "saved-123", boardId = "img", boardName = "img")
+        savedProps.onThreadClick(savedThread)
+        savedProps.onBack()
+        assertSame(manualRepository, savedProps.repository)
+        assertEquals(savedThread, selectedSavedThread)
+        assertTrue(savedThreadsDismissed)
+
+        val boardProps = buildFutachaBoardManagementDestinationProps(
+            boards = listOf(board),
+            history = history,
+            cookieRepository = null,
+            boardScreenCallbacks = boardCallbacks,
+            historyCallbacks = historyCallbacks,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            fileSystem = null,
+            autoSavedThreadRepository = null
+        )
+        boardProps.onBoardSelected(board)
+        assertEquals(board, selectedBoard)
+        assertSame(preferencesState, boardProps.preferencesState)
+        assertSame(preferencesCallbacks, boardProps.preferencesCallbacks)
+        assertNull(boardProps.dependencies.fileSystem)
+        assertNull(boardProps.dependencies.autoSavedThreadRepository)
+
+        val catalogProps = buildFutachaCatalogDestinationProps(
+            board = board,
+            history = history,
+            navigationCallbacks = navigationCallbacks,
+            historyCallbacks = historyCallbacks,
+            sharedRepository = sharedRepository,
+            stateStore = AppStateStore(FakePlatformStateStorage()),
+            autoSavedThreadRepository = null,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            cookieRepository = null,
+            httpClient = null
+        )
+        catalogProps.onThreadSelected(
+            FutachaThreadSelection(
+                boardId = board.id,
+                threadId = "321",
+                threadTitle = "catalog-title",
+                threadReplies = 7,
+                threadThumbnailUrl = "catalog-thumb",
+                threadUrl = "https://may.2chan.net/img/res/321.htm"
+            )
+        )
+        assertSame(sharedRepository, catalogProps.dependencies.repository)
+        assertNull(catalogProps.dependencies.fileSystem)
+        assertEquals("catalog-img", catalogProps.saveableStateKey)
+        assertEquals(
+            listOf(
+                "321",
+                "catalog-title",
+                7,
+                "catalog-thumb",
+                "https://may.2chan.net/img/res/321.htm"
+            ),
+            catalogSelection
+        )
+        assertNull(
+            buildFutachaCatalogDestinationProps(
+                board = mockBoard,
+                history = history,
+                navigationCallbacks = navigationCallbacks,
+                historyCallbacks = historyCallbacks,
+                sharedRepository = sharedRepository,
+                stateStore = AppStateStore(FakePlatformStateStorage()),
+                autoSavedThreadRepository = null,
+                preferencesState = preferencesState,
+                preferencesCallbacks = preferencesCallbacks,
+                cookieRepository = null,
+                httpClient = null
+            ).dependencies.repository
+        )
+
+        val threadContext = FutachaThreadHistoryContext(
+            title = "thread title",
+            threadUrl = "https://may.2chan.net/img/res/321.htm",
+            replyCount = 12,
+            thumbnailUrl = "thumb"
+        )
+        val threadProps = buildFutachaThreadDestinationProps(
+            board = board,
+            history = history,
+            threadId = "321",
+            historyContext = threadContext,
+            navigationState = FutachaNavigationState(
+                selectedThreadTitle = "thread title",
+                selectedThreadReplies = 12,
+                selectedThreadUrl = "https://may.2chan.net/img/res/321.htm"
+            ),
+            navigationCallbacks = navigationCallbacks,
+            historyCallbacks = historyCallbacks,
+            threadMutations = FutachaThreadMutationCallbacks(onScrollPositionPersist = { _, _, _ -> }),
+            sharedRepository = sharedRepository,
+            httpClient = null,
+            fileSystem = null,
+            cookieRepository = null,
+            stateStore = AppStateStore(FakePlatformStateStorage()),
+            autoSavedThreadRepository = null,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
+        )
+        assertEquals(threadContext, threadProps.historyContext)
+        assertSame(sharedRepository, threadProps.dependencies.repository)
+        assertNotNull(threadProps.dependencies.stateStore)
+        assertEquals("thread title", threadProps.threadTitle)
+        assertEquals(12, threadProps.initialReplyCount)
+        assertTrue(threadProps.onRegisteredThreadUrlClick("https://may.2chan.net/img/res/999.htm"))
+        assertEquals("https://may.2chan.net/img/res/999.htm", registeredUrl)
+        threadProps.onBack()
+        assertTrue(threadDismissed)
+    }
+
+    @Test
+    fun futachaBoardScreenCallbacks_handleSelectionAndBoardMutations() = runBlocking {
+        var currentBoards = listOf(
+            board(id = "img", name = "img", url = "https://may.2chan.net/img/futaba.php"),
+            board(id = "dat", name = "dat", url = "https://may.2chan.net/dat/futaba.php")
+        )
+        var navigationState = FutachaNavigationState()
+        val savedBoardsSnapshots = mutableListOf<List<BoardSummary>>()
+        val callbacks = buildFutachaBoardScreenCallbacks(
+            coroutineScope = this,
+            currentNavigationState = { navigationState },
+            setNavigationState = { navigationState = it },
+            updateBoards = { transform ->
+                val updatedBoards = transform(currentBoards)
+                if (updatedBoards != currentBoards) {
+                    currentBoards = updatedBoards
+                    savedBoardsSnapshots += currentBoards
+                }
+            }
+        )
+
+        callbacks.onBoardSelected(currentBoards[0])
+        callbacks.onMenuAction(BoardManagementMenuAction.SAVED_THREADS)
+        callbacks.onAddBoard("jun", "may.2chan.net/jun")
+        callbacks.onAddBoard("duplicate", "https://may.2chan.net/img/futaba.php")
+        callbacks.onBoardDeleted(currentBoards.first { it.id == "img" })
+        callbacks.onBoardsReordered(currentBoards.reversed())
+        yield()
+        delay(1)
+
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "img",
+                isSavedThreadsVisible = true
+            ),
+            navigationState
+        )
+        assertEquals(
+            listOf("img", "dat", "jun"),
+            savedBoardsSnapshots[0].map { it.id }
+        )
+        assertEquals(
+            listOf("dat", "jun"),
+            savedBoardsSnapshots[1].map { it.id }
+        )
+        assertEquals(
+            listOf("jun", "dat"),
+            savedBoardsSnapshots[2].map { it.id }
+        )
+    }
+
+    @Test
+    fun futachaNavigationCallbacks_handleCrossScreenSelectionAndBackActions() {
+        val boards = listOf(
+            board(id = "img", name = "img", url = "https://may.2chan.net/img/futaba.php"),
+            board(id = "dat", name = "dat", url = "https://may.2chan.net/dat/futaba.php")
+        )
+        var navigationState = FutachaNavigationState(isSavedThreadsVisible = true)
+        val callbacks = buildFutachaNavigationCallbacks(
+            currentBoards = { boards },
+            currentNavigationState = { navigationState },
+            setNavigationState = { navigationState = it }
+        )
+
+        callbacks.onSavedThreadsDismissed()
+        assertEquals(FutachaNavigationState(), navigationState)
+
+        callbacks.onHistoryEntrySelected(
+            historyEntry(
+                threadId = "123",
+                boardId = "dat",
+                boardName = "dat",
+                boardUrl = "https://may.2chan.net/dat/res/123.htm"
+            )
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "dat",
+                selectedThreadId = "123",
+                selectedThreadTitle = "title-123",
+                selectedThreadReplies = 10,
+                selectedThreadThumbnailUrl = "thumb-123",
+                selectedThreadUrl = "https://may.2chan.net/dat/res/123.htm"
+            ),
+            navigationState
+        )
+
+        callbacks.onThreadDismissed()
+        assertEquals(
+            FutachaNavigationState(selectedBoardId = "dat"),
+            navigationState
+        )
+
+        callbacks.onCatalogThreadSelected(
+            "999",
+            "catalog-title",
+            7,
+            "catalog-thumb",
+            "https://may.2chan.net/dat/res/999.htm"
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "dat",
+                selectedThreadId = "999",
+                selectedThreadTitle = "catalog-title",
+                selectedThreadReplies = 7,
+                selectedThreadThumbnailUrl = "catalog-thumb",
+                selectedThreadUrl = "https://may.2chan.net/dat/res/999.htm"
+            ),
+            navigationState
+        )
+
+        callbacks.onBoardSelectionCleared()
+        assertEquals(FutachaNavigationState(), navigationState)
+
+        callbacks.onSavedThreadSelected(
+            savedThread(
+                threadId = "456",
+                boardId = "img",
+                boardName = "img"
+            )
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "img",
+                selectedThreadId = "456",
+                selectedThreadTitle = "saved-title-456",
+                selectedThreadReplies = 10
+            ),
+            navigationState
+        )
+    }
+
+    @Test
+    fun futachaNavigationCallbacks_handleRegisteredThreadUrlsAndIgnoreUnknownTargets() {
+        val boards = listOf(
+            board(id = "img", name = "img", url = "https://may.2chan.net/img/futaba.php"),
+            board(id = "dat", name = "dat", url = "https://may.2chan.net/dat/futaba.php")
+        )
+        var navigationState = FutachaNavigationState(
+            selectedBoardId = "img",
+            selectedThreadId = "123",
+            selectedThreadUrl = "https://may.2chan.net/img/res/123.htm"
+        )
+        val callbacks = buildFutachaNavigationCallbacks(
+            currentBoards = { boards },
+            currentNavigationState = { navigationState },
+            setNavigationState = { navigationState = it }
+        )
+
+        assertFalse(callbacks.onRegisteredThreadUrlClick("https://jun.2chan.net/jun/res/456.htm"))
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "img",
+                selectedThreadId = "123",
+                selectedThreadUrl = "https://may.2chan.net/img/res/123.htm"
+            ),
+            navigationState
+        )
+
+        assertTrue(callbacks.onRegisteredThreadUrlClick("https://may.2chan.net/dat/res/456.htm"))
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "dat",
+                selectedThreadId = "456",
+                selectedThreadUrl = "https://may.2chan.net/dat/res/456.htm"
+            ),
+            navigationState
+        )
+    }
+
+    @Test
+    fun savedThreadRepositoryHelpers_buildResolveAndPreferRepositories() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val customLocation = SaveLocation.Path("custom")
+        val repositories = buildFutachaSavedThreadsRepositories(
+            fileSystem = fileSystem,
+            manualSaveDirectory = "custom",
+            manualSaveLocation = customLocation
+        )
+        val currentRepository = assertNotNull(repositories.currentRepository)
+        val legacyRepository = assertNotNull(repositories.legacyRepository)
+
+        legacyRepository.addThreadToIndex(savedThread(threadId = "legacy", boardId = "img")).getOrThrow()
+
+        assertSame(
+            legacyRepository,
+            selectPreferredSavedThreadsRepository(
+                currentRepository = currentRepository,
+                legacyRepository = legacyRepository,
+                currentCount = 0,
+                legacyCount = 1
+            )
+        )
+        assertSame(
+            legacyRepository,
+            resolveActiveSavedThreadsRepository(
+                currentRepository = currentRepository,
+                legacyRepository = legacyRepository
+            )
+        )
+        assertEquals(
+            "/virtual/custom",
+            resolveFutachaManualSaveDirectoryDisplay(
+                fileSystem = fileSystem,
+                manualSaveDirectory = "custom",
+                manualSaveLocation = customLocation
+            )
+        )
+        assertFalse(shouldResetInaccessibleManualSaveBookmark(fileSystem, customLocation))
+    }
+
+    @Test
+    fun savedThreadRepositoryHelpers_skipLegacyForDefaultPathAndDetectBookmarkFallback() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val defaultLocation = SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
+        val repositories = buildFutachaSavedThreadsRepositories(
+            fileSystem = fileSystem,
+            manualSaveDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+            manualSaveLocation = defaultLocation
+        )
+
+        assertNotNull(repositories.currentRepository)
+        assertNull(repositories.legacyRepository)
+        assertEquals(
+            "SAF: content://picked/tree",
+            resolveFutachaManualSaveDirectoryDisplay(
+                fileSystem = fileSystem,
+                manualSaveDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+                manualSaveLocation = SaveLocation.TreeUri("content://picked/tree")
+            )
+        )
+        assertEquals(
+            "Bookmark: 保存先が選択済みです",
+            resolveFutachaManualSaveDirectoryDisplay(
+                fileSystem = fileSystem,
+                manualSaveDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+                manualSaveLocation = SaveLocation.Bookmark("bookmark-token")
+            )
+        )
+        assertTrue(
+            shouldResetInaccessibleManualSaveBookmark(
+                fileSystem = fileSystem,
+                manualSaveLocation = SaveLocation.Bookmark("bookmark-token")
+            )
+        )
+    }
+
+    @Test
+    fun futachaThreadMutationCallbacks_persistScrollPositionWithThreadContext() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val board = board(id = "img-b", name = "img", url = "https://may.2chan.net/img/futaba.php")
+        val context = FutachaThreadHistoryContext(
+            title = "thread title",
+            threadUrl = "https://may.2chan.net/img/res/123.htm",
+            replyCount = 12,
+            thumbnailUrl = "thumb"
+        )
+        store.setHistory(
+            listOf(
+                historyEntry(
+                    threadId = "123",
+                    boardId = "img-b",
+                    boardName = "img",
+                    boardUrl = "https://may.2chan.net/img/res/123.htm"
+                )
+            )
+        )
+        val callbacks = buildFutachaThreadMutationCallbacks(
+            coroutineScope = this,
+            stateStore = store,
+            board = board,
+            historyContext = context
+        )
+
+        callbacks.onScrollPositionPersist("123", 9, 21)
+        yield()
+        delay(1)
+
+        assertEquals(
+            9,
+            store.history.first().first().lastReadItemIndex
+        )
+        assertEquals(
+            21,
+            store.history.first().first().lastReadItemOffset
+        )
+    }
+
+    @Test
+    fun recordFutachaVisitedThread_recordsAndSkipsUsingHistoryPolicy() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val board = board(id = "img-b", name = "img", url = "https://may.2chan.net/img/futaba.php")
+        val context = FutachaThreadHistoryContext(
+            title = "thread title",
+            threadUrl = "https://may.2chan.net/img/res/123.htm",
+            replyCount = 12,
+            thumbnailUrl = "thumb"
+        )
+        val existing = historyEntry(
+            threadId = "123",
+            boardId = "img-b",
+            boardName = "img",
+            boardUrl = "https://may.2chan.net/img/res/123.htm"
+        ).copy(
+            lastVisitedEpochMillis = 100_000L,
+            lastReadItemIndex = 7,
+            lastReadItemOffset = 11
+        )
+        store.setHistory(listOf(existing))
+
+        assertFalse(
+            recordFutachaVisitedThread(
+                stateStore = store,
+                history = store.history.first(),
+                threadId = "123",
+                board = board,
+                context = context,
+                currentTimeMillis = 120_000L
+            )
+        )
+        assertEquals(existing, store.history.first().first())
+
+        assertTrue(
+            recordFutachaVisitedThread(
+                stateStore = store,
+                history = store.history.first(),
+                threadId = "123",
+                board = board,
+                context = context,
+                currentTimeMillis = 170_000L
+            )
+        )
+        assertEquals(
+            ThreadHistoryEntry(
+                threadId = "123",
+                boardId = "img-b",
+                title = "thread title",
+                titleImageUrl = "thumb",
+                boardName = "img",
+                boardUrl = "https://may.2chan.net/img/res/123.htm",
+                lastVisitedEpochMillis = 170_000L,
+                replyCount = 12,
+                lastReadItemIndex = 7,
+                lastReadItemOffset = 11
+            ),
+            store.history.first().first()
+        )
+    }
+
+    @Test
+    fun futachaNavigationState_helpers_clearAndApplySelection() {
+        val base = FutachaNavigationState(
+            selectedBoardId = "img-b",
+            selectedThreadId = "123",
+            selectedThreadTitle = "title",
+            selectedThreadReplies = 42,
+            selectedThreadThumbnailUrl = "thumb",
+            selectedThreadUrl = "https://may.2chan.net/img/res/123.htm",
+            isSavedThreadsVisible = true
+        )
+
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "img-b",
+                isSavedThreadsVisible = true
+            ),
+            clearFutachaThreadSelection(base)
+        )
+        assertEquals(
+            FutachaNavigationState(isSavedThreadsVisible = true),
+            clearFutachaThreadSelection(base, clearBoardSelection = true)
+        )
+        assertEquals(
+            FutachaNavigationState(selectedBoardId = "dat", isSavedThreadsVisible = false),
+            selectFutachaBoard(base, "dat")
+        )
+
+        val selection = FutachaThreadSelection(
+            boardId = "jun",
+            threadId = "456",
+            threadTitle = "next",
+            threadReplies = 12,
+            threadThumbnailUrl = "next-thumb",
+            threadUrl = "https://jun.2chan.net/jun/res/456.htm",
+            isSavedThreadsVisible = false
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "jun",
+                selectedThreadId = "456",
+                selectedThreadTitle = "next",
+                selectedThreadReplies = 12,
+                selectedThreadThumbnailUrl = "next-thumb",
+                selectedThreadUrl = "https://jun.2chan.net/jun/res/456.htm",
+                isSavedThreadsVisible = false
+            ),
+            applyFutachaThreadSelection(FutachaNavigationState(), selection)
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "img-b",
+                selectedThreadId = "789",
+                selectedThreadTitle = "catalog",
+                selectedThreadReplies = 7,
+                selectedThreadThumbnailUrl = "catalog-thumb",
+                selectedThreadUrl = "https://may.2chan.net/img/res/789.htm",
+                isSavedThreadsVisible = false
+            ),
+            selectCatalogThread(
+                state = base,
+                threadId = "789",
+                title = "catalog",
+                replies = 7,
+                thumbnailUrl = "catalog-thumb",
+                threadUrl = "https://may.2chan.net/img/res/789.htm"
+            )
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "jun",
+                selectedThreadId = "456",
+                selectedThreadTitle = "next",
+                selectedThreadReplies = 12,
+                selectedThreadThumbnailUrl = "next-thumb",
+                selectedThreadUrl = "https://jun.2chan.net/jun/res/456.htm",
+                isSavedThreadsVisible = false
+            ),
+            selectCatalogThread(base, selection.copy(isSavedThreadsVisible = true))
+        )
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "img-b",
+                isSavedThreadsVisible = false
+            ),
+            dismissSavedThreads(
+                FutachaNavigationState(
+                    selectedBoardId = "img-b",
+                    isSavedThreadsVisible = true
+                )
+            )
+        )
+    }
+
+    @Test
+    fun resolveFutachaDestination_routesByNavigationState() {
+        val board = board(id = "img-b")
+        assertEquals(
+            FutachaDestination.BoardManagement,
+            resolveFutachaDestination(FutachaNavigationState(), listOf(board))
+        )
+        assertEquals(
+            FutachaDestination.SavedThreads,
+            resolveFutachaDestination(
+                FutachaNavigationState(isSavedThreadsVisible = true),
+                listOf(board)
+            )
+        )
+        assertEquals(
+            FutachaDestination.MissingBoard("missing"),
+            resolveFutachaDestination(
+                FutachaNavigationState(selectedBoardId = "missing"),
+                listOf(board)
+            )
+        )
+        assertEquals(
+            FutachaDestination.Catalog(board),
+            resolveFutachaDestination(
+                FutachaNavigationState(selectedBoardId = "img-b"),
+                listOf(board)
+            )
+        )
+        assertEquals(
+            FutachaDestination.Thread(board, "123"),
+            resolveFutachaDestination(
+                FutachaNavigationState(
+                    selectedBoardId = "img-b",
+                    selectedThreadId = "123"
+                ),
+                listOf(board)
+            )
+        )
+    }
+
+    @Test
+    fun applyRegisteredThreadNavigation_switchesBoardAndClearsThreadDecorations() {
+        val base = FutachaNavigationState(
+            selectedBoardId = "old",
+            selectedThreadId = "123",
+            selectedThreadTitle = "old",
+            selectedThreadReplies = 99,
+            selectedThreadThumbnailUrl = "thumb",
+            selectedThreadUrl = "https://old/res/123.htm",
+            isSavedThreadsVisible = true
+        )
+        val target = RegisteredThreadNavigation(
+            board = board(id = "new"),
+            threadId = "456",
+            threadUrl = "https://new/res/456.htm"
+        )
+
+        assertEquals(
+            FutachaNavigationState(
+                selectedBoardId = "new",
+                selectedThreadId = "456",
+                selectedThreadUrl = "https://new/res/456.htm",
+                isSavedThreadsVisible = false
+            ),
+            applyRegisteredThreadNavigation(base, target)
+        )
+    }
+
+    @Test
+    fun futachaThreadHistory_helpers_buildMatchAndSkipCorrectly() {
+        val board = board(id = "img-b", name = "img", url = "https://may.2chan.net/img/futaba.php")
+        val navigationState = FutachaNavigationState(
+            selectedThreadTitle = "thread title",
+            selectedThreadReplies = 12,
+            selectedThreadThumbnailUrl = "thumb",
+            selectedThreadUrl = "https://may.2chan.net/img/res/123.htm"
+        )
+        val context = buildFutachaThreadHistoryContext(board, navigationState)
+        assertEquals(
+            FutachaThreadHistoryContext(
+                title = "thread title",
+                threadUrl = "https://may.2chan.net/img/res/123.htm",
+                replyCount = 12,
+                thumbnailUrl = "thumb"
+            ),
+            context
+        )
+
+        val existing = ThreadHistoryEntry(
+            threadId = "123",
+            boardId = "img-b",
+            title = "title-123",
+            titleImageUrl = "thumb-123",
+            boardName = "img",
+            boardUrl = "https://may.2chan.net/img/res/123.htm",
+            lastVisitedEpochMillis = 90_000L,
+            replyCount = 10,
+            lastReadItemIndex = 7,
+            lastReadItemOffset = 11
+        )
+        val fallbackBoardUrlMatch = ThreadHistoryEntry(
+            threadId = "123",
+            boardId = "",
+            title = "title-123",
+            titleImageUrl = "thumb-123",
+            boardName = "img",
+            boardUrl = "https://may.2chan.net/img/res/123.htm",
+            lastVisitedEpochMillis = 1L,
+            replyCount = 10
+        )
+
+        assertEquals(
+            existing,
+            findFutachaVisitedHistoryEntry(
+                history = listOf(existing, fallbackBoardUrlMatch),
+                threadId = "123",
+                boardId = "img-b",
+                boardUrl = "https://may.2chan.net/img/res/123.htm"
+            )
+        )
+        assertEquals(
+            fallbackBoardUrlMatch,
+            findFutachaVisitedHistoryEntry(
+                history = listOf(fallbackBoardUrlMatch),
+                threadId = "123",
+                boardId = "img-b",
+                boardUrl = "https://may.2chan.net/img/res/123.htm"
+            )
+        )
+        assertTrue(
+            shouldSkipFutachaVisitedHistoryUpdate(
+                existingEntry = existing,
+                boardId = "img-b",
+                currentTimeMillis = 100_000L
+            )
+        )
+        assertFalse(
+            shouldSkipFutachaVisitedHistoryUpdate(
+                existingEntry = existing,
+                boardId = "other",
+                currentTimeMillis = 100_000L
+            )
+        )
+
+        assertEquals(
+            ThreadHistoryEntry(
+                threadId = "123",
+                boardId = "img-b",
+                title = "thread title",
+                titleImageUrl = "thumb",
+                boardName = "img",
+                boardUrl = "https://may.2chan.net/img/res/123.htm",
+                lastVisitedEpochMillis = 100_000L,
+                replyCount = 12,
+                lastReadItemIndex = 7,
+                lastReadItemOffset = 11
+            ),
+            buildFutachaVisitedHistoryEntry(
+                threadId = "123",
+                board = board,
+                context = context,
+                currentTimeMillis = 100_000L,
+                existingEntry = existing
+            )
+        )
+    }
+
     @Test
     fun resolveHistoryEntrySelection_prefersBoardIdAndKeepsThreadUrlWhenResUrl() {
         val targetBoard = board(
@@ -340,4 +1417,80 @@ private class DeleteRecursivelyFailingFileSystem(
     override suspend fun deleteRecursively(path: String): Result<Unit> {
         return Result.failure(IllegalStateException("cannot delete"))
     }
+}
+
+private class TestVersionChecker(
+    private val updateInfo: UpdateInfo? = null,
+    private val failure: Throwable? = null
+) : VersionChecker {
+    override fun getCurrentVersion(): String = "1.0.0"
+
+    override suspend fun checkForUpdate(): UpdateInfo? {
+        failure?.let { throw it }
+        return updateInfo
+    }
+}
+
+private class TestBoardRepository : BoardRepository {
+    var closeAsyncCalls = 0
+
+    override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> = emptyList()
+
+    override suspend fun fetchOpImageUrl(board: String, threadId: String): String? = null
+
+    override suspend fun getThread(board: String, threadId: String): ThreadPage {
+        error("not needed")
+    }
+
+    override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+        error("not needed")
+    }
+
+    override suspend fun voteSaidane(board: String, threadId: String, postId: String) = Unit
+
+    override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) = Unit
+
+    override suspend fun deleteByUser(
+        board: String,
+        threadId: String,
+        postId: String,
+        password: String,
+        imageOnly: Boolean
+    ) = Unit
+
+    override suspend fun replyToThread(
+        board: String,
+        threadId: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String? = null
+
+    override suspend fun createThread(
+        board: String,
+        name: String,
+        email: String,
+        subject: String,
+        comment: String,
+        password: String,
+        imageFile: ByteArray?,
+        imageFileName: String?,
+        textOnly: Boolean
+    ): String? = null
+
+    override fun close() = Unit
+
+    override fun closeAsync(): kotlinx.coroutines.Job {
+        closeAsyncCalls += 1
+        return CompletableDeferred(Unit)
+    }
+
+    override suspend fun clearOpImageCache(board: String?, threadId: String?) = Unit
+
+    override suspend fun invalidateCookies(board: String) = Unit
 }

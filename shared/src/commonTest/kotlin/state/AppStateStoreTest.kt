@@ -231,6 +231,50 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun historyMutations_preserveOrderAndApplyEntryUpdates() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val first = historyEntry("111")
+        val second = historyEntry("222")
+        store.setHistory(listOf(first, second))
+
+        store.upsertHistoryEntry(second.copy(title = "updated-222", replyCount = 22))
+        assertEquals(
+            listOf("111", "222"),
+            store.history.first().map { it.threadId }
+        )
+        assertEquals("updated-222", store.history.first()[1].title)
+        assertEquals(22, store.history.first()[1].replyCount)
+
+        val prepended = historyEntry("333")
+        store.prependOrReplaceHistoryEntry(prepended)
+        assertEquals(
+            listOf("333", "111", "222"),
+            store.history.first().map { it.threadId }
+        )
+
+        store.updateHistoryScrollPosition(
+            threadId = "222",
+            index = 7,
+            offset = 14,
+            boardId = "b",
+            title = "updated-222",
+            titleImageUrl = "thumb-222",
+            boardName = "board",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            replyCount = 22
+        )
+        val updatedEntry = store.history.first().first { it.threadId == "222" }
+        assertEquals(7, updatedEntry.lastReadItemIndex)
+        assertEquals(14, updatedEntry.lastReadItemOffset)
+
+        store.removeHistoryEntry(first)
+        assertEquals(
+            listOf("333", "222"),
+            store.history.first().map { it.threadId }
+        )
+    }
+
+    @Test
     fun preferenceFacade_forwardsPreferenceAndSelfPostOperations() = runBlocking {
         val calls = mutableListOf<String>()
         val facade = buildAppStatePreferenceFacade(
@@ -327,7 +371,10 @@ class AppStateStoreTest {
     fun boardsFacade_andFlow_forwardAndDecodeBoards() = runBlocking {
         val calls = mutableListOf<String>()
         val facade = buildAppStateBoardsFacade(
-            setBoardsImpl = { calls += "boards:${it.size}" }
+            setBoardsImpl = { calls += "boards:${it.size}" },
+            updateBoardsImpl = { transform ->
+                calls += "update:${transform(emptyList()).size}"
+            }
         )
         val storage = FakePlatformStateStorage().apply {
             boardsState.value = """
@@ -346,8 +393,17 @@ class AppStateStoreTest {
                 )
             )
         )
+        facade.updateBoards { boards ->
+            boards + BoardSummary(
+                id = "jun",
+                name = "jun",
+                category = "cat",
+                url = "https://may.2chan.net/jun/",
+                description = "desc"
+            )
+        }
 
-        assertEquals(listOf("boards:1"), calls)
+        assertEquals(listOf("boards:1", "update:1"), calls)
         assertEquals(
             listOf("img"),
             buildAppStateBoardsFlow(storage, json, "AppStateStoreTest").first().map { it.id }

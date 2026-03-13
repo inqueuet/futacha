@@ -1,9 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
-import com.valoser.futacha.shared.model.CatalogNavEntryConfig
-import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal fun buildThreadScreenReplyDialogCallbacks(
     replyDialogBinding: ThreadReplyDialogStateBinding
@@ -89,29 +86,13 @@ internal fun buildThreadScreenSaveProgressDialogCallbacks(
 
 internal fun buildThreadScreenGlobalSettingsCallbacks(
     onBack: () -> Unit,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
     onOpenCookieManager: (() -> Unit)?,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    onClearPreferredFileManager: (() -> Unit)?,
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
+    preferencesCallbacks: ScreenPreferencesCallbacks
 ): ThreadGlobalSettingsCallbacks {
     return buildThreadGlobalSettingsCallbacks(
         onBack = onBack,
-        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-        onLightweightModeChanged = onLightweightModeChanged,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
         onOpenCookieManager = onOpenCookieManager,
-        onFileManagerSelected = onFileManagerSelected,
-        onClearPreferredFileManager = onClearPreferredFileManager,
-        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-        onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
+        preferencesCallbacks = preferencesCallbacks
     )
 }
 

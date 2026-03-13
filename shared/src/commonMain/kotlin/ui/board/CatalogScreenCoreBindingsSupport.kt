@@ -32,6 +32,31 @@ internal data class CatalogScreenCoreBindingsBundle(
     val mutableStateBundle: CatalogScreenMutableStateBundle
 )
 
+internal data class CatalogScreenDisplaySettings(
+    val displayStyle: com.valoser.futacha.shared.model.CatalogDisplayStyle,
+    val gridColumns: Int
+)
+
+internal fun resolveCatalogScreenDisplaySettings(
+    hasStateStore: Boolean,
+    persistentDisplayStyle: com.valoser.futacha.shared.model.CatalogDisplayStyle,
+    localDisplayStyle: com.valoser.futacha.shared.model.CatalogDisplayStyle,
+    persistentGridColumns: Int,
+    localGridColumns: Int
+): CatalogScreenDisplaySettings {
+    return if (hasStateStore) {
+        CatalogScreenDisplaySettings(
+            displayStyle = persistentDisplayStyle,
+            gridColumns = persistentGridColumns
+        )
+    } else {
+        CatalogScreenDisplaySettings(
+            displayStyle = localDisplayStyle,
+            gridColumns = localGridColumns
+        )
+    }
+}
+
 @Composable
 internal fun rememberCatalogScreenCoreBindingsBundle(
     stateStore: AppStateStore?,

@@ -1,10 +1,7 @@
 package com.valoser.futacha.shared.ui
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -18,50 +15,31 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
-import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.model.ThreadMenuItemConfig
-import com.valoser.futacha.shared.model.defaultThreadMenuConfig
-import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
-import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.repository.CookieRepository
-import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.repo.createRemoteBoardRepository
-import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.repository.SavedThreadRepository
-import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
-import com.valoser.futacha.shared.service.HistoryRefresher
-import com.valoser.futacha.shared.ui.board.BoardManagementScreen
-import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
-import com.valoser.futacha.shared.ui.board.CatalogScreen
-import com.valoser.futacha.shared.ui.board.SavedThreadsScreen
-import com.valoser.futacha.shared.ui.board.ThreadScreen
-import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
-import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
+import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
-import com.valoser.futacha.shared.ui.board.resolveRegisteredThreadNavigation
+import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
-import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.time.Clock
-import kotlin.time.ExperimentalTime
-import com.valoser.futacha.shared.version.VersionChecker
 import com.valoser.futacha.shared.version.UpdateInfo
+import com.valoser.futacha.shared.version.VersionChecker
+import kotlinx.coroutines.flow.first
+import kotlin.time.ExperimentalTime
 
 private const val TAG = "FutachaApp"
 
@@ -105,52 +83,35 @@ fun FutachaApp(
                 stateStore.setScrollDebounceScope(coroutineScope)
             }
 
-            // FIX: より明確なリソース所有権管理
-            val repositoryHolder = remember(httpClient) {
-                if (httpClient != null) {
-                    RepositoryHolder(
-                        repository = createRemoteBoardRepository(httpClient, cookieRepository = cookieRepository),
-                        ownsRepository = false
-                    )
-                } else {
-                    RepositoryHolder(
-                        repository = createRemoteBoardRepository(),
-                        ownsRepository = true
-                    )
-                }
-            }
-
-            val effectiveAutoSavedThreadRepository = remember(fileSystem, autoSavedThreadRepository) {
-                autoSavedThreadRepository ?: fileSystem?.let {
-                    SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY)
-                }
-            }
-
-            val historyRefresher = remember(repositoryHolder.repository, effectiveAutoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
-                HistoryRefresher(
-                    stateStore = stateStore,
-                    repository = repositoryHolder.repository,
-                    dispatcher = AppDispatchers.io,
-                    autoSavedThreadRepository = effectiveAutoSavedThreadRepository,  // FIX: 自動保存チェック用
+            val repositoryHolder = remember(httpClient, cookieRepository) {
+                buildFutachaRepositoryHolder(
                     httpClient = httpClient,
-                    fileSystem = fileSystem,
-                    maxConcurrency = if (shouldUseLightweightMode) 2 else 4
+                    cookieRepository = cookieRepository
                 )
             }
 
-            // FIX: すべてのリソースを確実に解放
+            val effectiveAutoSavedThreadRepository = remember(fileSystem, autoSavedThreadRepository) {
+                buildFutachaAutoSavedThreadRepository(
+                    fileSystem = fileSystem,
+                    existingRepository = autoSavedThreadRepository
+                )
+            }
+
+            val historyRefresher = remember(repositoryHolder.repository, effectiveAutoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
+                buildFutachaHistoryRefresher(
+                    stateStore = stateStore,
+                    repository = repositoryHolder.repository,
+                    autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                    httpClient = httpClient,
+                    fileSystem = fileSystem,
+                    shouldUseLightweightMode = shouldUseLightweightMode
+                )
+            }
+
             DisposableEffect(repositoryHolder) {
                 onDispose {
-                    if (repositoryHolder.ownsRepository) {
-                        runCatching {
-                            repositoryHolder.repository.closeAsync().invokeOnCompletion { error ->
-                                if (error != null && error !is kotlinx.coroutines.CancellationException) {
-                                    Logger.e("FutachaApp", "Repository async close failed", error)
-                                }
-                            }
-                        }.onFailure { e ->
-                            Logger.e("FutachaApp", "Failed to close repository", e)
-                        }
+                    closeOwnedFutachaRepository(repositoryHolder) { error ->
+                        Logger.e(TAG, "Failed to close repository", error)
                     }
                 }
             }
@@ -165,22 +126,13 @@ fun FutachaApp(
                 )
             }
 
-            // バージョンチェック
             var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
             LaunchedEffect(versionChecker) {
-                versionChecker?.let { checker ->
-                    try {
-                        val info = checker.checkForUpdate()
-                        updateInfo = info
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Logger.e(TAG, "Version check failed", e)
-                    }
+                updateInfo = fetchFutachaUpdateInfo(versionChecker) {
+                    Logger.e(TAG, "Version check failed", it)
                 }
             }
 
-            // 更新通知ダイアログ
             updateInfo?.let { info ->
                 UpdateNotificationDialog(
                     updateInfo = info,
@@ -198,69 +150,28 @@ fun FutachaApp(
                 com.valoser.futacha.shared.model.SaveLocation.fromString(manualSaveDirectory)
             }
             LaunchedEffect(manualSaveLocation, fileSystem) {
-                val currentLocation = manualSaveLocation
-                if (
-                    currentLocation !is com.valoser.futacha.shared.model.SaveLocation.Bookmark ||
-                    fileSystem == null
-                ) {
-                    return@LaunchedEffect
-                }
-                val isAccessible = withContext(AppDispatchers.io) {
-                    runCatching { fileSystem.exists(currentLocation, "") }.getOrDefault(false)
-                }
-                if (!isAccessible) {
+                if (shouldResetInaccessibleManualSaveBookmark(fileSystem, manualSaveLocation)) {
                     Logger.w(TAG, "Manual save bookmark is not accessible. Falling back to default path.")
                     stateStore.setManualSaveDirectory(DEFAULT_MANUAL_SAVE_ROOT)
                     stateStore.setSaveDirectorySelection(SaveDirectorySelection.MANUAL_INPUT)
                 }
             }
-            val manualSavedThreadRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
-                fileSystem?.let { fs ->
-                    SavedThreadRepository(
-                        fs,
-                        baseDirectory = manualSaveDirectory,
-                        baseSaveLocation = manualSaveLocation
-                    )
-                }
-            }
-            val legacyManualSavedThreadRepository = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
-                val fs = fileSystem ?: return@remember null
-                val isCurrentDefaultPath = manualSaveLocation is com.valoser.futacha.shared.model.SaveLocation.Path &&
-                    isDefaultManualSaveRoot(manualSaveDirectory)
-                if (isCurrentDefaultPath) {
-                    null
-                } else {
-                    SavedThreadRepository(
-                        fs,
-                        baseDirectory = DEFAULT_MANUAL_SAVE_ROOT,
-                        baseSaveLocation = com.valoser.futacha.shared.model.SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
-                    )
-                }
+            val savedThreadsRepositories = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
+                buildFutachaSavedThreadsRepositories(
+                    fileSystem = fileSystem,
+                    manualSaveDirectory = manualSaveDirectory,
+                    manualSaveLocation = manualSaveLocation
+                )
             }
             val activeSavedThreadsRepository by produceState<SavedThreadRepository?>(
-                initialValue = manualSavedThreadRepository ?: legacyManualSavedThreadRepository,
-                key1 = manualSavedThreadRepository,
-                key2 = legacyManualSavedThreadRepository
+                initialValue = savedThreadsRepositories.currentRepository ?: savedThreadsRepositories.legacyRepository,
+                key1 = savedThreadsRepositories.currentRepository,
+                key2 = savedThreadsRepositories.legacyRepository
             ) {
-                val currentRepository = manualSavedThreadRepository
-                val legacyRepository = legacyManualSavedThreadRepository
-                if (currentRepository == null) {
-                    value = currentRepository ?: legacyRepository
-                    return@produceState
-                }
-                value = withContext(AppDispatchers.io) {
-                    val currentCount = runCatching { currentRepository.getThreadCount() }.getOrDefault(0)
-                    if (legacyRepository == null) {
-                        currentRepository
-                    } else {
-                        val legacyCount = runCatching { legacyRepository.getThreadCount() }.getOrDefault(0)
-                        when {
-                            currentCount <= 0 && legacyCount > 0 -> legacyRepository
-                            legacyCount > currentCount -> legacyRepository
-                            else -> currentRepository
-                        }
-                    }
-                }
+                value = resolveActiveSavedThreadsRepository(
+                    currentRepository = savedThreadsRepositories.currentRepository,
+                    legacyRepository = savedThreadsRepositories.legacyRepository
+                )
             }
             val attachmentPickerPreference by stateStore.attachmentPickerPreference.collectAsState(initial = AttachmentPickerPreference.MEDIA)
             val saveDirectorySelection by stateStore.saveDirectorySelection.collectAsState(initial = SaveDirectorySelection.MANUAL_INPUT)
@@ -269,500 +180,169 @@ fun FutachaApp(
             val appVersion = remember(versionChecker) {
                 versionChecker?.getCurrentVersion() ?: "1.0"
             }
-            val resolvedManualSaveDirectory by produceState<String?>(
-                initialValue = null,
-                key1 = manualSaveDirectory,
-                key2 = manualSaveLocation,
-                key3 = fileSystem
-            ) {
-                value = when (val currentLocation = manualSaveLocation) {
-                    is com.valoser.futacha.shared.model.SaveLocation.TreeUri ->
-                        "SAF: ${currentLocation.uri}"
-                    is com.valoser.futacha.shared.model.SaveLocation.Bookmark ->
-                        "Bookmark: 保存先が選択済みです"
-                    is com.valoser.futacha.shared.model.SaveLocation.Path -> {
-                        withContext(AppDispatchers.io) {
-                            runCatching { fileSystem?.resolveAbsolutePath(manualSaveDirectory) }
-                                .getOrNull()
-                        }
-                    }
-                }
+            val resolvedManualSaveDirectory = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
+                resolveFutachaManualSaveDirectoryDisplay(
+                    fileSystem = fileSystem,
+                    manualSaveDirectory = manualSaveDirectory,
+                    manualSaveLocation = manualSaveLocation
+                )
             }
 
-            var selectedBoardId by rememberSaveable { mutableStateOf<String?>(null) }
-            var selectedThreadId by rememberSaveable { mutableStateOf<String?>(null) }
-            var selectedThreadTitle by rememberSaveable { mutableStateOf<String?>(null) }
-            var selectedThreadReplies by rememberSaveable { mutableStateOf<Int?>(null) }
-            var selectedThreadThumbnailUrl by rememberSaveable { mutableStateOf<String?>(null) }
-            var selectedThreadUrl by rememberSaveable { mutableStateOf<String?>(null) }
-            var isSavedThreadsVisible by rememberSaveable { mutableStateOf(false) }
-            LaunchedEffect(selectedBoardId) {
-                if (selectedBoardId == null) {
-                    selectedThreadId = null
-                    selectedThreadTitle = null
-                    selectedThreadReplies = null
-                    selectedThreadThumbnailUrl = null
-                    selectedThreadUrl = null
-                }
+            var navigationState by rememberSaveable(stateSaver = FutachaNavigationState.Saver) {
+                mutableStateOf(FutachaNavigationState())
             }
-
-            val selectedBoard = persistedBoards.firstOrNull { it.id == selectedBoardId }
-            val onBackgroundRefreshChanged: (Boolean) -> Unit = { enabled ->
-                coroutineScope.launch {
-                    stateStore.setBackgroundRefreshEnabled(enabled)
-                }
-            }
-            val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = { config ->
-                coroutineScope.launch {
-                    stateStore.setThreadMenuEntries(config)
-                }
-            }
-            val onManualSaveDirectoryChanged: (String) -> Unit = { directory ->
-                coroutineScope.launch {
-                    stateStore.setManualSaveDirectory(directory)
-                }
-            }
-            val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = { pref ->
-                coroutineScope.launch {
-                    stateStore.setAttachmentPickerPreference(pref)
-                }
-            }
-            val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = { selection ->
-                coroutineScope.launch {
-                    stateStore.setSaveDirectorySelection(selection)
-                }
-            }
-            val onManualSaveLocationChanged: (com.valoser.futacha.shared.model.SaveLocation) -> Unit = { location ->
-                coroutineScope.launch {
-                    stateStore.setManualSaveLocation(location)
-                }
-            }
-            val dismissHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
-                coroutineScope.launch {
-                    dismissHistoryEntry(
-                        stateStore = stateStore,
-                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                        entry = entry,
-                        onAutoSavedThreadDeleteFailure = {
-                            Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
-                        }
+            LaunchedEffect(navigationState.selectedBoardId) {
+                if (navigationState.selectedBoardId == null) {
+                    navigationState = clearFutachaThreadSelection(
+                        state = navigationState,
+                        clearBoardSelection = true
                     )
                 }
             }
-            val updateHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
-                coroutineScope.launch {
-                    stateStore.upsertHistoryEntry(entry)
-                }
+
+            val destination = remember(navigationState, persistedBoards) {
+                resolveFutachaDestination(navigationState, persistedBoards)
             }
-            val clearHistory: () -> Unit = {
-                coroutineScope.launch {
-                    clearHistory(
-                        stateStore = stateStore,
-                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                        onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
-                        onAutoSavedThreadDeleteFailure = {
-                            Logger.e(TAG, "Failed to clear auto saved threads", it)
-                        }
-                    )
-                }
-            }
-            val directoryPickerLauncher = rememberDirectoryPickerLauncher(
-                onDirectorySelected = { pickedLocation ->
-                    onManualSaveLocationChanged(pickedLocation)
-                    onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
-                },
-                preferredFileManagerPackage = preferredFileManager?.packageName
-            )
             val refreshHistoryEntries: suspend () -> Unit = refreshHistoryEntries@{
                 historyRefresher.refresh(
                     boardsSnapshot = persistedBoards,
                     historySnapshot = persistedHistory
                 )
             }
-            val openHistoryEntry: (ThreadHistoryEntry) -> Unit = { entry ->
-                resolveHistoryEntrySelection(entry, persistedBoards)?.let { selection ->
-                    selectedBoardId = selection.boardId
-                    selectedThreadId = selection.threadId
-                    selectedThreadTitle = selection.threadTitle
-                    selectedThreadReplies = selection.threadReplies
-                    selectedThreadThumbnailUrl = selection.threadThumbnailUrl
-                    selectedThreadUrl = selection.threadUrl
+            var openSaveDirectoryPicker: () -> Unit = {}
+            val appScreenBindings = buildFutachaAppScreenBindings(
+                coroutineScope = coroutineScope,
+                stateStore = stateStore,
+                autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                currentBoards = { persistedBoards },
+                currentNavigationState = { navigationState },
+                setNavigationState = { navigationState = it },
+                appVersion = appVersion,
+                isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                isLightweightModeEnabled = shouldUseLightweightMode,
+                manualSaveDirectory = manualSaveDirectory,
+                manualSaveLocation = manualSaveLocation,
+                resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                attachmentPickerPreference = attachmentPickerPreference,
+                saveDirectorySelection = saveDirectorySelection,
+                preferredFileManagerPackage = preferredFileManager?.packageName,
+                preferredFileManagerLabel = preferredFileManager?.label,
+                threadMenuEntries = threadMenuEntries,
+                catalogNavEntries = catalogNavEntries,
+                onOpenSaveDirectoryPicker = { openSaveDirectoryPicker() },
+                onHistoryRefresh = refreshHistoryEntries,
+                onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
+                onAutoSavedThreadDeleteFailure = { entry, error ->
+                    Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", error)
+                },
+                onAutoSavedThreadClearFailure = {
+                    Logger.e(TAG, "Failed to clear auto saved threads", it)
                 }
-            }
+            )
+            val preferenceMutations = appScreenBindings.preferenceMutations
+            val directoryPickerLauncher = rememberDirectoryPickerLauncher(
+                onDirectorySelected = { pickedLocation ->
+                    preferenceMutations.onManualSaveLocationChanged(pickedLocation)
+                    preferenceMutations.onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
+                },
+                preferredFileManagerPackage = preferredFileManager?.packageName
+            )
+            openSaveDirectoryPicker = directoryPickerLauncher
+            val boardScreenCallbacks = appScreenBindings.boardScreenCallbacks
+            val navigationCallbacks = appScreenBindings.navigationCallbacks
+            val screenPreferencesState = appScreenBindings.screenPreferencesState
+            val screenPreferencesCallbacks = appScreenBindings.screenPreferencesCallbacks
+            val screenHistoryCallbacks = appScreenBindings.screenHistoryCallbacks
 
-            when {
-                selectedBoardId == null && isSavedThreadsVisible -> {
-                    val manualRepository = activeSavedThreadsRepository
-                    if (manualRepository != null) {
-                        SavedThreadsScreen(
-                            repository = manualRepository,
-                            onThreadClick = { savedThread ->
-                                resolveSavedThreadSelection(savedThread, persistedBoards)?.let { selection ->
-                                    selectedBoardId = selection.boardId
-                                    selectedThreadId = selection.threadId
-                                    selectedThreadTitle = selection.threadTitle
-                                    selectedThreadReplies = selection.threadReplies
-                                    selectedThreadThumbnailUrl = selection.threadThumbnailUrl
-                                    selectedThreadUrl = selection.threadUrl
-                                    isSavedThreadsVisible = selection.isSavedThreadsVisible
-                                }
-                            },
-                            onBack = { isSavedThreadsVisible = false }
+            when (destination) {
+                FutachaDestination.SavedThreads -> FutachaSavedThreadsDestination(
+                    props = activeSavedThreadsRepository?.let {
+                        buildFutachaSavedThreadsDestinationProps(
+                            repository = it,
+                            navigationCallbacks = navigationCallbacks
                         )
-                    } else {
-                        LaunchedEffect(Unit) {
-                            isSavedThreadsVisible = false
-                        }
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("保存済みスレッドは利用できません")
-                        }
-                    }
-                }
+                    },
+                    onUnavailable = navigationCallbacks.onSavedThreadsDismissed
+                )
 
-                selectedBoardId == null -> {
-                    BoardManagementScreen(
+                FutachaDestination.BoardManagement -> FutachaBoardManagementDestination(
+                    buildFutachaBoardManagementDestinationProps(
                         boards = persistedBoards,
                         history = persistedHistory,
                         cookieRepository = cookieRepository,
-                        attachmentPickerPreference = attachmentPickerPreference,
-                        saveDirectorySelection = saveDirectorySelection,
-                        manualSaveLocation = manualSaveLocation,
-                        onBoardSelected = { board -> selectedBoardId = board.id },
-                        onAddBoard = { name, url ->
-                            val normalizedUrl = normalizeBoardUrl(url)
-                            if (persistedBoards.none { it.url.equals(normalizedUrl, ignoreCase = true) }) {
-                                val newBoard = createCustomBoardSummary(
-                                    name = name,
-                                    url = normalizedUrl,
-                                    existingBoards = persistedBoards
-                                )
-                                coroutineScope.launch {
-                                    stateStore.setBoards(persistedBoards + newBoard)
-                                }
-                            }
-                        },
-                        onMenuAction = { action ->
-                            if (action == BoardManagementMenuAction.SAVED_THREADS) {
-                                isSavedThreadsVisible = true
-                            }
-                        },
-                        onHistoryEntrySelected = openHistoryEntry,
-                        onHistoryEntryDismissed = dismissHistoryEntry,
-                        onHistoryCleared = clearHistory,
-                        onHistoryRefresh = refreshHistoryEntries,
-                        onBoardDeleted = { board ->
-                            coroutineScope.launch {
-                                stateStore.setBoards(persistedBoards.filter { it.id != board.id })
-                            }
-                        },
-                        onBoardsReordered = { reorderedBoards ->
-                            coroutineScope.launch {
-                                stateStore.setBoards(reorderedBoards)
-                            }
-                        },
-                        appVersion = appVersion,
-                        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-                        isLightweightModeEnabled = shouldUseLightweightMode,
-                        onLightweightModeChanged = { enabled ->
-                            coroutineScope.launch {
-                                stateStore.setLightweightModeEnabled(enabled)
-                            }
-                        },
-                        manualSaveDirectory = manualSaveDirectory,
-                        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-                        onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
-                        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-                        onOpenSaveDirectoryPicker = {
-                            directoryPickerLauncher()
-                        },
+                        boardScreenCallbacks = boardScreenCallbacks,
+                        historyCallbacks = screenHistoryCallbacks,
+                        preferencesState = screenPreferencesState,
+                        preferencesCallbacks = screenPreferencesCallbacks,
                         fileSystem = fileSystem,
-                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                        preferredFileManagerPackage = preferredFileManager?.packageName,
-                        preferredFileManagerLabel = preferredFileManager?.label,
-                        onFileManagerSelected = { packageName, label ->
-                            coroutineScope.launch {
-                                stateStore.setPreferredFileManager(packageName, label)
-                            }
-                        },
-                        onClearPreferredFileManager = {
-                            coroutineScope.launch {
-                                stateStore.setPreferredFileManager(null, null)
-                            }
-                        },
-                        threadMenuEntries = threadMenuEntries,
-                        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-                        catalogNavEntries = catalogNavEntries,
-                        onCatalogNavEntriesChanged = { updated ->
-                            coroutineScope.launch {
-                                stateStore.setCatalogNavEntries(updated)
-                            }
-                        }
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository
+                    )
+                )
+
+                is FutachaDestination.MissingBoard -> FutachaMissingBoardDestination(
+                    missingBoardId = destination.missingBoardId,
+                    navigationState = navigationState,
+                    boards = persistedBoards,
+                    onRecovered = { navigationState = it }
+                )
+
+                is FutachaDestination.Catalog -> {
+                    FutachaCatalogDestination(
+                        props = buildFutachaCatalogDestinationProps(
+                            board = destination.board,
+                            history = persistedHistory,
+                            navigationCallbacks = navigationCallbacks,
+                            historyCallbacks = screenHistoryCallbacks,
+                            sharedRepository = repositoryHolder.repository,
+                            stateStore = stateStore,
+                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                            preferencesState = screenPreferencesState,
+                            preferencesCallbacks = screenPreferencesCallbacks,
+                            cookieRepository = cookieRepository,
+                            httpClient = httpClient
+                        ),
+                        saveableStateHolder = saveableStateHolder
                     )
                 }
 
-                selectedBoard == null -> {
-                    // 板削除などで選択中の板が消えた場合、無限ローディングを避けて復帰する
-                    LaunchedEffect(selectedBoardId, selectedThreadId, persistedBoards) {
-                        val missingBoardId = selectedBoardId ?: return@LaunchedEffect
-                        delay(2_000L)
-                        val stillMissing = isSelectedBoardStillMissing(
-                            selectedBoardId = selectedBoardId,
-                            missingBoardId = missingBoardId,
-                            boards = persistedBoards
-                        )
-                        if (stillMissing) {
-                            selectedThreadId = null
-                            selectedThreadTitle = null
-                            selectedThreadReplies = null
-                            selectedThreadThumbnailUrl = null
-                            selectedThreadUrl = null
-                            selectedBoardId = null
-                        }
-                    }
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                }
-
-                selectedThreadId == null -> {
-                    // FIX: repositoryHolder.repositoryを使用
-                    val boardRepository = selectedBoard.takeUnless { it.isMockBoard() }?.let { repositoryHolder.repository }
-                    saveableStateHolder.SaveableStateProvider("catalog-${selectedBoard.id}") {
-                        CatalogScreen(
-                            board = selectedBoard,
-                            history = persistedHistory,
-                            onBack = {
-                                selectedThreadId = null
-                                selectedThreadTitle = null
-                                selectedThreadReplies = null
-                                selectedThreadThumbnailUrl = null
-                                selectedThreadUrl = null
-                                selectedBoardId = null
-                            },
-                            onThreadSelected = { item ->
-                                selectedThreadId = item.id
-                                selectedThreadTitle = item.title
-                                selectedThreadReplies = item.replyCount
-                                selectedThreadThumbnailUrl = item.thumbnailUrl
-                                selectedThreadUrl = item.threadUrl
-                            },
-                            onHistoryEntrySelected = openHistoryEntry,
-                            onHistoryEntryDismissed = dismissHistoryEntry,
-                            onHistoryCleared = clearHistory,
-                            onHistoryEntryUpdated = updateHistoryEntry,
-                            onHistoryRefresh = refreshHistoryEntries,
-                            repository = boardRepository,
-                            stateStore = stateStore,
-                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            appVersion = appVersion,
-                            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-                            isLightweightModeEnabled = shouldUseLightweightMode,
-                            onLightweightModeChanged = { enabled ->
-                                coroutineScope.launch {
-                                    stateStore.setLightweightModeEnabled(enabled)
-                                }
-                            },
-                            cookieRepository = cookieRepository,
-                            manualSaveDirectory = manualSaveDirectory,
-                            manualSaveLocation = manualSaveLocation,
-                            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-                            attachmentPickerPreference = attachmentPickerPreference,
-                            saveDirectorySelection = saveDirectorySelection,
-                            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
-                            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-                            onOpenSaveDirectoryPicker = { directoryPickerLauncher() },
-                            preferredFileManagerPackage = preferredFileManager?.packageName,
-                            preferredFileManagerLabel = preferredFileManager?.label,
-                            onFileManagerSelected = { packageName, label ->
-                                coroutineScope.launch {
-                                    stateStore.setPreferredFileManager(packageName, label)
-                                }
-                            },
-                            onClearPreferredFileManager = {
-                                coroutineScope.launch {
-                                    stateStore.setPreferredFileManager(null, null)
-                                }
-                            },
-                            threadMenuEntries = threadMenuEntries,
-                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-                            catalogNavEntries = catalogNavEntries,
-                            onCatalogNavEntriesChanged = { updated ->
-                                coroutineScope.launch {
-                                    stateStore.setCatalogNavEntries(updated)
-                                }
-                            },
-                            httpClient = httpClient
+                is FutachaDestination.Thread -> {
+                    val currentBoard = destination.board
+                    val activeThreadId = destination.threadId
+                    val historyContext = remember(currentBoard, navigationState) {
+                        buildFutachaThreadHistoryContext(
+                            board = currentBoard,
+                            navigationState = navigationState
                         )
                     }
-                }
-
-                else -> {
-                    val activeThreadId = selectedThreadId ?: return@Surface
-                    // selectedBoard should be non-null at this point due to when block structure
-                    // but add explicit check for safety
-                    val currentBoard = selectedBoard
-                    val historyTitle = selectedThreadTitle ?: "無題"
-                    val historyThreadUrl = selectedThreadUrl ?: currentBoard.url
-                    val historyReplies = selectedThreadReplies ?: 0
-                    val historyThumbnail = selectedThreadThumbnailUrl.orEmpty()
-                    val handleRegisteredThreadUrlClick: (String) -> Boolean = { url ->
-                        val target = resolveRegisteredThreadNavigation(url, persistedBoards)
-                        if (target == null) {
-                            false
-                        } else {
-                            if (shouldApplyRegisteredThreadNavigation(
-                                    currentBoardId = selectedBoardId,
-                                    currentThreadId = selectedThreadId,
-                                    currentThreadUrl = selectedThreadUrl,
-                                    target = target
-                                )
-                            ) {
-                                selectedBoardId = target.board.id
-                                selectedThreadId = target.threadId
-                                selectedThreadTitle = null
-                                selectedThreadReplies = null
-                                selectedThreadThumbnailUrl = null
-                                selectedThreadUrl = target.threadUrl
-                            }
-                            true
-                        }
-                    }
-                    // Keep dependencies limited to navigation context.
-                    // History size changes should not retrigger this effect.
-                    LaunchedEffect(activeThreadId, currentBoard.id) {
-                        // FIX: デバウンス時間を60秒に増やしてDataStore書き込みを削減
-                        val isSameEntry: (ThreadHistoryEntry) -> Boolean = { historyEntry ->
-                            if (historyEntry.threadId != activeThreadId) {
-                                false
-                            } else if (historyEntry.boardId.isNotBlank()) {
-                                historyEntry.boardId == currentBoard.id
-                            } else {
-                                historyEntry.boardUrl == historyThreadUrl
-                            }
-                        }
-                        val existingEntry = persistedHistory.firstOrNull(isSameEntry)
-                        val currentTime = Clock.System.now().toEpochMilliseconds()
-
-                        // Skip update if entry exists and was updated very recently (< 60 seconds ago)
-                        if (existingEntry != null &&
-                            existingEntry.boardId == currentBoard.id &&
-                            (currentTime - existingEntry.lastVisitedEpochMillis) < 60_000) {
-                            return@LaunchedEffect
-                        }
-
-                        val entry = ThreadHistoryEntry(
-                            threadId = activeThreadId,
-                            boardId = currentBoard.id,
-                            title = historyTitle,
-                            titleImageUrl = historyThumbnail,
-                            boardName = currentBoard.name,
-                            boardUrl = historyThreadUrl,
-                            lastVisitedEpochMillis = currentTime,
-                            replyCount = historyReplies,
-                            lastReadItemIndex = existingEntry?.lastReadItemIndex ?: 0,
-                            lastReadItemOffset = existingEntry?.lastReadItemOffset ?: 0
-                        )
-                        stateStore.prependOrReplaceHistoryEntry(entry)
-                    }
-
-                    val persistScrollPosition: (String, Int, Int) -> Unit = { targetThreadId, index, offset ->
-                        coroutineScope.launch {
-                            // Use a synchronized update by reading current state within the same coroutine
-                            stateStore.updateHistoryScrollPosition(
-                                threadId = targetThreadId,
-                                index = index,
-                                offset = offset,
-                                boardId = currentBoard.id,
-                                title = historyTitle,
-                                titleImageUrl = historyThumbnail,
-                                boardName = currentBoard.name,
-                                boardUrl = historyThreadUrl,
-                                replyCount = historyReplies
-                            )
-                        }
-                    }
-
-                    // FIX: repositoryHolder.repositoryを使用
-                    val boardRepository = currentBoard.takeUnless { it.isMockBoard() }?.let { repositoryHolder.repository }
-                    ThreadScreen(
+                    val threadMutations = buildFutachaThreadMutationCallbacks(
+                        coroutineScope = coroutineScope,
+                        stateStore = stateStore,
+                        board = currentBoard,
+                        historyContext = historyContext
+                    )
+                    FutachaThreadDestination(
+                        props = buildFutachaThreadDestinationProps(
                             board = currentBoard,
                             history = persistedHistory,
                             threadId = activeThreadId,
-                            threadTitle = selectedThreadTitle,
-                            threadUrlOverride = selectedThreadUrl,
-                            initialReplyCount = selectedThreadReplies,
-                            onBack = {
-                                selectedThreadId = null
-                                selectedThreadTitle = null
-                                selectedThreadReplies = null
-                                selectedThreadThumbnailUrl = null
-                                selectedThreadUrl = null
-                            },
-                            onHistoryEntrySelected = openHistoryEntry,
-                            onHistoryEntryDismissed = dismissHistoryEntry,
-                            onHistoryCleared = clearHistory,
-                            onHistoryEntryUpdated = updateHistoryEntry,
-                            onHistoryRefresh = refreshHistoryEntries,
-                            onScrollPositionPersist = persistScrollPosition,
-                            repository = boardRepository,
+                            historyContext = historyContext,
+                            navigationState = navigationState,
+                            navigationCallbacks = navigationCallbacks,
+                            historyCallbacks = screenHistoryCallbacks,
+                            threadMutations = threadMutations,
+                            sharedRepository = repositoryHolder.repository,
                             httpClient = httpClient,
                             fileSystem = fileSystem,
                             cookieRepository = cookieRepository,
                             stateStore = stateStore,
                             autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            appVersion = appVersion,
-                            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-                            isLightweightModeEnabled = shouldUseLightweightMode,
-                            onLightweightModeChanged = { enabled ->
-                                coroutineScope.launch {
-                                    stateStore.setLightweightModeEnabled(enabled)
-                                }
-                            },
-                            manualSaveDirectory = manualSaveDirectory,
-                            manualSaveLocation = manualSaveLocation,
-                            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-                            attachmentPickerPreference = attachmentPickerPreference,
-                            saveDirectorySelection = saveDirectorySelection,
-                            onAttachmentPickerPreferenceChanged = onAttachmentPickerPreferenceChanged,
-                            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-                            onOpenSaveDirectoryPicker = { directoryPickerLauncher() },
-                            preferredFileManagerPackage = preferredFileManager?.packageName,
-                            preferredFileManagerLabel = preferredFileManager?.label,
-                            onFileManagerSelected = { packageName, label ->
-                                coroutineScope.launch {
-                                    stateStore.setPreferredFileManager(packageName, label)
-                                }
-                            },
-                            onClearPreferredFileManager = {
-                                coroutineScope.launch {
-                                    stateStore.setPreferredFileManager(null, null)
-                                }
-                            },
-                            threadMenuEntries = threadMenuEntries,
-                            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-                            catalogNavEntries = catalogNavEntries,
-                            onCatalogNavEntriesChanged = { updated ->
-                                coroutineScope.launch {
-                                    stateStore.setCatalogNavEntries(updated)
-                                }
-                            },
-                            onRegisteredThreadUrlClick = handleRegisteredThreadUrlClick
+                            preferencesState = screenPreferencesState,
+                            preferencesCallbacks = screenPreferencesCallbacks
                         )
-                    }
+                    )
                 }
             }
         }
     }
+}
 }

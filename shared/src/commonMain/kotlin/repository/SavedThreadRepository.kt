@@ -95,18 +95,12 @@ class SavedThreadRepository(
             try {
                 mutationMutex.withLock {
                     withIndexLock {
-                        val currentIndex = readIndexUnlocked()
-                        val updatedThreads = currentIndex.threads
-                            .filterNot { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
-                            .plus(thread)
-                            .sortedByDescending { it.savedAt }
-
-                        val updatedIndex = SavedThreadIndex(
-                            threads = updatedThreads,
-                            totalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow),
-                            lastUpdated = Clock.System.now().toEpochMilliseconds()
-                        )
-                        saveIndexUnlocked(updatedIndex)
+                        mutateIndexThreadsUnlocked { threads ->
+                            threads
+                                .filterNot { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
+                                .plus(thread)
+                                .sortedByDescending { it.savedAt }
+                        }
                     }
                 }
                 return@runSuspendCatchingNonCancellation
@@ -127,18 +121,11 @@ class SavedThreadRepository(
     suspend fun removeThreadFromIndex(threadId: String, boardId: String? = null): Result<Unit> = runSuspendCatchingNonCancellation {
         mutationMutex.withLock {
             withIndexLock {
-                val currentIndex = readIndexUnlocked()
-                val updatedThreads = currentIndex.threads.filterNot {
-                    isSameSavedThreadIdentity(it, threadId, boardId)
+                mutateIndexThreadsUnlocked { threads ->
+                    threads.filterNot {
+                        isSameSavedThreadIdentity(it, threadId, boardId)
+                    }
                 }
-
-                val updatedIndex = SavedThreadIndex(
-                    threads = updatedThreads,
-                    totalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow),
-                    lastUpdated = Clock.System.now().toEpochMilliseconds()
-                )
-
-                saveIndexUnlocked(updatedIndex)
             }
         }
     }
@@ -264,18 +251,13 @@ class SavedThreadRepository(
                 if (successfullyDeletedStorageIds.isNotEmpty()) {
                     deleteMutex.withLock {
                         withIndexLock {
-                            val latestIndex = readIndexUnlocked()
-                            val updatedThreads = latestIndex.threads.filterNot { thread ->
-                                val storageId = resolveSavedThreadStorageId(thread)
-                                val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
-                                storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
+                            val updatedIndex = buildUpdatedIndexUnlocked { threads ->
+                                threads.filterNot { thread ->
+                                    val storageId = resolveSavedThreadStorageId(thread)
+                                    val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
+                                    storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
+                                }
                             }
-                            val updatedIndex = buildSavedThreadIndex(
-                                threads = updatedThreads,
-                                nowMillis = Clock.System.now().toEpochMilliseconds(),
-                                onOverflow = ::logTotalSizeOverflow
-                            )
-
                             try {
                                 saveIndexUnlocked(updatedIndex)
                             } catch (e: Throwable) {
@@ -370,18 +352,14 @@ class SavedThreadRepository(
                 if (successfullyDeletedStorageIds.isNotEmpty()) {
                     deleteMutex.withLock {
                         withIndexLock {
-                            val currentIndex = readIndexUnlocked()
-                            // 成功した削除対象のうち、削除開始時点のエントリだけを除外
-                            val remainingThreads = currentIndex.threads.filterNot { thread ->
-                                val storageId = resolveSavedThreadStorageId(thread)
-                                val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
-                                storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
+                            val updatedIndex = buildUpdatedIndexUnlocked { threads ->
+                                // 成功した削除対象のうち、削除開始時点のエントリだけを除外
+                                threads.filterNot { thread ->
+                                    val storageId = resolveSavedThreadStorageId(thread)
+                                    val cutoffSavedAt = plan.cutoffSavedAtByStorageId[storageId] ?: return@filterNot false
+                                    storageId in successfullyDeletedStorageIds && thread.savedAt <= cutoffSavedAt
+                                }
                             }
-                            val updatedIndex = buildSavedThreadIndex(
-                                threads = remainingThreads,
-                                nowMillis = Clock.System.now().toEpochMilliseconds(),
-                                onOverflow = ::logTotalSizeOverflow
-                            )
                             saveIndexUnlocked(updatedIndex)
                         }
                     }
@@ -488,18 +466,11 @@ class SavedThreadRepository(
     suspend fun updateThread(thread: SavedThread): Result<Unit> = runSuspendCatchingNonCancellation {
         mutationMutex.withLock {
             withIndexLock {
-                val currentIndex = readIndexUnlocked()
-                val updatedThreads = currentIndex.threads.map {
-                    if (isSameSavedThreadIdentity(it, thread.threadId, thread.boardId)) thread else it
+                mutateIndexThreadsUnlocked { threads ->
+                    threads.map {
+                        if (isSameSavedThreadIdentity(it, thread.threadId, thread.boardId)) thread else it
+                    }
                 }
-
-                val updatedIndex = SavedThreadIndex(
-                    threads = updatedThreads,
-                    totalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow),
-                    lastUpdated = Clock.System.now().toEpochMilliseconds()
-                )
-
-                saveIndexUnlocked(updatedIndex)
             }
         }
     }
@@ -508,6 +479,23 @@ class SavedThreadRepository(
         indexMutex.withLock {
             block()
         }
+    }
+
+    private suspend fun buildUpdatedIndexUnlocked(
+        transform: (List<SavedThread>) -> List<SavedThread>
+    ): SavedThreadIndex {
+        val currentIndex = readIndexUnlocked()
+        return buildSavedThreadIndex(
+            threads = transform(currentIndex.threads),
+            nowMillis = Clock.System.now().toEpochMilliseconds(),
+            onOverflow = ::logTotalSizeOverflow
+        )
+    }
+
+    private suspend fun mutateIndexThreadsUnlocked(
+        transform: (List<SavedThread>) -> List<SavedThread>
+    ) {
+        saveIndexUnlocked(buildUpdatedIndexUnlocked(transform))
     }
 
     private suspend fun readIndexUnlocked(): SavedThreadIndex {

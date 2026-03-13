@@ -16,7 +16,20 @@ internal data class ThreadGlobalSettingsCallbacks(
     val onClearPreferredFileManager: (() -> Unit)?,
     val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
     val onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
-)
+) {
+    val preferencesCallbacks: ScreenPreferencesCallbacks
+        get() = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
+            onLightweightModeChanged = onLightweightModeChanged,
+            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
+            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
+            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+            onFileManagerSelected = onFileManagerSelected,
+            onClearPreferredFileManager = onClearPreferredFileManager,
+            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
+            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
+        )
+}
 
 internal fun buildThreadGlobalSettingsCallbacks(
     onBack: () -> Unit,
@@ -43,6 +56,26 @@ internal fun buildThreadGlobalSettingsCallbacks(
         onClearPreferredFileManager = onClearPreferredFileManager,
         onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
         onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
+    )
+}
+
+internal fun buildThreadGlobalSettingsCallbacks(
+    onBack: () -> Unit,
+    onOpenCookieManager: (() -> Unit)?,
+    preferencesCallbacks: ScreenPreferencesCallbacks
+): ThreadGlobalSettingsCallbacks {
+    return buildThreadGlobalSettingsCallbacks(
+        onBack = onBack,
+        onBackgroundRefreshChanged = preferencesCallbacks.onBackgroundRefreshChanged,
+        onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged,
+        onManualSaveDirectoryChanged = preferencesCallbacks.onManualSaveDirectoryChanged,
+        onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+        onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+        onOpenCookieManager = onOpenCookieManager,
+        onFileManagerSelected = preferencesCallbacks.onFileManagerSelected,
+        onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
+        onThreadMenuEntriesChanged = preferencesCallbacks.onThreadMenuEntriesChanged,
+        onCatalogNavEntriesChanged = preferencesCallbacks.onCatalogNavEntriesChanged
     )
 }
 

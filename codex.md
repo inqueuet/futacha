@@ -4,9 +4,13 @@
 
 ### Overall estimate
 
-- project overall: `about 85%`
-- screen layer: `about 90%+`
-- state / repository / service layer: `low-to-mid 80%`
+- project overall: `about 25-35% improved`
+- `shared` overall: `about 35-45% improved`
+- screen layer: `about 50-60% improved`
+- `FutachaApp` and adjacent screen wiring: `about 75-85% improved`
+- state / repository layer touched in this pass: `about 35-45% improved`
+
+This is an improvement estimate relative to the pre-refactor structure, not an absolute quality score.
 
 ### What has materially improved
 
@@ -16,6 +20,9 @@
   - screen file = orchestration
   - support/bindings file = state and callbacks
   - component file = UI rendering
+- recent additions in this pass:
+  - `GlobalSettingsScreen` now builds a single scaffold binding bundle instead of forwarding a long section-level argument list directly.
+  - `BoardManagementScreen` now builds screen bindings for both scaffold and overlay hosts, so dialog/settings/cookie-management wiring is no longer spread across the screen body.
 
 2. `AppStateStore` is no longer a single opaque blob.
 - public entry points are now grouped around:
@@ -31,18 +38,26 @@
   - cookie initialization, auth retry, OP-image cache, and close/cache cleanup are separated.
 - `SavedThreadRepository`:
   - index/identity/path candidate logic is separated.
+  - add/remove/update now share common index mutation helpers instead of maintaining parallel update paths.
 - `ThreadSaveService`:
   - runtime helpers, execution helpers, media planning/download batching, saved-post conversion, raw HTML persistence, metadata persistence, output preparation, and final result building are separated.
 
 4. testability is substantially better than before.
 - many previously in-file private branches are now covered by `commonTest`.
 - the shared JVM test corpus is the main safety net for refactoring shared logic.
+- newer contract-style tests now lock down:
+  - `FutachaApp` destination props / screen bindings
+  - `AppStateStore` history mutation flow
+  - `SavedThreadRepository` index mutation flow
+  - `GlobalSettingsScreen` scaffold binding assembly
+  - `BoardManagementScreen` scaffold/overlay binding assembly
 
 ### What is still structurally expensive to change
 
-1. Remaining service/repository orchestration.
+1. Remaining large orchestration/support files.
 - `ThreadSaveService` is much smaller than before, but it still owns the top-level save pipeline.
 - `HttpBoardApi` and `DefaultBoardRepository` still contain long request/execution flows, even though most private details are already extracted.
+- `ThreadScreen.kt`, `GlobalSettingsComponents.kt`, `BoardManagementComponents.kt`, and `FutachaAppSupport.kt` are still large enough that future changes can become expensive if more responsibilities accumulate there.
 
 2. Runtime integration verification.
 - Android instrumented coverage has improved in source, but end-to-end device execution is still incomplete.
@@ -85,6 +100,13 @@
   - extract pure logic first
   - add `commonTest`
   - then move runtime/binding/component code
+
+### Most recent maintainability wins
+
+- `FutachaApp` screen routing and cross-screen callback wiring were consolidated into helper/builders, leaving the app shell much thinner.
+- `CatalogScreen` and `ThreadScreen` setup/orchestration were moved into dedicated setup bundles.
+- `GlobalSettingsScreen` and `BoardManagementScreen` now use screen-level binding bundles to reduce prop drilling and make future section changes more localized.
+- `AppStateStore` history updates and `SavedThreadRepository` index updates now share common mutation paths, reducing duplicate persistence/index maintenance logic.
 
 ## Practical Rule For Future Refactors
 
@@ -151,6 +173,9 @@ Important note:
 
 - `shared` now has a JVM host target, so `commonTest` is executable in this environment through `:shared:jvmTest`
 - latest result on 2026-03-11:
+- latest confirmed result on 2026-03-13:
+  - `./gradlew :shared:check` -> success
+- earlier result on 2026-03-11:
   - `./gradlew :shared:jvmTest` -> success
   - 323 tests executed on JVM
 - iOS test tasks exist (`iosX64Test`, `iosSimulatorArm64Test`) but are skipped here

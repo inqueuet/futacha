@@ -237,6 +237,34 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
+    fun removeThreadFromIndex_removesMatchingEntryAndRecalculatesStats() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        val other = savedThread(
+            threadId = "456",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "456"),
+            savedAt = 90L,
+            totalSize = 20L
+        )
+
+        repository.addThreadToIndex(target).getOrThrow()
+        repository.addThreadToIndex(other).getOrThrow()
+
+        repository.removeThreadFromIndex("123", "b").getOrThrow()
+
+        assertEquals(listOf(other), repository.getAllThreads())
+        assertEquals(20L, repository.getTotalSize())
+    }
+
+    @Test
     fun deleteThread_removesStoredDirectoryAndIndexEntry() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")

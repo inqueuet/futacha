@@ -10,11 +10,13 @@ import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
+import androidx.compose.material3.SnackbarHostState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -481,5 +483,109 @@ class GlobalSettingsSupportTest {
                 stats = null
             )
         )
+    }
+
+    @Test
+    fun globalSettingsScaffoldSupport_buildsSectionBundlesFromPreferencesAndDerivedState() {
+        val preferencesState = ScreenPreferencesState(
+            appVersion = "1.2.3",
+            isBackgroundRefreshEnabled = true,
+            isLightweightModeEnabled = true,
+            manualSaveDirectory = "Documents",
+            resolvedManualSaveDirectory = "/storage/emulated/0/Documents/futacha/saved_threads",
+            attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+            saveDirectorySelection = SaveDirectorySelection.PICKER,
+            preferredFileManagerLabel = "Files",
+            threadMenuEntries = defaultThreadMenuEntries(),
+            catalogNavEntries = defaultCatalogNavEntries()
+        )
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = {},
+            onLightweightModeChanged = {},
+            onManualSaveDirectoryChanged = {},
+            onSaveDirectorySelectionChanged = {},
+            onOpenSaveDirectoryPicker = {},
+            onClearPreferredFileManager = {}
+        )
+        val derivedState = GlobalSettingsDerivedState(
+            resolvedManualPath = "/storage/emulated/0/Documents/futacha/saved_threads",
+            saveDestinationModeLabel = "ファイラーで選んだ保存先",
+            saveDestinationHint = "現在の保存先です。",
+            settingsEntries = listOf(cookieSettingsEntry),
+            preferredFileManagerState = PreferredFileManagerSummaryState(
+                currentSettingText = "現在の設定: Files",
+                isConfigured = true
+            ),
+            saveDirectoryPickerState = resolveSaveDirectoryPickerState(
+                isAndroidPlatform = true,
+                hasPickerLauncher = true
+            ),
+            storageSummaryState = resolveGlobalSettingsStorageSummaryState(
+                historyCount = 4,
+                autoSavedCount = 2,
+                autoSavedSize = 4096L
+            )
+        )
+        val interactionBindings = buildGlobalSettingsInteractionBindingsBundle(
+            saveCallbacks = buildGlobalSettingsSaveCallbacks(
+                currentManualSaveInput = { "Download" },
+                setManualSaveInput = {},
+                setIsFileManagerPickerVisible = {},
+                onManualSaveDirectoryChanged = {},
+                onSaveDirectorySelectionChanged = {},
+                onFileManagerSelected = null
+            ),
+            catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
+                currentEntries = { defaultCatalogNavEntries() },
+                setLocalEntries = {},
+                onCatalogNavEntriesChanged = {}
+            ),
+            threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
+                currentEntries = { defaultThreadMenuEntries() },
+                setLocalEntries = {},
+                onThreadMenuEntriesChanged = {}
+            ),
+            linkCallbacks = buildGlobalSettingsLinkCallbacks(
+                onOpenCookieManager = {},
+                urlLauncher = {},
+                onBack = {}
+            ),
+            cacheCallbacks = buildGlobalSettingsCacheCallbacks(
+                coroutineScope = CoroutineScope(Dispatchers.Unconfined),
+                showSnackbar = {},
+                clearImageCache = {},
+                clearTemporaryCache = {},
+                refreshAutoSavedStats = {}
+            )
+        )
+        val snackbarHostState = SnackbarHostState()
+        val bindings = buildGlobalSettingsScaffoldBindings(
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            derivedState = derivedState,
+            interactionBindings = interactionBindings,
+            localCatalogNavEntries = preferencesState.catalogNavEntries,
+            localThreadMenuEntries = preferencesState.threadMenuEntries,
+            manualSaveInput = "Download",
+            availableSaveDirectorySelections = listOf(
+                SaveDirectorySelection.MANUAL_INPUT,
+                SaveDirectorySelection.PICKER
+            ),
+            effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection,
+            snackbarHostState = snackbarHostState,
+            onBack = {}
+        )
+
+        assertEquals("1.2.3", bindings.appVersion)
+        assertTrue(bindings.behavior.isBackgroundRefreshEnabled)
+        assertTrue(bindings.behavior.isLightweightModeEnabled)
+        assertEquals(preferencesState.catalogNavEntries, bindings.catalogMenu.localCatalogNavEntries)
+        assertEquals(preferencesState.threadMenuEntries, bindings.threadMenu.localThreadMenuEntries)
+        assertEquals("現在の設定: Files", bindings.save.preferredFileManagerState.currentSettingText)
+        assertEquals("Download", bindings.save.manualSaveInput)
+        assertEquals(SaveDirectorySelection.PICKER, bindings.save.effectiveSaveDirectorySelection)
+        assertEquals("履歴: 4件", bindings.storage.storageSummaryState.historyText)
+        assertEquals(listOf(cookieSettingsEntry), bindings.links.settingsEntries)
+        assertTrue(bindings.snackbarHostState === snackbarHostState)
     }
 }

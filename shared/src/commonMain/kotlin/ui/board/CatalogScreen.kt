@@ -45,21 +45,16 @@ import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.BoardUrlResolver
-import com.valoser.futacha.shared.network.extractArchiveSearchScope
 import com.valoser.futacha.shared.network.fetchArchiveSearchResults
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
-import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.rememberUrlLauncher
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlin.math.abs
@@ -72,50 +67,31 @@ fun CatalogScreen(
     history: List<ThreadHistoryEntry>,
     onBack: () -> Unit,
     onThreadSelected: (CatalogItem) -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryRefresh: suspend () -> Unit = {},
-    onHistoryCleared: () -> Unit = {},
-    repository: BoardRepository? = null,
-    stateStore: com.valoser.futacha.shared.state.AppStateStore? = null,
-    autoSavedThreadRepository: SavedThreadRepository? = null,
-    cookieRepository: CookieRepository? = null,
-    appVersion: String,
-    isBackgroundRefreshEnabled: Boolean = false,
-    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
-    isLightweightModeEnabled: Boolean = false,
-    onLightweightModeChanged: (Boolean) -> Unit = {},
-    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
-    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
-    manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
-    resolvedManualSaveDirectory: String? = null,
-    onManualSaveDirectoryChanged: (String) -> Unit = {},
-    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
-    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
-    preferredFileManagerPackage: String? = null,
-    preferredFileManagerLabel: String? = null,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
-    onClearPreferredFileManager: (() -> Unit)? = null,
+    historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
+    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
+    dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
+    repository: BoardRepository? = dependencies.repository,
+    stateStore: com.valoser.futacha.shared.state.AppStateStore? = dependencies.stateStore,
+    autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
+    cookieRepository: CookieRepository? = dependencies.cookieRepository,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
     modifier: Modifier = Modifier,
-    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
-    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {},
-    httpClient: HttpClient? = null
+    httpClient: HttpClient? = dependencies.httpClient
 ) {
-    val activeRepository = remember(repository) {
-        repository ?: FakeBoardRepository()
-    }
-    val archiveSearchScope = remember(board?.url) { extractArchiveSearchScope(board) }
-    val coreBindings = rememberCatalogScreenCoreBindingsBundle(
-        stateStore = stateStore,
-        boardId = board?.id,
-        initialArchiveSearchScope = archiveSearchScope
+    val setupBundle = rememberCatalogScreenSetupBundle(
+        board = board,
+        repository = repository,
+        stateStore = stateStore
     )
+    val activeRepository = setupBundle.activeRepository
+    val archiveSearchScope = setupBundle.archiveSearchScope
+    val coreBindings = setupBundle.coreBindings
     val runtimeObjects = coreBindings.runtimeObjects
     val snackbarHostState = runtimeObjects.snackbarHostState
     val coroutineScope = runtimeObjects.coroutineScope
@@ -179,17 +155,24 @@ fun CatalogScreen(
     }
     val isPrivacyFilterEnabled = persistentBindings.isPrivacyFilterEnabled
     var localCatalogDisplayStyle by mutableStateBundle.localCatalogDisplayStyle
-    val catalogDisplayStyle = if (stateStore != null) {
-        persistentBindings.persistentDisplayStyle
-    } else {
-        localCatalogDisplayStyle
-    }
     var localCatalogGridColumns by mutableStateBundle.localCatalogGridColumns
-    val catalogGridColumns = if (stateStore != null) {
-        persistentBindings.persistentGridColumns
-    } else {
+    val displaySettings = remember(
+        stateStore,
+        persistentBindings.persistentDisplayStyle,
+        localCatalogDisplayStyle,
+        persistentBindings.persistentGridColumns,
         localCatalogGridColumns
+    ) {
+        resolveCatalogScreenDisplaySettings(
+            hasStateStore = stateStore != null,
+            persistentDisplayStyle = persistentBindings.persistentDisplayStyle,
+            localDisplayStyle = localCatalogDisplayStyle,
+            persistentGridColumns = persistentBindings.persistentGridColumns,
+            localGridColumns = localCatalogGridColumns
+        )
     }
+    val catalogDisplayStyle = displaySettings.displayStyle
+    val catalogGridColumns = displaySettings.gridColumns
     val interactionBindings = buildCatalogScreenInteractionBindingsBundle(
         coroutineScope = coroutineScope,
         drawerState = drawerState,
@@ -285,7 +268,7 @@ fun CatalogScreen(
         currentArchiveSearchQuery = { archiveSearchQuery },
         currentLastArchiveSearchScope = { pastSearchRuntimeState.lastArchiveSearchScope },
         onThreadSelected = onThreadSelected,
-        urlLauncher = rememberUrlLauncher(),
+        urlLauncher = setupBundle.urlLauncher,
         stateStore = stateStore,
         isPrivacyFilterEnabled = { isPrivacyFilterEnabled },
         cookieRepository = cookieRepository
@@ -343,7 +326,7 @@ fun CatalogScreen(
         searchQuery = searchQuery,
         isSearchActive = isSearchActive,
         topBarCallbacks = runtimeBindings.topBarCallbacks,
-        catalogNavEntries = catalogNavEntries,
+        catalogNavEntries = preferencesState.catalogNavEntries,
         navigationCallbacks = runtimeBindings.navigationCallbacks,
         uiState = uiState.value,
         watchWords = watchWords,
@@ -371,8 +354,6 @@ fun CatalogScreen(
         setCreateThreadDialogVisible = { isVisible ->
             overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
         },
-        attachmentPickerPreference = attachmentPickerPreference,
-        preferredFileManagerPackage = preferredFileManagerPackage,
         board = board,
         archiveSearchQuery = archiveSearchQuery,
         searchQuery = searchQuery,
@@ -385,27 +366,11 @@ fun CatalogScreen(
         catalogNgFilteringEnabled = catalogNgFilteringEnabled,
         isPrivacyFilterEnabled = isPrivacyFilterEnabled,
         createThreadBindings = createThreadBindings,
-        appVersion = appVersion,
-        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-        isLightweightModeEnabled = isLightweightModeEnabled,
-        onLightweightModeChanged = onLightweightModeChanged,
-        manualSaveDirectory = manualSaveDirectory,
-        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        saveDirectorySelection = saveDirectorySelection,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+        preferencesState = preferencesState,
+        preferencesCallbacks = preferencesCallbacks,
         history = history,
         fileSystem = fileSystem,
         autoSavedThreadRepository = autoSavedThreadRepository,
-        threadMenuEntries = threadMenuEntries,
-        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-        catalogNavEntries = catalogNavEntries,
-        onCatalogNavEntriesChanged = onCatalogNavEntriesChanged,
-        preferredFileManagerLabel = preferredFileManagerLabel,
-        onFileManagerSelected = onFileManagerSelected,
-        onClearPreferredFileManager = onClearPreferredFileManager,
         cookieRepository = cookieRepository
     )
 }

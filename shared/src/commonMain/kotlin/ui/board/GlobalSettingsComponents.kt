@@ -43,7 +43,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -56,7 +55,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
-import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
@@ -106,38 +104,7 @@ internal val globalSettingsEntries = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun GlobalSettingsScaffold(
-    appVersion: String,
-    historyEntries: List<ThreadHistoryEntry>,
-    isBackgroundRefreshEnabled: Boolean,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    isLightweightModeEnabled: Boolean,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    localCatalogNavEntries: List<CatalogNavEntryConfig>,
-    catalogMenuCallbacks: GlobalSettingsCatalogMenuCallbacks,
-    localThreadMenuEntries: List<ThreadMenuEntryConfig>,
-    threadMenuCallbacks: GlobalSettingsThreadMenuCallbacks,
-    preferredFileManagerState: PreferredFileManagerSummaryState,
-    onOpenFileManagerPicker: () -> Unit,
-    onClearPreferredFileManager: (() -> Unit)?,
-    availableSaveDirectorySelections: List<SaveDirectorySelection>,
-    effectiveSaveDirectorySelection: SaveDirectorySelection,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    saveDestinationModeLabel: String,
-    resolvedManualPath: String,
-    saveDestinationHint: String,
-    manualSaveInput: String,
-    onManualSaveInputChanged: (String) -> Unit,
-    onResetManualSaveDirectory: () -> Unit,
-    onUpdateManualSaveDirectory: () -> Unit,
-    saveDirectoryPickerState: SaveDirectoryPickerState,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    onFallbackToManualInput: () -> Unit,
-    cacheCallbacks: GlobalSettingsCacheCallbacks,
-    storageSummaryState: GlobalSettingsStorageSummaryState,
-    settingsEntries: List<GlobalSettingsEntry>,
-    linkCallbacks: GlobalSettingsLinkCallbacks,
-    snackbarHostState: SnackbarHostState,
-    onBack: () -> Unit,
+    bindings: GlobalSettingsScaffoldBindings,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -146,7 +113,7 @@ internal fun GlobalSettingsScaffold(
             CenterAlignedTopAppBar(
                 title = { Text("設定") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = bindings.onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = "戻る"
@@ -155,7 +122,7 @@ internal fun GlobalSettingsScaffold(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(bindings.snackbarHostState) }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
@@ -166,61 +133,61 @@ internal fun GlobalSettingsScaffold(
         ) {
             item {
                 GlobalSettingsBehaviorSection(
-                    isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                    onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-                    isLightweightModeEnabled = isLightweightModeEnabled,
-                    onLightweightModeChanged = onLightweightModeChanged
+                    isBackgroundRefreshEnabled = bindings.behavior.isBackgroundRefreshEnabled,
+                    onBackgroundRefreshChanged = bindings.behavior.onBackgroundRefreshChanged,
+                    isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
+                    onLightweightModeChanged = bindings.behavior.onLightweightModeChanged
                 )
             }
             item {
                 GlobalSettingsCatalogMenuSection(
-                    localCatalogNavEntries = localCatalogNavEntries,
-                    catalogMenuCallbacks = catalogMenuCallbacks
+                    localCatalogNavEntries = bindings.catalogMenu.localCatalogNavEntries,
+                    catalogMenuCallbacks = bindings.catalogMenu.catalogMenuCallbacks
                 )
             }
             item {
                 GlobalSettingsThreadMenuSection(
-                    localThreadMenuEntries = localThreadMenuEntries,
-                    threadMenuCallbacks = threadMenuCallbacks
+                    localThreadMenuEntries = bindings.threadMenu.localThreadMenuEntries,
+                    threadMenuCallbacks = bindings.threadMenu.threadMenuCallbacks
                 )
             }
             item {
                 GlobalSettingsSaveSection(
-                    preferredFileManagerState = preferredFileManagerState,
-                    onOpenFileManagerPicker = onOpenFileManagerPicker,
-                    onClearPreferredFileManager = onClearPreferredFileManager,
-                    availableSaveDirectorySelections = availableSaveDirectorySelections,
-                    effectiveSaveDirectorySelection = effectiveSaveDirectorySelection,
-                    onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-                    saveDestinationModeLabel = saveDestinationModeLabel,
-                    resolvedManualPath = resolvedManualPath,
-                    saveDestinationHint = saveDestinationHint,
-                    manualSaveInput = manualSaveInput,
-                    onManualSaveInputChanged = onManualSaveInputChanged,
-                    onResetManualSaveDirectory = onResetManualSaveDirectory,
-                    onUpdateManualSaveDirectory = onUpdateManualSaveDirectory,
-                    saveDirectoryPickerState = saveDirectoryPickerState,
-                    onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-                    onFallbackToManualInput = onFallbackToManualInput
+                    preferredFileManagerState = bindings.save.preferredFileManagerState,
+                    onOpenFileManagerPicker = bindings.save.onOpenFileManagerPicker,
+                    onClearPreferredFileManager = bindings.save.onClearPreferredFileManager,
+                    availableSaveDirectorySelections = bindings.save.availableSaveDirectorySelections,
+                    effectiveSaveDirectorySelection = bindings.save.effectiveSaveDirectorySelection,
+                    onSaveDirectorySelectionChanged = bindings.save.onSaveDirectorySelectionChanged,
+                    saveDestinationModeLabel = bindings.save.saveDestinationModeLabel,
+                    resolvedManualPath = bindings.save.resolvedManualPath,
+                    saveDestinationHint = bindings.save.saveDestinationHint,
+                    manualSaveInput = bindings.save.manualSaveInput,
+                    onManualSaveInputChanged = bindings.save.onManualSaveInputChanged,
+                    onResetManualSaveDirectory = bindings.save.onResetManualSaveDirectory,
+                    onUpdateManualSaveDirectory = bindings.save.onUpdateManualSaveDirectory,
+                    saveDirectoryPickerState = bindings.save.saveDirectoryPickerState,
+                    onOpenSaveDirectoryPicker = bindings.save.onOpenSaveDirectoryPicker,
+                    onFallbackToManualInput = bindings.save.onFallbackToManualInput
                 )
             }
             item {
-                GlobalSettingsCacheSection(cacheCallbacks = cacheCallbacks)
+                GlobalSettingsCacheSection(cacheCallbacks = bindings.cacheCallbacks)
             }
             item {
                 GlobalSettingsStorageSection(
-                    storageSummaryState = storageSummaryState,
-                    onRefreshStorageStats = cacheCallbacks.refreshStorageStats
+                    storageSummaryState = bindings.storage.storageSummaryState,
+                    onRefreshStorageStats = bindings.storage.onRefreshStorageStats
                 )
             }
             item {
                 GlobalSettingsLinksSection(
-                    settingsEntries = settingsEntries,
-                    linkCallbacks = linkCallbacks
+                    settingsEntries = bindings.links.settingsEntries,
+                    linkCallbacks = bindings.links.linkCallbacks
                 )
             }
             item {
-                GlobalSettingsAppInfoSection(appVersion = appVersion)
+                GlobalSettingsAppInfoSection(appVersion = bindings.appVersion)
             }
         }
     }

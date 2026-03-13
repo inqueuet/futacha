@@ -85,7 +85,8 @@ class AppStateStore internal constructor(
     private var cachedCatalogModeMap: Map<String, CatalogMode>? = null
     private var cachedSelfPostIdentifierMap: Map<String, List<String>>? = null
     private val boardsFacade = buildAppStateBoardsFacade(
-        setBoardsImpl = ::setBoardsInternal
+        setBoardsImpl = ::setBoardsInternal,
+        updateBoardsImpl = ::updateBoardsInternal
     )
     private val preferenceFacade = buildAppStatePreferenceFacade(
         setBackgroundRefreshEnabledImpl = ::setBackgroundRefreshEnabledInternal,
@@ -211,6 +212,10 @@ class AppStateStore internal constructor(
         boardsFacade.setBoards(boards)
     }
 
+    suspend fun updateBoards(transform: (List<BoardSummary>) -> List<BoardSummary>) {
+        boardsFacade.updateBoards(transform)
+    }
+
     private suspend fun setBoardsInternal(boards: List<BoardSummary>) {
         val encoded = encodeAppStateBoards(boards, json)
         boardsMutex.withLock {
@@ -225,6 +230,32 @@ class AppStateStore internal constructor(
                     timestamp = Clock.System.now().toEpochMilliseconds()
                 )
                 // Log error but don't crash - data will be lost but app continues
+            }
+        }
+    }
+
+    private suspend fun updateBoardsInternal(
+        transform: (List<BoardSummary>) -> List<BoardSummary>
+    ) {
+        boardsMutex.withLock {
+            val currentBoards = storage.boardsJson.first()?.let { stored ->
+                decodeAppStateBoards(stored, json, TAG)
+            } ?: emptyList()
+            val updatedBoards = transform(currentBoards)
+            if (updatedBoards == currentBoards) {
+                return
+            }
+            val encoded = encodeAppStateBoards(updatedBoards, json)
+            try {
+                storage.updateBoardsJson(encoded)
+            } catch (e: Exception) {
+                rethrowIfCancellation(e)
+                Logger.e(TAG, "Failed to update ${updatedBoards.size} boards", e)
+                _lastStorageError.value = StorageError(
+                    operation = "updateBoards",
+                    message = e.message ?: "Unknown error",
+                    timestamp = Clock.System.now().toEpochMilliseconds()
+                )
             }
         }
     }
@@ -579,25 +610,12 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun upsertHistoryEntryInternal(entry: ThreadHistoryEntry) {
-        val historySnapshot = readHistorySnapshot() ?: run {
-            Logger.w(TAG, "Skipping history upsert due to missing snapshot")
-            return
-        }
-        val mutation = buildAppStateHistoryMutation(
-            historyMutex = historyMutex,
-            historySnapshot = historySnapshot,
-            readLockedHistory = ::readHistorySnapshotLocked,
-            currentRevision = { historyRevision },
-            previousHistory = { cachedHistory },
-            updateCachedState = { revision, history ->
-                historyRevision = revision
-                cachedHistory = history
-            },
+        runHistoryMutation(
+            missingSnapshotMessage = "Skipping history upsert due to missing snapshot",
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryUpsertPlan(currentHistory, entry)
             }
-        ) ?: return
-        persistHistoryMutation(mutation) { threadId ->
+        ) { threadId ->
             "Failed to upsert history entry $threadId"
         }
     }
@@ -607,28 +625,15 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun prependOrReplaceHistoryEntryInternal(entry: ThreadHistoryEntry) {
-        val historySnapshot = readHistorySnapshot() ?: run {
-            Logger.w(TAG, "Skipping history prepend due to missing snapshot")
-            return
-        }
-        val updateResult = buildAppStateHistoryMutation(
-            historyMutex = historyMutex,
-            historySnapshot = historySnapshot,
-            readLockedHistory = ::readHistorySnapshotLocked,
-            currentRevision = { historyRevision },
-            previousHistory = { cachedHistory },
-            updateCachedState = { revision, history ->
-                historyRevision = revision
-                cachedHistory = history
-            },
+        runHistoryMutation(
+            missingSnapshotMessage = "Skipping history prepend due to missing snapshot",
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryPrependPlan(currentHistory, entry) ?: run {
                     Logger.w(TAG, "Skipping history prepend due to invalid identity")
                     null
                 }
             }
-        ) ?: return
-        persistHistoryMutation(updateResult) { threadId ->
+        ) { threadId ->
             "Failed to prepend history entry $threadId"
         }
     }
@@ -639,25 +644,12 @@ class AppStateStore internal constructor(
 
     private suspend fun prependOrReplaceHistoryEntriesInternal(entries: List<ThreadHistoryEntry>) {
         if (entries.isEmpty()) return
-        val historySnapshot = readHistorySnapshot() ?: run {
-            Logger.w(TAG, "Skipping history prepend batch due to missing snapshot")
-            return
-        }
-        val updateResult = buildAppStateHistoryMutation(
-            historyMutex = historyMutex,
-            historySnapshot = historySnapshot,
-            readLockedHistory = ::readHistorySnapshotLocked,
-            currentRevision = { historyRevision },
-            previousHistory = { cachedHistory },
-            updateCachedState = { revision, history ->
-                historyRevision = revision
-                cachedHistory = history
-            },
+        runHistoryMutation(
+            missingSnapshotMessage = "Skipping history prepend batch due to missing snapshot",
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryBatchPrependPlan(currentHistory, entries)
             }
-        ) ?: return
-        persistHistoryMutation(updateResult) { dedupedSize ->
+        ) { dedupedSize ->
             "Failed to prepend $dedupedSize history entries"
         }
     }
@@ -668,31 +660,16 @@ class AppStateStore internal constructor(
 
     private suspend fun mergeHistoryEntriesInternal(entries: Collection<ThreadHistoryEntry>) {
         if (entries.isEmpty()) return
-        val historySnapshot = readHistorySnapshot() ?: run {
-            Logger.w(TAG, "Skipping history merge due to missing snapshot")
-            return
-        }
-        val mergeResult = buildAppStateHistoryMutation(
-            historyMutex = historyMutex,
-            historySnapshot = historySnapshot,
-            readLockedHistory = ::readHistorySnapshotLocked,
-            currentRevision = { historyRevision },
-            previousHistory = { cachedHistory },
-            updateCachedState = { revision, history ->
-                historyRevision = revision
-                cachedHistory = history
-            },
+        runHistoryMutation(
+            missingSnapshotMessage = "Skipping history merge due to missing snapshot",
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryMergePlan(currentHistory, entries)?.let { plan ->
                     AppStateHistoryMutationPlan(
-                    updatedHistory = plan.updatedHistory,
-                    metadata = plan.droppedUpdateCount
-                )
+                        updatedHistory = plan.updatedHistory,
+                        metadata = plan.droppedUpdateCount
+                    )
                 }
-            }
-        ) ?: return
-        persistHistoryMutation(
-            mutation = mergeResult,
+            },
             onCommitted = { appendedSize ->
                 if (appendedSize > 0) {
                     Logger.i(TAG, "Dropped $appendedSize stale history update(s) during merge")
@@ -708,28 +685,15 @@ class AppStateStore internal constructor(
     }
 
     private suspend fun removeHistoryEntryInternal(entry: ThreadHistoryEntry) {
-        val historySnapshot = readHistorySnapshot() ?: run {
-            Logger.w(TAG, "Skipping history removal due to missing snapshot")
-            return
-        }
-        val removeResult = buildAppStateHistoryMutation(
-            historyMutex = historyMutex,
-            historySnapshot = historySnapshot,
-            readLockedHistory = ::readHistorySnapshotLocked,
-            currentRevision = { historyRevision },
-            previousHistory = { cachedHistory },
-            updateCachedState = { revision, history ->
-                historyRevision = revision
-                cachedHistory = history
-            },
+        runHistoryMutation(
+            missingSnapshotMessage = "Skipping history removal due to missing snapshot",
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryRemovalPlan(currentHistory, entry) ?: run {
                     Logger.w(TAG, "Skipping history removal due to invalid identity")
                     null
                 }
             }
-        ) ?: return
-        persistHistoryMutation(removeResult) { threadId ->
+        ) { threadId ->
             "Failed to remove history entry $threadId"
         }
     }
@@ -819,17 +783,8 @@ class AppStateStore internal constructor(
         boardUrl: String,
         replyCount: Int
     ) {
-        val historySnapshot = readHistorySnapshot() ?: return
-        val updateResult = buildAppStateHistoryMutation(
-            historyMutex = historyMutex,
-            historySnapshot = historySnapshot,
-            readLockedHistory = ::readHistorySnapshotLocked,
-            currentRevision = { historyRevision },
-            previousHistory = { cachedHistory },
-            updateCachedState = { revision, history ->
-                historyRevision = revision
-                cachedHistory = history
-            },
+        runHistoryMutation(
+            missingSnapshotMessage = "Skipping history scroll persistence due to missing snapshot",
             buildPlan = { currentHistory ->
                 resolveAppStateHistoryScrollUpdatePlan(
                     currentHistory = currentHistory,
@@ -845,8 +800,7 @@ class AppStateStore internal constructor(
                     nowMillis = Clock.System.now().toEpochMilliseconds()
                 )
             }
-        ) ?: return
-        persistHistoryMutation(updateResult) { targetThreadId ->
+        ) { targetThreadId ->
             "Failed to persist updated history for thread $targetThreadId"
         }
     }
@@ -954,6 +908,45 @@ class AppStateStore internal constructor(
                 historyRevision = restoredRevision
                 cachedHistory = restoredHistory
             }
+        )
+    }
+
+    private suspend fun <T> runHistoryMutation(
+        missingSnapshotMessage: String,
+        buildPlan: (List<ThreadHistoryEntry>) -> AppStateHistoryMutationPlan<T>?,
+        onCommitted: (T) -> Unit = {},
+        buildFailureMessage: (T) -> String
+    ) {
+        val mutation = prepareHistoryMutation(
+            missingSnapshotMessage = missingSnapshotMessage,
+            buildPlan = buildPlan
+        ) ?: return
+        persistHistoryMutation(
+            mutation = mutation,
+            onCommitted = onCommitted,
+            buildFailureMessage = buildFailureMessage
+        )
+    }
+
+    private suspend fun <T> prepareHistoryMutation(
+        missingSnapshotMessage: String,
+        buildPlan: (List<ThreadHistoryEntry>) -> AppStateHistoryMutationPlan<T>?
+    ): HistoryMutation<T>? {
+        val historySnapshot = readHistorySnapshot() ?: run {
+            Logger.w(TAG, missingSnapshotMessage)
+            return null
+        }
+        return buildAppStateHistoryMutation(
+            historyMutex = historyMutex,
+            historySnapshot = historySnapshot,
+            readLockedHistory = ::readHistorySnapshotLocked,
+            currentRevision = { historyRevision },
+            previousHistory = { cachedHistory },
+            updateCachedState = { revision, history ->
+                historyRevision = revision
+                cachedHistory = history
+            },
+            buildPlan = buildPlan
         )
     }
 
