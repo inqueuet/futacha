@@ -10,6 +10,11 @@ internal data class SavedThreadsSnapshot(
     val totalSize: Long
 )
 
+internal data class SavedThreadsDeleteUiOutcome(
+    val updatedSnapshot: SavedThreadsSnapshot? = null,
+    val message: String
+)
+
 internal suspend fun loadSavedThreadsSnapshot(
     repository: SavedThreadRepository,
     timeoutMillis: Long = 15_000L
@@ -82,5 +87,24 @@ internal fun buildSavedThreadsDeleteMessage(result: Result<Unit>): String {
     return result.fold(
         onSuccess = { "削除しました" },
         onFailure = { err -> "削除に失敗しました: ${err.message}" }
+    )
+}
+
+internal fun resolveSavedThreadsDeleteUiOutcome(
+    result: Result<SavedThreadsSnapshot>
+): SavedThreadsDeleteUiOutcome {
+    return result.fold(
+        onSuccess = { snapshot ->
+            SavedThreadsDeleteUiOutcome(
+                updatedSnapshot = snapshot,
+                message = buildSavedThreadsDeleteMessage(Result.success(Unit))
+            )
+        },
+        onFailure = { error ->
+            SavedThreadsDeleteUiOutcome(
+                updatedSnapshot = null,
+                message = buildSavedThreadsDeleteMessage(Result.failure(error))
+            )
+        }
     )
 }

@@ -1,13 +1,12 @@
 package com.valoser.futacha.shared.ui.board
 
-import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.material3.DrawerState
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
-import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 internal data class ThreadScreenInteractionUiAggregateBundle(
     val mediaBindings: ThreadScreenMediaBindings,
@@ -15,366 +14,327 @@ internal data class ThreadScreenInteractionUiAggregateBundle(
     val uiBindings: ThreadScreenUiBindingsBundle
 )
 
-internal fun buildThreadScreenInteractionUiAggregateBundle(
-    currentPreviewState: () -> ThreadMediaPreviewState,
-    setPreviewState: (ThreadMediaPreviewState) -> Unit,
-    currentMediaEntries: () -> List<MediaPreviewEntry>,
-    coroutineScope: CoroutineScope,
-    currentActionInProgress: () -> Boolean,
-    setActionInProgress: (Boolean) -> Unit,
-    currentLastBusyNoticeAtMillis: () -> Long,
-    setLastBusyNoticeAtMillis: (Long) -> Unit,
-    busyNoticeIntervalMillis: Long,
-    showMessage: (String) -> Unit,
-    showOptionalMessage: (String?) -> Unit,
-    onActionDebugLog: (String) -> Unit,
-    onActionInfoLog: (String) -> Unit,
-    onActionErrorLog: (String, Throwable) -> Unit,
-    currentIsHistoryRefreshing: () -> Boolean,
-    setIsHistoryRefreshing: (Boolean) -> Unit,
-    onHistoryRefresh: suspend () -> Unit,
-    showHistoryRefreshMessage: suspend (String) -> Unit,
-    currentReadAloudState: () -> ThreadReadAloudRuntimeState,
-    setReadAloudState: (ThreadReadAloudRuntimeState) -> Unit,
-    scrollToReadAloudPostIndex: suspend (Int) -> Unit,
-    speakReadAloudText: suspend (String) -> Unit,
-    cancelActiveReadAloud: () -> Unit,
-    currentReadAloudSegments: () -> List<ReadAloudSegment>,
-    isRefreshing: () -> Boolean,
-    onOpenReplyDialog: () -> Unit,
-    onScrollTop: () -> Unit,
-    onScrollBottom: () -> Unit,
-    onShowRefreshBusyMessage: () -> Unit,
-    onStartRefreshFromMenu: () -> Unit,
-    onOpenGallery: () -> Unit,
-    onDelegateToSaveHandler: () -> Unit,
-    onShowFilterSheet: () -> Unit,
-    onShowSettingsSheet: () -> Unit,
-    onClearNgHeaderPrefill: () -> Unit,
-    onShowNgManagement: () -> Unit,
-    onOpenExternalApp: () -> Unit,
-    onShowReadAloudControls: () -> Unit,
-    onTogglePrivacy: () -> Unit,
-    currentSearchIndex: () -> Int,
-    setCurrentSearchIndex: (Int) -> Unit,
-    currentSearchMatches: () -> List<ThreadSearchMatch>,
-    onScrollToSearchMatchPostIndex: (Int?) -> Unit,
-    onCloseDrawerAfterHistorySelection: () -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
-    currentOverlayState: () -> ThreadPostOverlayState,
-    setOverlayState: (ThreadPostOverlayState) -> Unit,
-    lastUsedDeleteKey: String,
-    currentSaidaneLabel: (Post) -> String?,
-    isSelfPost: (Post) -> Boolean,
-    onSaidaneLabelUpdated: (Post, String) -> Unit,
-    repository: BoardRepository,
-    effectiveBoardUrl: String,
-    threadId: String,
-    currentFirstVisibleItemIndex: () -> Int,
-    currentFirstVisibleItemOffset: () -> Int,
-    onStartRefreshFromPull: (Int, Int) -> Unit,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    onBoardClick: () -> Unit,
-    onHistoryBatchDeleteClick: () -> Unit,
-    onHistorySettingsClick: () -> Unit,
-    onSearchQueryChange: (String) -> Unit,
-    onSearchClose: () -> Unit,
-    onBack: () -> Unit,
-    onOpenHistory: () -> Unit,
-    onSearch: () -> Unit,
-    onOpenGlobalSettings: () -> Unit,
-    replyDialogBinding: ThreadReplyDialogStateBinding,
-    mediaPreviewEntryCount: Int,
-    onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
-    galleryPosts: List<Post>?,
-    onDismissGallery: () -> Unit,
-    onScrollToPostIndex: (Int) -> Unit,
-    threadFilterBinding: ThreadFilterUiStateBinding,
-    onDismissSettingsSheet: () -> Unit,
-    onDismissFilterSheet: () -> Unit,
-    onApplySettingsActionState: (ThreadSettingsActionState) -> Unit,
-    firstVisibleSegmentIndex: () -> Int,
-    onPauseReadAloud: () -> Unit,
-    onStopReadAloud: () -> Unit,
-    onShowReadAloudStoppedMessage: () -> Unit,
-    onDismissReadAloudControls: () -> Unit,
-    onDismissNgManagement: () -> Unit,
-    ngMutationCallbacks: ThreadNgMutationCallbacks,
-    onDismissSaveProgress: () -> Unit,
-    onCancelSaveProgress: () -> Unit,
-    onDismissGlobalSettings: () -> Unit,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    onOpenCookieManager: (() -> Unit)?,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    onClearPreferredFileManager: (() -> Unit)?,
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit,
-    onDismissCookieManagement: () -> Unit
-): ThreadScreenInteractionUiAggregateBundle {
-    return buildThreadScreenInteractionUiAggregateBundle(
-        currentPreviewState = currentPreviewState,
-        setPreviewState = setPreviewState,
-        currentMediaEntries = currentMediaEntries,
-        coroutineScope = coroutineScope,
-        currentActionInProgress = currentActionInProgress,
-        setActionInProgress = setActionInProgress,
-        currentLastBusyNoticeAtMillis = currentLastBusyNoticeAtMillis,
-        setLastBusyNoticeAtMillis = setLastBusyNoticeAtMillis,
-        busyNoticeIntervalMillis = busyNoticeIntervalMillis,
-        showMessage = showMessage,
-        showOptionalMessage = showOptionalMessage,
-        onActionDebugLog = onActionDebugLog,
-        onActionInfoLog = onActionInfoLog,
-        onActionErrorLog = onActionErrorLog,
-        currentIsHistoryRefreshing = currentIsHistoryRefreshing,
-        setIsHistoryRefreshing = setIsHistoryRefreshing,
-        onHistoryRefresh = onHistoryRefresh,
-        showHistoryRefreshMessage = showHistoryRefreshMessage,
-        currentReadAloudState = currentReadAloudState,
-        setReadAloudState = setReadAloudState,
-        scrollToReadAloudPostIndex = scrollToReadAloudPostIndex,
-        speakReadAloudText = speakReadAloudText,
-        cancelActiveReadAloud = cancelActiveReadAloud,
-        currentReadAloudSegments = currentReadAloudSegments,
-        isRefreshing = isRefreshing,
-        onOpenReplyDialog = onOpenReplyDialog,
-        onScrollTop = onScrollTop,
-        onScrollBottom = onScrollBottom,
-        onShowRefreshBusyMessage = onShowRefreshBusyMessage,
-        onStartRefreshFromMenu = onStartRefreshFromMenu,
-        onOpenGallery = onOpenGallery,
-        onDelegateToSaveHandler = onDelegateToSaveHandler,
-        onShowFilterSheet = onShowFilterSheet,
-        onShowSettingsSheet = onShowSettingsSheet,
-        onClearNgHeaderPrefill = onClearNgHeaderPrefill,
-        onShowNgManagement = onShowNgManagement,
-        onOpenExternalApp = onOpenExternalApp,
-        onShowReadAloudControls = onShowReadAloudControls,
-        onTogglePrivacy = onTogglePrivacy,
-        currentSearchIndex = currentSearchIndex,
-        setCurrentSearchIndex = setCurrentSearchIndex,
-        currentSearchMatches = currentSearchMatches,
-        onScrollToSearchMatchPostIndex = onScrollToSearchMatchPostIndex,
-        onCloseDrawerAfterHistorySelection = onCloseDrawerAfterHistorySelection,
-        onHistoryEntrySelected = onHistoryEntrySelected,
-        currentOverlayState = currentOverlayState,
-        setOverlayState = setOverlayState,
-        lastUsedDeleteKey = lastUsedDeleteKey,
-        currentSaidaneLabel = currentSaidaneLabel,
-        isSelfPost = isSelfPost,
-        onSaidaneLabelUpdated = onSaidaneLabelUpdated,
-        repository = repository,
-        effectiveBoardUrl = effectiveBoardUrl,
-        threadId = threadId,
-        currentFirstVisibleItemIndex = currentFirstVisibleItemIndex,
-        currentFirstVisibleItemOffset = currentFirstVisibleItemOffset,
-        onStartRefreshFromPull = onStartRefreshFromPull,
-        onHistoryEntryDismissed = onHistoryEntryDismissed,
-        onBoardClick = onBoardClick,
-        onHistoryBatchDeleteClick = onHistoryBatchDeleteClick,
-        onHistorySettingsClick = onHistorySettingsClick,
-        onSearchQueryChange = onSearchQueryChange,
-        onSearchClose = onSearchClose,
-        onBack = onBack,
-        onOpenHistory = onOpenHistory,
-        onSearch = onSearch,
-        onOpenGlobalSettings = onOpenGlobalSettings,
-        replyDialogBinding = replyDialogBinding,
-        mediaPreviewEntryCount = mediaPreviewEntryCount,
-        onSavePreviewMedia = onSavePreviewMedia,
-        galleryPosts = galleryPosts,
-        onDismissGallery = onDismissGallery,
-        onScrollToPostIndex = onScrollToPostIndex,
-        threadFilterBinding = threadFilterBinding,
-        onDismissSettingsSheet = onDismissSettingsSheet,
-        onDismissFilterSheet = onDismissFilterSheet,
-        onApplySettingsActionState = onApplySettingsActionState,
-        firstVisibleSegmentIndex = firstVisibleSegmentIndex,
-        onPauseReadAloud = onPauseReadAloud,
-        onStopReadAloud = onStopReadAloud,
-        onShowReadAloudStoppedMessage = onShowReadAloudStoppedMessage,
-        onDismissReadAloudControls = onDismissReadAloudControls,
-        onDismissNgManagement = onDismissNgManagement,
-        ngMutationCallbacks = ngMutationCallbacks,
-        onDismissSaveProgress = onDismissSaveProgress,
-        onCancelSaveProgress = onCancelSaveProgress,
-        onDismissGlobalSettings = onDismissGlobalSettings,
-        screenPreferencesCallbacks = ScreenPreferencesCallbacks(
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-            onLightweightModeChanged = onLightweightModeChanged,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-            onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
-        ),
-        onOpenCookieManager = onOpenCookieManager,
-        onDismissCookieManagement = onDismissCookieManagement
+internal data class ThreadScreenAggregateMediaInputs(
+    val currentPreviewState: () -> ThreadMediaPreviewState,
+    val setPreviewState: (ThreadMediaPreviewState) -> Unit,
+    val currentMediaEntries: () -> List<MediaPreviewEntry>
+)
+
+internal data class ThreadScreenAggregateUiInputs(
+    val onSearchQueryChange: (String) -> Unit,
+    val onSearchClose: () -> Unit,
+    val onBack: () -> Unit,
+    val onOpenHistory: () -> Unit,
+    val onSearch: () -> Unit,
+    val onOpenGlobalSettings: () -> Unit,
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val mediaPreviewEntryCount: Int,
+    val onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
+    val galleryPosts: List<Post>?,
+    val onDismissGallery: () -> Unit,
+    val onScrollToPostIndex: (Int) -> Unit,
+    val threadFilterBinding: ThreadFilterUiStateBinding,
+    val onDismissSettingsSheet: () -> Unit,
+    val onDismissFilterSheet: () -> Unit,
+    val onApplySettingsActionState: (ThreadSettingsActionState) -> Unit,
+    val firstVisibleSegmentIndex: () -> Int,
+    val onPauseReadAloud: () -> Unit,
+    val onStopReadAloud: () -> Unit,
+    val onShowReadAloudStoppedMessage: () -> Unit,
+    val onDismissReadAloudControls: () -> Unit,
+    val onDismissNgManagement: () -> Unit,
+    val ngMutationCallbacks: ThreadNgMutationCallbacks,
+    val onDismissSaveProgress: () -> Unit,
+    val onCancelSaveProgress: () -> Unit,
+    val onDismissGlobalSettings: () -> Unit,
+    val screenPreferencesCallbacks: ScreenPreferencesCallbacks,
+    val onOpenCookieManager: (() -> Unit)?,
+    val onDismissCookieManagement: () -> Unit
+)
+
+internal data class ThreadScreenControllerInteractionRuntimeInputs(
+    val coroutineScope: CoroutineScope,
+    val lazyListState: LazyListState,
+    val drawerState: DrawerState,
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val currentIsRefreshing: () -> Boolean,
+    val currentUiState: () -> ThreadUiState,
+    val currentModalOverlayState: () -> ThreadModalOverlayState,
+    val setModalOverlayState: (ThreadModalOverlayState) -> Unit,
+    val currentSheetOverlayState: () -> ThreadSheetOverlayState,
+    val setSheetOverlayState: (ThreadSheetOverlayState) -> Unit,
+    val currentPostOverlayState: () -> ThreadPostOverlayState,
+    val setPostOverlayState: (ThreadPostOverlayState) -> Unit,
+    val currentSearchIndex: () -> Int,
+    val setCurrentSearchIndex: (Int) -> Unit,
+    val currentSearchMatches: () -> List<ThreadSearchMatch>,
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
+    val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
+    val onHistoryCleared: () -> Unit,
+    val onBack: () -> Unit,
+    val lastUsedDeleteKey: String,
+    val currentSaidaneLabel: (Post) -> String?,
+    val isSelfPost: (Post) -> Boolean,
+    val onSaidaneLabelUpdated: (Post, String) -> Unit,
+    val repository: BoardRepository,
+    val effectiveBoardUrl: String,
+    val threadId: String,
+    val onStartRefresh: (Int, Int) -> Unit,
+    val onHandleThreadSaveRequest: () -> Unit,
+    val onShowMessage: (String) -> Unit,
+    val showSnackbar: suspend (String) -> Unit,
+    val onOpenExternalApp: () -> Unit,
+    val onTogglePrivacy: () -> Unit
+)
+
+internal fun buildThreadScreenControllerInteractionInputs(
+    inputs: ThreadScreenControllerInteractionRuntimeInputs
+): ThreadScreenControllerInteractionInputs {
+    return ThreadScreenControllerInteractionInputs(
+        isRefreshing = inputs.currentIsRefreshing,
+        onOpenReplyDialog = {
+            inputs.replyDialogBinding.setState(
+                openThreadReplyDialog(
+                    state = inputs.replyDialogBinding.currentState(),
+                    lastUsedDeleteKey = inputs.lastUsedDeleteKey
+                )
+            )
+        },
+        onScrollTop = {
+            inputs.coroutineScope.launch { inputs.lazyListState.animateScrollToItem(0) }
+        },
+        onScrollBottom = {
+            inputs.coroutineScope.launch {
+                val currentState = inputs.currentUiState()
+                if (currentState is ThreadUiState.Success) {
+                    val lastIndex = currentState.page.posts.size - 1
+                    if (lastIndex >= 0) {
+                        inputs.lazyListState.animateScrollToItem(lastIndex)
+                    }
+                }
+            }
+        },
+        onShowRefreshBusyMessage = {
+            inputs.onShowMessage(buildThreadRefreshBusyMessage())
+        },
+        onStartRefreshFromMenu = {
+            inputs.onStartRefresh(
+                inputs.lazyListState.firstVisibleItemIndex,
+                inputs.lazyListState.firstVisibleItemScrollOffset
+            )
+        },
+        onOpenGallery = {
+            inputs.setModalOverlayState(
+                openThreadGalleryOverlay(inputs.currentModalOverlayState())
+            )
+        },
+        onDelegateToSaveHandler = inputs.onHandleThreadSaveRequest,
+        onShowFilterSheet = {
+            inputs.setSheetOverlayState(
+                openThreadFilterOverlay(inputs.currentSheetOverlayState())
+            )
+        },
+        onShowSettingsSheet = {
+            inputs.setSheetOverlayState(
+                openThreadSettingsOverlay(inputs.currentSheetOverlayState())
+            )
+        },
+        onClearNgHeaderPrefill = {
+            inputs.setPostOverlayState(
+                inputs.currentPostOverlayState().copy(ngHeaderPrefill = null)
+            )
+        },
+        onShowNgManagement = {
+            inputs.setPostOverlayState(
+                openThreadNgManagementOverlay(inputs.currentPostOverlayState())
+            )
+        },
+        onOpenExternalApp = inputs.onOpenExternalApp,
+        onShowReadAloudControls = {
+            inputs.setSheetOverlayState(
+                openThreadReadAloudOverlay(inputs.currentSheetOverlayState())
+            )
+        },
+        onTogglePrivacy = inputs.onTogglePrivacy,
+        currentSearchIndex = inputs.currentSearchIndex,
+        setCurrentSearchIndex = inputs.setCurrentSearchIndex,
+        currentSearchMatches = inputs.currentSearchMatches,
+        onScrollToSearchMatchPostIndex = { targetPostIndex ->
+            if (targetPostIndex != null) {
+                inputs.coroutineScope.launch {
+                    inputs.lazyListState.animateScrollToItem(targetPostIndex)
+                }
+            }
+        },
+        onCloseDrawerAfterHistorySelection = {
+            inputs.coroutineScope.launch { inputs.drawerState.close() }
+        },
+        onHistoryEntrySelected = inputs.onHistoryEntrySelected,
+        currentOverlayState = inputs.currentPostOverlayState,
+        setOverlayState = inputs.setPostOverlayState,
+        lastUsedDeleteKey = inputs.lastUsedDeleteKey,
+        currentSaidaneLabel = inputs.currentSaidaneLabel,
+        isSelfPost = inputs.isSelfPost,
+        onSaidaneLabelUpdated = inputs.onSaidaneLabelUpdated,
+        repository = inputs.repository,
+        effectiveBoardUrl = inputs.effectiveBoardUrl,
+        threadId = inputs.threadId,
+        currentFirstVisibleItemIndex = { inputs.lazyListState.firstVisibleItemIndex },
+        currentFirstVisibleItemOffset = { inputs.lazyListState.firstVisibleItemScrollOffset },
+        onStartRefreshFromPull = inputs.onStartRefresh,
+        onHistoryEntryDismissed = inputs.onHistoryEntryDismissed,
+        onBoardClick = {
+            inputs.coroutineScope.launch {
+                inputs.drawerState.close()
+                inputs.onBack()
+            }
+        },
+        onHistoryBatchDeleteClick = {
+            inputs.coroutineScope.launch {
+                inputs.onHistoryCleared()
+                showThreadMessage(
+                    buildThreadHistoryBatchDeleteMessage(),
+                    inputs.showSnackbar
+                )
+                inputs.drawerState.close()
+            }
+        },
+        onHistorySettingsClick = {
+            inputs.setModalOverlayState(
+                openThreadGlobalSettingsOverlay(inputs.currentModalOverlayState())
+            )
+        }
+    )
+}
+
+internal data class ThreadScreenUiRuntimeInputs(
+    val coroutineScope: CoroutineScope,
+    val lazyListState: LazyListState,
+    val drawerState: DrawerState,
+    val currentModalOverlayState: () -> ThreadModalOverlayState,
+    val setModalOverlayState: (ThreadModalOverlayState) -> Unit,
+    val currentSheetOverlayState: () -> ThreadSheetOverlayState,
+    val setSheetOverlayState: (ThreadSheetOverlayState) -> Unit,
+    val currentPostOverlayState: () -> ThreadPostOverlayState,
+    val setPostOverlayState: (ThreadPostOverlayState) -> Unit,
+    val setSearchQuery: (String) -> Unit,
+    val setSearchActive: (Boolean) -> Unit,
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val mediaPreviewEntryCount: Int,
+    val onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
+    val galleryPosts: List<Post>?,
+    val threadFilterBinding: ThreadFilterUiStateBinding,
+    val firstVisibleSegmentIndex: () -> Int,
+    val onPauseReadAloud: () -> Unit,
+    val onStopReadAloud: () -> Unit,
+    val onShowMessage: (String) -> Unit,
+    val ngMutationCallbacks: ThreadNgMutationCallbacks,
+    val currentManualSaveJob: () -> kotlinx.coroutines.Job?,
+    val setSaveProgress: (com.valoser.futacha.shared.model.SaveProgress?) -> Unit,
+    val screenPreferencesCallbacks: ScreenPreferencesCallbacks,
+    val onOpenCookieManager: (() -> Unit)?,
+    val onDismissCookieManagement: () -> Unit,
+    val onBack: () -> Unit
+)
+
+internal fun buildThreadScreenAggregateUiInputs(
+    inputs: ThreadScreenUiRuntimeInputs
+): ThreadScreenAggregateUiInputs {
+    return ThreadScreenAggregateUiInputs(
+        onSearchQueryChange = inputs.setSearchQuery,
+        onSearchClose = { inputs.setSearchActive(false) },
+        onBack = inputs.onBack,
+        onOpenHistory = {
+            inputs.coroutineScope.launch { inputs.drawerState.open() }
+        },
+        onSearch = { inputs.setSearchActive(true) },
+        onOpenGlobalSettings = {
+            inputs.setModalOverlayState(
+                openThreadGlobalSettingsOverlay(inputs.currentModalOverlayState())
+            )
+        },
+        replyDialogBinding = inputs.replyDialogBinding,
+        mediaPreviewEntryCount = inputs.mediaPreviewEntryCount,
+        onSavePreviewMedia = inputs.onSavePreviewMedia,
+        galleryPosts = inputs.galleryPosts,
+        onDismissGallery = {
+            inputs.setModalOverlayState(
+                dismissThreadGalleryOverlay(inputs.currentModalOverlayState())
+            )
+        },
+        onScrollToPostIndex = { index ->
+            inputs.coroutineScope.launch {
+                inputs.lazyListState.animateScrollToItem(index)
+            }
+        },
+        threadFilterBinding = inputs.threadFilterBinding,
+        onDismissSettingsSheet = {
+            inputs.setSheetOverlayState(
+                dismissThreadSettingsOverlay(inputs.currentSheetOverlayState())
+            )
+        },
+        onDismissFilterSheet = {
+            inputs.setSheetOverlayState(
+                dismissThreadFilterOverlay(inputs.currentSheetOverlayState())
+            )
+        },
+        onApplySettingsActionState = { actionState ->
+            inputs.setSheetOverlayState(
+                applyThreadSettingsActionOverlayState(
+                    currentState = inputs.currentSheetOverlayState(),
+                    actionState = actionState
+                )
+            )
+        },
+        firstVisibleSegmentIndex = inputs.firstVisibleSegmentIndex,
+        onPauseReadAloud = inputs.onPauseReadAloud,
+        onStopReadAloud = inputs.onStopReadAloud,
+        onShowReadAloudStoppedMessage = {
+            inputs.onShowMessage(buildReadAloudStoppedMessage())
+        },
+        onDismissReadAloudControls = {
+            inputs.setSheetOverlayState(
+                dismissThreadReadAloudOverlay(inputs.currentSheetOverlayState())
+            )
+        },
+        onDismissNgManagement = {
+            inputs.setPostOverlayState(
+                dismissThreadNgManagementOverlay(inputs.currentPostOverlayState())
+            )
+        },
+        ngMutationCallbacks = inputs.ngMutationCallbacks,
+        onDismissSaveProgress = {
+            inputs.setSaveProgress(null)
+        },
+        onCancelSaveProgress = {
+            inputs.currentManualSaveJob()?.cancel()
+            inputs.onShowMessage("保存をキャンセルしました")
+        },
+        onDismissGlobalSettings = {
+            inputs.setModalOverlayState(
+                dismissThreadGlobalSettingsOverlay(inputs.currentModalOverlayState())
+            )
+        },
+        screenPreferencesCallbacks = inputs.screenPreferencesCallbacks,
+        onOpenCookieManager = inputs.onOpenCookieManager,
+        onDismissCookieManagement = inputs.onDismissCookieManagement
     )
 }
 
 internal fun buildThreadScreenInteractionUiAggregateBundle(
-    currentPreviewState: () -> ThreadMediaPreviewState,
-    setPreviewState: (ThreadMediaPreviewState) -> Unit,
-    currentMediaEntries: () -> List<MediaPreviewEntry>,
-    coroutineScope: CoroutineScope,
-    currentActionInProgress: () -> Boolean,
-    setActionInProgress: (Boolean) -> Unit,
-    currentLastBusyNoticeAtMillis: () -> Long,
-    setLastBusyNoticeAtMillis: (Long) -> Unit,
-    busyNoticeIntervalMillis: Long,
-    showMessage: (String) -> Unit,
-    showOptionalMessage: (String?) -> Unit,
-    onActionDebugLog: (String) -> Unit,
-    onActionInfoLog: (String) -> Unit,
-    onActionErrorLog: (String, Throwable) -> Unit,
-    currentIsHistoryRefreshing: () -> Boolean,
-    setIsHistoryRefreshing: (Boolean) -> Unit,
-    onHistoryRefresh: suspend () -> Unit,
-    showHistoryRefreshMessage: suspend (String) -> Unit,
-    currentReadAloudState: () -> ThreadReadAloudRuntimeState,
-    setReadAloudState: (ThreadReadAloudRuntimeState) -> Unit,
-    scrollToReadAloudPostIndex: suspend (Int) -> Unit,
-    speakReadAloudText: suspend (String) -> Unit,
-    cancelActiveReadAloud: () -> Unit,
-    currentReadAloudSegments: () -> List<ReadAloudSegment>,
-    isRefreshing: () -> Boolean,
-    onOpenReplyDialog: () -> Unit,
-    onScrollTop: () -> Unit,
-    onScrollBottom: () -> Unit,
-    onShowRefreshBusyMessage: () -> Unit,
-    onStartRefreshFromMenu: () -> Unit,
-    onOpenGallery: () -> Unit,
-    onDelegateToSaveHandler: () -> Unit,
-    onShowFilterSheet: () -> Unit,
-    onShowSettingsSheet: () -> Unit,
-    onClearNgHeaderPrefill: () -> Unit,
-    onShowNgManagement: () -> Unit,
-    onOpenExternalApp: () -> Unit,
-    onShowReadAloudControls: () -> Unit,
-    onTogglePrivacy: () -> Unit,
-    currentSearchIndex: () -> Int,
-    setCurrentSearchIndex: (Int) -> Unit,
-    currentSearchMatches: () -> List<ThreadSearchMatch>,
-    onScrollToSearchMatchPostIndex: (Int?) -> Unit,
-    onCloseDrawerAfterHistorySelection: () -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
-    currentOverlayState: () -> ThreadPostOverlayState,
-    setOverlayState: (ThreadPostOverlayState) -> Unit,
-    lastUsedDeleteKey: String,
-    currentSaidaneLabel: (Post) -> String?,
-    isSelfPost: (Post) -> Boolean,
-    onSaidaneLabelUpdated: (Post, String) -> Unit,
-    repository: BoardRepository,
-    effectiveBoardUrl: String,
-    threadId: String,
-    currentFirstVisibleItemIndex: () -> Int,
-    currentFirstVisibleItemOffset: () -> Int,
-    onStartRefreshFromPull: (Int, Int) -> Unit,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    onBoardClick: () -> Unit,
-    onHistoryBatchDeleteClick: () -> Unit,
-    onHistorySettingsClick: () -> Unit,
-    onSearchQueryChange: (String) -> Unit,
-    onSearchClose: () -> Unit,
-    onBack: () -> Unit,
-    onOpenHistory: () -> Unit,
-    onSearch: () -> Unit,
-    onOpenGlobalSettings: () -> Unit,
-    replyDialogBinding: ThreadReplyDialogStateBinding,
-    mediaPreviewEntryCount: Int,
-    onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
-    galleryPosts: List<Post>?,
-    onDismissGallery: () -> Unit,
-    onScrollToPostIndex: (Int) -> Unit,
-    threadFilterBinding: ThreadFilterUiStateBinding,
-    onDismissSettingsSheet: () -> Unit,
-    onDismissFilterSheet: () -> Unit,
-    onApplySettingsActionState: (ThreadSettingsActionState) -> Unit,
-    firstVisibleSegmentIndex: () -> Int,
-    onPauseReadAloud: () -> Unit,
-    onStopReadAloud: () -> Unit,
-    onShowReadAloudStoppedMessage: () -> Unit,
-    onDismissReadAloudControls: () -> Unit,
-    onDismissNgManagement: () -> Unit,
-    ngMutationCallbacks: ThreadNgMutationCallbacks,
-    onDismissSaveProgress: () -> Unit,
-    onCancelSaveProgress: () -> Unit,
-    onDismissGlobalSettings: () -> Unit,
-    screenPreferencesCallbacks: ScreenPreferencesCallbacks,
-    onOpenCookieManager: (() -> Unit)?,
-    onDismissCookieManagement: () -> Unit
+    mediaInputs: ThreadScreenAggregateMediaInputs,
+    controllerActionInputs: ThreadScreenControllerActionInputs,
+    controllerInteractionInputs: ThreadScreenControllerInteractionInputs,
+    uiInputs: ThreadScreenAggregateUiInputs
 ): ThreadScreenInteractionUiAggregateBundle {
     val mediaBindings = buildThreadScreenMediaBindings(
-        currentPreviewState = currentPreviewState,
-        setPreviewState = setPreviewState,
-        currentEntries = currentMediaEntries
+        currentPreviewState = mediaInputs.currentPreviewState,
+        setPreviewState = mediaInputs.setPreviewState,
+        currentEntries = mediaInputs.currentMediaEntries
     )
     val controllerBindings = buildThreadScreenControllerBindingsBundle(
-        coroutineScope = coroutineScope,
-        currentActionInProgress = currentActionInProgress,
-        setActionInProgress = setActionInProgress,
-        currentLastBusyNoticeAtMillis = currentLastBusyNoticeAtMillis,
-        setLastBusyNoticeAtMillis = setLastBusyNoticeAtMillis,
-        busyNoticeIntervalMillis = busyNoticeIntervalMillis,
-        showMessage = showMessage,
-        showOptionalMessage = showOptionalMessage,
-        onActionDebugLog = onActionDebugLog,
-        onActionInfoLog = onActionInfoLog,
-        onActionErrorLog = onActionErrorLog,
-        currentIsHistoryRefreshing = currentIsHistoryRefreshing,
-        setIsHistoryRefreshing = setIsHistoryRefreshing,
-        onHistoryRefresh = onHistoryRefresh,
-        showHistoryRefreshMessage = showHistoryRefreshMessage,
-        currentReadAloudState = currentReadAloudState,
-        setReadAloudState = setReadAloudState,
-        scrollToReadAloudPostIndex = scrollToReadAloudPostIndex,
-        speakReadAloudText = speakReadAloudText,
-        cancelActiveReadAloud = cancelActiveReadAloud,
-        currentReadAloudSegments = currentReadAloudSegments,
-        isRefreshing = isRefreshing,
-        onOpenReplyDialog = onOpenReplyDialog,
-        onScrollTop = onScrollTop,
-        onScrollBottom = onScrollBottom,
-        onShowRefreshBusyMessage = onShowRefreshBusyMessage,
-        onStartRefreshFromMenu = onStartRefreshFromMenu,
-        onOpenGallery = onOpenGallery,
-        onDelegateToSaveHandler = onDelegateToSaveHandler,
-        onShowFilterSheet = onShowFilterSheet,
-        onShowSettingsSheet = onShowSettingsSheet,
-        onClearNgHeaderPrefill = onClearNgHeaderPrefill,
-        onShowNgManagement = onShowNgManagement,
-        onOpenExternalApp = onOpenExternalApp,
-        onShowReadAloudControls = onShowReadAloudControls,
-        onTogglePrivacy = onTogglePrivacy,
-        currentSearchIndex = currentSearchIndex,
-        setCurrentSearchIndex = setCurrentSearchIndex,
-        currentSearchMatches = currentSearchMatches,
-        onScrollToSearchMatchPostIndex = onScrollToSearchMatchPostIndex,
-        onCloseDrawerAfterHistorySelection = onCloseDrawerAfterHistorySelection,
-        onHistoryEntrySelected = onHistoryEntrySelected,
-        currentOverlayState = currentOverlayState,
-        setOverlayState = setOverlayState,
-        lastUsedDeleteKey = lastUsedDeleteKey,
-        currentSaidaneLabel = currentSaidaneLabel,
-        isSelfPost = isSelfPost,
-        onSaidaneLabelUpdated = onSaidaneLabelUpdated,
-        repository = repository,
-        effectiveBoardUrl = effectiveBoardUrl,
-        threadId = threadId,
-        currentFirstVisibleItemIndex = currentFirstVisibleItemIndex,
-        currentFirstVisibleItemOffset = currentFirstVisibleItemOffset,
-        onStartRefreshFromPull = onStartRefreshFromPull,
-        onHistoryEntryDismissed = onHistoryEntryDismissed,
-        onBoardClick = onBoardClick,
-        onHistoryBatchDeleteClick = onHistoryBatchDeleteClick,
-        onHistorySettingsClick = onHistorySettingsClick
+        actionInputs = controllerActionInputs,
+        interactionInputs = controllerInteractionInputs
     )
     val interactionBindings = controllerBindings.interactionBindings
     val readAloudBindings = controllerBindings.actionExecutionBindings.readAloudBindings
@@ -382,46 +342,52 @@ internal fun buildThreadScreenInteractionUiAggregateBundle(
         mediaBindings = mediaBindings,
         controllerBindings = controllerBindings,
         uiBindings = buildThreadScreenUiBindingsBundle(
-            searchNavigationCallbacks = interactionBindings.searchNavigationCallbacks,
-            onSearchQueryChange = onSearchQueryChange,
-            onSearchClose = onSearchClose,
-            onBack = onBack,
-            onOpenHistory = onOpenHistory,
-            onSearch = onSearch,
-            onOpenGlobalSettings = onOpenGlobalSettings,
-            onAction = interactionBindings.menuEntryHandler,
-            replyDialogBinding = replyDialogBinding,
-            currentPostOverlayState = currentOverlayState,
-            setPostOverlayState = setOverlayState,
-            mediaPreviewState = currentPreviewState,
-            setMediaPreviewState = setPreviewState,
-            mediaPreviewEntryCount = mediaPreviewEntryCount,
-            onSavePreviewMedia = onSavePreviewMedia,
-            galleryPosts = galleryPosts,
-            onDismissGallery = onDismissGallery,
-            onScrollToPostIndex = onScrollToPostIndex,
-            threadFilterBinding = threadFilterBinding,
-            onDismissSettingsSheet = onDismissSettingsSheet,
-            onDismissFilterSheet = onDismissFilterSheet,
-            onApplySettingsActionState = onApplySettingsActionState,
-            onOpenNgManagement = onShowNgManagement,
-            onOpenExternalApp = onOpenExternalApp,
-            onTogglePrivacy = onTogglePrivacy,
-            firstVisibleSegmentIndex = firstVisibleSegmentIndex,
-            onSeekToReadAloudIndex = readAloudBindings.seekReadAloudToIndex,
-            onPlayReadAloud = readAloudBindings.startReadAloud,
-            onPauseReadAloud = onPauseReadAloud,
-            onStopReadAloud = onStopReadAloud,
-            onShowReadAloudStoppedMessage = onShowReadAloudStoppedMessage,
-            onDismissReadAloudControls = onDismissReadAloudControls,
-            onDismissNgManagement = onDismissNgManagement,
-            ngMutationCallbacks = ngMutationCallbacks,
-            onDismissSaveProgress = onDismissSaveProgress,
-            onCancelSaveProgress = onCancelSaveProgress,
-            onDismissGlobalSettings = onDismissGlobalSettings,
-            screenPreferencesCallbacks = screenPreferencesCallbacks,
-            onOpenCookieManager = onOpenCookieManager,
-            onDismissCookieManagement = onDismissCookieManagement
+            topBarInputs = ThreadScreenTopBarUiInputs(
+                searchNavigationCallbacks = interactionBindings.searchNavigationCallbacks,
+                onSearchQueryChange = uiInputs.onSearchQueryChange,
+                onSearchClose = uiInputs.onSearchClose,
+                onBack = uiInputs.onBack,
+                onOpenHistory = uiInputs.onOpenHistory,
+                onSearch = uiInputs.onSearch,
+                onOpenGlobalSettings = uiInputs.onOpenGlobalSettings,
+                onAction = interactionBindings.menuEntryHandler
+            ),
+            overlayInputs = ThreadScreenOverlayUiInputs(
+                replyDialogBinding = uiInputs.replyDialogBinding,
+                currentPostOverlayState = controllerInteractionInputs.currentOverlayState,
+                setPostOverlayState = controllerInteractionInputs.setOverlayState,
+                mediaPreviewState = mediaInputs.currentPreviewState,
+                setMediaPreviewState = mediaInputs.setPreviewState,
+                mediaPreviewEntryCount = uiInputs.mediaPreviewEntryCount,
+                onSavePreviewMedia = uiInputs.onSavePreviewMedia,
+                galleryPosts = uiInputs.galleryPosts,
+                onDismissGallery = uiInputs.onDismissGallery,
+                onScrollToPostIndex = uiInputs.onScrollToPostIndex,
+                threadFilterBinding = uiInputs.threadFilterBinding,
+                onDismissSettingsSheet = uiInputs.onDismissSettingsSheet,
+                onDismissFilterSheet = uiInputs.onDismissFilterSheet,
+                onApplySettingsActionState = uiInputs.onApplySettingsActionState,
+                onOpenNgManagement = controllerInteractionInputs.onShowNgManagement,
+                onOpenExternalApp = controllerInteractionInputs.onOpenExternalApp,
+                onTogglePrivacy = controllerInteractionInputs.onTogglePrivacy,
+                firstVisibleSegmentIndex = uiInputs.firstVisibleSegmentIndex,
+                onSeekToReadAloudIndex = readAloudBindings.seekReadAloudToIndex,
+                onPlayReadAloud = readAloudBindings.startReadAloud,
+                onPauseReadAloud = uiInputs.onPauseReadAloud,
+                onStopReadAloud = uiInputs.onStopReadAloud,
+                onShowReadAloudStoppedMessage = uiInputs.onShowReadAloudStoppedMessage,
+                onDismissReadAloudControls = uiInputs.onDismissReadAloudControls,
+                onDismissNgManagement = uiInputs.onDismissNgManagement,
+                ngMutationCallbacks = uiInputs.ngMutationCallbacks,
+                onDismissSaveProgress = uiInputs.onDismissSaveProgress,
+                onCancelSaveProgress = uiInputs.onCancelSaveProgress
+            ),
+            settingsInputs = ThreadScreenSettingsUiInputs(
+                onDismissGlobalSettings = uiInputs.onDismissGlobalSettings,
+                screenPreferencesCallbacks = uiInputs.screenPreferencesCallbacks,
+                onOpenCookieManager = uiInputs.onOpenCookieManager,
+                onDismissCookieManagement = uiInputs.onDismissCookieManagement
+            )
         )
     )
 }

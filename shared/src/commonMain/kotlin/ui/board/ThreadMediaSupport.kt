@@ -8,12 +8,16 @@ internal data class ThreadMediaPreviewState(
 
 internal fun emptyThreadMediaPreviewState(): ThreadMediaPreviewState = ThreadMediaPreviewState()
 
+private fun ThreadMediaPreviewState.withPreviewMediaIndex(index: Int?): ThreadMediaPreviewState {
+    return copy(previewMediaIndex = index)
+}
+
 internal fun normalizeThreadMediaPreviewState(
     currentState: ThreadMediaPreviewState,
     totalCount: Int
 ): ThreadMediaPreviewState {
-    return currentState.copy(
-        previewMediaIndex = normalizeMediaPreviewIndex(
+    return currentState.withPreviewMediaIndex(
+        normalizeMediaPreviewIndex(
             currentIndex = currentState.previewMediaIndex,
             totalCount = totalCount
         )
@@ -28,7 +32,7 @@ internal fun openThreadMediaPreview(
 ): ThreadMediaPreviewState {
     val targetIndex = entries.indexOfFirst { it.url == url && it.mediaType == mediaType }
     if (targetIndex < 0) return currentState
-    return currentState.copy(previewMediaIndex = targetIndex)
+    return currentState.withPreviewMediaIndex(targetIndex)
 }
 
 internal fun resolveThreadMediaPreviewNormalizationState(
@@ -58,15 +62,15 @@ internal fun resolveThreadMediaClickState(
 }
 
 internal fun dismissThreadMediaPreview(currentState: ThreadMediaPreviewState): ThreadMediaPreviewState {
-    return currentState.copy(previewMediaIndex = null)
+    return currentState.withPreviewMediaIndex(null)
 }
 
 internal fun moveToNextThreadMediaPreview(
     currentState: ThreadMediaPreviewState,
     totalCount: Int
 ): ThreadMediaPreviewState {
-    return currentState.copy(
-        previewMediaIndex = nextMediaPreviewIndex(
+    return currentState.withPreviewMediaIndex(
+        nextMediaPreviewIndex(
             currentIndex = currentState.previewMediaIndex,
             totalCount = totalCount
         )
@@ -77,8 +81,8 @@ internal fun moveToPreviousThreadMediaPreview(
     currentState: ThreadMediaPreviewState,
     totalCount: Int
 ): ThreadMediaPreviewState {
-    return currentState.copy(
-        previewMediaIndex = previousMediaPreviewIndex(
+    return currentState.withPreviewMediaIndex(
+        previousMediaPreviewIndex(
             currentIndex = currentState.previewMediaIndex,
             totalCount = totalCount
         )

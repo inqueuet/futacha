@@ -41,6 +41,12 @@ internal class HttpBoardApiThreadSafeLruCache<K, V>(private val maxSize: Int) {
     }
 }
 
+internal class HttpBoardApiPostingRuntime(maxCacheSize: Int) {
+    val cache = HttpBoardApiThreadSafeLruCache<String, HttpBoardApiPostingConfig>(maxCacheSize)
+    val locksGuard = Mutex()
+    val locks = mutableMapOf<String, Mutex>()
+}
+
 internal fun shouldRetryHttpBoardApiRequest(error: Exception): Boolean {
     var current: Throwable? = error
     while (current != null) {
@@ -127,4 +133,22 @@ internal fun guessHttpBoardApiMediaContentType(
         "mp4" -> mp4ContentType
         else -> ContentType.Application.OctetStream
     }
+}
+
+internal suspend fun getOrLoadHttpBoardApiPostingConfig(
+    board: String,
+    runtime: HttpBoardApiPostingRuntime,
+    fallbackChrencValue: String,
+    logTag: String,
+    fetchPostingConfig: suspend () -> HttpBoardApiPostingConfig
+): HttpBoardApiPostingConfig {
+    return getOrLoadHttpBoardApiPostingConfig(
+        board = board,
+        cache = runtime.cache,
+        locksGuard = runtime.locksGuard,
+        locks = runtime.locks,
+        fallbackChrencValue = fallbackChrencValue,
+        logTag = logTag,
+        fetchPostingConfig = fetchPostingConfig
+    )
 }

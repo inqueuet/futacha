@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.state
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -34,6 +35,7 @@ private class AndroidPlatformStateStorage(
     private val historyKey = stringPreferencesKey("history_json")
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
+    private val adsEnabledKey = booleanPreferencesKey("ads_enabled")
     private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val gridColumnsKey = stringPreferencesKey("catalog_grid_columns")
@@ -104,6 +106,9 @@ private class AndroidPlatformStateStorage(
     override val backgroundRefreshEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[backgroundRefreshKey] ?: false }
 
+    override val adsEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[adsEnabledKey] ?: true }
+
     override val lightweightModeEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
 
@@ -160,320 +165,332 @@ private class AndroidPlatformStateStorage(
     override val lastUsedDeleteKey: Flow<String?> =
         safeData.map { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] }
 
-    override suspend fun updateBoardsJson(value: String) {
+    private suspend fun updateStringPreference(
+        key: Preferences.Key<String>,
+        value: String,
+        logLabel: String,
+        failureMessage: String
+    ) {
         try {
-            context.dataStore.edit { prefs -> prefs[boardsKey] = value }
+            context.dataStore.edit { prefs -> prefs[key] = value }
         } catch (e: Exception) {
             rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update boards: ${e.message}")
-            // Re-throw as a more specific exception for caller to handle
-            throw StorageException("Failed to save boards data", e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update $logLabel: ${e.message}")
+            throw StorageException(failureMessage, e)
         }
     }
 
-    override suspend fun updateHistoryJson(value: String) {
+    private suspend fun updateBooleanPreference(
+        key: Preferences.Key<Boolean>,
+        value: Boolean,
+        logLabel: String,
+        failureMessage: String
+    ) {
         try {
-            context.dataStore.edit { prefs -> prefs[historyKey] = value }
+            context.dataStore.edit { prefs -> prefs[key] = value }
         } catch (e: Exception) {
             rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update history: ${e.message}")
-            // Re-throw as a more specific exception for caller to handle
-            throw StorageException("Failed to save history data", e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update $logLabel: ${e.message}")
+            throw StorageException(failureMessage, e)
         }
     }
 
-    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
-        try {
-            context.dataStore.edit { prefs -> prefs[backgroundRefreshKey] = enabled }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update background refresh: ${e.message}")
-            throw StorageException("Failed to save background refresh state", e)
-        }
-    }
-
-    override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
-        try {
-            context.dataStore.edit { prefs -> prefs[lightweightModeKey] = enabled }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update lightweight mode: ${e.message}")
-            throw StorageException("Failed to save lightweight mode state", e)
-        }
-    }
-
-    override suspend fun updateManualSaveDirectory(directory: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[manualSaveDirectoryKey] = directory }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update manual save directory: ${e.message}")
-            throw StorageException("Failed to save manual save directory", e)
-        }
-    }
-
-    override suspend fun updateAttachmentPickerPreference(preference: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[attachmentPickerPreferenceKey] = preference }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update attachment picker preference: ${e.message}")
-            throw StorageException("Failed to save attachment picker preference", e)
-        }
-    }
-
-    override suspend fun updateSaveDirectorySelection(selection: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[saveDirectorySelectionKey] = selection }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update save directory selection: ${e.message}")
-            throw StorageException("Failed to save save directory selection", e)
-        }
-    }
-
-    override suspend fun updateCatalogModeMapJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[catalogModeMapKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update catalog mode map: ${e.message}")
-            throw StorageException("Failed to save catalog mode map", e)
-        }
-    }
-
-    override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
-        try {
-            context.dataStore.edit { prefs -> prefs[privacyFilterKey] = enabled }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update privacy filter: ${e.message}")
-            // Re-throw as a more specific exception for caller to handle
-            throw StorageException("Failed to save privacy filter state", e)
-        }
-    }
-
-    override suspend fun updateCatalogDisplayStyle(style: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[displayStyleKey] = style }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update catalog display style: ${e.message}")
-            throw StorageException("Failed to save catalog display style", e)
-        }
-    }
-
-    override suspend fun updateCatalogGridColumns(columns: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[gridColumnsKey] = columns }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update catalog grid columns: ${e.message}")
-            throw StorageException("Failed to save catalog grid columns", e)
-        }
-    }
-
-    override suspend fun updateNgHeadersJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[ngHeadersKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update NG headers: ${e.message}")
-            throw StorageException("Failed to save NG headers", e)
-        }
-    }
-
-    override suspend fun updateNgWordsJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[ngWordsKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update NG words: ${e.message}")
-            throw StorageException("Failed to save NG words", e)
-        }
-    }
-
-    override suspend fun updateCatalogNgWordsJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[catalogNgWordsKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update catalog NG words: ${e.message}")
-            throw StorageException("Failed to save catalog NG words", e)
-        }
-    }
-
-    override suspend fun updateWatchWordsJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[watchWordsKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update watch words: ${e.message}")
-            throw StorageException("Failed to save watch words", e)
-        }
-    }
-
-    override suspend fun updateSelfPostIdentifiersJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[selfPostIdentifiersKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update self post identifiers: ${e.message}")
-            throw StorageException("Failed to save self post identifiers", e)
-        }
-    }
-
-    override suspend fun updateThreadMenuConfigJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[threadMenuConfigKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update thread menu config: ${e.message}")
-            throw StorageException("Failed to save thread menu config", e)
-        }
-    }
-
-    override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[threadMenuEntriesKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update thread menu entries: ${e.message}")
-            throw StorageException("Failed to save thread menu entries", e)
-        }
-    }
-
-    override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[catalogNavEntriesKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update catalog nav entries: ${e.message}")
-            throw StorageException("Failed to save catalog nav entries", e)
-        }
-    }
-
-    override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[threadSettingsMenuConfigKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update thread settings menu config: ${e.message}")
-            throw StorageException("Failed to save thread settings menu config", e)
-        }
-    }
-
-    override suspend fun updatePreferredFileManagerPackage(packageName: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[preferredFileManagerPackageKey] = packageName }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager package: ${e.message}")
-            throw StorageException("Failed to save preferred file manager package", e)
-        }
-    }
-
-    override suspend fun updatePreferredFileManagerLabel(label: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[preferredFileManagerLabelKey] = label }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager label: ${e.message}")
-            throw StorageException("Failed to save preferred file manager label", e)
-        }
-    }
-
-    override suspend fun updatePreferredFileManager(packageName: String, label: String) {
-        try {
-            context.dataStore.edit { prefs ->
-                prefs[preferredFileManagerPackageKey] = packageName
-                prefs[preferredFileManagerLabelKey] = label
-            }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update preferred file manager pair: ${e.message}")
-            throw StorageException("Failed to save preferred file manager pair", e)
-        }
-    }
-
-    override suspend fun updateLastUsedDeleteKey(value: String) {
-        try {
-            context.dataStore.edit { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] = value }
-        } catch (e: Exception) {
-            rethrowIfCancellation(e)
-            Logger.e("AndroidPlatformStateStorage", "Failed to update last used delete key: ${e.message}")
-            throw StorageException("Failed to save last used delete key", e)
-        }
-    }
-
-    override suspend fun seedIfEmpty(
-        defaultBoardsJson: String,
-        defaultHistoryJson: String,
-        defaultNgHeadersJson: String?,
-        defaultNgWordsJson: String?,
-        defaultCatalogNgWordsJson: String?,
-        defaultWatchWordsJson: String?,
-        defaultSelfPostIdentifiersJson: String?,
-        defaultCatalogModeMapJson: String?,
-        defaultAttachmentPickerPreference: String?,
-        defaultSaveDirectorySelection: String?,
-        defaultLastUsedDeleteKey: String?,
-        defaultThreadMenuConfigJson: String?,
-        defaultThreadSettingsMenuConfigJson: String?,
-        defaultThreadMenuEntriesConfigJson: String?,
-        defaultCatalogNavEntriesJson: String?
+    private suspend fun updateStringPreferencePair(
+        firstKey: Preferences.Key<String>,
+        firstValue: String,
+        secondKey: Preferences.Key<String>,
+        secondValue: String,
+        logLabel: String,
+        failureMessage: String
     ) {
         try {
             context.dataStore.edit { prefs ->
-                if (!prefs.contains(boardsKey)) {
-                    prefs[boardsKey] = defaultBoardsJson
-                }
-                if (!prefs.contains(historyKey)) {
-                    prefs[historyKey] = defaultHistoryJson
-                }
-                if (defaultNgHeadersJson != null && !prefs.contains(ngHeadersKey)) {
-                    prefs[ngHeadersKey] = defaultNgHeadersJson
-                }
-                if (defaultNgWordsJson != null && !prefs.contains(ngWordsKey)) {
-                    prefs[ngWordsKey] = defaultNgWordsJson
-                }
-                if (defaultCatalogNgWordsJson != null && !prefs.contains(catalogNgWordsKey)) {
-                    prefs[catalogNgWordsKey] = defaultCatalogNgWordsJson
-                }
-                if (defaultWatchWordsJson != null && !prefs.contains(watchWordsKey)) {
-                    prefs[watchWordsKey] = defaultWatchWordsJson
-                }
-                if (defaultSelfPostIdentifiersJson != null && !prefs.contains(selfPostIdentifiersKey)) {
-                    prefs[selfPostIdentifiersKey] = defaultSelfPostIdentifiersJson
-                }
-                if (!prefs.contains(manualSaveDirectoryKey)) {
-                    prefs[manualSaveDirectoryKey] = DEFAULT_MANUAL_SAVE_ROOT
-                }
-                if (defaultCatalogModeMapJson != null && !prefs.contains(catalogModeMapKey)) {
-                    prefs[catalogModeMapKey] = defaultCatalogModeMapJson
-                }
-                if (defaultAttachmentPickerPreference != null && !prefs.contains(attachmentPickerPreferenceKey)) {
-                    prefs[attachmentPickerPreferenceKey] = defaultAttachmentPickerPreference
-                }
-                if (defaultSaveDirectorySelection != null && !prefs.contains(saveDirectorySelectionKey)) {
-                    prefs[saveDirectorySelectionKey] = defaultSaveDirectorySelection
-                }
-                if (defaultLastUsedDeleteKey != null && !prefs.contains(lastUsedDeleteKeyPreferencesKey)) {
-                    prefs[lastUsedDeleteKeyPreferencesKey] = defaultLastUsedDeleteKey
-                }
-                if (defaultThreadMenuConfigJson != null && !prefs.contains(threadMenuConfigKey)) {
-                    prefs[threadMenuConfigKey] = defaultThreadMenuConfigJson
-                }
-                if (defaultThreadSettingsMenuConfigJson != null && !prefs.contains(threadSettingsMenuConfigKey)) {
-                    prefs[threadSettingsMenuConfigKey] = defaultThreadSettingsMenuConfigJson
-                }
-                if (defaultThreadMenuEntriesConfigJson != null && !prefs.contains(threadMenuEntriesKey)) {
-                    prefs[threadMenuEntriesKey] = defaultThreadMenuEntriesConfigJson
-                }
-                if (defaultCatalogNavEntriesJson != null && !prefs.contains(catalogNavEntriesKey)) {
-                    prefs[catalogNavEntriesKey] = defaultCatalogNavEntriesJson
-                }
+                prefs[firstKey] = firstValue
+                prefs[secondKey] = secondValue
             }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update $logLabel: ${e.message}")
+            throw StorageException(failureMessage, e)
+        }
+    }
+
+    private fun MutablePreferences.seedRequiredStringPreference(
+        key: Preferences.Key<String>,
+        value: String
+    ) {
+        if (!contains(key)) {
+            this[key] = value
+        }
+    }
+
+    private fun MutablePreferences.seedRequiredBooleanPreference(
+        key: Preferences.Key<Boolean>,
+        value: Boolean
+    ) {
+        if (!contains(key)) {
+            this[key] = value
+        }
+    }
+
+    private fun MutablePreferences.seedOptionalStringPreference(
+        key: Preferences.Key<String>,
+        value: String?
+    ) {
+        if (value != null && !contains(key)) {
+            this[key] = value
+        }
+    }
+
+    private fun MutablePreferences.seedFrom(seedBundles: AppStateSeedBundles) {
+        seedRequiredStringPreference(boardsKey, seedBundles.boards.boardsJson)
+        seedRequiredStringPreference(historyKey, seedBundles.history.historyJson)
+        seedRequiredStringPreference(manualSaveDirectoryKey, DEFAULT_MANUAL_SAVE_ROOT)
+        seedRequiredBooleanPreference(adsEnabledKey, true)
+        seedOptionalStringPreference(ngHeadersKey, seedBundles.preferences.ngHeadersJson)
+        seedOptionalStringPreference(ngWordsKey, seedBundles.preferences.ngWordsJson)
+        seedOptionalStringPreference(catalogNgWordsKey, seedBundles.preferences.catalogNgWordsJson)
+        seedOptionalStringPreference(watchWordsKey, seedBundles.preferences.watchWordsJson)
+        seedOptionalStringPreference(
+            selfPostIdentifiersKey,
+            seedBundles.preferences.selfPostIdentifiersJson
+        )
+        seedOptionalStringPreference(catalogModeMapKey, seedBundles.preferences.catalogModeMapJson)
+        seedOptionalStringPreference(
+            attachmentPickerPreferenceKey,
+            seedBundles.preferences.attachmentPickerPreference
+        )
+        seedOptionalStringPreference(
+            saveDirectorySelectionKey,
+            seedBundles.preferences.saveDirectorySelection
+        )
+        seedOptionalStringPreference(
+            lastUsedDeleteKeyPreferencesKey,
+            seedBundles.preferences.lastUsedDeleteKey
+        )
+        seedOptionalStringPreference(
+            threadMenuConfigKey,
+            seedBundles.preferences.threadMenuConfigJson
+        )
+        seedOptionalStringPreference(
+            threadSettingsMenuConfigKey,
+            seedBundles.preferences.threadSettingsMenuConfigJson
+        )
+        seedOptionalStringPreference(
+            threadMenuEntriesKey,
+            seedBundles.preferences.threadMenuEntriesConfigJson
+        )
+        seedOptionalStringPreference(
+            catalogNavEntriesKey,
+            seedBundles.preferences.catalogNavEntriesJson
+        )
+    }
+
+    override suspend fun updateBoardsJson(value: String) {
+        updateStringPreference(boardsKey, value, "boards", "Failed to save boards data")
+    }
+
+    override suspend fun updateHistoryJson(value: String) {
+        updateStringPreference(historyKey, value, "history", "Failed to save history data")
+    }
+
+    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            backgroundRefreshKey,
+            enabled,
+            "background refresh",
+            "Failed to save background refresh state"
+        )
+    }
+
+    override suspend fun updateAdsEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            adsEnabledKey,
+            enabled,
+            "ads enabled",
+            "Failed to save ads enabled state"
+        )
+    }
+
+    override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            lightweightModeKey,
+            enabled,
+            "lightweight mode",
+            "Failed to save lightweight mode state"
+        )
+    }
+
+    override suspend fun updateManualSaveDirectory(directory: String) {
+        updateStringPreference(
+            manualSaveDirectoryKey,
+            directory,
+            "manual save directory",
+            "Failed to save manual save directory"
+        )
+    }
+
+    override suspend fun updateAttachmentPickerPreference(preference: String) {
+        updateStringPreference(
+            attachmentPickerPreferenceKey,
+            preference,
+            "attachment picker preference",
+            "Failed to save attachment picker preference"
+        )
+    }
+
+    override suspend fun updateSaveDirectorySelection(selection: String) {
+        updateStringPreference(
+            saveDirectorySelectionKey,
+            selection,
+            "save directory selection",
+            "Failed to save save directory selection"
+        )
+    }
+
+    override suspend fun updateCatalogModeMapJson(value: String) {
+        updateStringPreference(
+            catalogModeMapKey,
+            value,
+            "catalog mode map",
+            "Failed to save catalog mode map"
+        )
+    }
+
+    override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            privacyFilterKey,
+            enabled,
+            "privacy filter",
+            "Failed to save privacy filter state"
+        )
+    }
+
+    override suspend fun updateCatalogDisplayStyle(style: String) {
+        updateStringPreference(
+            displayStyleKey,
+            style,
+            "catalog display style",
+            "Failed to save catalog display style"
+        )
+    }
+
+    override suspend fun updateCatalogGridColumns(columns: String) {
+        updateStringPreference(
+            gridColumnsKey,
+            columns,
+            "catalog grid columns",
+            "Failed to save catalog grid columns"
+        )
+    }
+
+    override suspend fun updateNgHeadersJson(value: String) {
+        updateStringPreference(ngHeadersKey, value, "NG headers", "Failed to save NG headers")
+    }
+
+    override suspend fun updateNgWordsJson(value: String) {
+        updateStringPreference(ngWordsKey, value, "NG words", "Failed to save NG words")
+    }
+
+    override suspend fun updateCatalogNgWordsJson(value: String) {
+        updateStringPreference(
+            catalogNgWordsKey,
+            value,
+            "catalog NG words",
+            "Failed to save catalog NG words"
+        )
+    }
+
+    override suspend fun updateWatchWordsJson(value: String) {
+        updateStringPreference(watchWordsKey, value, "watch words", "Failed to save watch words")
+    }
+
+    override suspend fun updateSelfPostIdentifiersJson(value: String) {
+        updateStringPreference(
+            selfPostIdentifiersKey,
+            value,
+            "self post identifiers",
+            "Failed to save self post identifiers"
+        )
+    }
+
+    override suspend fun updateThreadMenuConfigJson(value: String) {
+        updateStringPreference(
+            threadMenuConfigKey,
+            value,
+            "thread menu config",
+            "Failed to save thread menu config"
+        )
+    }
+
+    override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
+        updateStringPreference(
+            threadMenuEntriesKey,
+            value,
+            "thread menu entries",
+            "Failed to save thread menu entries"
+        )
+    }
+
+    override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
+        updateStringPreference(
+            catalogNavEntriesKey,
+            value,
+            "catalog nav entries",
+            "Failed to save catalog nav entries"
+        )
+    }
+
+    override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
+        updateStringPreference(
+            threadSettingsMenuConfigKey,
+            value,
+            "thread settings menu config",
+            "Failed to save thread settings menu config"
+        )
+    }
+
+    override suspend fun updatePreferredFileManagerPackage(packageName: String) {
+        updateStringPreference(
+            preferredFileManagerPackageKey,
+            packageName,
+            "preferred file manager package",
+            "Failed to save preferred file manager package"
+        )
+    }
+
+    override suspend fun updatePreferredFileManagerLabel(label: String) {
+        updateStringPreference(
+            preferredFileManagerLabelKey,
+            label,
+            "preferred file manager label",
+            "Failed to save preferred file manager label"
+        )
+    }
+
+    override suspend fun updatePreferredFileManager(packageName: String, label: String) {
+        updateStringPreferencePair(
+            preferredFileManagerPackageKey,
+            packageName,
+            preferredFileManagerLabelKey,
+            label,
+            "preferred file manager pair",
+            "Failed to save preferred file manager pair"
+        )
+    }
+
+    override suspend fun updateLastUsedDeleteKey(value: String) {
+        updateStringPreference(
+            lastUsedDeleteKeyPreferencesKey,
+            value,
+            "last used delete key",
+            "Failed to save last used delete key"
+        )
+    }
+
+    override suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles) {
+        try {
+            context.dataStore.edit { prefs -> prefs.seedFrom(seedBundles) }
         } catch (e: Exception) {
             rethrowIfCancellation(e)
             Logger.e("AndroidPlatformStateStorage", "Failed to seed data: ${e.message}")

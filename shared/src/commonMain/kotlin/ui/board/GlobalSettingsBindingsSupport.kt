@@ -19,24 +19,28 @@ internal data class GlobalSettingsCatalogMenuCallbacks(
     val setPlacement: (CatalogNavEntryId, CatalogNavEntryPlacement) -> Unit
 )
 
+internal data class GlobalSettingsCatalogMenuInputs(
+    val currentEntries: () -> List<CatalogNavEntryConfig>,
+    val setLocalEntries: (List<CatalogNavEntryConfig>) -> Unit,
+    val onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
+)
+
 internal fun buildGlobalSettingsCatalogMenuCallbacks(
-    currentEntries: () -> List<CatalogNavEntryConfig>,
-    setLocalEntries: (List<CatalogNavEntryConfig>) -> Unit,
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
+    inputs: GlobalSettingsCatalogMenuInputs
 ): GlobalSettingsCatalogMenuCallbacks {
     fun updateCatalogEntries(newConfig: List<CatalogNavEntryConfig>) {
         val normalized = resolveCatalogMenuConfigState(newConfig).allEntries
-        setLocalEntries(normalized)
-        onCatalogNavEntriesChanged(normalized)
+        inputs.setLocalEntries(normalized)
+        inputs.onCatalogNavEntriesChanged(normalized)
     }
 
     return GlobalSettingsCatalogMenuCallbacks(
         resetEntries = { updateCatalogEntries(defaultCatalogNavEntries()) },
         moveEntry = { id, delta ->
-            updateCatalogEntries(moveCatalogMenuEntry(currentEntries(), id, delta))
+            updateCatalogEntries(moveCatalogMenuEntry(inputs.currentEntries(), id, delta))
         },
         setPlacement = { id, placement ->
-            updateCatalogEntries(setCatalogMenuEntryPlacement(currentEntries(), id, placement))
+            updateCatalogEntries(setCatalogMenuEntryPlacement(inputs.currentEntries(), id, placement))
         }
     )
 }
@@ -47,24 +51,28 @@ internal data class GlobalSettingsThreadMenuCallbacks(
     val setPlacement: (ThreadMenuEntryId, ThreadMenuEntryPlacement) -> Unit
 )
 
+internal data class GlobalSettingsThreadMenuInputs(
+    val currentEntries: () -> List<ThreadMenuEntryConfig>,
+    val setLocalEntries: (List<ThreadMenuEntryConfig>) -> Unit,
+    val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit
+)
+
 internal fun buildGlobalSettingsThreadMenuCallbacks(
-    currentEntries: () -> List<ThreadMenuEntryConfig>,
-    setLocalEntries: (List<ThreadMenuEntryConfig>) -> Unit,
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit
+    inputs: GlobalSettingsThreadMenuInputs
 ): GlobalSettingsThreadMenuCallbacks {
     fun updateMenuEntries(newConfig: List<ThreadMenuEntryConfig>) {
         val normalized = resolveThreadMenuConfigState(newConfig).allEntries
-        setLocalEntries(normalized)
-        onThreadMenuEntriesChanged(normalized)
+        inputs.setLocalEntries(normalized)
+        inputs.onThreadMenuEntriesChanged(normalized)
     }
 
     return GlobalSettingsThreadMenuCallbacks(
         resetEntries = { updateMenuEntries(defaultThreadMenuEntries()) },
         moveWithinPlacement = { id, delta, placement ->
-            updateMenuEntries(moveThreadMenuEntryWithinPlacement(currentEntries(), id, delta, placement))
+            updateMenuEntries(moveThreadMenuEntryWithinPlacement(inputs.currentEntries(), id, delta, placement))
         },
         setPlacement = { id, placement ->
-            updateMenuEntries(setThreadMenuEntryPlacement(currentEntries(), id, placement))
+            updateMenuEntries(setThreadMenuEntryPlacement(inputs.currentEntries(), id, placement))
         }
     )
 }
@@ -73,20 +81,24 @@ internal data class GlobalSettingsLinkCallbacks(
     val onEntrySelected: (GlobalSettingsAction) -> Unit
 )
 
+internal data class GlobalSettingsLinkInputs(
+    val onOpenCookieManager: (() -> Unit)?,
+    val urlLauncher: (String) -> Unit,
+    val onBack: () -> Unit
+)
+
 internal fun buildGlobalSettingsLinkCallbacks(
-    onOpenCookieManager: (() -> Unit)?,
-    urlLauncher: (String) -> Unit,
-    onBack: () -> Unit
+    inputs: GlobalSettingsLinkInputs
 ): GlobalSettingsLinkCallbacks {
     return GlobalSettingsLinkCallbacks(
         onEntrySelected = { action ->
             val selection = resolveGlobalSettingsEntrySelection(action)
             if (selection.shouldOpenCookieManager) {
-                onOpenCookieManager?.invoke()
+                inputs.onOpenCookieManager?.invoke()
             }
-            selection.externalUrl?.let(urlLauncher)
+            selection.externalUrl?.let(inputs.urlLauncher)
             if (selection.shouldCloseScreen) {
-                onBack()
+                inputs.onBack()
             }
         }
     )
@@ -96,14 +108,6 @@ internal data class GlobalSettingsCacheCallbacks(
     val clearImageCache: () -> Unit,
     val clearTemporaryCache: () -> Unit,
     val refreshStorageStats: () -> Unit
-)
-
-internal data class GlobalSettingsInteractionBindingsBundle(
-    val saveCallbacks: GlobalSettingsSaveCallbacks,
-    val catalogMenuCallbacks: GlobalSettingsCatalogMenuCallbacks,
-    val threadMenuCallbacks: GlobalSettingsThreadMenuCallbacks,
-    val linkCallbacks: GlobalSettingsLinkCallbacks,
-    val cacheCallbacks: GlobalSettingsCacheCallbacks
 )
 
 internal data class GlobalSettingsSaveCallbacks(
@@ -116,18 +120,22 @@ internal data class GlobalSettingsSaveCallbacks(
     val onFallbackToManualInput: () -> Unit
 )
 
+internal data class GlobalSettingsCacheInputs(
+    val coroutineScope: CoroutineScope,
+    val showSnackbar: suspend (String) -> Unit,
+    val clearImageCache: suspend () -> Unit,
+    val clearTemporaryCache: suspend () -> Unit,
+    val refreshAutoSavedStats: suspend () -> Unit
+)
+
 internal fun buildGlobalSettingsCacheCallbacks(
-    coroutineScope: CoroutineScope,
-    showSnackbar: suspend (String) -> Unit,
-    clearImageCache: suspend () -> Unit,
-    clearTemporaryCache: suspend () -> Unit,
-    refreshAutoSavedStats: suspend () -> Unit
+    inputs: GlobalSettingsCacheInputs
 ): GlobalSettingsCacheCallbacks {
     return GlobalSettingsCacheCallbacks(
         clearImageCache = {
-            coroutineScope.launch {
-                val result = runCatching { clearImageCache() }
-                showSnackbar(
+            inputs.coroutineScope.launch {
+                val result = runCatching { inputs.clearImageCache() }
+                inputs.showSnackbar(
                     buildGlobalSettingsCacheCleanupMessage(
                         target = GlobalSettingsCacheCleanupTarget.IMAGE_CACHE,
                         result = result
@@ -136,9 +144,9 @@ internal fun buildGlobalSettingsCacheCallbacks(
             }
         },
         clearTemporaryCache = {
-            coroutineScope.launch {
-                val result = runCatching { clearTemporaryCache() }
-                showSnackbar(
+            inputs.coroutineScope.launch {
+                val result = runCatching { inputs.clearTemporaryCache() }
+                inputs.showSnackbar(
                     buildGlobalSettingsCacheCleanupMessage(
                         target = GlobalSettingsCacheCleanupTarget.TEMPORARY_CACHE,
                         result = result
@@ -147,56 +155,44 @@ internal fun buildGlobalSettingsCacheCallbacks(
             }
         },
         refreshStorageStats = {
-            coroutineScope.launch { refreshAutoSavedStats() }
+            inputs.coroutineScope.launch { inputs.refreshAutoSavedStats() }
         }
     )
 }
+
+internal data class GlobalSettingsSaveInputs(
+    val currentManualSaveInput: () -> String,
+    val setManualSaveInput: (String) -> Unit,
+    val setIsFileManagerPickerVisible: (Boolean) -> Unit,
+    val onManualSaveDirectoryChanged: (String) -> Unit,
+    val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
+    val onFileManagerSelected: ((packageName: String, label: String) -> Unit)?
+)
 
 internal fun buildGlobalSettingsSaveCallbacks(
-    currentManualSaveInput: () -> String,
-    setManualSaveInput: (String) -> Unit,
-    setIsFileManagerPickerVisible: (Boolean) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?
+    inputs: GlobalSettingsSaveInputs
 ): GlobalSettingsSaveCallbacks {
     return GlobalSettingsSaveCallbacks(
-        onOpenFileManagerPicker = { setIsFileManagerPickerVisible(true) },
-        onDismissFileManagerPicker = { setIsFileManagerPickerVisible(false) },
+        onOpenFileManagerPicker = { inputs.setIsFileManagerPickerVisible(true) },
+        onDismissFileManagerPicker = { inputs.setIsFileManagerPickerVisible(false) },
         onFileManagerSelected = { packageName, label ->
-            setIsFileManagerPickerVisible(false)
-            onFileManagerSelected?.invoke(packageName, label)
+            inputs.setIsFileManagerPickerVisible(false)
+            inputs.onFileManagerSelected?.invoke(packageName, label)
         },
-        onManualSaveInputChanged = setManualSaveInput,
+        onManualSaveInputChanged = inputs.setManualSaveInput,
         onResetManualSaveDirectory = {
-            setManualSaveInput(DEFAULT_MANUAL_SAVE_ROOT)
-            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+            inputs.setManualSaveInput(DEFAULT_MANUAL_SAVE_ROOT)
+            inputs.onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
         },
         onUpdateManualSaveDirectory = {
-            val normalized = normalizeManualSaveInputValue(currentManualSaveInput())
-            setManualSaveInput(normalized)
-            onManualSaveDirectoryChanged(normalized)
+            val normalized = normalizeManualSaveInputValue(inputs.currentManualSaveInput())
+            inputs.setManualSaveInput(normalized)
+            inputs.onManualSaveDirectoryChanged(normalized)
         },
         onFallbackToManualInput = {
-            setManualSaveInput(DEFAULT_MANUAL_SAVE_ROOT)
-            onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
-            onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
+            inputs.setManualSaveInput(DEFAULT_MANUAL_SAVE_ROOT)
+            inputs.onManualSaveDirectoryChanged(DEFAULT_MANUAL_SAVE_ROOT)
+            inputs.onSaveDirectorySelectionChanged(SaveDirectorySelection.MANUAL_INPUT)
         }
-    )
-}
-
-internal fun buildGlobalSettingsInteractionBindingsBundle(
-    saveCallbacks: GlobalSettingsSaveCallbacks,
-    catalogMenuCallbacks: GlobalSettingsCatalogMenuCallbacks,
-    threadMenuCallbacks: GlobalSettingsThreadMenuCallbacks,
-    linkCallbacks: GlobalSettingsLinkCallbacks,
-    cacheCallbacks: GlobalSettingsCacheCallbacks
-): GlobalSettingsInteractionBindingsBundle {
-    return GlobalSettingsInteractionBindingsBundle(
-        saveCallbacks = saveCallbacks,
-        catalogMenuCallbacks = catalogMenuCallbacks,
-        threadMenuCallbacks = threadMenuCallbacks,
-        linkCallbacks = linkCallbacks,
-        cacheCallbacks = cacheCallbacks
     )
 }

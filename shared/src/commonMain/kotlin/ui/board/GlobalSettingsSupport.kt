@@ -145,6 +145,39 @@ internal data class CatalogMenuConfigState(
     val allEntries: List<CatalogNavEntryConfig>
 )
 
+private fun <T> reorderEntriesWithinPlacement(
+    entries: List<T>,
+    targetEntry: T,
+    delta: Int,
+    sameEntry: (T, T) -> Boolean,
+    copyWithOrder: (T, Int) -> T
+): List<T> {
+    val sorted = entries.toMutableList()
+    val index = sorted.indexOfFirst { sameEntry(it, targetEntry) }
+    if (index == -1) return entries
+    val target = (index + delta).coerceIn(0, sorted.lastIndex)
+    if (target == index) return entries
+    val item = sorted.removeAt(index)
+    sorted.add(target, item)
+
+    val merged = entries.toMutableList()
+    sorted.forEachIndexed { order, config ->
+        val originIndex = merged.indexOfFirst { sameEntry(it, config) }
+        if (originIndex >= 0) {
+            merged[originIndex] = copyWithOrder(config, order)
+        }
+    }
+    return merged
+}
+
+private fun <T> setEntryPlacement(
+    entries: List<T>,
+    predicate: (T) -> Boolean,
+    transform: (T) -> T
+): List<T> {
+    return entries.map { entry -> if (predicate(entry)) transform(entry) else entry }
+}
+
 internal fun resolveCatalogMenuConfigState(
     entries: List<CatalogNavEntryConfig>
 ): CatalogMenuConfigState {
@@ -162,22 +195,19 @@ internal fun moveCatalogMenuEntry(
     delta: Int
 ): List<CatalogNavEntryConfig> {
     val normalized = normalizeCatalogNavEntries(entries)
-    val sorted = normalized
+    val barEntries = normalized
         .filter { it.placement == CatalogNavEntryPlacement.BAR }
         .sortedBy { it.order }
-        .toMutableList()
-    val index = sorted.indexOfFirst { it.id == id }
-    if (index == -1) return normalized
-    val target = (index + delta).coerceIn(0, sorted.lastIndex)
-    if (target == index) return normalized
-    val item = sorted.removeAt(index)
-    sorted.add(target, item)
-    val merged = normalized.toMutableList()
-    sorted.forEachIndexed { order, config ->
-        val originIndex = merged.indexOfFirst { it.id == config.id }
-        if (originIndex >= 0) {
-            merged[originIndex] = config.copy(order = order)
-        }
+    val targetEntry = barEntries.firstOrNull { it.id == id } ?: return normalized
+    val reordered = reorderEntriesWithinPlacement(
+        entries = barEntries,
+        targetEntry = targetEntry,
+        delta = delta,
+        sameEntry = { left, right -> left.id == right.id },
+        copyWithOrder = { entry, order -> entry.copy(order = order) }
+    )
+    val merged = normalized.map { existing ->
+        reordered.firstOrNull { it.id == existing.id } ?: existing
     }
     return normalizeCatalogNavEntries(merged)
 }
@@ -189,7 +219,11 @@ internal fun setCatalogMenuEntryPlacement(
 ): List<CatalogNavEntryConfig> {
     val normalized = normalizeCatalogNavEntries(entries)
     return normalizeCatalogNavEntries(
-        normalized.map { if (it.id == id) it.copy(placement = placement) else it }
+        setEntryPlacement(
+            entries = normalized,
+            predicate = { it.id == id },
+            transform = { it.copy(placement = placement) }
+        )
     )
 }
 
@@ -219,22 +253,19 @@ internal fun moveThreadMenuEntryWithinPlacement(
     placement: ThreadMenuEntryPlacement
 ): List<ThreadMenuEntryConfig> {
     val normalized = normalizeThreadMenuEntries(entries)
-    val sorted = normalized
+    val placedEntries = normalized
         .filter { it.placement == placement }
         .sortedBy { it.order }
-        .toMutableList()
-    val index = sorted.indexOfFirst { it.id == id }
-    if (index == -1) return normalized
-    val target = (index + delta).coerceIn(0, sorted.lastIndex)
-    if (target == index) return normalized
-    val item = sorted.removeAt(index)
-    sorted.add(target, item)
-    val merged = normalized.toMutableList()
-    sorted.forEachIndexed { order, config ->
-        val originIndex = merged.indexOfFirst { it.id == config.id }
-        if (originIndex >= 0) {
-            merged[originIndex] = config.copy(order = order)
-        }
+    val targetEntry = placedEntries.firstOrNull { it.id == id } ?: return normalized
+    val reordered = reorderEntriesWithinPlacement(
+        entries = placedEntries,
+        targetEntry = targetEntry,
+        delta = delta,
+        sameEntry = { left, right -> left.id == right.id },
+        copyWithOrder = { entry, order -> entry.copy(order = order) }
+    )
+    val merged = normalized.map { existing ->
+        reordered.firstOrNull { it.id == existing.id } ?: existing
     }
     return normalizeThreadMenuEntries(merged)
 }
@@ -246,6 +277,10 @@ internal fun setThreadMenuEntryPlacement(
 ): List<ThreadMenuEntryConfig> {
     val normalized = normalizeThreadMenuEntries(entries)
     return normalizeThreadMenuEntries(
-        normalized.map { if (it.id == id) it.copy(placement = placement) else it }
+        setEntryPlacement(
+            entries = normalized,
+            predicate = { it.id == id },
+            transform = { it.copy(placement = placement) }
+        )
     )
 }

@@ -6,57 +6,29 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal data class ThreadGlobalSettingsCallbacks(
     val onBack: () -> Unit,
-    val onBackgroundRefreshChanged: (Boolean) -> Unit,
-    val onLightweightModeChanged: (Boolean) -> Unit,
-    val onManualSaveDirectoryChanged: (String) -> Unit,
-    val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    val onOpenSaveDirectoryPicker: (() -> Unit)?,
+    val preferencesCallbacks: ScreenPreferencesCallbacks,
     val onOpenCookieManager: (() -> Unit)?,
-    val onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    val onClearPreferredFileManager: (() -> Unit)?,
-    val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    val onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
 ) {
-    val preferencesCallbacks: ScreenPreferencesCallbacks
-        get() = ScreenPreferencesCallbacks(
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-            onLightweightModeChanged = onLightweightModeChanged,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-            onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
-        )
-}
-
-internal fun buildThreadGlobalSettingsCallbacks(
-    onBack: () -> Unit,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    onOpenCookieManager: (() -> Unit)?,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    onClearPreferredFileManager: (() -> Unit)?,
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
-): ThreadGlobalSettingsCallbacks {
-    return ThreadGlobalSettingsCallbacks(
-        onBack = onBack,
-        onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-        onLightweightModeChanged = onLightweightModeChanged,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-        onOpenCookieManager = onOpenCookieManager,
-        onFileManagerSelected = onFileManagerSelected,
-        onClearPreferredFileManager = onClearPreferredFileManager,
-        onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-        onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
-    )
+    val onBackgroundRefreshChanged: (Boolean) -> Unit
+        get() = preferencesCallbacks.onBackgroundRefreshChanged
+    val onAdsEnabledChanged: (Boolean) -> Unit
+        get() = preferencesCallbacks.onAdsEnabledChanged
+    val onLightweightModeChanged: (Boolean) -> Unit
+        get() = preferencesCallbacks.onLightweightModeChanged
+    val onManualSaveDirectoryChanged: (String) -> Unit
+        get() = preferencesCallbacks.onManualSaveDirectoryChanged
+    val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit
+        get() = preferencesCallbacks.onSaveDirectorySelectionChanged
+    val onOpenSaveDirectoryPicker: (() -> Unit)?
+        get() = preferencesCallbacks.onOpenSaveDirectoryPicker
+    val onFileManagerSelected: ((packageName: String, label: String) -> Unit)?
+        get() = preferencesCallbacks.onFileManagerSelected
+    val onClearPreferredFileManager: (() -> Unit)?
+        get() = preferencesCallbacks.onClearPreferredFileManager
+    val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit
+        get() = preferencesCallbacks.onThreadMenuEntriesChanged
+    val onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
+        get() = preferencesCallbacks.onCatalogNavEntriesChanged
 }
 
 internal fun buildThreadGlobalSettingsCallbacks(
@@ -64,18 +36,10 @@ internal fun buildThreadGlobalSettingsCallbacks(
     onOpenCookieManager: (() -> Unit)?,
     preferencesCallbacks: ScreenPreferencesCallbacks
 ): ThreadGlobalSettingsCallbacks {
-    return buildThreadGlobalSettingsCallbacks(
+    return ThreadGlobalSettingsCallbacks(
         onBack = onBack,
-        onBackgroundRefreshChanged = preferencesCallbacks.onBackgroundRefreshChanged,
-        onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged,
-        onManualSaveDirectoryChanged = preferencesCallbacks.onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+        preferencesCallbacks = preferencesCallbacks,
         onOpenCookieManager = onOpenCookieManager,
-        onFileManagerSelected = preferencesCallbacks.onFileManagerSelected,
-        onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
-        onThreadMenuEntriesChanged = preferencesCallbacks.onThreadMenuEntriesChanged,
-        onCatalogNavEntriesChanged = preferencesCallbacks.onCatalogNavEntriesChanged
     )
 }
 

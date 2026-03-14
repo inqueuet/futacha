@@ -15,6 +15,7 @@ private const val CATALOG_DISPLAY_STYLE_KEY = "catalog_display_style"
 private const val CATALOG_GRID_COLUMNS_KEY = "catalog_grid_columns"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
+private const val ADS_ENABLED_KEY = "ads_enabled"
 private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
@@ -46,6 +47,9 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val gridColumnsState = MutableStateFlow(defaults.stringForKey(CATALOG_GRID_COLUMNS_KEY))
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
     private val backgroundRefreshState = MutableStateFlow(defaults.boolForKey(BACKGROUND_REFRESH_KEY))
+    private val adsEnabledState = MutableStateFlow(
+        if (defaults.objectForKey(ADS_ENABLED_KEY) == null) true else defaults.boolForKey(ADS_ENABLED_KEY)
+    )
     private val lightweightModeState = MutableStateFlow(defaults.boolForKey(LIGHTWEIGHT_MODE_KEY))
     private val manualSaveDirectoryState = MutableStateFlow(
         sanitizeManualSaveDirectoryValue(defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY))
@@ -70,6 +74,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val historyJson: Flow<String?> = historyState
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
+    override val adsEnabled: Flow<Boolean> = adsEnabledState
     override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
@@ -98,259 +103,296 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         }
     }
 
-    override suspend fun updateBoardsJson(value: String) {
+    private suspend fun updateStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String?>
+    ) {
         update {
-            defaults.setObject(value, forKey = BOARDS_KEY)
-            boardsState.value = value
+            defaults.setObject(value, forKey = key)
+            state.value = value
         }
+    }
+
+    private suspend fun updateStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String>
+    ) {
+        update {
+            defaults.setObject(value, forKey = key)
+            state.value = value
+        }
+    }
+
+    private suspend fun updateBooleanState(
+        key: String,
+        value: Boolean,
+        state: MutableStateFlow<Boolean>
+    ) {
+        update {
+            defaults.setBool(value, forKey = key)
+            state.value = value
+        }
+    }
+
+    private suspend fun updateStringStatePair(
+        firstKey: String,
+        firstValue: String,
+        firstState: MutableStateFlow<String>,
+        secondKey: String,
+        secondValue: String,
+        secondState: MutableStateFlow<String>
+    ) {
+        update {
+            defaults.setObject(firstValue, forKey = firstKey)
+            defaults.setObject(secondValue, forKey = secondKey)
+            firstState.value = firstValue
+            secondState.value = secondValue
+        }
+    }
+
+    private fun seedRequiredStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String?>
+    ) {
+        if (defaults.stringForKey(key) == null) {
+            defaults.setObject(value, forKey = key)
+            state.value = value
+        }
+    }
+
+    private fun seedRequiredBooleanState(
+        key: String,
+        value: Boolean,
+        state: MutableStateFlow<Boolean>
+    ) {
+        if (defaults.objectForKey(key) == null) {
+            defaults.setBool(value, forKey = key)
+            state.value = value
+        }
+    }
+
+    private fun seedRequiredStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String>
+    ) {
+        if (defaults.stringForKey(key) == null) {
+            defaults.setObject(value, forKey = key)
+            state.value = value
+        }
+    }
+
+    private fun seedOptionalStringState(
+        key: String,
+        value: String?,
+        state: MutableStateFlow<String?>
+    ) {
+        if (value != null && defaults.stringForKey(key) == null) {
+            defaults.setObject(value, forKey = key)
+            state.value = value
+        }
+    }
+
+    private fun seedFrom(seedBundles: AppStateSeedBundles) {
+        seedRequiredStringState(BOARDS_KEY, seedBundles.boards.boardsJson, boardsState)
+        seedRequiredStringState(HISTORY_KEY, seedBundles.history.historyJson, historyState)
+        seedRequiredBooleanState(ADS_ENABLED_KEY, true, adsEnabledState)
+        seedRequiredStringState(
+            MANUAL_SAVE_DIRECTORY_KEY,
+            DEFAULT_MANUAL_SAVE_ROOT,
+            manualSaveDirectoryState
+        )
+        seedOptionalStringState(
+            LAST_USED_DELETE_KEY,
+            seedBundles.preferences.lastUsedDeleteKey,
+            lastUsedDeleteKeyState
+        )
+        seedOptionalStringState(
+            NG_HEADERS_KEY,
+            seedBundles.preferences.ngHeadersJson,
+            ngHeadersState
+        )
+        seedOptionalStringState(
+            NG_WORDS_KEY,
+            seedBundles.preferences.ngWordsJson,
+            ngWordsState
+        )
+        seedOptionalStringState(
+            CATALOG_NG_WORDS_KEY,
+            seedBundles.preferences.catalogNgWordsJson,
+            catalogNgWordsState
+        )
+        seedOptionalStringState(
+            WATCH_WORDS_KEY,
+            seedBundles.preferences.watchWordsJson,
+            watchWordsState
+        )
+        seedOptionalStringState(
+            SELF_POST_IDENTIFIERS_KEY,
+            seedBundles.preferences.selfPostIdentifiersJson,
+            selfPostIdentifiersState
+        )
+        seedOptionalStringState(
+            ATTACHMENT_PICKER_PREF_KEY,
+            seedBundles.preferences.attachmentPickerPreference,
+            attachmentPickerPreferenceState
+        )
+        seedOptionalStringState(
+            SAVE_DIRECTORY_SELECTION_KEY,
+            seedBundles.preferences.saveDirectorySelection,
+            saveDirectorySelectionState
+        )
+        seedOptionalStringState(
+            THREAD_MENU_CONFIG_KEY,
+            seedBundles.preferences.threadMenuConfigJson,
+            threadMenuConfigState
+        )
+        seedOptionalStringState(
+            THREAD_SETTINGS_MENU_CONFIG_KEY,
+            seedBundles.preferences.threadSettingsMenuConfigJson,
+            threadSettingsMenuConfigState
+        )
+        seedOptionalStringState(
+            THREAD_MENU_ENTRIES_KEY,
+            seedBundles.preferences.threadMenuEntriesConfigJson,
+            threadMenuEntriesState
+        )
+        seedOptionalStringState(
+            CATALOG_NAV_ENTRIES_KEY,
+            seedBundles.preferences.catalogNavEntriesJson,
+            catalogNavEntriesState
+        )
+        seedOptionalStringState(
+            CATALOG_MODE_MAP_KEY,
+            seedBundles.preferences.catalogModeMapJson,
+            catalogModeMapState
+        )
+    }
+
+    override suspend fun updateBoardsJson(value: String) {
+        updateStringState(BOARDS_KEY, value, boardsState)
     }
 
     override suspend fun updateHistoryJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = HISTORY_KEY)
-            historyState.value = value
-        }
+        updateStringState(HISTORY_KEY, value, historyState)
     }
 
     override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
-        update {
-            defaults.setBool(enabled, forKey = PRIVACY_FILTER_KEY)
-            privacyFilterState.value = enabled
-        }
+        updateBooleanState(PRIVACY_FILTER_KEY, enabled, privacyFilterState)
     }
 
     override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
-        update {
-            defaults.setBool(enabled, forKey = BACKGROUND_REFRESH_KEY)
-            backgroundRefreshState.value = enabled
-        }
+        updateBooleanState(BACKGROUND_REFRESH_KEY, enabled, backgroundRefreshState)
+    }
+
+    override suspend fun updateAdsEnabled(enabled: Boolean) {
+        updateBooleanState(ADS_ENABLED_KEY, enabled, adsEnabledState)
     }
 
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
-        update {
-            defaults.setBool(enabled, forKey = LIGHTWEIGHT_MODE_KEY)
-            lightweightModeState.value = enabled
-        }
+        updateBooleanState(LIGHTWEIGHT_MODE_KEY, enabled, lightweightModeState)
     }
 
     override suspend fun updateManualSaveDirectory(directory: String) {
-        update {
-            defaults.setObject(directory, forKey = MANUAL_SAVE_DIRECTORY_KEY)
-            manualSaveDirectoryState.value = directory
-        }
+        updateStringState(MANUAL_SAVE_DIRECTORY_KEY, directory, manualSaveDirectoryState)
     }
 
     override suspend fun updateAttachmentPickerPreference(preference: String) {
-        update {
-            defaults.setObject(preference, forKey = ATTACHMENT_PICKER_PREF_KEY)
-            attachmentPickerPreferenceState.value = preference
-        }
+        updateStringState(
+            ATTACHMENT_PICKER_PREF_KEY,
+            preference,
+            attachmentPickerPreferenceState
+        )
     }
 
     override suspend fun updateSaveDirectorySelection(selection: String) {
-        update {
-            defaults.setObject(selection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
-            saveDirectorySelectionState.value = selection
-        }
+        updateStringState(SAVE_DIRECTORY_SELECTION_KEY, selection, saveDirectorySelectionState)
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = CATALOG_MODE_MAP_KEY)
-            catalogModeMapState.value = value
-        }
+        updateStringState(CATALOG_MODE_MAP_KEY, value, catalogModeMapState)
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
-        update {
-            defaults.setObject(style, forKey = CATALOG_DISPLAY_STYLE_KEY)
-            displayStyleState.value = style
-        }
+        updateStringState(CATALOG_DISPLAY_STYLE_KEY, style, displayStyleState)
     }
 
     override suspend fun updateCatalogGridColumns(columns: String) {
-        update {
-            defaults.setObject(columns, forKey = CATALOG_GRID_COLUMNS_KEY)
-            gridColumnsState.value = columns
-        }
+        updateStringState(CATALOG_GRID_COLUMNS_KEY, columns, gridColumnsState)
     }
 
     override suspend fun updateNgHeadersJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = NG_HEADERS_KEY)
-            ngHeadersState.value = value
-        }
+        updateStringState(NG_HEADERS_KEY, value, ngHeadersState)
     }
 
     override suspend fun updateNgWordsJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = NG_WORDS_KEY)
-            ngWordsState.value = value
-        }
+        updateStringState(NG_WORDS_KEY, value, ngWordsState)
     }
 
     override suspend fun updateCatalogNgWordsJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = CATALOG_NG_WORDS_KEY)
-            catalogNgWordsState.value = value
-        }
+        updateStringState(CATALOG_NG_WORDS_KEY, value, catalogNgWordsState)
     }
 
     override suspend fun updateWatchWordsJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = WATCH_WORDS_KEY)
-            watchWordsState.value = value
-        }
+        updateStringState(WATCH_WORDS_KEY, value, watchWordsState)
     }
 
     override suspend fun updateSelfPostIdentifiersJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = SELF_POST_IDENTIFIERS_KEY)
-            selfPostIdentifiersState.value = value
-        }
+        updateStringState(SELF_POST_IDENTIFIERS_KEY, value, selfPostIdentifiersState)
     }
 
     override suspend fun updateThreadMenuConfigJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = THREAD_MENU_CONFIG_KEY)
-            threadMenuConfigState.value = value
-        }
+        updateStringState(THREAD_MENU_CONFIG_KEY, value, threadMenuConfigState)
     }
 
     override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
-            threadSettingsMenuConfigState.value = value
-        }
+        updateStringState(
+            THREAD_SETTINGS_MENU_CONFIG_KEY,
+            value,
+            threadSettingsMenuConfigState
+        )
     }
 
     override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = THREAD_MENU_ENTRIES_KEY)
-            threadMenuEntriesState.value = value
-        }
+        updateStringState(THREAD_MENU_ENTRIES_KEY, value, threadMenuEntriesState)
     }
 
     override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
-        update {
-            defaults.setObject(value, forKey = CATALOG_NAV_ENTRIES_KEY)
-            catalogNavEntriesState.value = value
-        }
+        updateStringState(CATALOG_NAV_ENTRIES_KEY, value, catalogNavEntriesState)
     }
 
     override suspend fun updatePreferredFileManagerPackage(packageName: String) {
-        update {
-            defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
-            preferredFileManagerPackageState.value = packageName
-        }
+        updateStringState(
+            PREFERRED_FILE_MANAGER_PACKAGE_KEY,
+            packageName,
+            preferredFileManagerPackageState
+        )
     }
 
     override suspend fun updatePreferredFileManagerLabel(label: String) {
-        update {
-            defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
-            preferredFileManagerLabelState.value = label
-        }
+        updateStringState(PREFERRED_FILE_MANAGER_LABEL_KEY, label, preferredFileManagerLabelState)
     }
 
     override suspend fun updatePreferredFileManager(packageName: String, label: String) {
-        update {
-            defaults.setObject(packageName, forKey = PREFERRED_FILE_MANAGER_PACKAGE_KEY)
-            defaults.setObject(label, forKey = PREFERRED_FILE_MANAGER_LABEL_KEY)
-            preferredFileManagerPackageState.value = packageName
-            preferredFileManagerLabelState.value = label
-        }
+        updateStringStatePair(
+            PREFERRED_FILE_MANAGER_PACKAGE_KEY,
+            packageName,
+            preferredFileManagerPackageState,
+            PREFERRED_FILE_MANAGER_LABEL_KEY,
+            label,
+            preferredFileManagerLabelState
+        )
     }
 
     override suspend fun updateLastUsedDeleteKey(value: String) {
-        update {
-            defaults.setObject(value, forKey = LAST_USED_DELETE_KEY)
-            lastUsedDeleteKeyState.value = value
-        }
+        updateStringState(LAST_USED_DELETE_KEY, value, lastUsedDeleteKeyState)
     }
 
-    override suspend fun seedIfEmpty(
-        defaultBoardsJson: String,
-        defaultHistoryJson: String,
-        defaultNgHeadersJson: String?,
-        defaultNgWordsJson: String?,
-        defaultCatalogNgWordsJson: String?,
-        defaultWatchWordsJson: String?,
-        defaultSelfPostIdentifiersJson: String?,
-        defaultCatalogModeMapJson: String?,
-        defaultAttachmentPickerPreference: String?,
-        defaultSaveDirectorySelection: String?,
-        defaultLastUsedDeleteKey: String?,
-        defaultThreadMenuConfigJson: String?,
-        defaultThreadSettingsMenuConfigJson: String?,
-        defaultThreadMenuEntriesConfigJson: String?,
-        defaultCatalogNavEntriesJson: String?
-    ) {
-        update {
-            if (defaults.stringForKey(BOARDS_KEY) == null) {
-                defaults.setObject(defaultBoardsJson, forKey = BOARDS_KEY)
-                boardsState.value = defaultBoardsJson
-            }
-            if (defaults.stringForKey(HISTORY_KEY) == null) {
-                defaults.setObject(defaultHistoryJson, forKey = HISTORY_KEY)
-                historyState.value = defaultHistoryJson
-            }
-            if (defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY) == null) {
-                defaults.setObject(DEFAULT_MANUAL_SAVE_ROOT, forKey = MANUAL_SAVE_DIRECTORY_KEY)
-                manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
-            }
-            if (defaultLastUsedDeleteKey != null && defaults.stringForKey(LAST_USED_DELETE_KEY) == null) {
-                defaults.setObject(defaultLastUsedDeleteKey, forKey = LAST_USED_DELETE_KEY)
-                lastUsedDeleteKeyState.value = defaultLastUsedDeleteKey
-            }
-            if (defaultNgHeadersJson != null && defaults.stringForKey(NG_HEADERS_KEY) == null) {
-                defaults.setObject(defaultNgHeadersJson, forKey = NG_HEADERS_KEY)
-                ngHeadersState.value = defaultNgHeadersJson
-            }
-            if (defaultNgWordsJson != null && defaults.stringForKey(NG_WORDS_KEY) == null) {
-                defaults.setObject(defaultNgWordsJson, forKey = NG_WORDS_KEY)
-                ngWordsState.value = defaultNgWordsJson
-            }
-            if (defaultCatalogNgWordsJson != null && defaults.stringForKey(CATALOG_NG_WORDS_KEY) == null) {
-                defaults.setObject(defaultCatalogNgWordsJson, forKey = CATALOG_NG_WORDS_KEY)
-                catalogNgWordsState.value = defaultCatalogNgWordsJson
-            }
-            if (defaultWatchWordsJson != null && defaults.stringForKey(WATCH_WORDS_KEY) == null) {
-                defaults.setObject(defaultWatchWordsJson, forKey = WATCH_WORDS_KEY)
-                watchWordsState.value = defaultWatchWordsJson
-            }
-            if (defaultSelfPostIdentifiersJson != null && defaults.stringForKey(SELF_POST_IDENTIFIERS_KEY) == null) {
-                defaults.setObject(defaultSelfPostIdentifiersJson, forKey = SELF_POST_IDENTIFIERS_KEY)
-                selfPostIdentifiersState.value = defaultSelfPostIdentifiersJson
-            }
-            if (defaultAttachmentPickerPreference != null && defaults.stringForKey(ATTACHMENT_PICKER_PREF_KEY) == null) {
-                defaults.setObject(defaultAttachmentPickerPreference, forKey = ATTACHMENT_PICKER_PREF_KEY)
-                attachmentPickerPreferenceState.value = defaultAttachmentPickerPreference
-            }
-            if (defaultSaveDirectorySelection != null && defaults.stringForKey(SAVE_DIRECTORY_SELECTION_KEY) == null) {
-                defaults.setObject(defaultSaveDirectorySelection, forKey = SAVE_DIRECTORY_SELECTION_KEY)
-                saveDirectorySelectionState.value = defaultSaveDirectorySelection
-            }
-            if (defaultThreadMenuConfigJson != null && defaults.stringForKey(THREAD_MENU_CONFIG_KEY) == null) {
-                defaults.setObject(defaultThreadMenuConfigJson, forKey = THREAD_MENU_CONFIG_KEY)
-                threadMenuConfigState.value = defaultThreadMenuConfigJson
-            }
-            if (defaultThreadSettingsMenuConfigJson != null && defaults.stringForKey(THREAD_SETTINGS_MENU_CONFIG_KEY) == null) {
-                defaults.setObject(defaultThreadSettingsMenuConfigJson, forKey = THREAD_SETTINGS_MENU_CONFIG_KEY)
-                threadSettingsMenuConfigState.value = defaultThreadSettingsMenuConfigJson
-            }
-            if (defaultThreadMenuEntriesConfigJson != null && defaults.stringForKey(THREAD_MENU_ENTRIES_KEY) == null) {
-                defaults.setObject(defaultThreadMenuEntriesConfigJson, forKey = THREAD_MENU_ENTRIES_KEY)
-                threadMenuEntriesState.value = defaultThreadMenuEntriesConfigJson
-            }
-            if (defaultCatalogNavEntriesJson != null && defaults.stringForKey(CATALOG_NAV_ENTRIES_KEY) == null) {
-                defaults.setObject(defaultCatalogNavEntriesJson, forKey = CATALOG_NAV_ENTRIES_KEY)
-                catalogNavEntriesState.value = defaultCatalogNavEntriesJson
-            }
-            if (defaultCatalogModeMapJson != null && defaults.stringForKey(CATALOG_MODE_MAP_KEY) == null) {
-                defaults.setObject(defaultCatalogModeMapJson, forKey = CATALOG_MODE_MAP_KEY)
-                catalogModeMapState.value = defaultCatalogModeMapJson
-            }
-        }
+    override suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles) {
+        update { seedFrom(seedBundles) }
         // NSUserDefaults writes are automatically persisted; explicit synchronize is unnecessary.
     }
 

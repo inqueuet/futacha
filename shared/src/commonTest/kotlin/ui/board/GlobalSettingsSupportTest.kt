@@ -194,6 +194,19 @@ class GlobalSettingsSupportTest {
     }
 
     @Test
+    fun moveThreadMenuEntryWithinPlacement_ignoresEntriesOutsidePlacement() {
+        val original = defaultThreadMenuEntries()
+        val moved = moveThreadMenuEntryWithinPlacement(
+            entries = original,
+            id = ThreadMenuEntryId.NgManagement,
+            delta = -1,
+            placement = ThreadMenuEntryPlacement.BAR
+        )
+
+        assertEquals(resolveThreadMenuConfigState(original), resolveThreadMenuConfigState(moved))
+    }
+
+    @Test
     fun setThreadMenuEntryPlacement_keepsSettingsInBarWhenSheetExists() {
         val hiddenSettings = setThreadMenuEntryPlacement(
             entries = defaultThreadMenuEntries(),
@@ -210,9 +223,11 @@ class GlobalSettingsSupportTest {
         var localEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries()
         var persistedEntries = emptyList<CatalogNavEntryConfig>()
         val callbacks = buildGlobalSettingsCatalogMenuCallbacks(
-            currentEntries = { localEntries },
-            setLocalEntries = { localEntries = it },
-            onCatalogNavEntriesChanged = { persistedEntries = it }
+            inputs = GlobalSettingsCatalogMenuInputs(
+                currentEntries = { localEntries },
+                setLocalEntries = { localEntries = it },
+                onCatalogNavEntriesChanged = { persistedEntries = it }
+            )
         )
 
         callbacks.moveEntry(CatalogNavEntryId.RefreshCatalog, -1)
@@ -238,9 +253,11 @@ class GlobalSettingsSupportTest {
         var localEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries()
         var persistedEntries = emptyList<ThreadMenuEntryConfig>()
         val callbacks = buildGlobalSettingsThreadMenuCallbacks(
-            currentEntries = { localEntries },
-            setLocalEntries = { localEntries = it },
-            onThreadMenuEntriesChanged = { persistedEntries = it }
+            inputs = GlobalSettingsThreadMenuInputs(
+                currentEntries = { localEntries },
+                setLocalEntries = { localEntries = it },
+                onThreadMenuEntriesChanged = { persistedEntries = it }
+            )
         )
 
         callbacks.moveWithinPlacement(ThreadMenuEntryId.Save, -1, ThreadMenuEntryPlacement.BAR)
@@ -267,9 +284,11 @@ class GlobalSettingsSupportTest {
         var openedUrl: String? = null
         var dismissed = false
         val callbacks = buildGlobalSettingsLinkCallbacks(
-            onOpenCookieManager = { openedCookieManager = true },
-            urlLauncher = { openedUrl = it },
-            onBack = { dismissed = true }
+            inputs = GlobalSettingsLinkInputs(
+                onOpenCookieManager = { openedCookieManager = true },
+                urlLauncher = { openedUrl = it },
+                onBack = { dismissed = true }
+            )
         )
 
         callbacks.onEntrySelected(GlobalSettingsAction.Cookies)
@@ -293,11 +312,13 @@ class GlobalSettingsSupportTest {
         var tempCleared = false
         var refreshed = false
         val callbacks = buildGlobalSettingsCacheCallbacks(
-            coroutineScope = this,
-            showSnackbar = { messages += it },
-            clearImageCache = { imageCleared = true },
-            clearTemporaryCache = { tempCleared = true },
-            refreshAutoSavedStats = { refreshed = true }
+            inputs = GlobalSettingsCacheInputs(
+                coroutineScope = this,
+                showSnackbar = { messages += it },
+                clearImageCache = { imageCleared = true },
+                clearTemporaryCache = { tempCleared = true },
+                refreshAutoSavedStats = { refreshed = true }
+            )
         )
 
         callbacks.clearImageCache()
@@ -323,14 +344,16 @@ class GlobalSettingsSupportTest {
         var changedSelection: SaveDirectorySelection? = null
         var selectedFileManager: Pair<String, String>? = null
         val callbacks = buildGlobalSettingsSaveCallbacks(
-            currentManualSaveInput = { manualSaveInput },
-            setManualSaveInput = { manualSaveInput = it },
-            setIsFileManagerPickerVisible = { isFileManagerPickerVisible = it },
-            onManualSaveDirectoryChanged = { changedDirectory = it },
-            onSaveDirectorySelectionChanged = { changedSelection = it },
-            onFileManagerSelected = { packageName, label ->
-                selectedFileManager = packageName to label
-            }
+            inputs = GlobalSettingsSaveInputs(
+                currentManualSaveInput = { manualSaveInput },
+                setManualSaveInput = { manualSaveInput = it },
+                setIsFileManagerPickerVisible = { isFileManagerPickerVisible = it },
+                onManualSaveDirectoryChanged = { changedDirectory = it },
+                onSaveDirectorySelectionChanged = { changedSelection = it },
+                onFileManagerSelected = { packageName, label ->
+                    selectedFileManager = packageName to label
+                }
+            )
         )
 
         callbacks.onOpenFileManagerPicker()
@@ -359,54 +382,6 @@ class GlobalSettingsSupportTest {
         assertEquals(DEFAULT_MANUAL_SAVE_ROOT, manualSaveInput)
         assertEquals(DEFAULT_MANUAL_SAVE_ROOT, changedDirectory)
         assertEquals(SaveDirectorySelection.MANUAL_INPUT, changedSelection)
-    }
-
-    @Test
-    fun globalSettingsBindingsSupport_interactionBundle_forwardsCallbacks() {
-        val saveCallbacks = buildGlobalSettingsSaveCallbacks(
-            currentManualSaveInput = { "" },
-            setManualSaveInput = {},
-            setIsFileManagerPickerVisible = {},
-            onManualSaveDirectoryChanged = {},
-            onSaveDirectorySelectionChanged = {},
-            onFileManagerSelected = null
-        )
-        val catalogCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
-            currentEntries = { defaultCatalogNavEntries() },
-            setLocalEntries = {},
-            onCatalogNavEntriesChanged = {}
-        )
-        val threadCallbacks = buildGlobalSettingsThreadMenuCallbacks(
-            currentEntries = { defaultThreadMenuEntries() },
-            setLocalEntries = {},
-            onThreadMenuEntriesChanged = {}
-        )
-        val linkCallbacks = buildGlobalSettingsLinkCallbacks(
-            onOpenCookieManager = null,
-            urlLauncher = {},
-            onBack = {}
-        )
-        val cacheCallbacks = buildGlobalSettingsCacheCallbacks(
-            coroutineScope = CoroutineScope(Dispatchers.Unconfined),
-            showSnackbar = {},
-            clearImageCache = {},
-            clearTemporaryCache = {},
-            refreshAutoSavedStats = {}
-        )
-
-        val bundle = buildGlobalSettingsInteractionBindingsBundle(
-            saveCallbacks = saveCallbacks,
-            catalogMenuCallbacks = catalogCallbacks,
-            threadMenuCallbacks = threadCallbacks,
-            linkCallbacks = linkCallbacks,
-            cacheCallbacks = cacheCallbacks
-        )
-
-        assertTrue(bundle.saveCallbacks === saveCallbacks)
-        assertTrue(bundle.catalogMenuCallbacks === catalogCallbacks)
-        assertTrue(bundle.threadMenuCallbacks === threadCallbacks)
-        assertTrue(bundle.linkCallbacks === linkCallbacks)
-        assertTrue(bundle.cacheCallbacks === cacheCallbacks)
     }
 
     @Test
@@ -486,10 +461,11 @@ class GlobalSettingsSupportTest {
     }
 
     @Test
-    fun globalSettingsScaffoldSupport_buildsSectionBundlesFromPreferencesAndDerivedState() {
+    fun globalSettingsScaffoldBindings_keepSectionContractsExplicit() {
         val preferencesState = ScreenPreferencesState(
             appVersion = "1.2.3",
             isBackgroundRefreshEnabled = true,
+            isAdsEnabled = false,
             isLightweightModeEnabled = true,
             manualSaveDirectory = "Documents",
             resolvedManualSaveDirectory = "/storage/emulated/0/Documents/futacha/saved_threads",
@@ -501,6 +477,7 @@ class GlobalSettingsSupportTest {
         )
         val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = {},
+            onAdsEnabledChanged = {},
             onLightweightModeChanged = {},
             onManualSaveDirectoryChanged = {},
             onSaveDirectorySelectionChanged = {},
@@ -526,31 +503,39 @@ class GlobalSettingsSupportTest {
                 autoSavedSize = 4096L
             )
         )
-        val interactionBindings = buildGlobalSettingsInteractionBindingsBundle(
-            saveCallbacks = buildGlobalSettingsSaveCallbacks(
+        val saveCallbacks = buildGlobalSettingsSaveCallbacks(
+            inputs = GlobalSettingsSaveInputs(
                 currentManualSaveInput = { "Download" },
                 setManualSaveInput = {},
                 setIsFileManagerPickerVisible = {},
                 onManualSaveDirectoryChanged = {},
                 onSaveDirectorySelectionChanged = {},
                 onFileManagerSelected = null
-            ),
-            catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
+            )
+        )
+        val catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
+            inputs = GlobalSettingsCatalogMenuInputs(
                 currentEntries = { defaultCatalogNavEntries() },
                 setLocalEntries = {},
                 onCatalogNavEntriesChanged = {}
-            ),
-            threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
+            )
+        )
+        val threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
+            inputs = GlobalSettingsThreadMenuInputs(
                 currentEntries = { defaultThreadMenuEntries() },
                 setLocalEntries = {},
                 onThreadMenuEntriesChanged = {}
-            ),
-            linkCallbacks = buildGlobalSettingsLinkCallbacks(
+            )
+        )
+        val linkCallbacks = buildGlobalSettingsLinkCallbacks(
+            inputs = GlobalSettingsLinkInputs(
                 onOpenCookieManager = {},
                 urlLauncher = {},
                 onBack = {}
-            ),
-            cacheCallbacks = buildGlobalSettingsCacheCallbacks(
+            )
+        )
+        val cacheCallbacks = buildGlobalSettingsCacheCallbacks(
+            inputs = GlobalSettingsCacheInputs(
                 coroutineScope = CoroutineScope(Dispatchers.Unconfined),
                 showSnackbar = {},
                 clearImageCache = {},
@@ -559,25 +544,61 @@ class GlobalSettingsSupportTest {
             )
         )
         val snackbarHostState = SnackbarHostState()
-        val bindings = buildGlobalSettingsScaffoldBindings(
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks,
-            derivedState = derivedState,
-            interactionBindings = interactionBindings,
-            localCatalogNavEntries = preferencesState.catalogNavEntries,
-            localThreadMenuEntries = preferencesState.threadMenuEntries,
-            manualSaveInput = "Download",
-            availableSaveDirectorySelections = listOf(
-                SaveDirectorySelection.MANUAL_INPUT,
-                SaveDirectorySelection.PICKER
+        val bindings = GlobalSettingsScaffoldBindings(
+            appVersion = preferencesState.appVersion,
+            behavior = GlobalSettingsBehaviorSectionBindings(
+                isBackgroundRefreshEnabled = preferencesState.isBackgroundRefreshEnabled,
+                onBackgroundRefreshChanged = preferencesCallbacks.onBackgroundRefreshChanged,
+                isAdsEnabled = preferencesState.isAdsEnabled,
+                onAdsEnabledChanged = preferencesCallbacks.onAdsEnabledChanged,
+                isLightweightModeEnabled = preferencesState.isLightweightModeEnabled,
+                onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged
             ),
-            effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection,
+            catalogMenu = GlobalSettingsCatalogMenuSectionBindings(
+                localCatalogNavEntries = preferencesState.catalogNavEntries,
+                catalogMenuCallbacks = catalogMenuCallbacks
+            ),
+            threadMenu = GlobalSettingsThreadMenuSectionBindings(
+                localThreadMenuEntries = preferencesState.threadMenuEntries,
+                threadMenuCallbacks = threadMenuCallbacks
+            ),
+            save = GlobalSettingsSaveSectionBindings(
+                preferredFileManagerState = derivedState.preferredFileManagerState,
+                onOpenFileManagerPicker = saveCallbacks.onOpenFileManagerPicker,
+                onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
+                availableSaveDirectorySelections = listOf(
+                    SaveDirectorySelection.MANUAL_INPUT,
+                    SaveDirectorySelection.PICKER
+                ),
+                effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection,
+                onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+                saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
+                resolvedManualPath = derivedState.resolvedManualPath,
+                saveDestinationHint = derivedState.saveDestinationHint,
+                manualSaveInput = "Download",
+                onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
+                onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,
+                onUpdateManualSaveDirectory = saveCallbacks.onUpdateManualSaveDirectory,
+                saveDirectoryPickerState = derivedState.saveDirectoryPickerState,
+                onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+                onFallbackToManualInput = saveCallbacks.onFallbackToManualInput
+            ),
+            cacheCallbacks = cacheCallbacks,
+            storage = GlobalSettingsStorageSectionBindings(
+                storageSummaryState = derivedState.storageSummaryState,
+                onRefreshStorageStats = cacheCallbacks.refreshStorageStats
+            ),
+            links = GlobalSettingsLinksSectionBindings(
+                settingsEntries = derivedState.settingsEntries,
+                linkCallbacks = linkCallbacks
+            ),
             snackbarHostState = snackbarHostState,
             onBack = {}
         )
 
         assertEquals("1.2.3", bindings.appVersion)
         assertTrue(bindings.behavior.isBackgroundRefreshEnabled)
+        assertFalse(bindings.behavior.isAdsEnabled)
         assertTrue(bindings.behavior.isLightweightModeEnabled)
         assertEquals(preferencesState.catalogNavEntries, bindings.catalogMenu.localCatalogNavEntries)
         assertEquals(preferencesState.threadMenuEntries, bindings.threadMenu.localThreadMenuEntries)

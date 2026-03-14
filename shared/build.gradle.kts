@@ -74,6 +74,7 @@ kotlin {
                 implementation(libs.androidx.documentfile)
                 implementation(libs.coil3.video)
                 implementation(libs.coil3.gif)
+                implementation(libs.google.mobile.ads)
             }
         }
 

@@ -1,10 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
-import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.Post
-import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal data class ThreadScreenUiBindingsBundle(
     val topBarCallbacks: ThreadTopBarCallbacks,
@@ -22,224 +19,138 @@ internal data class ThreadScreenUiBindingsBundle(
     val cookieManagementCallbacks: ThreadCookieManagementCallbacks
 )
 
-internal fun buildThreadScreenUiBindingsBundle(
-    searchNavigationCallbacks: ThreadSearchNavigationCallbacks,
-    onSearchQueryChange: (String) -> Unit,
-    onSearchClose: () -> Unit,
-    onBack: () -> Unit,
-    onOpenHistory: () -> Unit,
-    onSearch: () -> Unit,
-    onOpenGlobalSettings: () -> Unit,
-    onAction: (ThreadMenuEntryId) -> Unit,
-    replyDialogBinding: ThreadReplyDialogStateBinding,
-    currentPostOverlayState: () -> ThreadPostOverlayState,
-    setPostOverlayState: (ThreadPostOverlayState) -> Unit,
-    mediaPreviewState: () -> ThreadMediaPreviewState,
-    setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
-    mediaPreviewEntryCount: Int,
-    onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
-    galleryPosts: List<Post>?,
-    onDismissGallery: () -> Unit,
-    onScrollToPostIndex: (Int) -> Unit,
-    threadFilterBinding: ThreadFilterUiStateBinding,
-    onDismissSettingsSheet: () -> Unit,
-    onDismissFilterSheet: () -> Unit,
-    onApplySettingsActionState: (ThreadSettingsActionState) -> Unit,
-    onOpenNgManagement: () -> Unit,
-    onOpenExternalApp: () -> Unit,
-    onTogglePrivacy: () -> Unit,
-    firstVisibleSegmentIndex: () -> Int,
-    onSeekToReadAloudIndex: (Int, Boolean) -> Unit,
-    onPlayReadAloud: () -> Unit,
-    onPauseReadAloud: () -> Unit,
-    onStopReadAloud: () -> Unit,
-    onShowReadAloudStoppedMessage: () -> Unit,
-    onDismissReadAloudControls: () -> Unit,
-    onDismissNgManagement: () -> Unit,
-    ngMutationCallbacks: ThreadNgMutationCallbacks,
-    onDismissSaveProgress: () -> Unit,
-    onCancelSaveProgress: () -> Unit,
-    onDismissGlobalSettings: () -> Unit,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    onOpenCookieManager: (() -> Unit)?,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
-    onClearPreferredFileManager: (() -> Unit)?,
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit,
-    onDismissCookieManagement: () -> Unit
-): ThreadScreenUiBindingsBundle {
-    return buildThreadScreenUiBindingsBundle(
-        searchNavigationCallbacks = searchNavigationCallbacks,
-        onSearchQueryChange = onSearchQueryChange,
-        onSearchClose = onSearchClose,
-        onBack = onBack,
-        onOpenHistory = onOpenHistory,
-        onSearch = onSearch,
-        onOpenGlobalSettings = onOpenGlobalSettings,
-        onAction = onAction,
-        replyDialogBinding = replyDialogBinding,
-        currentPostOverlayState = currentPostOverlayState,
-        setPostOverlayState = setPostOverlayState,
-        mediaPreviewState = mediaPreviewState,
-        setMediaPreviewState = setMediaPreviewState,
-        mediaPreviewEntryCount = mediaPreviewEntryCount,
-        onSavePreviewMedia = onSavePreviewMedia,
-        galleryPosts = galleryPosts,
-        onDismissGallery = onDismissGallery,
-        onScrollToPostIndex = onScrollToPostIndex,
-        threadFilterBinding = threadFilterBinding,
-        onDismissSettingsSheet = onDismissSettingsSheet,
-        onDismissFilterSheet = onDismissFilterSheet,
-        onApplySettingsActionState = onApplySettingsActionState,
-        onOpenNgManagement = onOpenNgManagement,
-        onOpenExternalApp = onOpenExternalApp,
-        onTogglePrivacy = onTogglePrivacy,
-        firstVisibleSegmentIndex = firstVisibleSegmentIndex,
-        onSeekToReadAloudIndex = onSeekToReadAloudIndex,
-        onPlayReadAloud = onPlayReadAloud,
-        onPauseReadAloud = onPauseReadAloud,
-        onStopReadAloud = onStopReadAloud,
-        onShowReadAloudStoppedMessage = onShowReadAloudStoppedMessage,
-        onDismissReadAloudControls = onDismissReadAloudControls,
-        onDismissNgManagement = onDismissNgManagement,
-        ngMutationCallbacks = ngMutationCallbacks,
-        onDismissSaveProgress = onDismissSaveProgress,
-        onCancelSaveProgress = onCancelSaveProgress,
-        onDismissGlobalSettings = onDismissGlobalSettings,
-        screenPreferencesCallbacks = ScreenPreferencesCallbacks(
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-            onLightweightModeChanged = onLightweightModeChanged,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-            onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
-        ),
-        onOpenCookieManager = onOpenCookieManager,
-        onDismissCookieManagement = onDismissCookieManagement
-    )
-}
+internal data class ThreadScreenTopBarUiInputs(
+    val searchNavigationCallbacks: ThreadSearchNavigationCallbacks,
+    val onSearchQueryChange: (String) -> Unit,
+    val onSearchClose: () -> Unit,
+    val onBack: () -> Unit,
+    val onOpenHistory: () -> Unit,
+    val onSearch: () -> Unit,
+    val onOpenGlobalSettings: () -> Unit,
+    val onAction: (ThreadMenuEntryId) -> Unit
+)
+
+internal data class ThreadScreenOverlayUiInputs(
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val currentPostOverlayState: () -> ThreadPostOverlayState,
+    val setPostOverlayState: (ThreadPostOverlayState) -> Unit,
+    val mediaPreviewState: () -> ThreadMediaPreviewState,
+    val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
+    val mediaPreviewEntryCount: Int,
+    val onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
+    val galleryPosts: List<Post>?,
+    val onDismissGallery: () -> Unit,
+    val onScrollToPostIndex: (Int) -> Unit,
+    val threadFilterBinding: ThreadFilterUiStateBinding,
+    val onDismissSettingsSheet: () -> Unit,
+    val onDismissFilterSheet: () -> Unit,
+    val onApplySettingsActionState: (ThreadSettingsActionState) -> Unit,
+    val onOpenNgManagement: () -> Unit,
+    val onOpenExternalApp: () -> Unit,
+    val onTogglePrivacy: () -> Unit,
+    val firstVisibleSegmentIndex: () -> Int,
+    val onSeekToReadAloudIndex: (Int, Boolean) -> Unit,
+    val onPlayReadAloud: () -> Unit,
+    val onPauseReadAloud: () -> Unit,
+    val onStopReadAloud: () -> Unit,
+    val onShowReadAloudStoppedMessage: () -> Unit,
+    val onDismissReadAloudControls: () -> Unit,
+    val onDismissNgManagement: () -> Unit,
+    val ngMutationCallbacks: ThreadNgMutationCallbacks,
+    val onDismissSaveProgress: () -> Unit,
+    val onCancelSaveProgress: () -> Unit
+)
+
+internal data class ThreadScreenSettingsUiInputs(
+    val onDismissGlobalSettings: () -> Unit,
+    val screenPreferencesCallbacks: ScreenPreferencesCallbacks,
+    val onOpenCookieManager: (() -> Unit)?,
+    val onDismissCookieManagement: () -> Unit
+)
 
 internal fun buildThreadScreenUiBindingsBundle(
-    searchNavigationCallbacks: ThreadSearchNavigationCallbacks,
-    onSearchQueryChange: (String) -> Unit,
-    onSearchClose: () -> Unit,
-    onBack: () -> Unit,
-    onOpenHistory: () -> Unit,
-    onSearch: () -> Unit,
-    onOpenGlobalSettings: () -> Unit,
-    onAction: (ThreadMenuEntryId) -> Unit,
-    replyDialogBinding: ThreadReplyDialogStateBinding,
-    currentPostOverlayState: () -> ThreadPostOverlayState,
-    setPostOverlayState: (ThreadPostOverlayState) -> Unit,
-    mediaPreviewState: () -> ThreadMediaPreviewState,
-    setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
-    mediaPreviewEntryCount: Int,
-    onSavePreviewMedia: (MediaPreviewEntry) -> Unit,
-    galleryPosts: List<Post>?,
-    onDismissGallery: () -> Unit,
-    onScrollToPostIndex: (Int) -> Unit,
-    threadFilterBinding: ThreadFilterUiStateBinding,
-    onDismissSettingsSheet: () -> Unit,
-    onDismissFilterSheet: () -> Unit,
-    onApplySettingsActionState: (ThreadSettingsActionState) -> Unit,
-    onOpenNgManagement: () -> Unit,
-    onOpenExternalApp: () -> Unit,
-    onTogglePrivacy: () -> Unit,
-    firstVisibleSegmentIndex: () -> Int,
-    onSeekToReadAloudIndex: (Int, Boolean) -> Unit,
-    onPlayReadAloud: () -> Unit,
-    onPauseReadAloud: () -> Unit,
-    onStopReadAloud: () -> Unit,
-    onShowReadAloudStoppedMessage: () -> Unit,
-    onDismissReadAloudControls: () -> Unit,
-    onDismissNgManagement: () -> Unit,
-    ngMutationCallbacks: ThreadNgMutationCallbacks,
-    onDismissSaveProgress: () -> Unit,
-    onCancelSaveProgress: () -> Unit,
-    onDismissGlobalSettings: () -> Unit,
-    screenPreferencesCallbacks: ScreenPreferencesCallbacks,
-    onOpenCookieManager: (() -> Unit)?,
-    onDismissCookieManagement: () -> Unit
+    topBarInputs: ThreadScreenTopBarUiInputs,
+    overlayInputs: ThreadScreenOverlayUiInputs,
+    settingsInputs: ThreadScreenSettingsUiInputs
 ): ThreadScreenUiBindingsBundle {
     return ThreadScreenUiBindingsBundle(
         topBarCallbacks = buildThreadScreenTopBarCallbacks(
-            onSearchQueryChange = onSearchQueryChange,
-            onSearchPrev = searchNavigationCallbacks.onSearchPrev,
-            onSearchNext = searchNavigationCallbacks.onSearchNext,
-            onSearchSubmit = searchNavigationCallbacks.onSearchSubmit,
-            onSearchClose = onSearchClose,
-            onBack = onBack,
-            onOpenHistory = onOpenHistory,
-            onSearch = onSearch,
-            onMenuSettings = onOpenGlobalSettings
+            onSearchQueryChange = topBarInputs.onSearchQueryChange,
+            onSearchPrev = topBarInputs.searchNavigationCallbacks.onSearchPrev,
+            onSearchNext = topBarInputs.searchNavigationCallbacks.onSearchNext,
+            onSearchSubmit = topBarInputs.searchNavigationCallbacks.onSearchSubmit,
+            onSearchClose = topBarInputs.onSearchClose,
+            onBack = topBarInputs.onBack,
+            onOpenHistory = topBarInputs.onOpenHistory,
+            onSearch = topBarInputs.onSearch,
+            onMenuSettings = topBarInputs.onOpenGlobalSettings
         ),
         actionBarCallbacks = buildThreadScreenActionBarCallbacks(
-            onAction = onAction
+            onAction = topBarInputs.onAction
         ),
         quoteSelectionConfirm = buildThreadScreenQuoteSelectionConfirmHandler(
-            replyDialogBinding = replyDialogBinding,
-            currentOverlayState = currentPostOverlayState,
-            setOverlayState = setPostOverlayState
+            replyDialogBinding = overlayInputs.replyDialogBinding,
+            currentOverlayState = overlayInputs.currentPostOverlayState,
+            setOverlayState = overlayInputs.setPostOverlayState
         ),
-        replyDialogCallbacks = buildThreadScreenReplyDialogCallbacks(
-            replyDialogBinding = replyDialogBinding
+        replyDialogCallbacks = buildThreadReplyDialogCallbacks(
+            currentState = overlayInputs.replyDialogBinding.currentState,
+            setState = overlayInputs.replyDialogBinding.setState
         ),
         mediaPreviewDialogCallbacks = buildThreadScreenMediaPreviewDialogCallbacks(
-            mediaPreviewState = mediaPreviewState,
-            setMediaPreviewState = setMediaPreviewState,
-            totalCount = mediaPreviewEntryCount,
-            onSave = onSavePreviewMedia
+            mediaPreviewState = overlayInputs.mediaPreviewState,
+            setMediaPreviewState = overlayInputs.setMediaPreviewState,
+            totalCount = overlayInputs.mediaPreviewEntryCount,
+            onSave = overlayInputs.onSavePreviewMedia
         ),
-        galleryCallbacks = galleryPosts?.let { posts ->
+        galleryCallbacks = overlayInputs.galleryPosts?.let { posts ->
             buildThreadScreenGalleryCallbacks(
                 currentPosts = posts,
-                onDismiss = onDismissGallery,
-                onScrollToPostIndex = onScrollToPostIndex
+                onDismiss = overlayInputs.onDismissGallery,
+                onScrollToPostIndex = overlayInputs.onScrollToPostIndex
             )
         },
-        settingsSheetCallbacks = buildThreadScreenSettingsSheetCallbacks(
-            onDismiss = onDismissSettingsSheet,
-            onApplyActionState = onApplySettingsActionState,
-            onOpenNgManagement = onOpenNgManagement,
-            onOpenExternalApp = onOpenExternalApp,
-            onTogglePrivacy = onTogglePrivacy,
-            onDelegateToMainActionHandler = onAction
+        settingsSheetCallbacks = buildThreadSettingsSheetCallbacks(
+            onDismiss = overlayInputs.onDismissSettingsSheet,
+            onApplyActionState = overlayInputs.onApplySettingsActionState,
+            onOpenNgManagement = overlayInputs.onOpenNgManagement,
+            onOpenExternalApp = overlayInputs.onOpenExternalApp,
+            onTogglePrivacy = overlayInputs.onTogglePrivacy,
+            onDelegateToMainActionHandler = topBarInputs.onAction
         ),
-        filterSheetCallbacks = buildThreadScreenFilterSheetCallbacks(
-            threadFilterBinding = threadFilterBinding,
-            onDismiss = onDismissFilterSheet
+        filterSheetCallbacks = buildThreadFilterSheetCallbacks(
+            currentState = overlayInputs.threadFilterBinding.currentState,
+            setState = overlayInputs.threadFilterBinding.setState,
+            onDismiss = overlayInputs.onDismissFilterSheet
         ),
-        readAloudControlCallbacks = buildThreadScreenReadAloudControlCallbacks(
-            firstVisibleSegmentIndex = firstVisibleSegmentIndex,
-            onSeekToIndex = onSeekToReadAloudIndex,
-            onPlay = onPlayReadAloud,
-            onPause = onPauseReadAloud,
-            onStop = onStopReadAloud,
-            onShowStoppedMessage = onShowReadAloudStoppedMessage,
-            onDismiss = onDismissReadAloudControls
+        readAloudControlCallbacks = buildThreadReadAloudControlCallbacks(
+            firstVisibleSegmentIndex = overlayInputs.firstVisibleSegmentIndex,
+            onSeekToIndex = overlayInputs.onSeekToReadAloudIndex,
+            onPlay = overlayInputs.onPlayReadAloud,
+            onPause = overlayInputs.onPauseReadAloud,
+            onStop = overlayInputs.onStopReadAloud,
+            onShowStoppedMessage = overlayInputs.onShowReadAloudStoppedMessage,
+            onDismiss = overlayInputs.onDismissReadAloudControls
         ),
-        ngManagementCallbacks = buildThreadScreenNgManagementCallbacks(
-            onDismiss = onDismissNgManagement,
-            mutationCallbacks = ngMutationCallbacks
+        ngManagementCallbacks = buildThreadNgManagementCallbacks(
+            onDismiss = overlayInputs.onDismissNgManagement,
+            onAddHeader = overlayInputs.ngMutationCallbacks.onAddHeader,
+            onAddWord = overlayInputs.ngMutationCallbacks.onAddWord,
+            onRemoveHeader = overlayInputs.ngMutationCallbacks.onRemoveHeader,
+            onRemoveWord = overlayInputs.ngMutationCallbacks.onRemoveWord,
+            onToggleFiltering = overlayInputs.ngMutationCallbacks.onToggleFiltering
         ),
-        saveProgressDialogCallbacks = buildThreadScreenSaveProgressDialogCallbacks(
-            onDismissRequest = onDismissSaveProgress,
-            onCancelRequest = onCancelSaveProgress
+        saveProgressDialogCallbacks = buildThreadSaveProgressDialogCallbacks(
+            onDismissRequest = overlayInputs.onDismissSaveProgress,
+            onCancelRequest = overlayInputs.onCancelSaveProgress
         ),
-        globalSettingsCallbacks = buildThreadScreenGlobalSettingsCallbacks(
-            onBack = onDismissGlobalSettings,
-            onOpenCookieManager = onOpenCookieManager,
-            preferencesCallbacks = screenPreferencesCallbacks
+        globalSettingsCallbacks = buildThreadGlobalSettingsCallbacks(
+            onBack = settingsInputs.onDismissGlobalSettings,
+            onOpenCookieManager = settingsInputs.onOpenCookieManager,
+            preferencesCallbacks = settingsInputs.screenPreferencesCallbacks
         ),
-        cookieManagementCallbacks = buildThreadScreenCookieManagementCallbacks(
-            onBack = onDismissCookieManagement
+        cookieManagementCallbacks = buildThreadCookieManagementCallbacks(
+            onBack = settingsInputs.onDismissCookieManagement
         )
     )
 }

@@ -162,46 +162,53 @@ internal fun updateThreadReplyDialogDraft(
     return state.copy(draft = transform(state.draft))
 }
 
+private fun updateThreadReplyDialogField(
+    state: ThreadReplyDialogState,
+    transform: ThreadReplyDraft.() -> ThreadReplyDraft
+): ThreadReplyDialogState {
+    return updateThreadReplyDialogDraft(state) { draft -> draft.transform() }
+}
+
 internal fun updateThreadReplyDialogName(
     state: ThreadReplyDialogState,
     value: String
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogDraft(state) { draft -> draft.copy(name = value) }
+    return updateThreadReplyDialogField(state) { copy(name = value) }
 }
 
 internal fun updateThreadReplyDialogEmail(
     state: ThreadReplyDialogState,
     value: String
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogDraft(state) { draft -> draft.copy(email = value) }
+    return updateThreadReplyDialogField(state) { copy(email = value) }
 }
 
 internal fun updateThreadReplyDialogSubject(
     state: ThreadReplyDialogState,
     value: String
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogDraft(state) { draft -> draft.copy(subject = value) }
+    return updateThreadReplyDialogField(state) { copy(subject = value) }
 }
 
 internal fun updateThreadReplyDialogComment(
     state: ThreadReplyDialogState,
     value: String
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogDraft(state) { draft -> draft.copy(comment = value) }
+    return updateThreadReplyDialogField(state) { copy(comment = value) }
 }
 
 internal fun updateThreadReplyDialogPassword(
     state: ThreadReplyDialogState,
     value: String
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogDraft(state) { draft -> draft.copy(password = value) }
+    return updateThreadReplyDialogField(state) { copy(password = value) }
 }
 
 internal fun updateThreadReplyDialogImage(
     state: ThreadReplyDialogState,
     value: ImageData?
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogDraft(state) { draft -> draft.copy(imageData = value) }
+    return updateThreadReplyDialogField(state) { copy(imageData = value) }
 }
 
 internal fun clearThreadReplyDialog(

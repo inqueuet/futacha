@@ -23,102 +23,114 @@ internal data class CatalogScreenOverlayBindingsBundle(
     val onCookieManagementBack: () -> Unit
 )
 
+internal data class CatalogScreenOverlayDialogInputs(
+    val persistCatalogMode: (CatalogMode) -> Unit,
+    val updateCatalogDisplayStyle: (CatalogDisplayStyle) -> Unit,
+    val updateCatalogGridColumns: (Int) -> Unit,
+    val setShowModeDialog: (Boolean) -> Unit,
+    val setShowDisplayStyleDialog: (Boolean) -> Unit
+)
+
+internal data class CatalogScreenOverlaySearchInputs(
+    val currentArchiveSearchScope: () -> ArchiveSearchScope?,
+    val setLastArchiveSearchScope: (ArchiveSearchScope?) -> Unit,
+    val setArchiveSearchQuery: (String) -> Unit,
+    val setShowPastThreadSearchDialog: (Boolean) -> Unit,
+    val setIsPastSearchSheetVisible: (Boolean) -> Unit,
+    val runPastThreadSearch: (String, ArchiveSearchScope?) -> Boolean,
+    val currentPastSearchGeneration: () -> Long,
+    val currentPastSearchJob: () -> Job?,
+    val setPastSearchGeneration: (Long) -> Unit,
+    val setPastSearchJob: (Job?) -> Unit,
+    val currentArchiveSearchQuery: () -> String,
+    val currentLastArchiveSearchScope: () -> ArchiveSearchScope?,
+    val onThreadSelected: (CatalogItem) -> Unit
+)
+
+internal data class CatalogScreenOverlaySettingsInputs(
+    val board: () -> BoardSummary?,
+    val catalogMode: () -> CatalogMode,
+    val urlLauncher: (String) -> Unit,
+    val stateStore: AppStateStore?,
+    val isPrivacyFilterEnabled: () -> Boolean,
+    val coroutineScope: CoroutineScope,
+    val scrollCatalogToTop: () -> Unit,
+    val setIsNgManagementVisible: (Boolean) -> Unit,
+    val setIsWatchWordsVisible: (Boolean) -> Unit,
+    val setShowSettingsMenu: (Boolean) -> Unit,
+    val cookieRepository: CookieRepository?,
+    val setIsGlobalSettingsVisible: (Boolean) -> Unit,
+    val setIsCookieManagementVisible: (Boolean) -> Unit,
+    val onAddNgWord: (String) -> Unit,
+    val onRemoveNgWord: (String) -> Unit,
+    val onToggleNgFiltering: () -> Unit,
+    val onAddWatchWord: (String) -> Unit,
+    val onRemoveWatchWord: (String) -> Unit
+)
+
 internal fun buildCatalogScreenOverlayBindingsBundle(
-    persistCatalogMode: (CatalogMode) -> Unit,
-    updateCatalogDisplayStyle: (CatalogDisplayStyle) -> Unit,
-    updateCatalogGridColumns: (Int) -> Unit,
-    currentArchiveSearchScope: () -> ArchiveSearchScope?,
-    setLastArchiveSearchScope: (ArchiveSearchScope?) -> Unit,
-    setArchiveSearchQuery: (String) -> Unit,
-    setShowPastThreadSearchDialog: (Boolean) -> Unit,
-    setIsPastSearchSheetVisible: (Boolean) -> Unit,
-    runPastThreadSearch: (String, ArchiveSearchScope?) -> Boolean,
-    currentPastSearchGeneration: () -> Long,
-    currentPastSearchJob: () -> Job?,
-    setPastSearchGeneration: (Long) -> Unit,
-    setPastSearchJob: (Job?) -> Unit,
-    currentArchiveSearchQuery: () -> String,
-    currentLastArchiveSearchScope: () -> ArchiveSearchScope?,
-    onThreadSelected: (CatalogItem) -> Unit,
-    board: () -> BoardSummary?,
-    catalogMode: () -> CatalogMode,
-    urlLauncher: (String) -> Unit,
-    stateStore: AppStateStore?,
-    isPrivacyFilterEnabled: () -> Boolean,
-    coroutineScope: CoroutineScope,
-    scrollCatalogToTop: () -> Unit,
-    setShowModeDialog: (Boolean) -> Unit,
-    setShowDisplayStyleDialog: (Boolean) -> Unit,
-    setIsNgManagementVisible: (Boolean) -> Unit,
-    setIsWatchWordsVisible: (Boolean) -> Unit,
-    setShowSettingsMenu: (Boolean) -> Unit,
-    cookieRepository: CookieRepository?,
-    setIsGlobalSettingsVisible: (Boolean) -> Unit,
-    setIsCookieManagementVisible: (Boolean) -> Unit,
-    onAddNgWord: (String) -> Unit,
-    onRemoveNgWord: (String) -> Unit,
-    onToggleNgFiltering: () -> Unit,
-    onAddWatchWord: (String) -> Unit,
-    onRemoveWatchWord: (String) -> Unit
+    dialogInputs: CatalogScreenOverlayDialogInputs,
+    searchInputs: CatalogScreenOverlaySearchInputs,
+    settingsInputs: CatalogScreenOverlaySettingsInputs
 ): CatalogScreenOverlayBindingsBundle {
     return CatalogScreenOverlayBindingsBundle(
         modeDialogCallbacks = buildCatalogModeDialogCallbacks(
-            persistCatalogMode = persistCatalogMode,
-            setShowModeDialog = setShowModeDialog
+            persistCatalogMode = dialogInputs.persistCatalogMode,
+            setShowModeDialog = dialogInputs.setShowModeDialog
         ),
         displayStyleDialogCallbacks = buildCatalogDisplayStyleDialogCallbacks(
-            updateCatalogDisplayStyle = updateCatalogDisplayStyle,
-            updateCatalogGridColumns = updateCatalogGridColumns,
-            setShowDisplayStyleDialog = setShowDisplayStyleDialog
+            updateCatalogDisplayStyle = dialogInputs.updateCatalogDisplayStyle,
+            updateCatalogGridColumns = dialogInputs.updateCatalogGridColumns,
+            setShowDisplayStyleDialog = dialogInputs.setShowDisplayStyleDialog
         ),
         pastThreadSearchDialogCallbacks = buildCatalogPastThreadSearchDialogCallbacks(
-            currentArchiveSearchScope = currentArchiveSearchScope,
-            setLastArchiveSearchScope = setLastArchiveSearchScope,
-            setArchiveSearchQuery = setArchiveSearchQuery,
-            setShowPastThreadSearchDialog = setShowPastThreadSearchDialog,
-            setIsPastSearchSheetVisible = setIsPastSearchSheetVisible,
-            runPastThreadSearch = runPastThreadSearch
+            currentArchiveSearchScope = searchInputs.currentArchiveSearchScope,
+            setLastArchiveSearchScope = searchInputs.setLastArchiveSearchScope,
+            setArchiveSearchQuery = searchInputs.setArchiveSearchQuery,
+            setShowPastThreadSearchDialog = searchInputs.setShowPastThreadSearchDialog,
+            setIsPastSearchSheetVisible = searchInputs.setIsPastSearchSheetVisible,
+            runPastThreadSearch = searchInputs.runPastThreadSearch
         ),
         pastThreadSearchResultCallbacks = buildCatalogPastThreadSearchResultCallbacks(
-            currentPastSearchGeneration = currentPastSearchGeneration,
-            currentPastSearchJob = currentPastSearchJob,
-            setPastSearchGeneration = setPastSearchGeneration,
-            setPastSearchJob = setPastSearchJob,
-            setIsPastSearchSheetVisible = setIsPastSearchSheetVisible,
-            runPastThreadSearch = runPastThreadSearch,
-            currentArchiveSearchQuery = currentArchiveSearchQuery,
-            currentLastArchiveSearchScope = currentLastArchiveSearchScope,
-            onThreadSelected = onThreadSelected
+            currentPastSearchGeneration = searchInputs.currentPastSearchGeneration,
+            currentPastSearchJob = searchInputs.currentPastSearchJob,
+            setPastSearchGeneration = searchInputs.setPastSearchGeneration,
+            setPastSearchJob = searchInputs.setPastSearchJob,
+            setIsPastSearchSheetVisible = searchInputs.setIsPastSearchSheetVisible,
+            runPastThreadSearch = searchInputs.runPastThreadSearch,
+            currentArchiveSearchQuery = searchInputs.currentArchiveSearchQuery,
+            currentLastArchiveSearchScope = searchInputs.currentLastArchiveSearchScope,
+            onThreadSelected = searchInputs.onThreadSelected
         ),
         settingsMenuCallbacks = buildCatalogSettingsMenuCallbacks(
-            board = board,
-            catalogMode = catalogMode,
-            urlLauncher = urlLauncher,
-            stateStore = stateStore,
-            isPrivacyFilterEnabled = isPrivacyFilterEnabled,
-            coroutineScope = coroutineScope,
-            scrollCatalogToTop = scrollCatalogToTop,
-            setShowDisplayStyleDialog = setShowDisplayStyleDialog,
-            setIsNgManagementVisible = setIsNgManagementVisible,
-            setIsWatchWordsVisible = setIsWatchWordsVisible,
-            setShowSettingsMenu = setShowSettingsMenu
+            board = settingsInputs.board,
+            catalogMode = settingsInputs.catalogMode,
+            urlLauncher = settingsInputs.urlLauncher,
+            stateStore = settingsInputs.stateStore,
+            isPrivacyFilterEnabled = settingsInputs.isPrivacyFilterEnabled,
+            coroutineScope = settingsInputs.coroutineScope,
+            scrollCatalogToTop = settingsInputs.scrollCatalogToTop,
+            setShowDisplayStyleDialog = dialogInputs.setShowDisplayStyleDialog,
+            setIsNgManagementVisible = settingsInputs.setIsNgManagementVisible,
+            setIsWatchWordsVisible = settingsInputs.setIsWatchWordsVisible,
+            setShowSettingsMenu = settingsInputs.setShowSettingsMenu
         ),
         globalSettingsCallbacks = buildCatalogGlobalSettingsCallbacks(
-            cookieRepository = cookieRepository,
-            setIsGlobalSettingsVisible = setIsGlobalSettingsVisible,
-            setIsCookieManagementVisible = setIsCookieManagementVisible
+            cookieRepository = settingsInputs.cookieRepository,
+            setIsGlobalSettingsVisible = settingsInputs.setIsGlobalSettingsVisible,
+            setIsCookieManagementVisible = settingsInputs.setIsCookieManagementVisible
         ),
         ngManagementCallbacks = buildCatalogNgManagementCallbacks(
-            setIsNgManagementVisible = setIsNgManagementVisible,
-            onAddWord = onAddNgWord,
-            onRemoveWord = onRemoveNgWord,
-            onToggleFiltering = onToggleNgFiltering
+            setIsNgManagementVisible = settingsInputs.setIsNgManagementVisible,
+            onAddWord = settingsInputs.onAddNgWord,
+            onRemoveWord = settingsInputs.onRemoveNgWord,
+            onToggleFiltering = settingsInputs.onToggleNgFiltering
         ),
         watchWordsCallbacks = buildCatalogWatchWordsCallbacks(
-            onAddWord = onAddWatchWord,
-            onRemoveWord = onRemoveWatchWord,
-            setIsWatchWordsVisible = setIsWatchWordsVisible
+            onAddWord = settingsInputs.onAddWatchWord,
+            onRemoveWord = settingsInputs.onRemoveWatchWord,
+            setIsWatchWordsVisible = settingsInputs.setIsWatchWordsVisible
         ),
-        onCookieManagementBack = { setIsCookieManagementVisible(false) }
+        onCookieManagementBack = { settingsInputs.setIsCookieManagementVisible(false) }
     )
 }

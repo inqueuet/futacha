@@ -13,108 +13,97 @@ internal data class ThreadScreenInteractionBindingsBundle(
     val historyDrawerCallbacks: ThreadHistoryDrawerCallbacks
 )
 
+internal data class ThreadScreenMenuInteractionInputs(
+    val isRefreshing: () -> Boolean,
+    val onOpenReplyDialog: () -> Unit,
+    val onScrollTop: () -> Unit,
+    val onScrollBottom: () -> Unit,
+    val onShowRefreshBusyMessage: () -> Unit,
+    val onStartRefreshFromMenu: () -> Unit,
+    val onOpenGallery: () -> Unit,
+    val onDelegateToSaveHandler: () -> Unit,
+    val onShowFilterSheet: () -> Unit,
+    val onShowSettingsSheet: () -> Unit,
+    val onClearNgHeaderPrefill: () -> Unit,
+    val onShowNgManagement: () -> Unit,
+    val onOpenExternalApp: () -> Unit,
+    val onShowReadAloudControls: () -> Unit,
+    val onTogglePrivacy: () -> Unit
+)
+
+internal data class ThreadScreenSearchInteractionInputs(
+    val currentSearchIndex: () -> Int,
+    val setCurrentSearchIndex: (Int) -> Unit,
+    val currentSearchMatches: () -> List<ThreadSearchMatch>,
+    val onScrollToSearchMatchPostIndex: (Int?) -> Unit,
+    val onCloseDrawerAfterHistorySelection: () -> Unit,
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit
+)
+
+internal data class ThreadScreenRefreshInteractionInputs(
+    val currentFirstVisibleItemIndex: () -> Int,
+    val currentFirstVisibleItemOffset: () -> Int,
+    val onStartRefreshFromPull: (Int, Int) -> Unit
+)
+
+internal data class ThreadScreenHistoryDrawerInputs(
+    val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
+    val onBoardClick: () -> Unit,
+    val onHistoryRefreshClick: () -> Unit,
+    val onHistoryBatchDeleteClick: () -> Unit,
+    val onHistorySettingsClick: () -> Unit
+)
+
 internal fun buildThreadScreenInteractionBindingsBundle(
-    isRefreshing: () -> Boolean,
-    onOpenReplyDialog: () -> Unit,
-    onScrollTop: () -> Unit,
-    onScrollBottom: () -> Unit,
-    onShowRefreshBusyMessage: () -> Unit,
-    onStartRefreshFromMenu: () -> Unit,
-    onOpenGallery: () -> Unit,
-    onDelegateToSaveHandler: () -> Unit,
-    onShowFilterSheet: () -> Unit,
-    onShowSettingsSheet: () -> Unit,
-    onClearNgHeaderPrefill: () -> Unit,
-    onShowNgManagement: () -> Unit,
-    onOpenExternalApp: () -> Unit,
-    onShowReadAloudControls: () -> Unit,
-    onTogglePrivacy: () -> Unit,
-    currentSearchIndex: () -> Int,
-    setCurrentSearchIndex: (Int) -> Unit,
-    currentSearchMatches: () -> List<ThreadSearchMatch>,
-    onScrollToSearchMatchPostIndex: (Int?) -> Unit,
-    onCloseDrawerAfterHistorySelection: () -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
-    currentOverlayState: () -> ThreadPostOverlayState,
-    setOverlayState: (ThreadPostOverlayState) -> Unit,
-    lastUsedDeleteKey: String,
-    currentSaidaneLabel: (Post) -> String?,
-    isSelfPost: (Post) -> Boolean,
-    onShowOptionalMessage: (String?) -> Unit,
-    onSaidaneLabelUpdated: (Post, String) -> Unit,
-    launchUnitAction: (
-        successMessage: String,
-        failurePrefix: String,
-        onSuccess: () -> Unit,
-        block: suspend () -> Unit
-    ) -> Unit,
-    voteSaidane: suspend (Post) -> Unit,
-    requestDeletion: suspend (Post) -> Unit,
-    currentFirstVisibleItemIndex: () -> Int,
-    currentFirstVisibleItemOffset: () -> Int,
-    onStartRefreshFromPull: (Int, Int) -> Unit,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    onBoardClick: () -> Unit,
-    onHistoryRefreshClick: () -> Unit,
-    onHistoryBatchDeleteClick: () -> Unit,
-    onHistorySettingsClick: () -> Unit
+    menuInputs: ThreadScreenMenuInteractionInputs,
+    searchInputs: ThreadScreenSearchInteractionInputs,
+    postActionInputs: ThreadScreenPostActionInputs,
+    refreshInputs: ThreadScreenRefreshInteractionInputs,
+    historyDrawerInputs: ThreadScreenHistoryDrawerInputs
 ): ThreadScreenInteractionBindingsBundle {
+    val historySelectionHandler = buildThreadScreenHistorySelectionHandler(
+        onCloseDrawer = searchInputs.onCloseDrawerAfterHistorySelection,
+        onHistoryEntrySelected = searchInputs.onHistoryEntrySelected
+    )
     return ThreadScreenInteractionBindingsBundle(
         menuEntryHandler = buildThreadScreenMenuEntryHandler(
-            isRefreshing = isRefreshing,
-            onOpenReplyDialog = onOpenReplyDialog,
-            onScrollTop = onScrollTop,
-            onScrollBottom = onScrollBottom,
-            onShowRefreshBusyMessage = onShowRefreshBusyMessage,
-            onStartRefresh = onStartRefreshFromMenu,
-            onOpenGallery = onOpenGallery,
-            onDelegateToSaveHandler = onDelegateToSaveHandler,
-            onShowFilterSheet = onShowFilterSheet,
-            onShowSettingsSheet = onShowSettingsSheet,
-            onClearNgHeaderPrefill = onClearNgHeaderPrefill,
-            onShowNgManagement = onShowNgManagement,
-            onOpenExternalApp = onOpenExternalApp,
-            onShowReadAloudControls = onShowReadAloudControls,
-            onTogglePrivacy = onTogglePrivacy
+            isRefreshing = menuInputs.isRefreshing,
+            onOpenReplyDialog = menuInputs.onOpenReplyDialog,
+            onScrollTop = menuInputs.onScrollTop,
+            onScrollBottom = menuInputs.onScrollBottom,
+            onShowRefreshBusyMessage = menuInputs.onShowRefreshBusyMessage,
+            onStartRefresh = menuInputs.onStartRefreshFromMenu,
+            onOpenGallery = menuInputs.onOpenGallery,
+            onDelegateToSaveHandler = menuInputs.onDelegateToSaveHandler,
+            onShowFilterSheet = menuInputs.onShowFilterSheet,
+            onShowSettingsSheet = menuInputs.onShowSettingsSheet,
+            onClearNgHeaderPrefill = menuInputs.onClearNgHeaderPrefill,
+            onShowNgManagement = menuInputs.onShowNgManagement,
+            onOpenExternalApp = menuInputs.onOpenExternalApp,
+            onShowReadAloudControls = menuInputs.onShowReadAloudControls,
+            onTogglePrivacy = menuInputs.onTogglePrivacy
         ),
         searchNavigationCallbacks = buildThreadScreenSearchNavigationCallbacks(
-            currentIndex = currentSearchIndex,
-            setCurrentIndex = setCurrentSearchIndex,
-            matches = currentSearchMatches,
-            onScrollToPostIndex = onScrollToSearchMatchPostIndex
+            currentIndex = searchInputs.currentSearchIndex,
+            setCurrentIndex = searchInputs.setCurrentSearchIndex,
+            matches = searchInputs.currentSearchMatches,
+            onScrollToPostIndex = searchInputs.onScrollToSearchMatchPostIndex
         ),
-        historySelectionHandler = buildThreadScreenHistorySelectionHandler(
-            onCloseDrawer = onCloseDrawerAfterHistorySelection,
-            onHistoryEntrySelected = onHistoryEntrySelected
-        ),
-        postActionHandlers = buildThreadScreenPostActionHandlers(
-            currentOverlayState = currentOverlayState,
-            setOverlayState = setOverlayState,
-            lastUsedDeleteKey = lastUsedDeleteKey,
-            currentSaidaneLabel = currentSaidaneLabel,
-            isSelfPost = isSelfPost,
-            onShowOptionalMessage = onShowOptionalMessage,
-            onSaidaneLabelUpdated = onSaidaneLabelUpdated,
-            launchUnitAction = launchUnitAction,
-            voteSaidane = voteSaidane,
-            requestDeletion = requestDeletion
-        ),
+        historySelectionHandler = historySelectionHandler,
+        postActionHandlers = buildThreadScreenPostActionHandlers(postActionInputs),
         refreshHandler = buildThreadScreenRefreshHandler(
-            isRefreshing = isRefreshing,
-            currentFirstVisibleItemIndex = currentFirstVisibleItemIndex,
-            currentFirstVisibleItemOffset = currentFirstVisibleItemOffset,
-            onStartRefresh = onStartRefreshFromPull
+            isRefreshing = menuInputs.isRefreshing,
+            currentFirstVisibleItemIndex = refreshInputs.currentFirstVisibleItemIndex,
+            currentFirstVisibleItemOffset = refreshInputs.currentFirstVisibleItemOffset,
+            onStartRefresh = refreshInputs.onStartRefreshFromPull
         ),
         historyDrawerCallbacks = buildThreadScreenHistoryDrawerCallbacks(
-            onHistoryEntryDismissed = onHistoryEntryDismissed,
-            onHistoryEntrySelected = buildThreadScreenHistorySelectionHandler(
-                onCloseDrawer = onCloseDrawerAfterHistorySelection,
-                onHistoryEntrySelected = onHistoryEntrySelected
-            ),
-            onBoardClick = onBoardClick,
-            onRefreshClick = onHistoryRefreshClick,
-            onBatchDeleteClick = onHistoryBatchDeleteClick,
-            onSettingsClick = onHistorySettingsClick
+            onHistoryEntryDismissed = historyDrawerInputs.onHistoryEntryDismissed,
+            onHistoryEntrySelected = historySelectionHandler,
+            onBoardClick = historyDrawerInputs.onBoardClick,
+            onRefreshClick = historyDrawerInputs.onHistoryRefreshClick,
+            onBatchDeleteClick = historyDrawerInputs.onHistoryBatchDeleteClick,
+            onSettingsClick = historyDrawerInputs.onHistorySettingsClick
         )
     )
 }

@@ -118,6 +118,28 @@ class SavedThreadsScreenTest {
     }
 
     @Test
+    fun resolveSavedThreadsDeleteUiOutcome_mapsSnapshotAndMessage() {
+        val snapshot = SavedThreadsSnapshot(
+            threads = listOf(savedThread(threadId = "1")),
+            totalSize = 10L
+        )
+        assertEquals(
+            SavedThreadsDeleteUiOutcome(
+                updatedSnapshot = snapshot,
+                message = "削除しました"
+            ),
+            resolveSavedThreadsDeleteUiOutcome(Result.success(snapshot))
+        )
+        assertEquals(
+            SavedThreadsDeleteUiOutcome(
+                updatedSnapshot = null,
+                message = "削除に失敗しました: boom"
+            ),
+            resolveSavedThreadsDeleteUiOutcome(Result.failure(IllegalStateException("boom")))
+        )
+    }
+
+    @Test
     fun loadSavedThreadsSnapshot_readsThreadsAndTotalSizeFromRepository() = runBlocking {
         val repository = SavedThreadRepository(InMemoryFileSystem(), baseDirectory = "saved_threads")
         val first = savedThread(threadId = "1", totalSize = 10L, savedAt = 100L)

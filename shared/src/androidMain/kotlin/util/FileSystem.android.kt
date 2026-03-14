@@ -241,63 +241,10 @@ class AndroidFileSystem(
      * このメソッドはフォールバックとしてのみ使用され、失敗時は内部ストレージにフォールバックします。
      */
     private fun getPublicDocumentsDirectory(): String {
-        try {
-            val documentsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10以降: 非推奨APIだが、読み取り専用として使用可能
-                // 書き込みには権限が必要で、多くのケースで失敗する
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-            } else {
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-            }
-
-            // Null check for rare cases where external storage is not available
-            if (documentsDir == null) {
-                Logger.e("FileSystem.android", "External storage documents directory is null, falling back to internal storage")
-                return context.filesDir.absolutePath
-            }
-
-            // アプリ専用のサブフォルダを作成
-            val appDir = File(documentsDir, "futacha")
-            if (!appDir.exists()) {
-                val success = appDir.mkdirs()
-                if (!success && !appDir.exists()) {
-                    // mkdirs failed and directory still doesn't exist
-                    Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}, falling back to internal storage")
-                    return File(context.filesDir, "futacha").apply {
-                        if (!exists()) {
-                            val fallbackSuccess = mkdirs()
-                            if (!fallbackSuccess && !exists()) {
-                                throw IllegalStateException("Failed to create fallback directory")
-                            }
-                        }
-                    }.absolutePath
-                }
-            }
-
-            return appDir.absolutePath
-        } catch (e: SecurityException) {
-            Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
-            // Fallback to internal storage
-            return File(context.filesDir, "futacha").apply {
-                if (!exists()) {
-                    val fallbackSuccess = mkdirs()
-                    if (!fallbackSuccess && !exists()) {
-                        throw IllegalStateException("Failed to create fallback directory after SecurityException", e)
-                    }
-                }
-            }.absolutePath
-        } catch (e: Exception) {
-            Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
-            // Fallback to internal storage
-            return File(context.filesDir, "futacha").apply {
-                if (!exists()) {
-                    val fallbackSuccess = mkdirs()
-                    if (!fallbackSuccess && !exists()) {
-                        throw IllegalStateException("Failed to create fallback directory after unexpected error", e)
-                    }
-                }
-            }.absolutePath
-        }
+        return getPublicAppDirectory(
+            directoryType = Environment.DIRECTORY_DOCUMENTS,
+            directoryLabel = "documents"
+        )
     }
 
     /**
@@ -308,57 +255,32 @@ class AndroidFileSystem(
      * このメソッドはフォールバックとしてのみ使用され、失敗時は内部ストレージにフォールバックします。
      */
     private fun getPublicDownloadsDirectory(): String {
+        return getPublicAppDirectory(
+            directoryType = Environment.DIRECTORY_DOWNLOADS,
+            directoryLabel = "downloads"
+        )
+    }
+
+    private fun getPublicAppDirectory(
+        directoryType: String,
+        directoryLabel: String
+    ): String {
         try {
-            val downloadsDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10以降: 非推奨APIだが、読み取り専用として使用可能
-                // 書き込みには権限が必要で、多くのケースで失敗する
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            } else {
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val publicDir = Environment.getExternalStoragePublicDirectory(directoryType)
+            if (publicDir == null) {
+                Logger.e(
+                    "FileSystem.android",
+                    "External storage $directoryLabel directory is null, falling back to internal storage"
+                )
+                return getFallbackAppDirectory()
             }
-
-            if (downloadsDir == null) {
-                Logger.e("FileSystem.android", "External storage downloads directory is null, falling back to internal storage")
-                return context.filesDir.absolutePath
-            }
-
-            val appDir = File(downloadsDir, "futacha")
-            if (!appDir.exists()) {
-                val success = appDir.mkdirs()
-                if (!success && !appDir.exists()) {
-                    Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}, falling back to internal storage")
-                    return File(context.filesDir, "futacha").apply {
-                        if (!exists()) {
-                            val fallbackSuccess = mkdirs()
-                            if (!fallbackSuccess && !exists()) {
-                                throw IllegalStateException("Failed to create fallback directory")
-                            }
-                        }
-                    }.absolutePath
-                }
-            }
-
-            return appDir.absolutePath
+            return ensureAppDirectory(publicDir).absolutePath
         } catch (e: SecurityException) {
             Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
-            return File(context.filesDir, "futacha").apply {
-                if (!exists()) {
-                    val fallbackSuccess = mkdirs()
-                    if (!fallbackSuccess && !exists()) {
-                        throw IllegalStateException("Failed to create fallback directory after SecurityException", e)
-                    }
-                }
-            }.absolutePath
+            return getFallbackAppDirectory(e, "SecurityException")
         } catch (e: Exception) {
             Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
-            return File(context.filesDir, "futacha").apply {
-                if (!exists()) {
-                    val fallbackSuccess = mkdirs()
-                    if (!fallbackSuccess && !exists()) {
-                        throw IllegalStateException("Failed to create fallback directory after unexpected error", e)
-                    }
-                }
-            }.absolutePath
+            return getFallbackAppDirectory(e, "unexpected error")
         }
     }
 
@@ -366,15 +288,7 @@ class AndroidFileSystem(
      * FilesDir 配下のアプリ専用ディレクトリを取得 (ファイラーからは見えない)
      */
     private fun getPrivateAppDataDirectory(): String {
-        val appDir = File(context.filesDir, "futacha")
-        if (!appDir.exists()) {
-            val created = appDir.mkdirs()
-            if (!created && !appDir.exists()) {
-                Logger.e("FileSystem.android", "Failed to create private app directory at ${appDir.absolutePath}")
-                throw IllegalStateException("Failed to create private app directory at ${appDir.absolutePath}")
-            }
-        }
-        return appDir.absolutePath
+        return ensureAppDirectory(context.filesDir).absolutePath
     }
 
     /**
@@ -391,6 +305,125 @@ class AndroidFileSystem(
         } else {
             File(resolvedBase, relativePath).absolutePath
         }
+    }
+
+    private fun ensureAppDirectory(baseDirectory: File): File {
+        val appDir = File(baseDirectory, "futacha")
+        if (!appDir.exists()) {
+            val created = appDir.mkdirs()
+            if (!created && !appDir.exists()) {
+                Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}")
+                throw IllegalStateException("Failed to create app directory at ${appDir.absolutePath}")
+            }
+        }
+        return appDir
+    }
+
+    private fun getFallbackAppDirectory(
+        cause: Throwable? = null,
+        reason: String? = null
+    ): String {
+        if (reason != null) {
+            Logger.w("FileSystem.android", "Using internal storage fallback after $reason")
+        }
+        return try {
+            ensureAppDirectory(context.filesDir).absolutePath
+        } catch (fallbackError: Exception) {
+            throw IllegalStateException(
+                "Failed to create fallback app directory",
+                cause ?: fallbackError
+            )
+        }
+    }
+
+    private fun requireTreeBaseDirectory(
+        base: SaveLocation.TreeUri,
+        requireWrite: Boolean = false
+    ): DocumentFile {
+        val treeUri = Uri.parse(base.uri)
+        val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+            ?: throw PermissionRevokedException(
+                "Cannot resolve tree URI: ${base.uri}. Please select the folder again."
+            )
+        if (requireWrite && !baseDir.canWrite()) {
+            throw PermissionRevokedException(
+                "Write permission lost for tree URI: ${base.uri}. Please select the folder again."
+            )
+        }
+        return baseDir
+    }
+
+    private suspend inline fun <T> runTreeUriCatching(
+        base: SaveLocation.TreeUri,
+        requireWrite: Boolean = false,
+        block: suspend (DocumentFile) -> T
+    ): Result<T> {
+        return try {
+            Result.success(block(requireTreeBaseDirectory(base, requireWrite)))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private fun resolveTreeParentDirectory(
+        baseDir: DocumentFile,
+        relativePath: String,
+        createDirectories: Boolean
+    ): Pair<DocumentFile, String> {
+        val (parentPath, fileName) = splitParentAndFileName(relativePath)
+        val parentDir = when {
+            parentPath.isEmpty() -> baseDir
+            createDirectories -> createOrNavigateToDirectory(baseDir, parentPath)
+            else -> navigateToDirectory(baseDir, parentPath)
+                ?: throw IllegalStateException("Directory not found: $parentPath")
+        }
+        return parentDir to fileName
+    }
+
+    private fun findOrCreateTreeFile(
+        parentDir: DocumentFile,
+        fileName: String
+    ): DocumentFile {
+        return parentDir.findFile(fileName)?.takeIf { !it.isDirectory }
+            ?: parentDir.createFile("application/octet-stream", fileName)
+            ?: throw IllegalStateException("Failed to create file: $fileName")
+    }
+
+    private suspend fun readTreeFileUtf8(file: DocumentFile, fileName: String): String {
+        return context.contentResolver.openInputStream(file.uri)?.use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            var totalRead = 0L
+            var zeroReadCount = 0
+            while (true) {
+                coroutineContext.ensureActive()
+                val read = withTimeoutOrNull(SAF_READ_IDLE_TIMEOUT_MILLIS) {
+                    runInterruptible {
+                        input.read(buffer)
+                    }
+                } ?: throw IllegalStateException("Read timed out while loading file: $fileName")
+                when {
+                    read < 0 -> break
+                    read == 0 -> {
+                        zeroReadCount += 1
+                        if (zeroReadCount >= 100) {
+                            throw IllegalStateException("Read stalled while loading file: $fileName")
+                        }
+                        backoffAfterZeroRead()
+                        continue
+                    }
+                    else -> {
+                        zeroReadCount = 0
+                    }
+                }
+                totalRead += read
+                validateFileSize(totalRead, "file")
+                output.write(buffer, 0, read)
+            }
+            output.toString(Charsets.UTF_8.name())
+        } ?: throw IllegalStateException("Failed to open input stream for ${file.uri}")
     }
 
     // ========================================
@@ -410,34 +443,12 @@ class AndroidFileSystem(
                 createDirectory(fullPath)
             }
             is SaveLocation.TreeUri -> {
-                runFsCatching {
-                    val treeUri = Uri.parse(base.uri)
-                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
-
-                    // Verify we still have permission
-                    if (!baseDir.canWrite()) {
-                        throw PermissionRevokedException("Write permission lost for tree URI: ${base.uri}. Please select the folder again.")
-                    }
-
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
                     if (relativePath.isEmpty()) {
-                        // Base directory already exists if we can resolve it
-                        return@runFsCatching Unit
+                        return@runTreeUriCatching Unit
                     }
-
-                    val segments = relativePath.split('/').filter { it.isNotBlank() }
-                    var current = baseDir
-                    for (segment in segments) {
-                        val existing = current.findFile(segment)
-                        current = if (existing != null && existing.isDirectory) {
-                            existing
-                        } else if (existing == null) {
-                            current.createDirectory(segment)
-                                ?: throw IllegalStateException("Failed to create directory: $segment in ${current.uri}")
-                        } else {
-                            throw IllegalStateException("Path segment exists but is not a directory: $segment")
-                        }
-                    }
+                    createOrNavigateToDirectory(baseDir, relativePath)
+                    Unit
                 }
             }
             is SaveLocation.Bookmark -> {
@@ -460,22 +471,13 @@ class AndroidFileSystem(
                 writeBytes(fullPath, bytes)
             }
             is SaveLocation.TreeUri -> {
-                runFsCatching {
-                    val treeUri = Uri.parse(base.uri)
-                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
-
-                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
-                    val parentDir = if (parentPath.isEmpty()) {
-                        baseDir
-                    } else {
-                        createOrNavigateToDirectory(baseDir, parentPath)
-                    }
-
-                    val file = parentDir.findFile(fileName)?.takeIf { !it.isDirectory }
-                        ?: parentDir.createFile("application/octet-stream", fileName)
-                        ?: throw IllegalStateException("Failed to create file: $fileName")
-
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = true
+                    )
+                    val file = findOrCreateTreeFile(parentDir, fileName)
                     context.contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
                         output.write(bytes)
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
@@ -501,22 +503,13 @@ class AndroidFileSystem(
                 appendBytes(fullPath, bytes)
             }
             is SaveLocation.TreeUri -> {
-                runFsCatching {
-                    val treeUri = Uri.parse(base.uri)
-                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
-
-                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
-                    val parentDir = if (parentPath.isEmpty()) {
-                        baseDir
-                    } else {
-                        createOrNavigateToDirectory(baseDir, parentPath)
-                    }
-
-                    val file = parentDir.findFile(fileName)?.takeIf { !it.isDirectory }
-                        ?: parentDir.createFile("application/octet-stream", fileName)
-                        ?: throw IllegalStateException("Failed to create file: $fileName")
-
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = true
+                    )
+                    val file = findOrCreateTreeFile(parentDir, fileName)
                     context.contentResolver.openOutputStream(file.uri, "wa")?.use { output ->
                         output.write(bytes)
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
@@ -544,54 +537,15 @@ class AndroidFileSystem(
                 readString(fullPath)
             }
             is SaveLocation.TreeUri -> {
-                runFsCatching {
-                    val treeUri = Uri.parse(base.uri)
-                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
-
-                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
-                    val parentDir = if (parentPath.isEmpty()) {
-                        baseDir
-                    } else {
-                        navigateToDirectory(baseDir, parentPath)
-                            ?: throw IllegalStateException("Directory not found: $parentPath")
-                    }
-
+                runTreeUriCatching(base) { baseDir ->
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
                     val file = parentDir.findFile(fileName)
                         ?: throw IllegalStateException("File not found: $fileName")
-
-                    context.contentResolver.openInputStream(file.uri)?.use { input ->
-                        val output = ByteArrayOutputStream()
-                        val buffer = ByteArray(8192)
-                        var totalRead = 0L
-                        var zeroReadCount = 0
-                        while (true) {
-                            coroutineContext.ensureActive()
-                            val read = withTimeoutOrNull(SAF_READ_IDLE_TIMEOUT_MILLIS) {
-                                runInterruptible {
-                                    input.read(buffer)
-                                }
-                            } ?: throw IllegalStateException("Read timed out while loading file: $fileName")
-                            when {
-                                read < 0 -> break
-                                read == 0 -> {
-                                    zeroReadCount += 1
-                                    if (zeroReadCount >= 100) {
-                                        throw IllegalStateException("Read stalled while loading file: $fileName")
-                                    }
-                                    backoffAfterZeroRead()
-                                    continue
-                                }
-                                else -> {
-                                    zeroReadCount = 0
-                                }
-                            }
-                            totalRead += read
-                            validateFileSize(totalRead, "file")
-                            output.write(buffer, 0, read)
-                        }
-                        output.toString(Charsets.UTF_8.name())
-                    } ?: throw IllegalStateException("Failed to open input stream for ${file.uri}")
+                    readTreeFileUtf8(file, fileName)
                 }
             }
             is SaveLocation.Bookmark -> {
@@ -608,20 +562,17 @@ class AndroidFileSystem(
             }
             is SaveLocation.TreeUri -> {
                 try {
-                    val treeUri = Uri.parse(base.uri)
-                    val baseDir = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext false
+                    val baseDir = requireTreeBaseDirectory(base)
 
                     if (relativePath.isEmpty()) {
                         return@withContext baseDir.exists()
                     }
 
-                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
-                    val parentDir = if (parentPath.isEmpty()) {
-                        baseDir
-                    } else {
-                        navigateToDirectory(baseDir, parentPath) ?: return@withContext false
-                    }
-
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
                     parentDir.findFile(fileName)?.exists() ?: false
                 } catch (e: Exception) {
                     Logger.e("AndroidFileSystem", "Error checking existence for TreeUri: ${base.uri}, path: $relativePath", e)
@@ -647,28 +598,22 @@ class AndroidFileSystem(
                 deleteRecursively(fullPath)
             }
             is SaveLocation.TreeUri -> {
-                runFsCatching {
-                    val treeUri = Uri.parse(base.uri)
-                    val baseDir = DocumentFile.fromTreeUri(context, treeUri)
-                        ?: throw PermissionRevokedException("Cannot resolve tree URI: ${base.uri}. Please select the folder again.")
-
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
                     if (relativePath.isEmpty()) {
                         // Safety guard: never delete the user-selected TreeUri root from app code.
                         Logger.w(
                             "AndroidFileSystem",
                             "Refusing to delete TreeUri base directory directly: ${base.uri}"
                         )
-                        return@runFsCatching Unit
+                        return@runTreeUriCatching Unit
                     }
 
-                    val (parentPath, fileName) = splitParentAndFileName(relativePath)
-                    val parentDir = if (parentPath.isEmpty()) {
-                        baseDir
-                    } else {
-                        navigateToDirectory(baseDir, parentPath) ?: return@runFsCatching Unit
-                    }
-
-                    val target = parentDir.findFile(fileName) ?: return@runFsCatching Unit
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    val target = parentDir.findFile(fileName) ?: return@runTreeUriCatching Unit
 
                     if (!deleteDocumentRecursively(target)) {
                         throw IllegalStateException("Failed to delete: $relativePath")

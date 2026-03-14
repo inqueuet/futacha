@@ -291,6 +291,7 @@ internal fun ThreadNoticeCard(message: String) {
 internal fun ThreadActionBar(
     menuEntries: List<ThreadMenuEntryConfig>,
     onAction: (ThreadMenuEntryId) -> Unit,
+    applyNavigationBarsPadding: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val visibleActions = remember(menuEntries) {
@@ -304,7 +305,13 @@ internal fun ThreadActionBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp)
-                .navigationBarsPadding(),
+                .then(
+                    if (applyNavigationBarsPadding) {
+                        Modifier.navigationBarsPadding()
+                    } else {
+                        Modifier
+                    }
+                ),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {

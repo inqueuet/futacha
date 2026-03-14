@@ -53,6 +53,19 @@ internal data class ThreadMenuActionState(
     val togglePrivacy: Boolean = false
 )
 
+private fun threadMenuActionStateForScroll(target: ThreadScrollTarget): ThreadMenuActionState {
+    return ThreadMenuActionState(scrollTarget = target)
+}
+
+private fun threadMenuActionStateForRefreshAvailability(
+    availability: ThreadRefreshAvailability
+): ThreadMenuActionState {
+    return when (availability) {
+        ThreadRefreshAvailability.Busy -> ThreadMenuActionState(showRefreshBusyMessage = true)
+        ThreadRefreshAvailability.Ready -> ThreadMenuActionState(startRefresh = true)
+    }
+}
+
 internal fun resolveThreadMenuActionState(
     entryId: ThreadMenuEntryId,
     isRefreshing: Boolean
@@ -62,12 +75,11 @@ internal fun resolveThreadMenuActionState(
             showReplyDialog = true,
             applyReplyDeleteKeyAutofill = true
         )
-        ThreadMenuEntryId.ScrollToTop -> ThreadMenuActionState(scrollTarget = ThreadScrollTarget.Top)
-        ThreadMenuEntryId.ScrollToBottom -> ThreadMenuActionState(scrollTarget = ThreadScrollTarget.Bottom)
-        ThreadMenuEntryId.Refresh -> when (resolveThreadRefreshAvailability(isRefreshing)) {
-            ThreadRefreshAvailability.Busy -> ThreadMenuActionState(showRefreshBusyMessage = true)
-            ThreadRefreshAvailability.Ready -> ThreadMenuActionState(startRefresh = true)
-        }
+        ThreadMenuEntryId.ScrollToTop -> threadMenuActionStateForScroll(ThreadScrollTarget.Top)
+        ThreadMenuEntryId.ScrollToBottom -> threadMenuActionStateForScroll(ThreadScrollTarget.Bottom)
+        ThreadMenuEntryId.Refresh -> threadMenuActionStateForRefreshAvailability(
+            resolveThreadRefreshAvailability(isRefreshing)
+        )
         ThreadMenuEntryId.Gallery -> ThreadMenuActionState(showGallery = true)
         ThreadMenuEntryId.Save -> ThreadMenuActionState(delegateToSaveHandler = true)
         ThreadMenuEntryId.Filter -> ThreadMenuActionState(showFilterSheet = true)
@@ -107,30 +119,58 @@ internal data class ThreadSettingsActionState(
     val delegateToMainActionHandler: Boolean = false
 )
 
+private fun threadSettingsActionState(
+    showNgManagement: Boolean = false,
+    openExternalApp: Boolean = false,
+    togglePrivacy: Boolean = false,
+    showReadAloudControls: Boolean = false,
+    reopenSettingsSheet: Boolean = false,
+    delegateToMainActionHandler: Boolean = false
+): ThreadSettingsActionState {
+    return ThreadSettingsActionState(
+        showNgManagement = showNgManagement,
+        openExternalApp = openExternalApp,
+        togglePrivacy = togglePrivacy,
+        showReadAloudControls = showReadAloudControls,
+        reopenSettingsSheet = reopenSettingsSheet,
+        delegateToMainActionHandler = delegateToMainActionHandler
+    )
+}
+
 internal fun resolveThreadSettingsActionState(
     menuEntryId: ThreadMenuEntryId
 ): ThreadSettingsActionState {
     return when (menuEntryId) {
-        ThreadMenuEntryId.NgManagement -> ThreadSettingsActionState(showNgManagement = true)
-        ThreadMenuEntryId.ExternalApp -> ThreadSettingsActionState(openExternalApp = true)
-        ThreadMenuEntryId.Privacy -> ThreadSettingsActionState(togglePrivacy = true)
-        ThreadMenuEntryId.ReadAloud -> ThreadSettingsActionState(showReadAloudControls = true)
-        ThreadMenuEntryId.Settings -> ThreadSettingsActionState(reopenSettingsSheet = true)
-        else -> ThreadSettingsActionState(delegateToMainActionHandler = true)
+        ThreadMenuEntryId.NgManagement -> threadSettingsActionState(showNgManagement = true)
+        ThreadMenuEntryId.ExternalApp -> threadSettingsActionState(openExternalApp = true)
+        ThreadMenuEntryId.Privacy -> threadSettingsActionState(togglePrivacy = true)
+        ThreadMenuEntryId.ReadAloud -> threadSettingsActionState(showReadAloudControls = true)
+        ThreadMenuEntryId.Settings -> threadSettingsActionState(reopenSettingsSheet = true)
+        else -> threadSettingsActionState(delegateToMainActionHandler = true)
     }
 }
 
-internal fun resolveThreadActionBarEntries(menuEntries: List<ThreadMenuEntryConfig>): List<ThreadMenuEntryConfig> {
-    val normalized = normalizeThreadMenuEntries(menuEntries)
-    return normalized
-        .filter { it.placement == ThreadMenuEntryPlacement.BAR }
+private fun resolveThreadMenuEntriesForPlacement(
+    menuEntries: List<ThreadMenuEntryConfig>,
+    placement: ThreadMenuEntryPlacement
+): List<ThreadMenuEntryConfig> {
+    return normalizeThreadMenuEntries(menuEntries)
+        .filter { it.placement == placement }
         .sortedWith(compareBy<ThreadMenuEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
 }
 
+internal fun resolveThreadActionBarEntries(menuEntries: List<ThreadMenuEntryConfig>): List<ThreadMenuEntryConfig> {
+    return resolveThreadMenuEntriesForPlacement(
+        menuEntries = menuEntries,
+        placement = ThreadMenuEntryPlacement.BAR
+    )
+}
+
 internal fun resolveThreadSettingsMenuEntries(menuEntries: List<ThreadMenuEntryConfig>): List<ThreadMenuEntryConfig> {
-    return normalizeThreadMenuEntries(menuEntries)
-        .filter { it.placement == ThreadMenuEntryPlacement.SHEET }
-        .sortedWith(compareBy<ThreadMenuEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
+    return resolveThreadMenuEntriesForPlacement(
+        menuEntries = menuEntries,
+        placement = ThreadMenuEntryPlacement.SHEET
+    )
 }
 
 internal data class ThreadMenuEntryMeta(

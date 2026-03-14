@@ -364,29 +364,37 @@ fun BoardManagementScreen(
         onBoardDeleted
     ) {
         buildBoardManagementInteractionBindingsBundle(
-            coroutineScope = scope,
-            closeDrawer = { drawerState.close() },
-            openDrawer = { drawerState.open() },
-            onExternalMenuAction = onMenuAction,
-            onHistoryEntrySelected = { onHistoryEntrySelectedState.value(it) },
-            onHistoryRefresh = { onHistoryRefreshState.value() },
-            onHistoryCleared = { onHistoryClearedState.value() },
-            onAddBoard = onAddBoard,
-            onBoardDeleted = onBoardDeleted,
-            showSnackbar = snackbarHostState::showSnackbar,
-            currentIsDeleteMode = { isDeleteMode },
-            currentIsReorderMode = { isReorderMode },
-            currentIsHistoryRefreshing = { isHistoryRefreshing },
-            setIsDeleteMode = { isDeleteMode = it },
-            setIsReorderMode = { isReorderMode = it },
-            setIsHistoryRefreshing = { isHistoryRefreshing = it },
-            currentOverlayState = { overlayState },
-            setOverlayState = { overlayState = it },
-            hasCookieRepository = cookieRepository != null,
-            currentIsMenuExpanded = { isMenuExpanded },
-            setIsMenuExpanded = { isMenuExpanded = it },
-            onBoardSelected = onBoardSelected,
-            onBoardsReordered = onBoardsReordered
+            historyInputs = BoardManagementHistoryInteractionInputs(
+                coroutineScope = scope,
+                closeDrawer = { drawerState.close() },
+                openDrawer = { drawerState.open() },
+                onExternalMenuAction = onMenuAction,
+                onHistoryEntrySelected = { onHistoryEntrySelectedState.value(it) },
+                onHistoryRefresh = { onHistoryRefreshState.value() },
+                onHistoryCleared = { onHistoryClearedState.value() },
+                showSnackbar = snackbarHostState::showSnackbar
+            ),
+            stateInputs = BoardManagementStateInteractionInputs(
+                currentIsDeleteMode = { isDeleteMode },
+                currentIsReorderMode = { isReorderMode },
+                currentIsHistoryRefreshing = { isHistoryRefreshing },
+                setIsDeleteMode = { isDeleteMode = it },
+                setIsReorderMode = { isReorderMode = it },
+                setIsHistoryRefreshing = { isHistoryRefreshing = it },
+                currentIsMenuExpanded = { isMenuExpanded },
+                setIsMenuExpanded = { isMenuExpanded = it }
+            ),
+            overlayInputs = BoardManagementOverlayInteractionInputs(
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                hasCookieRepository = cookieRepository != null
+            ),
+            boardInputs = BoardManagementBoardInteractionInputs(
+                onAddBoard = onAddBoard,
+                onBoardDeleted = onBoardDeleted,
+                onBoardSelected = onBoardSelected,
+                onBoardsReordered = onBoardsReordered
+            )
         )
     }
     val lifecycleBindings = remember(drawerState, scope, isDrawerOpen, isDeleteMode, isReorderMode) {
@@ -407,9 +415,9 @@ fun BoardManagementScreen(
             }
         )
     }
-    val screenBindings = buildBoardManagementScreenBindings(
-        boards = boards,
+    val scaffoldBindings = BoardManagementScaffoldBindings(
         history = history,
+        boards = boards,
         isDeleteMode = isDeleteMode,
         isReorderMode = isReorderMode,
         isDrawerOpen = isDrawerOpen,
@@ -419,20 +427,34 @@ fun BoardManagementScreen(
         snackbarHostState = snackbarHostState,
         onHistoryEntryDismissed = onHistoryEntryDismissed,
         onDismissDrawerTap = { scope.launch { drawerState.close() } },
-        interactionBindings = interactionBindings,
+        historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks,
+        topBarCallbacks = interactionBindings.topBarCallbacks,
+        boardListCallbacks = interactionBindings.boardListCallbacks,
+        onHistorySettingsClick = interactionBindings.onHistorySettingsClick
+    )
+    val overlayBindings = BoardManagementOverlayBindings(
+        boards = boards,
+        history = history,
         overlayState = overlayState,
         preferencesState = preferencesState,
         preferencesCallbacks = preferencesCallbacks,
         autoSavedThreadRepository = autoSavedThreadRepository,
         fileSystem = fileSystem,
-        cookieRepository = cookieRepository
+        cookieRepository = cookieRepository,
+        onDismissAddDialog = interactionBindings.onDismissAddDialog,
+        onAddBoardSubmitted = interactionBindings.dialogCallbacks.onAddBoardSubmitted,
+        onDismissDeleteDialog = interactionBindings.onDismissDeleteDialog,
+        onDeleteBoardConfirmed = interactionBindings.dialogCallbacks.onDeleteBoardConfirmed,
+        onGlobalSettingsBack = interactionBindings.onGlobalSettingsBack,
+        onOpenCookieManagement = interactionBindings.onOpenCookieManagement,
+        onCookieManagementBack = interactionBindings.onCookieManagementBack
     )
 
     PlatformBackHandler(enabled = lifecycleBindings.backAction != BoardManagementBackAction.NONE) {
         lifecycleBindings.onBack()
     }
 
-    BoardManagementScaffold(bindings = screenBindings.scaffold, modifier = modifier)
+    BoardManagementScaffold(bindings = scaffoldBindings, modifier = modifier)
 
-    BoardManagementOverlayHost(bindings = screenBindings.overlay)
+    BoardManagementOverlayHost(bindings = overlayBindings)
 }

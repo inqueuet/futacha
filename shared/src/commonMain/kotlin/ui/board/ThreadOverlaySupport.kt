@@ -97,6 +97,16 @@ internal fun dismissThreadQuoteSelection(): ThreadQuoteSelectionState {
     return ThreadQuoteSelectionState(targetPost = null)
 }
 
+private fun resetThreadPostOverlayTransientState(
+    currentState: ThreadPostOverlayState
+): ThreadPostOverlayState {
+    return currentState.copy(
+        actionSheetState = dismissThreadPostActionSheet(),
+        deleteDialogState = dismissThreadDeleteDialog(),
+        quoteSelectionState = dismissThreadQuoteSelection()
+    )
+}
+
 internal data class ThreadPostOverlayState(
     val actionSheetState: ThreadPostActionSelectionState = dismissThreadPostActionSheet(),
     val deleteDialogState: ThreadDeleteDialogState = dismissThreadDeleteDialog(),
@@ -111,10 +121,8 @@ internal fun openThreadPostActionOverlay(
     currentState: ThreadPostOverlayState,
     post: Post
 ): ThreadPostOverlayState {
-    return currentState.copy(
-        actionSheetState = openThreadPostActionSheet(post),
-        deleteDialogState = dismissThreadDeleteDialog(),
-        quoteSelectionState = dismissThreadQuoteSelection()
+    return resetThreadPostOverlayTransientState(currentState).copy(
+        actionSheetState = openThreadPostActionSheet(post)
     )
 }
 
@@ -129,10 +137,8 @@ internal fun openThreadDeleteOverlay(
     post: Post,
     lastUsedDeleteKey: String
 ): ThreadPostOverlayState {
-    return currentState.copy(
-        actionSheetState = dismissThreadPostActionSheet(),
-        deleteDialogState = openThreadDeleteDialog(post, lastUsedDeleteKey),
-        quoteSelectionState = dismissThreadQuoteSelection()
+    return resetThreadPostOverlayTransientState(currentState).copy(
+        deleteDialogState = openThreadDeleteDialog(post, lastUsedDeleteKey)
     )
 }
 
@@ -166,9 +172,7 @@ internal fun openThreadQuoteOverlay(
     currentState: ThreadPostOverlayState,
     post: Post
 ): ThreadPostOverlayState {
-    return currentState.copy(
-        actionSheetState = dismissThreadPostActionSheet(),
-        deleteDialogState = dismissThreadDeleteDialog(),
+    return resetThreadPostOverlayTransientState(currentState).copy(
         quoteSelectionState = openThreadQuoteSelection(post)
     )
 }
@@ -226,40 +230,52 @@ internal data class ThreadSheetOverlayState(
 
 internal fun emptyThreadSheetOverlayState(): ThreadSheetOverlayState = ThreadSheetOverlayState()
 
+private fun ThreadSheetOverlayState.withSettingsVisible(isVisible: Boolean): ThreadSheetOverlayState {
+    return copy(isSettingsVisible = isVisible)
+}
+
+private fun ThreadSheetOverlayState.withFilterVisible(isVisible: Boolean): ThreadSheetOverlayState {
+    return copy(isFilterVisible = isVisible)
+}
+
+private fun ThreadSheetOverlayState.withReadAloudControlsVisible(isVisible: Boolean): ThreadSheetOverlayState {
+    return copy(isReadAloudControlsVisible = isVisible)
+}
+
 internal fun openThreadSettingsOverlay(
     currentState: ThreadSheetOverlayState
 ): ThreadSheetOverlayState {
-    return currentState.copy(isSettingsVisible = true)
+    return currentState.withSettingsVisible(true)
 }
 
 internal fun dismissThreadSettingsOverlay(
     currentState: ThreadSheetOverlayState
 ): ThreadSheetOverlayState {
-    return currentState.copy(isSettingsVisible = false)
+    return currentState.withSettingsVisible(false)
 }
 
 internal fun openThreadFilterOverlay(
     currentState: ThreadSheetOverlayState
 ): ThreadSheetOverlayState {
-    return currentState.copy(isFilterVisible = true)
+    return currentState.withFilterVisible(true)
 }
 
 internal fun dismissThreadFilterOverlay(
     currentState: ThreadSheetOverlayState
 ): ThreadSheetOverlayState {
-    return currentState.copy(isFilterVisible = false)
+    return currentState.withFilterVisible(false)
 }
 
 internal fun openThreadReadAloudOverlay(
     currentState: ThreadSheetOverlayState
 ): ThreadSheetOverlayState {
-    return currentState.copy(isReadAloudControlsVisible = true)
+    return currentState.withReadAloudControlsVisible(true)
 }
 
 internal fun dismissThreadReadAloudOverlay(
     currentState: ThreadSheetOverlayState
 ): ThreadSheetOverlayState {
-    return currentState.copy(isReadAloudControlsVisible = false)
+    return currentState.withReadAloudControlsVisible(false)
 }
 
 internal fun applyThreadSettingsActionOverlayState(
@@ -287,16 +303,28 @@ internal data class ThreadModalOverlayState(
 
 internal fun emptyThreadModalOverlayState(): ThreadModalOverlayState = ThreadModalOverlayState()
 
+private fun ThreadModalOverlayState.withGalleryVisible(isVisible: Boolean): ThreadModalOverlayState {
+    return copy(isGalleryVisible = isVisible)
+}
+
+private fun ThreadModalOverlayState.withGlobalSettingsVisible(isVisible: Boolean): ThreadModalOverlayState {
+    return copy(isGlobalSettingsVisible = isVisible)
+}
+
+private fun ThreadModalOverlayState.withCookieManagementVisible(isVisible: Boolean): ThreadModalOverlayState {
+    return copy(isCookieManagementVisible = isVisible)
+}
+
 internal fun openThreadGalleryOverlay(
     currentState: ThreadModalOverlayState
 ): ThreadModalOverlayState {
-    return currentState.copy(isGalleryVisible = true)
+    return currentState.withGalleryVisible(true)
 }
 
 internal fun dismissThreadGalleryOverlay(
     currentState: ThreadModalOverlayState
 ): ThreadModalOverlayState {
-    return currentState.copy(isGalleryVisible = false)
+    return currentState.withGalleryVisible(false)
 }
 
 internal fun openThreadGlobalSettingsOverlay(
@@ -311,7 +339,7 @@ internal fun openThreadGlobalSettingsOverlay(
 internal fun dismissThreadGlobalSettingsOverlay(
     currentState: ThreadModalOverlayState
 ): ThreadModalOverlayState {
-    return currentState.copy(isGlobalSettingsVisible = false)
+    return currentState.withGlobalSettingsVisible(false)
 }
 
 internal fun openThreadCookieManagementOverlay(
@@ -326,5 +354,5 @@ internal fun openThreadCookieManagementOverlay(
 internal fun dismissThreadCookieManagementOverlay(
     currentState: ThreadModalOverlayState
 ): ThreadModalOverlayState {
-    return currentState.copy(isCookieManagementVisible = false)
+    return currentState.withCookieManagementVisible(false)
 }

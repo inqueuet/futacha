@@ -318,59 +318,6 @@ internal fun resolveCatalogNgManagementSheetState(
     )
 }
 
-internal data class CatalogOverscrollDragState(
-    val totalDrag: Float,
-    val overscrollTarget: Float,
-    val shouldConsume: Boolean
-)
-
-internal fun updateCatalogOverscrollDragState(
-    totalDrag: Float,
-    dragAmount: Float,
-    isRefreshing: Boolean,
-    isAtTop: Boolean,
-    isAtBottom: Boolean,
-    maxOverscrollPx: Float
-): CatalogOverscrollDragState {
-    if (isRefreshing) {
-        return CatalogOverscrollDragState(
-            totalDrag = totalDrag,
-            overscrollTarget = 0f,
-            shouldConsume = false
-        )
-    }
-    return when {
-        isAtTop && dragAmount > 0f -> {
-            val updatedTotalDrag = totalDrag + dragAmount
-            CatalogOverscrollDragState(
-                totalDrag = updatedTotalDrag,
-                overscrollTarget = (updatedTotalDrag * 0.4f).coerceIn(0f, maxOverscrollPx),
-                shouldConsume = true
-            )
-        }
-        isAtBottom && dragAmount < 0f -> {
-            val updatedTotalDrag = totalDrag + dragAmount
-            CatalogOverscrollDragState(
-                totalDrag = updatedTotalDrag,
-                overscrollTarget = (updatedTotalDrag * 0.4f).coerceIn(-maxOverscrollPx, 0f),
-                shouldConsume = true
-            )
-        }
-        else -> CatalogOverscrollDragState(
-            totalDrag = totalDrag,
-            overscrollTarget = (totalDrag * 0.4f).coerceIn(-maxOverscrollPx, maxOverscrollPx),
-            shouldConsume = false
-        )
-    }
-}
-
-internal fun shouldTriggerCatalogOverscrollRefresh(
-    totalDrag: Float,
-    refreshTriggerPx: Float
-): Boolean {
-    return kotlin.math.abs(totalDrag) > refreshTriggerPx
-}
-
 internal enum class CatalogBackAction {
     CloseDrawer,
     ExitSearch,

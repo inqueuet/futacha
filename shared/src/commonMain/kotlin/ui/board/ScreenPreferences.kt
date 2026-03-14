@@ -12,6 +12,7 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 data class ScreenPreferencesState(
     val appVersion: String,
     val isBackgroundRefreshEnabled: Boolean = false,
+    val isAdsEnabled: Boolean = true,
     val isLightweightModeEnabled: Boolean = false,
     val manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     val manualSaveLocation: SaveLocation? = null,
@@ -26,6 +27,7 @@ data class ScreenPreferencesState(
 
 data class ScreenPreferencesCallbacks(
     val onBackgroundRefreshChanged: (Boolean) -> Unit = {},
+    val onAdsEnabledChanged: (Boolean) -> Unit = {},
     val onLightweightModeChanged: (Boolean) -> Unit = {},
     val onManualSaveDirectoryChanged: (String) -> Unit = {},
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},

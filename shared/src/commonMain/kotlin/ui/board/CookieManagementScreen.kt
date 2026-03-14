@@ -68,16 +68,15 @@ fun CookieManagementScreen(
                     repository.listCookies()
                 }
             }.getOrElse { emptyList() }
-            applyCookieReloadResult(
+            val reloadResult = applyCookieReloadResult(
                 currentGeneration = reloadGeneration,
                 requestGeneration = requestGeneration,
                 cookies = loaded,
                 isLoading = isLoading
-            ).let { (updatedCookies, updatedLoading) ->
-                if (reloadGeneration == requestGeneration) {
-                    cookies = updatedCookies
-                    isLoading = updatedLoading
-                }
+            )
+            if (reloadResult.shouldApply) {
+                cookies = reloadResult.cookies
+                isLoading = reloadResult.isLoading
             }
         }
     }

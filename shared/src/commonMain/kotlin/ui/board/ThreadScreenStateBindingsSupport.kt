@@ -2,7 +2,6 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.ImageData
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 
@@ -11,45 +10,47 @@ internal data class ThreadScreenMessageNgBindings(
     val ngMutationCallbacks: ThreadNgMutationCallbacks
 )
 
+internal data class ThreadScreenMessageNgInputs(
+    val coroutineScope: CoroutineScope,
+    val showSnackbar: suspend (String) -> Unit,
+    val screenPreferencesCallbacks: ScreenPreferencesCallbacks,
+    val stateStore: AppStateStore?,
+    val onFallbackHeadersChanged: (List<String>) -> Unit,
+    val onFallbackWordsChanged: (List<String>) -> Unit,
+    val currentHeaders: () -> List<String>,
+    val currentWords: () -> List<String>,
+    val isFilteringEnabled: () -> Boolean,
+    val setFilteringEnabled: (Boolean) -> Unit
+)
+
 internal data class ThreadScreenMessageFormBindingsBundle(
     val messageNgBindings: ThreadScreenMessageNgBindings,
     val formBindings: ThreadScreenFormBindings
 )
 
 internal fun buildThreadScreenMessageNgBindings(
-    coroutineScope: CoroutineScope,
-    showSnackbar: suspend (String) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    stateStore: AppStateStore?,
-    onFallbackHeadersChanged: (List<String>) -> Unit,
-    onFallbackWordsChanged: (List<String>) -> Unit,
-    currentHeaders: () -> List<String>,
-    currentWords: () -> List<String>,
-    isFilteringEnabled: () -> Boolean,
-    setFilteringEnabled: (Boolean) -> Unit
+    inputs: ThreadScreenMessageNgInputs
 ): ThreadScreenMessageNgBindings {
     val messageRuntime = buildThreadMessageRuntimeBindings(
-        coroutineScope = coroutineScope,
-        showSnackbar = showSnackbar,
-        onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-        onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker
+        coroutineScope = inputs.coroutineScope,
+        showSnackbar = inputs.showSnackbar,
+        onManualSaveDirectoryChanged = inputs.screenPreferencesCallbacks.onManualSaveDirectoryChanged,
+        onSaveDirectorySelectionChanged = inputs.screenPreferencesCallbacks.onSaveDirectorySelectionChanged,
+        onOpenSaveDirectoryPicker = inputs.screenPreferencesCallbacks.onOpenSaveDirectoryPicker
     )
     val ngPersistenceBindings = buildThreadNgPersistenceBindings(
-        coroutineScope = coroutineScope,
-        stateStore = stateStore,
-        onFallbackHeadersChanged = onFallbackHeadersChanged,
-        onFallbackWordsChanged = onFallbackWordsChanged
+        coroutineScope = inputs.coroutineScope,
+        stateStore = inputs.stateStore,
+        onFallbackHeadersChanged = inputs.onFallbackHeadersChanged,
+        onFallbackWordsChanged = inputs.onFallbackWordsChanged
     )
     return ThreadScreenMessageNgBindings(
         messageRuntime = messageRuntime,
         ngMutationCallbacks = buildThreadNgMutationCallbacks(
-            currentHeaders = currentHeaders,
-            currentWords = currentWords,
-            isFilteringEnabled = isFilteringEnabled,
-            setFilteringEnabled = setFilteringEnabled,
+            currentHeaders = inputs.currentHeaders,
+            currentWords = inputs.currentWords,
+            isFilteringEnabled = inputs.isFilteringEnabled,
+            setFilteringEnabled = inputs.setFilteringEnabled,
             persistHeaders = ngPersistenceBindings.persistHeaders,
             persistWords = ngPersistenceBindings.persistWords,
             showMessage = messageRuntime.showMessage
@@ -63,132 +64,88 @@ internal data class ThreadScreenFormBindings(
     val replyDialogBinding: ThreadReplyDialogStateBinding
 )
 
+internal data class ThreadScreenFilterBindingInputs(
+    val currentOptions: () -> Set<ThreadFilterOption>,
+    val currentSortOption: () -> ThreadFilterSortOption?,
+    val currentKeyword: () -> String,
+    val setOptions: (Set<ThreadFilterOption>) -> Unit,
+    val setSortOption: (ThreadFilterSortOption?) -> Unit,
+    val setKeyword: (String) -> Unit
+)
+
+internal data class ThreadScreenReplyDraftInputs(
+    val currentName: () -> String,
+    val currentEmail: () -> String,
+    val currentSubject: () -> String,
+    val currentComment: () -> String,
+    val currentPassword: () -> String,
+    val currentImageData: () -> ImageData?,
+    val setName: (String) -> Unit,
+    val setEmail: (String) -> Unit,
+    val setSubject: (String) -> Unit,
+    val setComment: (String) -> Unit,
+    val setPassword: (String) -> Unit,
+    val setImageData: (ImageData?) -> Unit
+)
+
+internal data class ThreadScreenReplyDialogInputs(
+    val isVisible: () -> Boolean,
+    val setVisible: (Boolean) -> Unit
+)
+
+internal data class ThreadScreenFormInputs(
+    val filterInputs: ThreadScreenFilterBindingInputs,
+    val replyDraftInputs: ThreadScreenReplyDraftInputs,
+    val replyDialogInputs: ThreadScreenReplyDialogInputs
+)
+
 internal fun buildThreadScreenFormBindings(
-    currentFilterOptions: () -> Set<ThreadFilterOption>,
-    currentSortOption: () -> ThreadFilterSortOption?,
-    currentKeyword: () -> String,
-    setFilterOptions: (Set<ThreadFilterOption>) -> Unit,
-    setSortOption: (ThreadFilterSortOption?) -> Unit,
-    setKeyword: (String) -> Unit,
-    currentReplyName: () -> String,
-    currentReplyEmail: () -> String,
-    currentReplySubject: () -> String,
-    currentReplyComment: () -> String,
-    currentReplyPassword: () -> String,
-    currentReplyImageData: () -> ImageData?,
-    setReplyName: (String) -> Unit,
-    setReplyEmail: (String) -> Unit,
-    setReplySubject: (String) -> Unit,
-    setReplyComment: (String) -> Unit,
-    setReplyPassword: (String) -> Unit,
-    setReplyImageData: (ImageData?) -> Unit,
-    isReplyDialogVisible: () -> Boolean,
-    setReplyDialogVisible: (Boolean) -> Unit
+    inputs: ThreadScreenFormInputs
 ): ThreadScreenFormBindings {
     val threadFilterBinding = buildThreadFilterUiStateBinding(
-        currentOptions = currentFilterOptions,
-        currentSortOption = currentSortOption,
-        currentKeyword = currentKeyword,
-        setOptions = setFilterOptions,
-        setSortOption = setSortOption,
-        setKeyword = setKeyword
+        currentOptions = inputs.filterInputs.currentOptions,
+        currentSortOption = inputs.filterInputs.currentSortOption,
+        currentKeyword = inputs.filterInputs.currentKeyword,
+        setOptions = inputs.filterInputs.setOptions,
+        setSortOption = inputs.filterInputs.setSortOption,
+        setKeyword = inputs.filterInputs.setKeyword
     )
     val replyDraftBinding = buildThreadReplyDraftBinding(
-        currentName = currentReplyName,
-        currentEmail = currentReplyEmail,
-        currentSubject = currentReplySubject,
-        currentComment = currentReplyComment,
-        currentPassword = currentReplyPassword,
-        currentImageData = currentReplyImageData,
-        setName = setReplyName,
-        setEmail = setReplyEmail,
-        setSubject = setReplySubject,
-        setComment = setReplyComment,
-        setPassword = setReplyPassword,
-        setImageData = setReplyImageData
+        currentName = inputs.replyDraftInputs.currentName,
+        currentEmail = inputs.replyDraftInputs.currentEmail,
+        currentSubject = inputs.replyDraftInputs.currentSubject,
+        currentComment = inputs.replyDraftInputs.currentComment,
+        currentPassword = inputs.replyDraftInputs.currentPassword,
+        currentImageData = inputs.replyDraftInputs.currentImageData,
+        setName = inputs.replyDraftInputs.setName,
+        setEmail = inputs.replyDraftInputs.setEmail,
+        setSubject = inputs.replyDraftInputs.setSubject,
+        setComment = inputs.replyDraftInputs.setComment,
+        setPassword = inputs.replyDraftInputs.setPassword,
+        setImageData = inputs.replyDraftInputs.setImageData
     )
     return ThreadScreenFormBindings(
         threadFilterBinding = threadFilterBinding,
         replyDraftBinding = replyDraftBinding,
         replyDialogBinding = buildThreadReplyDialogStateBinding(
-            isVisible = isReplyDialogVisible,
-            setVisible = setReplyDialogVisible,
+            isVisible = inputs.replyDialogInputs.isVisible,
+            setVisible = inputs.replyDialogInputs.setVisible,
             draftBinding = replyDraftBinding
         )
     )
 }
 
+internal data class ThreadScreenMessageFormInputs(
+    val messageNgInputs: ThreadScreenMessageNgInputs,
+    val formInputs: ThreadScreenFormInputs
+)
+
 internal fun buildThreadScreenMessageFormBindingsBundle(
-    coroutineScope: CoroutineScope,
-    showSnackbar: suspend (String) -> Unit,
-    onManualSaveDirectoryChanged: (String) -> Unit,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    stateStore: AppStateStore?,
-    onFallbackHeadersChanged: (List<String>) -> Unit,
-    onFallbackWordsChanged: (List<String>) -> Unit,
-    currentHeaders: () -> List<String>,
-    currentWords: () -> List<String>,
-    isFilteringEnabled: () -> Boolean,
-    setFilteringEnabled: (Boolean) -> Unit,
-    currentFilterOptions: () -> Set<ThreadFilterOption>,
-    currentSortOption: () -> ThreadFilterSortOption?,
-    currentKeyword: () -> String,
-    setFilterOptions: (Set<ThreadFilterOption>) -> Unit,
-    setSortOption: (ThreadFilterSortOption?) -> Unit,
-    setKeyword: (String) -> Unit,
-    currentReplyName: () -> String,
-    currentReplyEmail: () -> String,
-    currentReplySubject: () -> String,
-    currentReplyComment: () -> String,
-    currentReplyPassword: () -> String,
-    currentReplyImageData: () -> ImageData?,
-    setReplyName: (String) -> Unit,
-    setReplyEmail: (String) -> Unit,
-    setReplySubject: (String) -> Unit,
-    setReplyComment: (String) -> Unit,
-    setReplyPassword: (String) -> Unit,
-    setReplyImageData: (ImageData?) -> Unit,
-    isReplyDialogVisible: () -> Boolean,
-    setReplyDialogVisible: (Boolean) -> Unit
+    inputs: ThreadScreenMessageFormInputs
 ): ThreadScreenMessageFormBindingsBundle {
     return ThreadScreenMessageFormBindingsBundle(
-        messageNgBindings = buildThreadScreenMessageNgBindings(
-            coroutineScope = coroutineScope,
-            showSnackbar = showSnackbar,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-            stateStore = stateStore,
-            onFallbackHeadersChanged = onFallbackHeadersChanged,
-            onFallbackWordsChanged = onFallbackWordsChanged,
-            currentHeaders = currentHeaders,
-            currentWords = currentWords,
-            isFilteringEnabled = isFilteringEnabled,
-            setFilteringEnabled = setFilteringEnabled
-        ),
-        formBindings = buildThreadScreenFormBindings(
-            currentFilterOptions = currentFilterOptions,
-            currentSortOption = currentSortOption,
-            currentKeyword = currentKeyword,
-            setFilterOptions = setFilterOptions,
-            setSortOption = setSortOption,
-            setKeyword = setKeyword,
-            currentReplyName = currentReplyName,
-            currentReplyEmail = currentReplyEmail,
-            currentReplySubject = currentReplySubject,
-            currentReplyComment = currentReplyComment,
-            currentReplyPassword = currentReplyPassword,
-            currentReplyImageData = currentReplyImageData,
-            setReplyName = setReplyName,
-            setReplyEmail = setReplyEmail,
-            setReplySubject = setReplySubject,
-            setReplyComment = setReplyComment,
-            setReplyPassword = setReplyPassword,
-            setReplyImageData = setReplyImageData,
-            isReplyDialogVisible = isReplyDialogVisible,
-            setReplyDialogVisible = setReplyDialogVisible
-        )
+        messageNgBindings = buildThreadScreenMessageNgBindings(inputs.messageNgInputs),
+        formBindings = buildThreadScreenFormBindings(inputs.formInputs)
     )
 }
 
@@ -208,6 +165,22 @@ internal data class ThreadReadAloudRuntimeBindings(
 internal data class ThreadScreenRuntimeJobBindingsBundle(
     val readAloudRuntimeBindings: ThreadReadAloudRuntimeBindings,
     val jobBindings: ThreadScreenJobBindings
+)
+
+internal data class ThreadScreenRuntimeJobInputs(
+    val readAloudStateBindings: ThreadScreenReadAloudStateBindings,
+    val onStopPlayback: () -> Unit,
+    val currentAutoSaveJob: () -> Job?,
+    val setAutoSaveJob: (Job?) -> Unit,
+    val currentManualSaveJob: () -> Job?,
+    val setManualSaveJob: (Job?) -> Unit,
+    val currentSingleMediaSaveJob: () -> Job?,
+    val setSingleMediaSaveJob: (Job?) -> Unit,
+    val currentRefreshThreadJob: () -> Job?,
+    val setRefreshThreadJob: (Job?) -> Unit,
+    val setIsManualSaveInProgress: (Boolean) -> Unit,
+    val setIsSingleMediaSaveInProgress: (Boolean) -> Unit,
+    val onDismissReadAloudOverlay: () -> Unit
 )
 
 internal fun buildThreadReadAloudRuntimeBindings(
@@ -289,41 +262,28 @@ internal fun buildThreadScreenJobBindings(
 }
 
 internal fun buildThreadScreenRuntimeJobBindingsBundle(
-    currentReadAloudState: () -> ThreadReadAloudRuntimeState,
-    setReadAloudState: (ThreadReadAloudRuntimeState) -> Unit,
-    onStopPlayback: () -> Unit,
-    currentAutoSaveJob: () -> Job?,
-    setAutoSaveJob: (Job?) -> Unit,
-    currentManualSaveJob: () -> Job?,
-    setManualSaveJob: (Job?) -> Unit,
-    currentSingleMediaSaveJob: () -> Job?,
-    setSingleMediaSaveJob: (Job?) -> Unit,
-    currentRefreshThreadJob: () -> Job?,
-    setRefreshThreadJob: (Job?) -> Unit,
-    setIsManualSaveInProgress: (Boolean) -> Unit,
-    setIsSingleMediaSaveInProgress: (Boolean) -> Unit,
-    onDismissReadAloudOverlay: () -> Unit
+    inputs: ThreadScreenRuntimeJobInputs
 ): ThreadScreenRuntimeJobBindingsBundle {
     val readAloudRuntimeBindings = buildThreadReadAloudRuntimeBindings(
-        currentState = currentReadAloudState,
-        setState = setReadAloudState,
-        onStopPlayback = onStopPlayback
+        currentState = inputs.readAloudStateBindings.currentState,
+        setState = inputs.readAloudStateBindings.setState,
+        onStopPlayback = inputs.onStopPlayback
     )
     return ThreadScreenRuntimeJobBindingsBundle(
         readAloudRuntimeBindings = readAloudRuntimeBindings,
         jobBindings = buildThreadScreenJobBindings(
-            currentAutoSaveJob = currentAutoSaveJob,
-            setAutoSaveJob = setAutoSaveJob,
-            currentManualSaveJob = currentManualSaveJob,
-            setManualSaveJob = setManualSaveJob,
-            currentSingleMediaSaveJob = currentSingleMediaSaveJob,
-            setSingleMediaSaveJob = setSingleMediaSaveJob,
-            currentRefreshThreadJob = currentRefreshThreadJob,
-            setRefreshThreadJob = setRefreshThreadJob,
-            setIsManualSaveInProgress = setIsManualSaveInProgress,
-            setIsSingleMediaSaveInProgress = setIsSingleMediaSaveInProgress,
+            currentAutoSaveJob = inputs.currentAutoSaveJob,
+            setAutoSaveJob = inputs.setAutoSaveJob,
+            currentManualSaveJob = inputs.currentManualSaveJob,
+            setManualSaveJob = inputs.setManualSaveJob,
+            currentSingleMediaSaveJob = inputs.currentSingleMediaSaveJob,
+            setSingleMediaSaveJob = inputs.setSingleMediaSaveJob,
+            currentRefreshThreadJob = inputs.currentRefreshThreadJob,
+            setRefreshThreadJob = inputs.setRefreshThreadJob,
+            setIsManualSaveInProgress = inputs.setIsManualSaveInProgress,
+            setIsSingleMediaSaveInProgress = inputs.setIsSingleMediaSaveInProgress,
             onStopReadAloud = readAloudRuntimeBindings.stop,
-            onDismissReadAloudOverlay = onDismissReadAloudOverlay
+            onDismissReadAloudOverlay = inputs.onDismissReadAloudOverlay
         )
     )
 }

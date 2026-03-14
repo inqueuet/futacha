@@ -25,6 +25,22 @@ internal data class BoardManagementOverlayState(
     val isCookieManagementVisible: Boolean = false
 )
 
+private fun BoardManagementOverlayState.withAddDialogVisible(isVisible: Boolean): BoardManagementOverlayState {
+    return copy(isAddDialogVisible = isVisible)
+}
+
+private fun BoardManagementOverlayState.withBoardToDelete(board: BoardSummary?): BoardManagementOverlayState {
+    return copy(boardToDelete = board)
+}
+
+private fun BoardManagementOverlayState.withGlobalSettingsVisible(isVisible: Boolean): BoardManagementOverlayState {
+    return copy(isGlobalSettingsVisible = isVisible)
+}
+
+private fun BoardManagementOverlayState.withCookieManagementVisible(isVisible: Boolean): BoardManagementOverlayState {
+    return copy(isCookieManagementVisible = isVisible)
+}
+
 internal data class BoardManagementMutableStateBundle(
     val isMenuExpanded: MutableState<Boolean>,
     val isDeleteMode: MutableState<Boolean>,
@@ -47,53 +63,52 @@ internal fun rememberBoardManagementMutableStateBundle(): BoardManagementMutable
 internal fun openBoardManagementAddDialog(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(isAddDialogVisible = true)
+    return currentState.withAddDialogVisible(true)
 }
 
 internal fun dismissBoardManagementAddDialog(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(isAddDialogVisible = false)
+    return currentState.withAddDialogVisible(false)
 }
 
 internal fun openBoardManagementDeleteDialog(
     currentState: BoardManagementOverlayState,
     board: BoardSummary
 ): BoardManagementOverlayState {
-    return currentState.copy(boardToDelete = board)
+    return currentState.withBoardToDelete(board)
 }
 
 internal fun dismissBoardManagementDeleteDialog(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(boardToDelete = null)
+    return currentState.withBoardToDelete(null)
 }
 
 internal fun openBoardManagementGlobalSettings(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(isGlobalSettingsVisible = true)
+    return currentState.withGlobalSettingsVisible(true)
 }
 
 internal fun closeBoardManagementGlobalSettings(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(isGlobalSettingsVisible = false)
+    return currentState.withGlobalSettingsVisible(false)
 }
 
 internal fun openBoardManagementCookieManagement(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(
-        isGlobalSettingsVisible = false,
-        isCookieManagementVisible = true
-    )
+    return currentState
+        .withGlobalSettingsVisible(false)
+        .withCookieManagementVisible(true)
 }
 
 internal fun closeBoardManagementCookieManagement(
     currentState: BoardManagementOverlayState
 ): BoardManagementOverlayState {
-    return currentState.copy(isCookieManagementVisible = false)
+    return currentState.withCookieManagementVisible(false)
 }
 
 internal data class BoardManagementRuntimeObjectsBundle(
@@ -111,8 +126,10 @@ internal fun rememberBoardManagementRuntimeObjectsBundle(): BoardManagementRunti
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isDrawerOpen by remember {
         derivedStateOf {
-            drawerState.currentValue == DrawerValue.Open ||
-                drawerState.targetValue == DrawerValue.Open
+            resolveBoardManagementDrawerOpenState(
+                currentValue = drawerState.currentValue,
+                targetValue = drawerState.targetValue
+            )
         }
     }
     return BoardManagementRuntimeObjectsBundle(
@@ -127,6 +144,13 @@ internal enum class BoardManagementBackAction {
     NONE,
     CLOSE_DRAWER,
     CLEAR_EDIT_MODES
+}
+
+internal fun resolveBoardManagementDrawerOpenState(
+    currentValue: DrawerValue,
+    targetValue: DrawerValue
+): Boolean {
+    return currentValue == DrawerValue.Open || targetValue == DrawerValue.Open
 }
 
 internal fun resolveBoardManagementBackAction(
@@ -155,13 +179,27 @@ internal fun buildBoardManagementLifecycleBindings(
     return BoardManagementLifecycleBindings(
         backAction = currentBackAction(),
         onBack = {
-            when (currentBackAction()) {
-                BoardManagementBackAction.CLOSE_DRAWER -> {
-                    coroutineScope.launch { closeDrawer() }
-                }
-                BoardManagementBackAction.CLEAR_EDIT_MODES -> clearEditModes()
-                BoardManagementBackAction.NONE -> Unit
-            }
+            performBoardManagementBackAction(
+                action = currentBackAction(),
+                coroutineScope = coroutineScope,
+                closeDrawer = closeDrawer,
+                clearEditModes = clearEditModes
+            )
         }
     )
+}
+
+internal fun performBoardManagementBackAction(
+    action: BoardManagementBackAction,
+    coroutineScope: CoroutineScope,
+    closeDrawer: suspend () -> Unit,
+    clearEditModes: () -> Unit
+) {
+    when (action) {
+        BoardManagementBackAction.CLOSE_DRAWER -> {
+            coroutineScope.launch { closeDrawer() }
+        }
+        BoardManagementBackAction.CLEAR_EDIT_MODES -> clearEditModes()
+        BoardManagementBackAction.NONE -> Unit
+    }
 }

@@ -16,11 +16,12 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.FakePlatformStateStorage
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
+import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.version.UpdateInfo
@@ -56,15 +57,17 @@ class FutachaAppTest {
         val entry = historyEntry()
         val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
             coroutineScope = this,
-            setBackgroundRefreshEnabled = { backgroundRefreshEnabled = it },
-            setLightweightModeEnabled = { lightweightEnabled = it },
-            setManualSaveDirectory = { manualSaveDirectory = it },
-            setAttachmentPickerPreference = { attachmentPickerPreference = it },
-            setSaveDirectorySelection = { saveDirectorySelection = it },
-            setManualSaveLocation = { manualSaveLocation = it },
-            setPreferredFileManager = { packageName, label -> preferredFileManager = packageName to label },
-            setThreadMenuEntries = { threadMenuEntries = it },
-            setCatalogNavEntries = { catalogNavEntries = it }
+            inputs = FutachaPreferenceMutationInputs(
+                setBackgroundRefreshEnabled = { backgroundRefreshEnabled = it },
+                setLightweightModeEnabled = { lightweightEnabled = it },
+                setManualSaveDirectory = { manualSaveDirectory = it },
+                setAttachmentPickerPreference = { attachmentPickerPreference = it },
+                setSaveDirectorySelection = { saveDirectorySelection = it },
+                setManualSaveLocation = { manualSaveLocation = it },
+                setPreferredFileManager = { packageName, label -> preferredFileManager = packageName to label },
+                setThreadMenuEntries = { threadMenuEntries = it },
+                setCatalogNavEntries = { catalogNavEntries = it }
+            )
         )
         val historyMutations = buildFutachaHistoryMutationCallbacks(
             coroutineScope = this,
@@ -74,8 +77,10 @@ class FutachaAppTest {
         )
         var pickerOpened = false
         val screenPreferencesCallbacks = buildFutachaScreenPreferencesCallbacks(
-            mutations = preferenceMutations,
-            onOpenSaveDirectoryPicker = { pickerOpened = true }
+            FutachaScreenPreferencesCallbackInputs(
+                preferenceMutations = preferenceMutations,
+                onOpenSaveDirectoryPicker = { pickerOpened = true }
+            )
         )
 
         preferenceMutations.onBackgroundRefreshChanged(true)
@@ -119,22 +124,26 @@ class FutachaAppTest {
         var refreshCount = 0
         var clearCount = 0
         val entry = historyEntry()
+        val navigationCallbacks = FutachaNavigationCallbacks(
+            onHistoryEntrySelected = { selectedEntry = it },
+            onSavedThreadSelected = {},
+            onCatalogThreadSelected = { _, _, _, _, _ -> },
+            onSavedThreadsDismissed = {},
+            onBoardSelectionCleared = {},
+            onThreadDismissed = {},
+            onRegisteredThreadUrlClick = { false }
+        )
+        val historyMutations = FutachaHistoryMutationCallbacks(
+            onDismissHistoryEntry = { dismissedEntry = it },
+            onUpdateHistoryEntry = { updatedEntry = it },
+            onClearHistory = { clearCount += 1 }
+        )
         val historyCallbacks = buildFutachaScreenHistoryCallbacks(
-            navigationCallbacks = FutachaNavigationCallbacks(
-                onHistoryEntrySelected = { selectedEntry = it },
-                onSavedThreadSelected = {},
-                onCatalogThreadSelected = { _, _, _, _, _ -> },
-                onSavedThreadsDismissed = {},
-                onBoardSelectionCleared = {},
-                onThreadDismissed = {},
-                onRegisteredThreadUrlClick = { false }
-            ),
-            historyMutations = FutachaHistoryMutationCallbacks(
-                onDismissHistoryEntry = { dismissedEntry = it },
-                onUpdateHistoryEntry = { updatedEntry = it },
-                onClearHistory = { clearCount += 1 }
-            ),
-            onHistoryRefresh = { refreshCount += 1 }
+            FutachaScreenHistoryCallbackInputs(
+                navigationCallbacks = navigationCallbacks,
+                historyMutations = historyMutations,
+                onHistoryRefresh = { refreshCount += 1 }
+            )
         )
 
         historyCallbacks.onHistoryEntrySelected(entry)
@@ -152,20 +161,96 @@ class FutachaAppTest {
     }
 
     @Test
+    fun futachaScreenBindingsBundle_buildsSharedContractsFromSingleInputBundle() = runBlocking {
+        var backgroundRefreshEnabled: Boolean? = null
+        var selectedBoardId: String? = null
+        var pickerOpened = false
+        val boards = listOf(board(id = "img"))
+        val entry = historyEntry(boardId = "img")
+        val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
+            coroutineScope = this,
+            inputs = FutachaPreferenceMutationInputs(
+                setBackgroundRefreshEnabled = { backgroundRefreshEnabled = it },
+                setLightweightModeEnabled = {},
+                setManualSaveDirectory = {},
+                setAttachmentPickerPreference = {},
+                setSaveDirectorySelection = {},
+                setManualSaveLocation = {},
+                setPreferredFileManager = { _, _ -> },
+                setThreadMenuEntries = {},
+                setCatalogNavEntries = {}
+            )
+        )
+        val historyMutations = FutachaHistoryMutationCallbacks(
+            onDismissHistoryEntry = {},
+            onUpdateHistoryEntry = {},
+            onClearHistory = {}
+        )
+        val bundle = buildFutachaScreenBindingsBundle(
+            coroutineScope = this,
+            inputs = FutachaScreenBindingsInputs(
+                history = listOf(entry),
+                currentBoards = { boards },
+                currentNavigationState = { FutachaNavigationState() },
+                setNavigationState = { selectedBoardId = it.selectedBoardId },
+                updateBoards = { it(boards) },
+                preferenceMutations = preferenceMutations,
+                historyMutations = historyMutations,
+                preferencesStateInputs = FutachaScreenPreferencesStateInputs(
+                    appVersion = "1.2.3",
+                    isBackgroundRefreshEnabled = false,
+                    isLightweightModeEnabled = true,
+                    manualSaveDirectory = "manual",
+                    manualSaveLocation = SaveLocation.Path("manual"),
+                    resolvedManualSaveDirectory = "/virtual/manual",
+                    attachmentPickerPreference = AttachmentPickerPreference.DOCUMENT,
+                    saveDirectorySelection = SaveDirectorySelection.PICKER,
+                    preferredFileManagerPackage = "pkg",
+                    preferredFileManagerLabel = "Files",
+                    threadMenuEntries = emptyList(),
+                    catalogNavEntries = emptyList()
+                ),
+                onOpenSaveDirectoryPicker = { pickerOpened = true },
+                onHistoryRefresh = {}
+            )
+        )
+
+        bundle.screenPreferencesCallbacks.onBackgroundRefreshChanged(true)
+        bundle.screenPreferencesCallbacks.onOpenSaveDirectoryPicker?.invoke()
+        bundle.screenHistoryCallbacks.onHistoryEntrySelected(entry)
+        yield()
+        delay(1)
+
+        assertEquals(true, backgroundRefreshEnabled)
+        assertTrue(pickerOpened)
+        assertEquals("img", selectedBoardId)
+        assertEquals(listOf(entry), bundle.screenContract.history)
+        assertSame(bundle.screenHistoryCallbacks, bundle.screenContract.historyCallbacks)
+        assertSame(bundle.screenPreferencesCallbacks, bundle.screenContract.preferencesCallbacks)
+        assertEquals("1.2.3", bundle.screenPreferencesState.appVersion)
+        assertSame(bundle.screenPreferencesState, bundle.screenContract.preferencesState)
+    }
+
+    @Test
     fun futachaRuntimeHelpers_buildRepositoryHolderAndCloseOwnedRepository() {
         val sharedRepository = TestBoardRepository()
         val ownedRepository = TestBoardRepository()
+        val existingAutoSaveRepository = SavedThreadRepository(InMemoryFileSystem())
         val sharedHolder = buildFutachaRepositoryHolder(
-            httpClient = null,
-            cookieRepository = null,
-            createSharedRepository = { _, _ -> error("should not create shared repository") },
-            createOwnedRepository = { ownedRepository }
+            FutachaRepositoryHolderInputs(
+                httpClient = null,
+                cookieRepository = null,
+                createSharedRepository = { _, _ -> error("should not create shared repository") },
+                createOwnedRepository = { ownedRepository }
+            )
         )
         val explicitSharedHolder = buildFutachaRepositoryHolder(
-            httpClient = io.ktor.client.HttpClient(),
-            cookieRepository = null,
-            createSharedRepository = { _, _ -> sharedRepository },
-            createOwnedRepository = { error("should not create owned repository") }
+            FutachaRepositoryHolderInputs(
+                httpClient = io.ktor.client.HttpClient(),
+                cookieRepository = null,
+                createSharedRepository = { _, _ -> sharedRepository },
+                createOwnedRepository = { error("should not create owned repository") }
+            )
         )
 
         assertTrue(sharedHolder.ownsRepository)
@@ -178,6 +263,15 @@ class FutachaAppTest {
 
         assertEquals(0, sharedRepository.closeAsyncCalls)
         assertEquals(1, ownedRepository.closeAsyncCalls)
+        assertSame(
+            existingAutoSaveRepository,
+            buildFutachaAutoSavedThreadRepository(
+                FutachaAutoSavedThreadRepositoryInputs(
+                    fileSystem = InMemoryFileSystem(),
+                    existingRepository = existingAutoSaveRepository
+                )
+            )
+        )
     }
 
     @Test
@@ -208,20 +302,24 @@ class FutachaAppTest {
     @Test
     fun futachaUiAssemblyHelpers_buildPreferencesResolveRepositoryAndRecoverMissingBoard() {
         val screenPreferencesState = buildFutachaScreenPreferencesState(
-            appVersion = "1.2.3",
-            isBackgroundRefreshEnabled = true,
-            isLightweightModeEnabled = false,
-            manualSaveDirectory = "custom",
-            manualSaveLocation = SaveLocation.Path("custom"),
-            resolvedManualSaveDirectory = "/virtual/custom",
-            attachmentPickerPreference = AttachmentPickerPreference.DOCUMENT,
-            saveDirectorySelection = SaveDirectorySelection.PICKER,
-            preferredFileManagerPackage = "pkg",
-            preferredFileManagerLabel = "Files",
-            threadMenuEntries = emptyList(),
-            catalogNavEntries = emptyList()
+            FutachaScreenPreferencesStateInputs(
+                appVersion = "1.2.3",
+                isBackgroundRefreshEnabled = true,
+                isAdsEnabled = false,
+                isLightweightModeEnabled = false,
+                manualSaveDirectory = "custom",
+                manualSaveLocation = SaveLocation.Path("custom"),
+                resolvedManualSaveDirectory = "/virtual/custom",
+                attachmentPickerPreference = AttachmentPickerPreference.DOCUMENT,
+                saveDirectorySelection = SaveDirectorySelection.PICKER,
+                preferredFileManagerPackage = "pkg",
+                preferredFileManagerLabel = "Files",
+                threadMenuEntries = emptyList(),
+                catalogNavEntries = emptyList()
+            )
         )
         assertEquals("1.2.3", screenPreferencesState.appVersion)
+        assertEquals(false, screenPreferencesState.isAdsEnabled)
         assertEquals("/virtual/custom", screenPreferencesState.resolvedManualSaveDirectory)
         assertEquals(AttachmentPickerPreference.DOCUMENT, screenPreferencesState.attachmentPickerPreference)
 
@@ -264,7 +362,7 @@ class FutachaAppTest {
     }
 
     @Test
-    fun futachaAppScreenBindings_builder_wiresScreenCallbacksAndState() = runBlocking {
+    fun futachaApp_screenContractContext_keepsCallbacksAndStateAligned() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val entry = historyEntry(boardId = "img", boardName = "img")
         store.setHistory(listOf(entry))
@@ -272,71 +370,129 @@ class FutachaAppTest {
         var pickerOpened = false
         var refreshCount = 0
         var skippedCleared = false
-        val bindings = buildFutachaAppScreenBindings(
+        val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
             coroutineScope = this,
-            stateStore = store,
-            autoSavedThreadRepository = null,
+            inputs = FutachaPreferenceMutationInputs(
+                setBackgroundRefreshEnabled = store::setBackgroundRefreshEnabled,
+                setAdsEnabled = store::setAdsEnabled,
+                setLightweightModeEnabled = store::setLightweightModeEnabled,
+                setManualSaveDirectory = store::setManualSaveDirectory,
+                setAttachmentPickerPreference = store::setAttachmentPickerPreference,
+                setSaveDirectorySelection = store::setSaveDirectorySelection,
+                setManualSaveLocation = store::setManualSaveLocation,
+                setPreferredFileManager = store::setPreferredFileManager,
+                setThreadMenuEntries = store::setThreadMenuEntries,
+                setCatalogNavEntries = store::setCatalogNavEntries
+            )
+        )
+        val historyMutations = buildFutachaHistoryMutationCallbacks(
+            coroutineScope = this,
+            dismissHistoryEntry = {},
+            updateHistoryEntry = store::upsertHistoryEntry,
+            clearHistory = { skippedCleared = true }
+        )
+        val navigationCallbacks = buildFutachaNavigationCallbacks(
             currentBoards = { listOf(board(id = "img", name = "img")) },
             currentNavigationState = { navigationState },
-            setNavigationState = { navigationState = it },
-            appVersion = "1.2.3",
-            isBackgroundRefreshEnabled = false,
-            isLightweightModeEnabled = true,
-            manualSaveDirectory = "custom",
-            manualSaveLocation = SaveLocation.Path("custom"),
-            resolvedManualSaveDirectory = "/virtual/custom",
-            attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-            saveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-            preferredFileManagerPackage = "pkg",
-            preferredFileManagerLabel = "Files",
-            threadMenuEntries = emptyList(),
-            catalogNavEntries = emptyList(),
-            onOpenSaveDirectoryPicker = { pickerOpened = true },
-            onHistoryRefresh = { refreshCount += 1 },
-            onSkippedThreadsCleared = { skippedCleared = true },
-            onAutoSavedThreadDeleteFailure = { _, _ -> },
-            onAutoSavedThreadClearFailure = {}
+            setNavigationState = { navigationState = it }
+        )
+        val boardScreenCallbacks = buildFutachaBoardScreenCallbacks(
+            coroutineScope = this,
+            inputs = FutachaBoardScreenCallbackInputs(
+                currentNavigationState = { navigationState },
+                setNavigationState = { navigationState = it },
+                updateBoards = store::updateBoards
+            )
+        )
+        val screenPreferencesState = buildFutachaScreenPreferencesState(
+            FutachaScreenPreferencesStateInputs(
+                appVersion = "1.2.3",
+                isBackgroundRefreshEnabled = false,
+                isLightweightModeEnabled = true,
+                manualSaveDirectory = "custom",
+                manualSaveLocation = SaveLocation.Path("custom"),
+                resolvedManualSaveDirectory = "/virtual/custom",
+                attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+                saveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+                preferredFileManagerPackage = "pkg",
+                preferredFileManagerLabel = "Files",
+                threadMenuEntries = emptyList(),
+                catalogNavEntries = emptyList()
+            )
+        )
+        val screenPreferencesCallbacks = buildFutachaScreenPreferencesCallbacks(
+            FutachaScreenPreferencesCallbackInputs(
+                preferenceMutations = preferenceMutations,
+                onOpenSaveDirectoryPicker = { pickerOpened = true }
+            )
+        )
+        val screenHistoryCallbacks = buildFutachaScreenHistoryCallbacks(
+            FutachaScreenHistoryCallbackInputs(
+                navigationCallbacks = navigationCallbacks,
+                historyMutations = historyMutations,
+                onHistoryRefresh = { refreshCount += 1 }
+            )
+        )
+        val screenContract = buildFutachaScreenContractContext(
+            history = store.history.first(),
+            historyCallbacks = screenHistoryCallbacks,
+            preferencesState = screenPreferencesState,
+            preferencesCallbacks = screenPreferencesCallbacks
         )
 
-        bindings.boardScreenCallbacks.onMenuAction(BoardManagementMenuAction.SAVED_THREADS)
-        bindings.screenPreferencesCallbacks.onBackgroundRefreshChanged(true)
-        bindings.screenPreferencesCallbacks.onOpenSaveDirectoryPicker?.invoke()
-        bindings.screenHistoryCallbacks.onHistoryRefresh()
-        bindings.screenHistoryCallbacks.onHistoryCleared()
+        boardScreenCallbacks.onMenuAction(BoardManagementMenuAction.SAVED_THREADS)
+        screenPreferencesCallbacks.onBackgroundRefreshChanged(true)
+        screenPreferencesCallbacks.onAdsEnabledChanged(false)
+        screenPreferencesCallbacks.onOpenSaveDirectoryPicker?.invoke()
+        screenHistoryCallbacks.onHistoryRefresh()
+        screenHistoryCallbacks.onHistoryCleared()
         yield()
         delay(1)
 
         assertTrue(navigationState.isSavedThreadsVisible)
         assertTrue(store.isBackgroundRefreshEnabled.first())
+        assertEquals(false, store.isAdsEnabled.first())
         assertTrue(pickerOpened)
         assertEquals(1, refreshCount)
         assertTrue(skippedCleared)
-        assertEquals("1.2.3", bindings.screenPreferencesState.appVersion)
+        assertEquals("1.2.3", screenPreferencesState.appVersion)
+        assertEquals(listOf(entry), screenContract.history)
+        assertSame(screenPreferencesCallbacks, screenContract.preferencesCallbacks)
+        assertSame(screenHistoryCallbacks, screenContract.historyCallbacks)
     }
 
     @Test
-    fun futachaDestinationProps_builders_mapScreenContractsAndRepositories() {
+    fun futachaDestinationProps_directComposition_mapsScreenContractsAndRepositories() {
         val manualRepository = SavedThreadRepository(InMemoryFileSystem())
         val sharedRepository = TestBoardRepository()
         val board = board(id = "img", name = "img", url = "https://may.2chan.net/img/futaba.php")
         val mockBoard = board(id = "mock", name = "mock", url = "https://example.com/mock/futaba.php")
         val history = listOf(historyEntry(boardId = "img", boardName = "img"))
+        val stateStore = AppStateStore(FakePlatformStateStorage())
         val preferencesState = buildFutachaScreenPreferencesState(
-            appVersion = "1.2.3",
-            isBackgroundRefreshEnabled = false,
-            isLightweightModeEnabled = true,
-            manualSaveDirectory = "custom",
-            manualSaveLocation = SaveLocation.Path("custom"),
-            resolvedManualSaveDirectory = "/virtual/custom",
-            attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-            saveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-            preferredFileManagerPackage = null,
-            preferredFileManagerLabel = null,
-            threadMenuEntries = emptyList(),
-            catalogNavEntries = emptyList()
+            FutachaScreenPreferencesStateInputs(
+                appVersion = "1.2.3",
+                isBackgroundRefreshEnabled = false,
+                isLightweightModeEnabled = true,
+                manualSaveDirectory = "custom",
+                manualSaveLocation = SaveLocation.Path("custom"),
+                resolvedManualSaveDirectory = "/virtual/custom",
+                attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+                saveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+                preferredFileManagerPackage = null,
+                preferredFileManagerLabel = null,
+                threadMenuEntries = emptyList(),
+                catalogNavEntries = emptyList()
+            )
         )
         val preferencesCallbacks = ScreenPreferencesCallbacks()
         val historyCallbacks = ScreenHistoryCallbacks()
+        val screenContract = buildFutachaScreenContractContext(
+            history = history,
+            historyCallbacks = historyCallbacks,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
+        )
         var selectedBoard: BoardSummary? = null
         val boardCallbacks = FutachaBoardScreenCallbacks(
             onBoardSelected = { selectedBoard = it },
@@ -365,9 +521,10 @@ class FutachaAppTest {
             }
         )
 
-        val savedProps = buildFutachaSavedThreadsDestinationProps(
+        val savedProps = FutachaSavedThreadsDestinationProps(
             repository = manualRepository,
-            navigationCallbacks = navigationCallbacks
+            onThreadClick = navigationCallbacks.onSavedThreadSelected,
+            onBack = navigationCallbacks.onSavedThreadsDismissed
         )
         val savedThread = savedThread(threadId = "saved-123", boardId = "img", boardName = "img")
         savedProps.onThreadClick(savedThread)
@@ -377,35 +534,32 @@ class FutachaAppTest {
         assertTrue(savedThreadsDismissed)
 
         val boardProps = buildFutachaBoardManagementDestinationProps(
-            boards = listOf(board),
-            history = history,
-            cookieRepository = null,
-            boardScreenCallbacks = boardCallbacks,
-            historyCallbacks = historyCallbacks,
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks,
-            fileSystem = null,
-            autoSavedThreadRepository = null
+            FutachaBoardManagementDestinationInputs(
+                boards = listOf(board),
+                boardCallbacks = boardCallbacks,
+                screenContract = screenContract,
+                cookieRepository = null,
+                fileSystem = null,
+                autoSavedThreadRepository = null
+            )
         )
         boardProps.onBoardSelected(board)
         assertEquals(board, selectedBoard)
-        assertSame(preferencesState, boardProps.preferencesState)
-        assertSame(preferencesCallbacks, boardProps.preferencesCallbacks)
+        assertSame(screenContract, boardProps.screenContract)
         assertNull(boardProps.dependencies.fileSystem)
         assertNull(boardProps.dependencies.autoSavedThreadRepository)
 
         val catalogProps = buildFutachaCatalogDestinationProps(
-            board = board,
-            history = history,
-            navigationCallbacks = navigationCallbacks,
-            historyCallbacks = historyCallbacks,
-            sharedRepository = sharedRepository,
-            stateStore = AppStateStore(FakePlatformStateStorage()),
-            autoSavedThreadRepository = null,
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks,
-            cookieRepository = null,
-            httpClient = null
+            FutachaCatalogDestinationInputs(
+                board = board,
+                stateStore = stateStore,
+                sharedRepository = sharedRepository,
+                screenContract = screenContract,
+                navigationCallbacks = navigationCallbacks,
+                autoSavedThreadRepository = null,
+                cookieRepository = null,
+                httpClient = null
+            )
         )
         catalogProps.onThreadSelected(
             FutachaThreadSelection(
@@ -432,17 +586,16 @@ class FutachaAppTest {
         )
         assertNull(
             buildFutachaCatalogDestinationProps(
-                board = mockBoard,
-                history = history,
-                navigationCallbacks = navigationCallbacks,
-                historyCallbacks = historyCallbacks,
-                sharedRepository = sharedRepository,
-                stateStore = AppStateStore(FakePlatformStateStorage()),
-                autoSavedThreadRepository = null,
-                preferencesState = preferencesState,
-                preferencesCallbacks = preferencesCallbacks,
-                cookieRepository = null,
-                httpClient = null
+                FutachaCatalogDestinationInputs(
+                    board = mockBoard,
+                    stateStore = stateStore,
+                    sharedRepository = sharedRepository,
+                    screenContract = screenContract,
+                    navigationCallbacks = navigationCallbacks,
+                    autoSavedThreadRepository = null,
+                    cookieRepository = null,
+                    httpClient = null
+                )
             ).dependencies.repository
         )
 
@@ -453,26 +606,27 @@ class FutachaAppTest {
             thumbnailUrl = "thumb"
         )
         val threadProps = buildFutachaThreadDestinationProps(
-            board = board,
-            history = history,
-            threadId = "321",
-            historyContext = threadContext,
-            navigationState = FutachaNavigationState(
-                selectedThreadTitle = "thread title",
-                selectedThreadReplies = 12,
-                selectedThreadUrl = "https://may.2chan.net/img/res/321.htm"
-            ),
-            navigationCallbacks = navigationCallbacks,
-            historyCallbacks = historyCallbacks,
-            threadMutations = FutachaThreadMutationCallbacks(onScrollPositionPersist = { _, _, _ -> }),
-            sharedRepository = sharedRepository,
-            httpClient = null,
-            fileSystem = null,
-            cookieRepository = null,
-            stateStore = AppStateStore(FakePlatformStateStorage()),
-            autoSavedThreadRepository = null,
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks
+            FutachaThreadDestinationInputs(
+                board = board,
+                threadId = "321",
+                navigationState = FutachaNavigationState(
+                    selectedBoardId = board.id,
+                    selectedThreadId = "321",
+                    selectedThreadTitle = "thread title",
+                    selectedThreadReplies = 12,
+                    selectedThreadUrl = "https://may.2chan.net/img/res/321.htm"
+                ),
+                historyContext = threadContext,
+                screenContract = screenContract,
+                navigationCallbacks = navigationCallbacks,
+                onScrollPositionPersist = { _, _, _ -> },
+                sharedRepository = sharedRepository,
+                httpClient = null,
+                fileSystem = null,
+                cookieRepository = null,
+                stateStore = stateStore,
+                autoSavedThreadRepository = null
+            )
         )
         assertEquals(threadContext, threadProps.historyContext)
         assertSame(sharedRepository, threadProps.dependencies.repository)
@@ -495,15 +649,17 @@ class FutachaAppTest {
         val savedBoardsSnapshots = mutableListOf<List<BoardSummary>>()
         val callbacks = buildFutachaBoardScreenCallbacks(
             coroutineScope = this,
-            currentNavigationState = { navigationState },
-            setNavigationState = { navigationState = it },
-            updateBoards = { transform ->
-                val updatedBoards = transform(currentBoards)
-                if (updatedBoards != currentBoards) {
-                    currentBoards = updatedBoards
-                    savedBoardsSnapshots += currentBoards
+            inputs = FutachaBoardScreenCallbackInputs(
+                currentNavigationState = { navigationState },
+                setNavigationState = { navigationState = it },
+                updateBoards = { transform ->
+                    val updatedBoards = transform(currentBoards)
+                    if (updatedBoards != currentBoards) {
+                        currentBoards = updatedBoards
+                        savedBoardsSnapshots += currentBoards
+                    }
                 }
-            }
+            )
         )
 
         callbacks.onBoardSelected(currentBoards[0])
@@ -661,9 +817,11 @@ class FutachaAppTest {
         val fileSystem = InMemoryFileSystem()
         val customLocation = SaveLocation.Path("custom")
         val repositories = buildFutachaSavedThreadsRepositories(
-            fileSystem = fileSystem,
-            manualSaveDirectory = "custom",
-            manualSaveLocation = customLocation
+            FutachaSavedThreadsRepositoryInputs(
+                fileSystem = fileSystem,
+                manualSaveDirectory = "custom",
+                manualSaveLocation = customLocation
+            )
         )
         val currentRepository = assertNotNull(repositories.currentRepository)
         val legacyRepository = assertNotNull(repositories.legacyRepository)
@@ -682,8 +840,10 @@ class FutachaAppTest {
         assertSame(
             legacyRepository,
             resolveActiveSavedThreadsRepository(
-                currentRepository = currentRepository,
-                legacyRepository = legacyRepository
+                FutachaActiveSavedThreadsRepositoryInputs(
+                    currentRepository = currentRepository,
+                    legacyRepository = legacyRepository
+                )
             )
         )
         assertEquals(
@@ -702,9 +862,11 @@ class FutachaAppTest {
         val fileSystem = InMemoryFileSystem()
         val defaultLocation = SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
         val repositories = buildFutachaSavedThreadsRepositories(
-            fileSystem = fileSystem,
-            manualSaveDirectory = DEFAULT_MANUAL_SAVE_ROOT,
-            manualSaveLocation = defaultLocation
+            FutachaSavedThreadsRepositoryInputs(
+                fileSystem = fileSystem,
+                manualSaveDirectory = DEFAULT_MANUAL_SAVE_ROOT,
+                manualSaveLocation = defaultLocation
+            )
         )
 
         assertNotNull(repositories.currentRepository)

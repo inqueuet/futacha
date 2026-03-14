@@ -95,41 +95,49 @@ internal fun GlobalSettingsScreen(
         autoSavedCount = autoSavedCount,
         autoSavedSize = autoSavedSize
     )
-    val interactionBindings = buildGlobalSettingsInteractionBindingsBundle(
-        saveCallbacks = buildGlobalSettingsSaveCallbacks(
-        currentManualSaveInput = { manualSaveInput },
-        setManualSaveInput = { manualSaveInput = it },
-        setIsFileManagerPickerVisible = { isFileManagerPickerVisible = it },
-        onManualSaveDirectoryChanged = preferencesCallbacks.onManualSaveDirectoryChanged,
-        onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
-        onFileManagerSelected = preferencesCallbacks.onFileManagerSelected
-        ),
-        catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
-        currentEntries = { localCatalogNavEntries },
-        setLocalEntries = { localCatalogNavEntries = it },
-        onCatalogNavEntriesChanged = preferencesCallbacks.onCatalogNavEntriesChanged
-        ),
-        threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
-        currentEntries = { localThreadMenuEntries },
-        setLocalEntries = { localThreadMenuEntries = it },
-        onThreadMenuEntriesChanged = preferencesCallbacks.onThreadMenuEntriesChanged
-        ),
-        linkCallbacks = buildGlobalSettingsLinkCallbacks(
-        onOpenCookieManager = onOpenCookieManager,
-        urlLauncher = urlLauncher,
-        onBack = onBack
-        ),
-        cacheCallbacks = buildGlobalSettingsCacheCallbacks(
-        coroutineScope = coroutineScope,
-        showSnackbar = snackbarHostState::showSnackbar,
-        clearImageCache = {
+    val saveCallbacks = buildGlobalSettingsSaveCallbacks(
+        inputs = GlobalSettingsSaveInputs(
+            currentManualSaveInput = { manualSaveInput },
+            setManualSaveInput = { manualSaveInput = it },
+            setIsFileManagerPickerVisible = { isFileManagerPickerVisible = it },
+            onManualSaveDirectoryChanged = preferencesCallbacks.onManualSaveDirectoryChanged,
+            onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+            onFileManagerSelected = preferencesCallbacks.onFileManagerSelected
+        )
+    )
+    val catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
+        inputs = GlobalSettingsCatalogMenuInputs(
+            currentEntries = { localCatalogNavEntries },
+            setLocalEntries = { localCatalogNavEntries = it },
+            onCatalogNavEntriesChanged = preferencesCallbacks.onCatalogNavEntriesChanged
+        )
+    )
+    val threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
+        inputs = GlobalSettingsThreadMenuInputs(
+            currentEntries = { localThreadMenuEntries },
+            setLocalEntries = { localThreadMenuEntries = it },
+            onThreadMenuEntriesChanged = preferencesCallbacks.onThreadMenuEntriesChanged
+        )
+    )
+    val linkCallbacks = buildGlobalSettingsLinkCallbacks(
+        inputs = GlobalSettingsLinkInputs(
+            onOpenCookieManager = onOpenCookieManager,
+            urlLauncher = urlLauncher,
+            onBack = onBack
+        )
+    )
+    val cacheCallbacks = buildGlobalSettingsCacheCallbacks(
+        inputs = GlobalSettingsCacheInputs(
+            coroutineScope = coroutineScope,
+            showSnackbar = snackbarHostState::showSnackbar,
+            clearImageCache = {
             withContext(AppDispatchers.io) {
                 imageLoader.diskCache?.clear()
                 imageLoader.memoryCache?.clear()
                 Unit
             }
         },
-        clearTemporaryCache = {
+            clearTemporaryCache = {
             withContext(AppDispatchers.io) {
                 val fs = fileSystem
                 if (fs != null) {
@@ -142,7 +150,7 @@ internal fun GlobalSettingsScreen(
                 Unit
             }
         },
-        refreshAutoSavedStats = {
+            refreshAutoSavedStats = {
             val statsUpdate = loadGlobalSettingsAutoSavedStatsUpdate(effectiveAutoSavedRepository)
             if (statsUpdate.shouldApply) {
                 autoSavedCount = statsUpdate.autoSavedCount
@@ -151,16 +159,51 @@ internal fun GlobalSettingsScreen(
         }
         )
     )
-    val scaffoldBindings = buildGlobalSettingsScaffoldBindings(
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
-        derivedState = derivedState,
-        interactionBindings = interactionBindings,
-        localCatalogNavEntries = localCatalogNavEntries,
-        localThreadMenuEntries = localThreadMenuEntries,
-        manualSaveInput = manualSaveInput,
-        availableSaveDirectorySelections = availableSaveDirectorySelections,
-        effectiveSaveDirectorySelection = effectiveSaveDirectorySelection,
+    val scaffoldBindings = GlobalSettingsScaffoldBindings(
+        appVersion = preferencesState.appVersion,
+        behavior = GlobalSettingsBehaviorSectionBindings(
+            isBackgroundRefreshEnabled = preferencesState.isBackgroundRefreshEnabled,
+            onBackgroundRefreshChanged = preferencesCallbacks.onBackgroundRefreshChanged,
+            isAdsEnabled = preferencesState.isAdsEnabled,
+            onAdsEnabledChanged = preferencesCallbacks.onAdsEnabledChanged,
+            isLightweightModeEnabled = preferencesState.isLightweightModeEnabled,
+            onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged
+        ),
+        catalogMenu = GlobalSettingsCatalogMenuSectionBindings(
+            localCatalogNavEntries = localCatalogNavEntries,
+            catalogMenuCallbacks = catalogMenuCallbacks
+        ),
+        threadMenu = GlobalSettingsThreadMenuSectionBindings(
+            localThreadMenuEntries = localThreadMenuEntries,
+            threadMenuCallbacks = threadMenuCallbacks
+        ),
+        save = GlobalSettingsSaveSectionBindings(
+            preferredFileManagerState = derivedState.preferredFileManagerState,
+            onOpenFileManagerPicker = saveCallbacks.onOpenFileManagerPicker,
+            onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
+            availableSaveDirectorySelections = availableSaveDirectorySelections,
+            effectiveSaveDirectorySelection = effectiveSaveDirectorySelection,
+            onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+            saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
+            resolvedManualPath = derivedState.resolvedManualPath,
+            saveDestinationHint = derivedState.saveDestinationHint,
+            manualSaveInput = manualSaveInput,
+            onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
+            onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,
+            onUpdateManualSaveDirectory = saveCallbacks.onUpdateManualSaveDirectory,
+            saveDirectoryPickerState = derivedState.saveDirectoryPickerState,
+            onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+            onFallbackToManualInput = saveCallbacks.onFallbackToManualInput
+        ),
+        cacheCallbacks = cacheCallbacks,
+        storage = GlobalSettingsStorageSectionBindings(
+            storageSummaryState = derivedState.storageSummaryState,
+            onRefreshStorageStats = cacheCallbacks.refreshStorageStats
+        ),
+        links = GlobalSettingsLinksSectionBindings(
+            settingsEntries = derivedState.settingsEntries,
+            linkCallbacks = linkCallbacks
+        ),
         snackbarHostState = snackbarHostState,
         onBack = onBack
     )
@@ -170,8 +213,8 @@ internal fun GlobalSettingsScreen(
 
     GlobalSettingsFileManagerPickerHost(
         isVisible = isFileManagerPickerVisible,
-        onDismiss = interactionBindings.saveCallbacks.onDismissFileManagerPicker,
-        onFileManagerSelected = interactionBindings.saveCallbacks.onFileManagerSelected
+        onDismiss = saveCallbacks.onDismissFileManagerPicker,
+        onFileManagerSelected = saveCallbacks.onFileManagerSelected
     )
 }
 

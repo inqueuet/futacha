@@ -19,6 +19,41 @@ internal data class BoardManagementInteractionBindingsBundle(
     val onCookieManagementBack: () -> Unit
 )
 
+internal data class BoardManagementHistoryInteractionInputs(
+    val coroutineScope: CoroutineScope,
+    val closeDrawer: suspend () -> Unit,
+    val openDrawer: suspend () -> Unit,
+    val onExternalMenuAction: (BoardManagementMenuAction) -> Unit,
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
+    val onHistoryRefresh: suspend () -> Unit,
+    val onHistoryCleared: () -> Unit,
+    val showSnackbar: suspend (String) -> Unit
+)
+
+internal data class BoardManagementStateInteractionInputs(
+    val currentIsDeleteMode: () -> Boolean,
+    val currentIsReorderMode: () -> Boolean,
+    val currentIsHistoryRefreshing: () -> Boolean,
+    val setIsDeleteMode: (Boolean) -> Unit,
+    val setIsReorderMode: (Boolean) -> Unit,
+    val setIsHistoryRefreshing: (Boolean) -> Unit,
+    val currentIsMenuExpanded: () -> Boolean,
+    val setIsMenuExpanded: (Boolean) -> Unit
+)
+
+internal data class BoardManagementOverlayInteractionInputs(
+    val currentOverlayState: () -> BoardManagementOverlayState,
+    val setOverlayState: (BoardManagementOverlayState) -> Unit,
+    val hasCookieRepository: Boolean
+)
+
+internal data class BoardManagementBoardInteractionInputs(
+    val onAddBoard: (String, String) -> Unit,
+    val onBoardDeleted: (BoardSummary) -> Unit,
+    val onBoardSelected: (BoardSummary) -> Unit,
+    val onBoardsReordered: (List<BoardSummary>) -> Unit
+)
+
 internal data class BoardManagementTopBarCallbacks(
     val onNavigationClick: () -> Unit,
     val onBackClick: () -> Unit,
@@ -34,108 +69,103 @@ internal data class BoardManagementBoardListCallbacks(
     val onMoveDown: (boards: List<BoardSummary>, index: Int) -> Unit
 )
 
-internal fun buildBoardManagementInteractionBindingsBundle(
-    coroutineScope: CoroutineScope,
-    closeDrawer: suspend () -> Unit,
-    openDrawer: suspend () -> Unit,
-    onExternalMenuAction: (BoardManagementMenuAction) -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
-    onHistoryRefresh: suspend () -> Unit,
-    onHistoryCleared: () -> Unit,
-    onAddBoard: (String, String) -> Unit,
-    onBoardDeleted: (BoardSummary) -> Unit,
-    showSnackbar: suspend (String) -> Unit,
-    currentIsDeleteMode: () -> Boolean,
-    currentIsReorderMode: () -> Boolean,
-    currentIsHistoryRefreshing: () -> Boolean,
-    setIsDeleteMode: (Boolean) -> Unit,
-    setIsReorderMode: (Boolean) -> Unit,
-    setIsHistoryRefreshing: (Boolean) -> Unit,
+internal fun mutateBoardManagementOverlayState(
     currentOverlayState: () -> BoardManagementOverlayState,
     setOverlayState: (BoardManagementOverlayState) -> Unit,
-    hasCookieRepository: Boolean,
-    currentIsMenuExpanded: () -> Boolean,
-    setIsMenuExpanded: (Boolean) -> Unit,
-    onBoardSelected: (BoardSummary) -> Unit,
-    onBoardsReordered: (List<BoardSummary>) -> Unit
+    transform: (BoardManagementOverlayState) -> BoardManagementOverlayState
+) {
+    setOverlayState(transform(currentOverlayState()))
+}
+
+internal fun buildBoardManagementInteractionBindingsBundle(
+    historyInputs: BoardManagementHistoryInteractionInputs,
+    stateInputs: BoardManagementStateInteractionInputs,
+    overlayInputs: BoardManagementOverlayInteractionInputs,
+    boardInputs: BoardManagementBoardInteractionInputs
 ): BoardManagementInteractionBindingsBundle {
     val historyDrawerCallbacks = buildBoardManagementHistoryDrawerCallbacks(
-        coroutineScope = coroutineScope,
-        closeDrawer = closeDrawer,
-        onHistoryEntrySelected = onHistoryEntrySelected,
-        onHistoryRefresh = onHistoryRefresh,
-        onHistoryCleared = onHistoryCleared,
-        showSnackbar = showSnackbar,
-        currentIsHistoryRefreshing = currentIsHistoryRefreshing,
-        setIsHistoryRefreshing = setIsHistoryRefreshing
+        coroutineScope = historyInputs.coroutineScope,
+        closeDrawer = historyInputs.closeDrawer,
+        onHistoryEntrySelected = historyInputs.onHistoryEntrySelected,
+        onHistoryRefresh = historyInputs.onHistoryRefresh,
+        onHistoryCleared = historyInputs.onHistoryCleared,
+        showSnackbar = historyInputs.showSnackbar,
+        currentIsHistoryRefreshing = stateInputs.currentIsHistoryRefreshing,
+        setIsHistoryRefreshing = stateInputs.setIsHistoryRefreshing
     )
     val menuActionCallbacks = buildBoardManagementMenuActionCallbacks(
-        coroutineScope = coroutineScope,
-        openDrawer = openDrawer,
-        onExternalMenuAction = onExternalMenuAction,
-        currentIsDeleteMode = currentIsDeleteMode,
-        currentIsReorderMode = currentIsReorderMode,
-        setIsDeleteMode = setIsDeleteMode,
-        setIsReorderMode = setIsReorderMode,
+        coroutineScope = historyInputs.coroutineScope,
+        openDrawer = historyInputs.openDrawer,
+        onExternalMenuAction = historyInputs.onExternalMenuAction,
+        currentIsDeleteMode = stateInputs.currentIsDeleteMode,
+        currentIsReorderMode = stateInputs.currentIsReorderMode,
+        setIsDeleteMode = stateInputs.setIsDeleteMode,
+        setIsReorderMode = stateInputs.setIsReorderMode,
         setIsAddDialogVisible = {
-            setOverlayState(
-                if (it) {
-                    openBoardManagementAddDialog(currentOverlayState())
-                } else {
-                    dismissBoardManagementAddDialog(currentOverlayState())
-                }
-            )
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState
+            ) { currentState ->
+                if (it) openBoardManagementAddDialog(currentState) else dismissBoardManagementAddDialog(currentState)
+            }
         },
         setIsGlobalSettingsVisible = {
-            setOverlayState(
-                if (it) {
-                    openBoardManagementGlobalSettings(currentOverlayState())
-                } else {
-                    closeBoardManagementGlobalSettings(currentOverlayState())
-                }
-            )
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState
+            ) { currentState ->
+                if (it) openBoardManagementGlobalSettings(currentState) else closeBoardManagementGlobalSettings(currentState)
+            }
         }
     )
     val dialogCallbacks = buildBoardManagementDialogCallbacks(
-        coroutineScope = coroutineScope,
-        onAddBoard = onAddBoard,
-        onBoardDeleted = onBoardDeleted,
+        coroutineScope = historyInputs.coroutineScope,
+        onAddBoard = boardInputs.onAddBoard,
+        onBoardDeleted = boardInputs.onBoardDeleted,
         setIsAddDialogVisible = {
-            setOverlayState(
-                if (it) {
-                    openBoardManagementAddDialog(currentOverlayState())
-                } else {
-                    dismissBoardManagementAddDialog(currentOverlayState())
-                }
-            )
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState
+            ) { currentState ->
+                if (it) openBoardManagementAddDialog(currentState) else dismissBoardManagementAddDialog(currentState)
+            }
         },
         clearBoardToDelete = {
-            setOverlayState(dismissBoardManagementDeleteDialog(currentOverlayState()))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState,
+                transform = ::dismissBoardManagementDeleteDialog
+            )
         },
-        showSnackbar = showSnackbar
+        showSnackbar = historyInputs.showSnackbar
     )
     val topBarCallbacks = BoardManagementTopBarCallbacks(
         onNavigationClick = menuActionCallbacks.onNavigationClick,
         onBackClick = menuActionCallbacks.onBackClick,
-        onOpenMenu = { setIsMenuExpanded(true) },
-        onDismissMenu = { setIsMenuExpanded(false) },
+        onOpenMenu = { stateInputs.setIsMenuExpanded(true) },
+        onDismissMenu = { stateInputs.setIsMenuExpanded(false) },
         onMenuActionSelected = { action ->
-            if (currentIsMenuExpanded()) {
-                setIsMenuExpanded(false)
+            if (stateInputs.currentIsMenuExpanded()) {
+                stateInputs.setIsMenuExpanded(false)
             }
             menuActionCallbacks.onMenuActionSelected(action)
         }
     )
     val boardListCallbacks = BoardManagementBoardListCallbacks(
-        onBoardClick = onBoardSelected,
+        onBoardClick = boardInputs.onBoardSelected,
         onDeleteClick = { board ->
-            setOverlayState(openBoardManagementDeleteDialog(currentOverlayState(), board))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState
+            ) { currentState ->
+                openBoardManagementDeleteDialog(currentState, board)
+            }
         },
         onMoveUp = { boards, index ->
-            onBoardsReordered(moveBoardSummary(boards, index, moveUp = true))
+            boardInputs.onBoardsReordered(moveBoardSummary(boards, index, moveUp = true))
         },
         onMoveDown = { boards, index ->
-            onBoardsReordered(moveBoardSummary(boards, index, moveUp = false))
+            boardInputs.onBoardsReordered(moveBoardSummary(boards, index, moveUp = false))
         }
     )
     return BoardManagementInteractionBindingsBundle(
@@ -145,29 +175,58 @@ internal fun buildBoardManagementInteractionBindingsBundle(
         topBarCallbacks = topBarCallbacks,
         boardListCallbacks = boardListCallbacks,
         onHistorySettingsClick = {
-            setOverlayState(openBoardManagementGlobalSettings(currentOverlayState()))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState,
+                transform = ::openBoardManagementGlobalSettings
+            )
         },
         onDismissAddDialog = {
-            setOverlayState(dismissBoardManagementAddDialog(currentOverlayState()))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState,
+                transform = ::dismissBoardManagementAddDialog
+            )
         },
         onDeleteRequested = { board ->
-            setOverlayState(openBoardManagementDeleteDialog(currentOverlayState(), board))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState
+            ) { currentState ->
+                openBoardManagementDeleteDialog(currentState, board)
+            }
         },
         onDismissDeleteDialog = {
-            setOverlayState(dismissBoardManagementDeleteDialog(currentOverlayState()))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState,
+                transform = ::dismissBoardManagementDeleteDialog
+            )
         },
         onGlobalSettingsBack = {
-            setOverlayState(closeBoardManagementGlobalSettings(currentOverlayState()))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState,
+                transform = ::closeBoardManagementGlobalSettings
+            )
         },
-        onOpenCookieManagement = if (hasCookieRepository) {
+        onOpenCookieManagement = if (overlayInputs.hasCookieRepository) {
             {
-                setOverlayState(openBoardManagementCookieManagement(currentOverlayState()))
+                mutateBoardManagementOverlayState(
+                    currentOverlayState = overlayInputs.currentOverlayState,
+                    setOverlayState = overlayInputs.setOverlayState,
+                    transform = ::openBoardManagementCookieManagement
+                )
             }
         } else {
             null
         },
         onCookieManagementBack = {
-            setOverlayState(closeBoardManagementCookieManagement(currentOverlayState()))
+            mutateBoardManagementOverlayState(
+                currentOverlayState = overlayInputs.currentOverlayState,
+                setOverlayState = overlayInputs.setOverlayState,
+                transform = ::closeBoardManagementCookieManagement
+            )
         }
     )
 }

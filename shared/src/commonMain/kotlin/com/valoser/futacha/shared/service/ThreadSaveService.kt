@@ -94,6 +94,11 @@ class ThreadSaveService(
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
         val storageId = buildThreadStorageId(boardId, threadId)
+        val storageTarget = buildThreadSaveStorageTarget(
+            saveLocation = baseSaveLocation,
+            baseDirectory = baseDirectory,
+            storageId = storageId
+        )
         val storageLockKey = buildThreadStorageLockKey(
             storageId = storageId,
             baseDirectory = baseDirectory,
@@ -110,16 +115,13 @@ class ThreadSaveService(
                 // 準備フェーズ
                 updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
-                val baseDir = "$baseDirectory/$storageId"
                 val boardPath = extractBoardPath(boardUrl, boardId)
                 val opPostId = posts.firstOrNull()?.id
 
                 prepareThreadSaveOutput(
                     fileSystem = fileSystem,
-                    saveLocation = baseSaveLocation,
+                    target = storageTarget,
                     request = ThreadSaveOutputPreparationRequest(
-                        baseDirectory = baseDirectory,
-                        storageId = storageId,
                         boardPath = boardPath
                     )
                 )
@@ -160,10 +162,8 @@ class ThreadSaveService(
                 downloadMedia = { mediaItem ->
                     downloadAndSaveMedia(
                         url = mediaItem.url,
-                        saveLocation = baseSaveLocation,
-                        baseDir = baseDir,
+                        storageTarget = storageTarget,
                         boardPath = boardPath,
-                        storageId = storageId,
                         requestType = mediaItem.requestType,
                         postId = mediaItem.postId,
                         startedAtMillis = startedAtMillis
@@ -183,9 +183,7 @@ class ThreadSaveService(
             val rawHtmlWriteResult = saveThreadRawHtmlIfEnabled(
                 enabled = rawHtmlOptions.enable,
                 fileSystem = fileSystem,
-                saveLocation = baseSaveLocation,
-                storageId = storageId,
-                baseDir = baseDir,
+                target = storageTarget,
                 threadId = threadId,
                 fetchOriginalHtml = { fetchThreadHtml(boardUrl, threadId) },
                 rewriteHtml = { originalHtml ->
@@ -229,8 +227,7 @@ class ThreadSaveService(
             val metadataSize = writeThreadSaveMetadataIfEnabled(
                 writeMetadata = writeMetadata,
                 fileSystem = fileSystem,
-                saveLocation = baseSaveLocation,
-                baseDir = baseDir,
+                target = storageTarget,
                 request = ThreadSaveMetadataWriteRequest(
                     threadId = threadId,
                     boardId = boardId,
@@ -270,9 +267,7 @@ class ThreadSaveService(
                 runCatching {
                     cleanupThreadSaveFailedOutput(
                         fileSystem = fileSystem,
-                        baseSaveLocation = baseSaveLocation,
-                        baseDirectory = baseDirectory,
-                        storageId = storageId
+                        target = storageTarget
                     )
                 }.onFailure { cleanupError ->
                     Logger.w("ThreadSaveService", "Failed to cleanup canceled save for $storageId: ${cleanupError.message}")
@@ -282,9 +277,7 @@ class ThreadSaveService(
                 runCatching {
                     cleanupThreadSaveFailedOutput(
                         fileSystem = fileSystem,
-                        baseSaveLocation = baseSaveLocation,
-                        baseDirectory = baseDirectory,
-                        storageId = storageId
+                        target = storageTarget
                     )
                 }.onFailure { cleanupError ->
                     Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
@@ -303,10 +296,8 @@ class ThreadSaveService(
      */
     private suspend fun downloadAndSaveMedia(
         url: String,
-        saveLocation: SaveLocation?,
-        baseDir: String,
+        storageTarget: ThreadSaveStorageTarget,
         boardPath: String,
-        storageId: String,
         requestType: ThreadSaveMediaRequestType,
         postId: String,
         startedAtMillis: Long
@@ -315,26 +306,26 @@ class ThreadSaveService(
             httpClient = httpClient,
             fileSystem = fileSystem,
             logTag = "ThreadSaveService",
-            url = url,
-            saveLocation = saveLocation,
-            baseDir = baseDir,
-            boardPath = boardPath,
-            storageId = storageId,
-            requestType = requestType,
-            postId = postId,
-            startedAtMillis = startedAtMillis,
-            mediaRequestTimeoutMillis = MEDIA_REQUEST_TIMEOUT_MILLIS,
-            maxFileSizeBytes = MAX_FILE_SIZE_BYTES,
-            maxSaveDurationMs = MAX_SAVE_DURATION_MS,
-            streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
-            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
-            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
-            readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS,
-            writeTimeoutMillis = WRITE_TIMEOUT_MILLIS,
-            nowMillis = { Clock.System.now().toEpochMilliseconds() },
-            withMediaWriteLock = { relativePath, block ->
-                withMediaWriteLock(relativePath, block)
-            }
+            request = ThreadSaveMediaDownloadRequest(
+                url = url,
+                target = storageTarget,
+                boardPath = boardPath,
+                requestType = requestType,
+                postId = postId,
+                startedAtMillis = startedAtMillis,
+                mediaRequestTimeoutMillis = MEDIA_REQUEST_TIMEOUT_MILLIS,
+                maxFileSizeBytes = MAX_FILE_SIZE_BYTES,
+                maxSaveDurationMs = MAX_SAVE_DURATION_MS,
+                streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
+                maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+                zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+                readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS,
+                writeTimeoutMillis = WRITE_TIMEOUT_MILLIS,
+                nowMillis = { Clock.System.now().toEpochMilliseconds() },
+                withMediaWriteLock = { relativePath, block ->
+                    withMediaWriteLock(relativePath, block)
+                }
+            )
         )
     }
 
@@ -363,14 +354,16 @@ class ThreadSaveService(
     private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> {
         return fetchThreadSaveHtml(
             httpClient = httpClient,
-            boardUrl = boardUrl,
-            threadId = threadId,
-            threadHtmlFetchTimeoutMillis = THREAD_HTML_FETCH_TIMEOUT_MILLIS,
-            maxThreadHtmlBytes = MAX_THREAD_HTML_BYTES,
-            streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
-            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
-            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
-            readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS
+            request = ThreadSaveHtmlFetchRequest(
+                boardUrl = boardUrl,
+                threadId = threadId,
+                threadHtmlFetchTimeoutMillis = THREAD_HTML_FETCH_TIMEOUT_MILLIS,
+                maxThreadHtmlBytes = MAX_THREAD_HTML_BYTES,
+                streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
+                maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+                zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+                readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS
+            )
         )
     }
 

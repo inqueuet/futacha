@@ -171,6 +171,15 @@ internal data class AppStateSeedBundles(
     val preferences: AppStatePreferencesSeedBundle
 )
 
+internal data class AppStateSeedPayloadInputs(
+    val defaults: AppStateSeedDefaults,
+    val json: Json,
+    val normalizedThreadMenuConfig: List<ThreadMenuItemConfig>,
+    val normalizedThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig>,
+    val normalizedThreadMenuEntries: List<ThreadMenuEntryConfig>,
+    val normalizedCatalogNavEntries: List<CatalogNavEntryConfig>
+)
+
 internal fun AppStateSeedPayload.toSeedBundles(): AppStateSeedBundles {
     return AppStateSeedBundles(
         boards = AppStateBoardsSeedBundle(
@@ -198,59 +207,60 @@ internal fun AppStateSeedPayload.toSeedBundles(): AppStateSeedBundles {
 }
 
 internal suspend fun buildAppStateSeedPayload(
-    defaultBoards: List<BoardSummary>,
-    defaultHistory: List<ThreadHistoryEntry>,
-    defaultNgHeaders: List<String>,
-    defaultNgWords: List<String>,
-    defaultCatalogNgWords: List<String>,
-    defaultWatchWords: List<String>,
-    defaultSelfPostIdentifierMap: Map<String, List<String>>,
-    defaultCatalogModeMap: Map<String, CatalogMode>,
-    defaultThreadMenuConfig: List<ThreadMenuItemConfig>,
-    defaultThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig>,
-    defaultThreadMenuEntries: List<ThreadMenuEntryConfig>,
-    defaultCatalogNavEntries: List<CatalogNavEntryConfig>,
-    defaultLastUsedDeleteKey: String,
-    json: Json,
-    threadMenuConfig: List<ThreadMenuItemConfig>,
-    threadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig>,
-    threadMenuEntries: List<ThreadMenuEntryConfig>,
-    catalogNavEntries: List<CatalogNavEntryConfig>
+    inputs: AppStateSeedPayloadInputs
 ): AppStateSeedPayload {
     return withContext(AppDispatchers.parsing) {
         AppStateSeedPayload(
-            defaultBoardsJson = json.encodeToString(ListSerializer(BoardSummary.serializer()), defaultBoards),
-            defaultHistoryJson = json.encodeToString(ListSerializer(ThreadHistoryEntry.serializer()), defaultHistory),
-            defaultNgHeadersJson = json.encodeToString(ListSerializer(String.serializer()), defaultNgHeaders),
-            defaultNgWordsJson = json.encodeToString(ListSerializer(String.serializer()), defaultNgWords),
-            defaultCatalogNgWordsJson = json.encodeToString(ListSerializer(String.serializer()), defaultCatalogNgWords),
-            defaultWatchWordsJson = json.encodeToString(ListSerializer(String.serializer()), defaultWatchWords),
-            defaultSelfPostIdentifiersJson = json.encodeToString(
-                MapSerializer(String.serializer(), ListSerializer(String.serializer())),
-                defaultSelfPostIdentifierMap
+            defaultBoardsJson = inputs.json.encodeToString(
+                ListSerializer(BoardSummary.serializer()),
+                inputs.defaults.boards
             ),
-            defaultCatalogModeMapJson = json.encodeToString(
+            defaultHistoryJson = inputs.json.encodeToString(
+                ListSerializer(ThreadHistoryEntry.serializer()),
+                inputs.defaults.history
+            ),
+            defaultNgHeadersJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.ngHeaders
+            ),
+            defaultNgWordsJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.ngWords
+            ),
+            defaultCatalogNgWordsJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.catalogNgWords
+            ),
+            defaultWatchWordsJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.watchWords
+            ),
+            defaultSelfPostIdentifiersJson = inputs.json.encodeToString(
+                MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+                inputs.defaults.selfPostIdentifierMap
+            ),
+            defaultCatalogModeMapJson = inputs.json.encodeToString(
                 MapSerializer(String.serializer(), String.serializer()),
-                encodeCatalogModeMapValue(defaultCatalogModeMap)
+                encodeCatalogModeMapValue(inputs.defaults.catalogModeMap)
             ),
             defaultAttachmentPickerPreference = AttachmentPickerPreference.MEDIA.name,
             defaultSaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT.name,
-            defaultLastUsedDeleteKey = defaultLastUsedDeleteKey.take(8),
-            defaultThreadMenuConfigJson = json.encodeToString(
+            defaultLastUsedDeleteKey = inputs.defaults.lastUsedDeleteKey.take(8),
+            defaultThreadMenuConfigJson = inputs.json.encodeToString(
                 ListSerializer(ThreadMenuItemConfig.serializer()),
-                threadMenuConfig
+                inputs.normalizedThreadMenuConfig
             ),
-            defaultThreadSettingsMenuConfigJson = json.encodeToString(
+            defaultThreadSettingsMenuConfigJson = inputs.json.encodeToString(
                 ListSerializer(ThreadSettingsMenuItemConfig.serializer()),
-                threadSettingsMenuConfig
+                inputs.normalizedThreadSettingsMenuConfig
             ),
-            defaultThreadMenuEntriesConfigJson = json.encodeToString(
+            defaultThreadMenuEntriesConfigJson = inputs.json.encodeToString(
                 ListSerializer(ThreadMenuEntryConfig.serializer()),
-                threadMenuEntries
+                inputs.normalizedThreadMenuEntries
             ),
-            defaultCatalogNavEntriesJson = json.encodeToString(
+            defaultCatalogNavEntriesJson = inputs.json.encodeToString(
                 ListSerializer(CatalogNavEntryConfig.serializer()),
-                catalogNavEntries
+                inputs.normalizedCatalogNavEntries
             )
         )
     }

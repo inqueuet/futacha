@@ -381,48 +381,54 @@ class CatalogScreenSupportTest {
             setShowSettingsMenu = {}
         )
         val overlayBindings = buildCatalogScreenOverlayBindingsBundle(
-            persistCatalogMode = {},
-            updateCatalogDisplayStyle = {},
-            updateCatalogGridColumns = {},
-            currentArchiveSearchScope = { null },
-            setLastArchiveSearchScope = {},
-            setArchiveSearchQuery = {},
-            setShowPastThreadSearchDialog = {},
-            setIsPastSearchSheetVisible = {},
-            runPastThreadSearch = { _, _ -> true },
-            currentPastSearchGeneration = { 0L },
-            currentPastSearchJob = { null },
-            setPastSearchGeneration = {},
-            setPastSearchJob = {},
-            currentArchiveSearchQuery = { "" },
-            currentLastArchiveSearchScope = { null },
-            onThreadSelected = {},
-            board = { board },
-            catalogMode = { CatalogMode.Many },
-            urlLauncher = {},
-            stateStore = null,
-            isPrivacyFilterEnabled = { false },
-            coroutineScope = this,
-            scrollCatalogToTop = {},
-            setShowModeDialog = {},
-            setShowDisplayStyleDialog = {},
-            setIsNgManagementVisible = {},
-            setIsWatchWordsVisible = {},
-            setShowSettingsMenu = {},
-            cookieRepository = null,
-            setIsGlobalSettingsVisible = {},
-            setIsCookieManagementVisible = {},
-            onAddNgWord = {},
-            onRemoveNgWord = {},
-            onToggleNgFiltering = {},
-            onAddWatchWord = {},
-            onRemoveWatchWord = {}
+            dialogInputs = CatalogScreenOverlayDialogInputs(
+                persistCatalogMode = {},
+                updateCatalogDisplayStyle = {},
+                updateCatalogGridColumns = {},
+                setShowModeDialog = {},
+                setShowDisplayStyleDialog = {}
+            ),
+            searchInputs = CatalogScreenOverlaySearchInputs(
+                currentArchiveSearchScope = { null },
+                setLastArchiveSearchScope = {},
+                setArchiveSearchQuery = {},
+                setShowPastThreadSearchDialog = {},
+                setIsPastSearchSheetVisible = {},
+                runPastThreadSearch = { _, _ -> true },
+                currentPastSearchGeneration = { 0L },
+                currentPastSearchJob = { null },
+                setPastSearchGeneration = {},
+                setPastSearchJob = {},
+                currentArchiveSearchQuery = { "" },
+                currentLastArchiveSearchScope = { null },
+                onThreadSelected = {}
+            ),
+            settingsInputs = CatalogScreenOverlaySettingsInputs(
+                board = { board },
+                catalogMode = { CatalogMode.Many },
+                urlLauncher = {},
+                stateStore = null,
+                isPrivacyFilterEnabled = { false },
+                coroutineScope = this,
+                scrollCatalogToTop = {},
+                setIsNgManagementVisible = {},
+                setIsWatchWordsVisible = {},
+                setShowSettingsMenu = {},
+                cookieRepository = null,
+                setIsGlobalSettingsVisible = {},
+                setIsCookieManagementVisible = {},
+                onAddNgWord = {},
+                onRemoveNgWord = {},
+                onToggleNgFiltering = {},
+                onAddWatchWord = {},
+                onRemoveWatchWord = {}
+            )
         )
         val setDraft: (CreateThreadDraft) -> Unit = {}
         val setImage: (ImageData?) -> Unit = {}
         val setDialogVisible: (Boolean) -> Unit = {}
 
-        val bindings = buildCatalogScreenHostBindings(
+        val scaffoldBindings = CatalogScreenScaffoldBindings(
             history = history,
             onHistoryEntryDismissed = {},
             historyDrawerCallbacks = runtimeBindings.historyDrawerCallbacks,
@@ -455,7 +461,9 @@ class CatalogScreenSupportTest {
             catalogDisplayStyle = CatalogDisplayStyle.Grid,
             catalogGridColumns = 5,
             catalogGridState = gridState,
-            catalogListState = listState,
+            catalogListState = listState
+        )
+        val overlayHostBindings = CatalogScreenOverlayHostBindings(
             overlayState = CatalogOverlayState(
                 showCreateThreadDialog = true,
                 isGlobalSettingsVisible = true
@@ -466,36 +474,45 @@ class CatalogScreenSupportTest {
             createThreadImage = null,
             setCreateThreadImage = setImage,
             setCreateThreadDialogVisible = setDialogVisible,
+            board = board,
             archiveSearchQuery = "foo",
+            searchQuery = "cat",
+            catalogMode = CatalogMode.Many,
+            catalogDisplayStyle = CatalogDisplayStyle.Grid,
+            catalogGridColumns = 5,
             pastSearchRuntimeState = CatalogPastSearchRuntimeState(),
+            watchWords = listOf("watch"),
+            catalogNgWords = listOf("ng"),
+            catalogNgFilteringEnabled = true,
             isPrivacyFilterEnabled = true,
             createThreadBindings = runtimeBindings.createThreadBindings,
             preferencesState = ScreenPreferencesState(appVersion = "1.0.0"),
             preferencesCallbacks = ScreenPreferencesCallbacks(),
+            history = history,
             fileSystem = null,
             autoSavedThreadRepository = null,
             cookieRepository = null
         )
 
-        assertEquals(history, bindings.scaffold.history)
-        assertTrue(bindings.scaffold.isDrawerOpen)
-        assertTrue(bindings.scaffold.isSearchActive)
-        assertEquals(listOf("watch"), bindings.scaffold.watchWords)
-        assertEquals(listOf("ng"), bindings.scaffold.catalogNgWords)
-        assertTrue(bindings.scaffold.topBarCallbacks === runtimeBindings.topBarCallbacks)
-        assertTrue(bindings.scaffold.navigationCallbacks === runtimeBindings.navigationCallbacks)
-        assertTrue(bindings.scaffold.drawerState === drawerState)
-        assertTrue(bindings.scaffold.snackbarHostState === snackbarHostState)
-        assertTrue(bindings.scaffold.catalogGridState === gridState)
-        assertTrue(bindings.scaffold.catalogListState === listState)
-        assertTrue(bindings.overlay.overlayBindings === overlayBindings)
-        assertTrue(bindings.overlay.overlayState.showCreateThreadDialog)
-        assertTrue(bindings.overlay.overlayState.isGlobalSettingsVisible)
-        assertTrue(bindings.overlay.setCreateThreadDraft === setDraft)
-        assertTrue(bindings.overlay.setCreateThreadImage === setImage)
-        assertTrue(bindings.overlay.setCreateThreadDialogVisible === setDialogVisible)
-        assertTrue(bindings.overlay.createThreadBindings === runtimeBindings.createThreadBindings)
-        assertTrue(bindings.overlay.isPrivacyFilterEnabled)
+        assertEquals(history, scaffoldBindings.history)
+        assertTrue(scaffoldBindings.isDrawerOpen)
+        assertTrue(scaffoldBindings.isSearchActive)
+        assertEquals(listOf("watch"), scaffoldBindings.watchWords)
+        assertEquals(listOf("ng"), scaffoldBindings.catalogNgWords)
+        assertTrue(scaffoldBindings.topBarCallbacks === runtimeBindings.topBarCallbacks)
+        assertTrue(scaffoldBindings.navigationCallbacks === runtimeBindings.navigationCallbacks)
+        assertTrue(scaffoldBindings.drawerState === drawerState)
+        assertTrue(scaffoldBindings.snackbarHostState === snackbarHostState)
+        assertTrue(scaffoldBindings.catalogGridState === gridState)
+        assertTrue(scaffoldBindings.catalogListState === listState)
+        assertTrue(overlayHostBindings.overlayBindings === overlayBindings)
+        assertTrue(overlayHostBindings.overlayState.showCreateThreadDialog)
+        assertTrue(overlayHostBindings.overlayState.isGlobalSettingsVisible)
+        assertTrue(overlayHostBindings.setCreateThreadDraft === setDraft)
+        assertTrue(overlayHostBindings.setCreateThreadImage === setImage)
+        assertTrue(overlayHostBindings.setCreateThreadDialogVisible === setDialogVisible)
+        assertTrue(overlayHostBindings.createThreadBindings === runtimeBindings.createThreadBindings)
+        assertTrue(overlayHostBindings.isPrivacyFilterEnabled)
     }
 
     @Test
@@ -723,42 +740,48 @@ class CatalogScreenSupportTest {
         val ngEvents = mutableListOf<String>()
         val watchEvents = mutableListOf<String>()
         val bundle = buildCatalogScreenOverlayBindingsBundle(
-            persistCatalogMode = { selectedMode = it },
-            updateCatalogDisplayStyle = {},
-            updateCatalogGridColumns = {},
-            currentArchiveSearchScope = { null },
-            setLastArchiveSearchScope = {},
-            setArchiveSearchQuery = {},
-            setShowPastThreadSearchDialog = {},
-            setIsPastSearchSheetVisible = {},
-            runPastThreadSearch = { _, _ -> true },
-            currentPastSearchGeneration = { 0L },
-            currentPastSearchJob = { null },
-            setPastSearchGeneration = {},
-            setPastSearchJob = {},
-            currentArchiveSearchQuery = { "" },
-            currentLastArchiveSearchScope = { null },
-            onThreadSelected = {},
-            board = { null },
-            catalogMode = { CatalogMode.default },
-            urlLauncher = {},
-            stateStore = null,
-            isPrivacyFilterEnabled = { false },
-            coroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()),
-            scrollCatalogToTop = {},
-            setShowModeDialog = { showModeDialog = it },
-            setShowDisplayStyleDialog = {},
-            setIsNgManagementVisible = {},
-            setIsWatchWordsVisible = {},
-            setShowSettingsMenu = {},
-            cookieRepository = CookieRepository(PersistentCookieStorage(NoOpFileSystem())),
-            setIsGlobalSettingsVisible = { globalSettingsVisible = it },
-            setIsCookieManagementVisible = { cookieManagementVisible = it },
-            onAddNgWord = { ngEvents += "add:$it" },
-            onRemoveNgWord = { ngEvents += "remove:$it" },
-            onToggleNgFiltering = { ngEvents += "toggle" },
-            onAddWatchWord = { watchEvents += "add:$it" },
-            onRemoveWatchWord = { watchEvents += "remove:$it" }
+            dialogInputs = CatalogScreenOverlayDialogInputs(
+                persistCatalogMode = { selectedMode = it },
+                updateCatalogDisplayStyle = {},
+                updateCatalogGridColumns = {},
+                setShowModeDialog = { showModeDialog = it },
+                setShowDisplayStyleDialog = {}
+            ),
+            searchInputs = CatalogScreenOverlaySearchInputs(
+                currentArchiveSearchScope = { null },
+                setLastArchiveSearchScope = {},
+                setArchiveSearchQuery = {},
+                setShowPastThreadSearchDialog = {},
+                setIsPastSearchSheetVisible = {},
+                runPastThreadSearch = { _, _ -> true },
+                currentPastSearchGeneration = { 0L },
+                currentPastSearchJob = { null },
+                setPastSearchGeneration = {},
+                setPastSearchJob = {},
+                currentArchiveSearchQuery = { "" },
+                currentLastArchiveSearchScope = { null },
+                onThreadSelected = {}
+            ),
+            settingsInputs = CatalogScreenOverlaySettingsInputs(
+                board = { null },
+                catalogMode = { CatalogMode.default },
+                urlLauncher = {},
+                stateStore = null,
+                isPrivacyFilterEnabled = { false },
+                coroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()),
+                scrollCatalogToTop = {},
+                setIsNgManagementVisible = {},
+                setIsWatchWordsVisible = {},
+                setShowSettingsMenu = {},
+                cookieRepository = CookieRepository(PersistentCookieStorage(NoOpFileSystem())),
+                setIsGlobalSettingsVisible = { globalSettingsVisible = it },
+                setIsCookieManagementVisible = { cookieManagementVisible = it },
+                onAddNgWord = { ngEvents += "add:$it" },
+                onRemoveNgWord = { ngEvents += "remove:$it" },
+                onToggleNgFiltering = { ngEvents += "toggle" },
+                onAddWatchWord = { watchEvents += "add:$it" },
+                onRemoveWatchWord = { watchEvents += "remove:$it" }
+            )
         )
 
         bundle.modeDialogCallbacks.onModeSelected(CatalogMode.New)
@@ -833,6 +856,20 @@ class CatalogScreenSupportTest {
                     showModeDialog = true,
                     showCreateThreadDialog = true,
                     showPastThreadSearchDialog = true,
+                    isPastSearchSheetVisible = true
+                )
+            )
+        )
+        assertEquals(
+            CatalogOverlayState(
+                showDisplayStyleDialog = true,
+                isGlobalSettingsVisible = true
+            ),
+            resetCatalogPastSearchOverlayState(
+                CatalogOverlayState(
+                    showDisplayStyleDialog = true,
+                    showPastThreadSearchDialog = true,
+                    isGlobalSettingsVisible = true,
                     isPastSearchSheetVisible = true
                 )
             )
@@ -1263,12 +1300,12 @@ class CatalogScreenSupportTest {
     @Test
     fun overscrollHelpers_consumeDirectionalEdgeDrag_andTriggerByThreshold() {
         assertEquals(
-            CatalogOverscrollDragState(
+            EdgeSwipeRefreshDragState(
                 totalDrag = 30f,
                 overscrollTarget = 12f,
                 shouldConsume = true
             ),
-            updateCatalogOverscrollDragState(
+            updateEdgeSwipeRefreshDragState(
                 totalDrag = 0f,
                 dragAmount = 30f,
                 isRefreshing = false,
@@ -1278,12 +1315,12 @@ class CatalogScreenSupportTest {
             )
         )
         assertEquals(
-            CatalogOverscrollDragState(
+            EdgeSwipeRefreshDragState(
                 totalDrag = -20f,
                 overscrollTarget = -8f,
                 shouldConsume = true
             ),
-            updateCatalogOverscrollDragState(
+            updateEdgeSwipeRefreshDragState(
                 totalDrag = 0f,
                 dragAmount = -20f,
                 isRefreshing = false,
@@ -1293,12 +1330,12 @@ class CatalogScreenSupportTest {
             )
         )
         assertEquals(
-            CatalogOverscrollDragState(
+            EdgeSwipeRefreshDragState(
                 totalDrag = 10f,
                 overscrollTarget = 4f,
                 shouldConsume = false
             ),
-            updateCatalogOverscrollDragState(
+            updateEdgeSwipeRefreshDragState(
                 totalDrag = 10f,
                 dragAmount = -3f,
                 isRefreshing = false,
@@ -1307,8 +1344,23 @@ class CatalogScreenSupportTest {
                 maxOverscrollPx = 64f
             )
         )
-        assertTrue(shouldTriggerCatalogOverscrollRefresh(totalDrag = 57f, refreshTriggerPx = 56f))
-        assertFalse(shouldTriggerCatalogOverscrollRefresh(totalDrag = 56f, refreshTriggerPx = 56f))
+        assertEquals(
+            EdgeSwipeRefreshDragState(
+                totalDrag = 18f,
+                overscrollTarget = 0f,
+                shouldConsume = false
+            ),
+            updateEdgeSwipeRefreshDragState(
+                totalDrag = 18f,
+                dragAmount = 12f,
+                isRefreshing = true,
+                isAtTop = true,
+                isAtBottom = false,
+                maxOverscrollPx = 64f
+            )
+        )
+        assertTrue(shouldTriggerEdgeSwipeRefresh(totalDrag = 57f, refreshTriggerPx = 56f))
+        assertFalse(shouldTriggerEdgeSwipeRefresh(totalDrag = 56f, refreshTriggerPx = 56f))
     }
 }
 

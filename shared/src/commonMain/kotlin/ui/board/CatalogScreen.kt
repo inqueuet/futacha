@@ -174,104 +174,130 @@ fun CatalogScreen(
     val catalogDisplayStyle = displaySettings.displayStyle
     val catalogGridColumns = displaySettings.gridColumns
     val interactionBindings = buildCatalogScreenInteractionBindingsBundle(
-        coroutineScope = coroutineScope,
-        drawerState = drawerState,
-        currentBoard = { board },
-        currentBoardId = { board?.id },
-        currentCatalogMode = { catalogMode },
-        setCatalogMode = { catalogMode = it },
-        currentCatalogLoadGeneration = { catalogLoadGeneration },
-        setCatalogLoadGeneration = { catalogLoadGeneration = it },
-        currentCatalogLoadJob = { catalogLoadJob },
-        setCatalogLoadJob = { catalogLoadJob = it },
-        currentIsRefreshing = { isRefreshing },
-        setIsRefreshing = { isRefreshing = it },
-        setCatalogUiState = { uiState.value = it },
-        setLastCatalogItems = { lastCatalogItems = it },
-        loadCatalogItems = ::loadCatalogItems,
-        activeRepository = activeRepository,
-        currentCreateThreadDraft = { createThreadDraft },
-        currentCreateThreadImage = { createThreadImage },
-        setCreateThreadDraft = { createThreadDraft = it },
-        setCreateThreadImage = { createThreadImage = it },
-        setShowCreateThreadDialog = { isVisible ->
-            overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
-        },
-        updateLastUsedDeleteKey = updateLastUsedDeleteKey,
-        showSnackbar = snackbarHostState::showSnackbar,
-        currentIsHistoryRefreshing = { isHistoryRefreshing },
-        setIsHistoryRefreshing = { isHistoryRefreshing = it },
-        onHistoryRefresh = onHistoryRefresh,
-        currentPastSearchRuntimeState = { pastSearchRuntimeState },
-        setPastSearchRuntimeState = { pastSearchRuntimeState = it },
-        httpClient = httpClient,
-        archiveSearchJson = archiveSearchJson,
-        onHistoryEntrySelected = onHistoryEntrySelected,
-        onBack = onBack,
-        onHistoryCleared = onHistoryCleared,
-        setShowGlobalSettings = { isVisible ->
-            overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
-        },
-        setSearchQuery = { searchQuery = it },
-        setSearchActive = { isSearchActive = it },
-        lastUsedDeleteKey = lastUsedDeleteKey,
-        currentCreateThreadPassword = { createThreadDraft.password },
-        setCreateThreadPassword = {
-            createThreadDraft = updateCreateThreadDraftPassword(createThreadDraft, it)
-        },
-        currentCatalogNgWords = { catalogNgWords },
-        currentWatchWords = { watchWords },
-        currentCatalogNgFilteringEnabled = { catalogNgFilteringEnabled },
-        setCatalogNgFilteringEnabled = { catalogNgFilteringEnabled = it },
-        onFallbackCatalogNgWordsChanged = persistentBindings.onFallbackCatalogNgWordsChanged,
-        onFallbackWatchWordsChanged = persistentBindings.onFallbackWatchWordsChanged,
-        setLocalCatalogDisplayStyle = { localCatalogDisplayStyle = it },
-        setLocalCatalogGridColumns = { localCatalogGridColumns = it },
-        currentCatalogDisplayStyle = {
-            if (stateStore != null) {
-                persistentBindings.persistentDisplayStyle
-            } else {
-                localCatalogDisplayStyle
+        mutationInputs = CatalogScreenMutationInputs(
+            coroutineScope = coroutineScope,
+            stateStore = stateStore,
+            currentBoardId = { board?.id },
+            setCatalogMode = { catalogMode = it },
+            currentCatalogNgWords = { catalogNgWords },
+            currentWatchWords = { watchWords },
+            currentCatalogNgFilteringEnabled = { catalogNgFilteringEnabled },
+            setCatalogNgFilteringEnabled = { catalogNgFilteringEnabled = it },
+            onFallbackCatalogNgWordsChanged = persistentBindings.onFallbackCatalogNgWordsChanged,
+            onFallbackWatchWordsChanged = persistentBindings.onFallbackWatchWordsChanged,
+            showSnackbar = snackbarHostState::showSnackbar,
+            setLocalCatalogDisplayStyle = { localCatalogDisplayStyle = it },
+            setLocalCatalogGridColumns = { localCatalogGridColumns = it },
+            currentCatalogDisplayStyle = {
+                if (stateStore != null) {
+                    persistentBindings.persistentDisplayStyle
+                } else {
+                    localCatalogDisplayStyle
+                }
+            },
+            catalogGridState = catalogGridState,
+            catalogListState = catalogListState
+        ),
+        runtimeInputs = CatalogScreenRuntimeInputs(
+            coroutineScope = coroutineScope,
+            drawerState = drawerState,
+            currentBoard = { board },
+            currentCatalogMode = { catalogMode },
+            currentCatalogLoadGeneration = { catalogLoadGeneration },
+            setCatalogLoadGeneration = { catalogLoadGeneration = it },
+            currentCatalogLoadJob = { catalogLoadJob },
+            setCatalogLoadJob = { catalogLoadJob = it },
+            currentIsRefreshing = { isRefreshing },
+            setIsRefreshing = { isRefreshing = it },
+            setCatalogUiState = { uiState.value = it },
+            setLastCatalogItems = { lastCatalogItems = it },
+            loadCatalogItems = ::loadCatalogItems,
+            activeRepository = activeRepository,
+            currentCreateThreadDraft = { createThreadDraft },
+            currentCreateThreadImage = { createThreadImage },
+            setCreateThreadDraft = { createThreadDraft = it },
+            setCreateThreadImage = { createThreadImage = it },
+            setShowCreateThreadDialog = { isVisible ->
+                overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
+            },
+            updateLastUsedDeleteKey = updateLastUsedDeleteKey,
+            showSnackbar = snackbarHostState::showSnackbar,
+            currentIsHistoryRefreshing = { isHistoryRefreshing },
+            setIsHistoryRefreshing = { isHistoryRefreshing = it },
+            onHistoryRefresh = onHistoryRefresh,
+            currentPastSearchRuntimeState = { pastSearchRuntimeState },
+            setPastSearchRuntimeState = { pastSearchRuntimeState = it },
+            httpClient = httpClient,
+            archiveSearchJson = archiveSearchJson,
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onBack = onBack,
+            onHistoryCleared = onHistoryCleared,
+            setShowGlobalSettings = { isVisible ->
+                overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
+            },
+            setSearchQuery = { searchQuery = it },
+            setSearchActive = { isSearchActive = it },
+            lastUsedDeleteKey = lastUsedDeleteKey,
+            currentCreateThreadPassword = { createThreadDraft.password },
+            setCreateThreadPassword = {
+                createThreadDraft = updateCreateThreadDraftPassword(createThreadDraft, it)
+            },
+            setShowPastThreadSearchDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)
+            },
+            setShowModeDialog = { isVisible ->
+                overlayState = setCatalogModeDialogVisible(overlayState, isVisible)
+            },
+            setShowSettingsMenu = { isVisible ->
+                overlayState = setCatalogSettingsMenuVisible(overlayState, isVisible)
             }
-        },
-        catalogGridState = catalogGridState,
-        catalogListState = catalogListState,
-        setShowPastThreadSearchDialog = { isVisible ->
-            overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)
-        },
-        setShowPastSearchSheetVisible = { isVisible ->
-            overlayState = setCatalogPastSearchSheetVisible(overlayState, isVisible)
-        },
-        setShowModeDialog = { isVisible ->
-            overlayState = setCatalogModeDialogVisible(overlayState, isVisible)
-        },
-        setShowDisplayStyleDialog = { isVisible ->
-            overlayState = setCatalogDisplayStyleDialogVisible(overlayState, isVisible)
-        },
-        setShowSettingsMenu = { isVisible ->
-            overlayState = setCatalogSettingsMenuVisible(overlayState, isVisible)
-        },
-        setNgManagementVisible = { isVisible ->
-            overlayState = setCatalogNgManagementVisible(overlayState, isVisible)
-        },
-        setWatchWordsVisible = { isVisible ->
-            overlayState = setCatalogWatchWordsVisible(overlayState, isVisible)
-        },
-        setCookieManagementVisible = { isVisible ->
-            overlayState = setCatalogCookieManagementVisible(overlayState, isVisible)
-        },
-        currentArchiveSearchScope = { archiveSearchScope },
-        setLastArchiveSearchScope = {
-            pastSearchRuntimeState = pastSearchRuntimeState.copy(lastArchiveSearchScope = it)
-        },
-        setArchiveSearchQuery = { archiveSearchQuery = it },
-        currentArchiveSearchQuery = { archiveSearchQuery },
-        currentLastArchiveSearchScope = { pastSearchRuntimeState.lastArchiveSearchScope },
-        onThreadSelected = onThreadSelected,
-        urlLauncher = setupBundle.urlLauncher,
-        stateStore = stateStore,
-        isPrivacyFilterEnabled = { isPrivacyFilterEnabled },
-        cookieRepository = cookieRepository
+        ),
+        overlayInputs = CatalogScreenOverlayInputs(
+            currentBoard = { board },
+            currentCatalogMode = { catalogMode },
+            currentPastSearchRuntimeState = { pastSearchRuntimeState },
+            setPastSearchRuntimeState = { pastSearchRuntimeState = it },
+            setShowGlobalSettings = { isVisible ->
+                overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
+            },
+            setShowPastThreadSearchDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)
+            },
+            setShowPastSearchSheetVisible = { isVisible ->
+                overlayState = setCatalogPastSearchSheetVisible(overlayState, isVisible)
+            },
+            setShowModeDialog = { isVisible ->
+                overlayState = setCatalogModeDialogVisible(overlayState, isVisible)
+            },
+            setShowDisplayStyleDialog = { isVisible ->
+                overlayState = setCatalogDisplayStyleDialogVisible(overlayState, isVisible)
+            },
+            setShowSettingsMenu = { isVisible ->
+                overlayState = setCatalogSettingsMenuVisible(overlayState, isVisible)
+            },
+            setNgManagementVisible = { isVisible ->
+                overlayState = setCatalogNgManagementVisible(overlayState, isVisible)
+            },
+            setWatchWordsVisible = { isVisible ->
+                overlayState = setCatalogWatchWordsVisible(overlayState, isVisible)
+            },
+            setCookieManagementVisible = { isVisible ->
+                overlayState = setCatalogCookieManagementVisible(overlayState, isVisible)
+            },
+            currentArchiveSearchScope = { archiveSearchScope },
+            setLastArchiveSearchScope = {
+                pastSearchRuntimeState = pastSearchRuntimeState.copy(lastArchiveSearchScope = it)
+            },
+            setArchiveSearchQuery = { archiveSearchQuery = it },
+            currentArchiveSearchQuery = { archiveSearchQuery },
+            currentLastArchiveSearchScope = { pastSearchRuntimeState.lastArchiveSearchScope },
+            onThreadSelected = onThreadSelected,
+            urlLauncher = setupBundle.urlLauncher,
+            stateStore = stateStore,
+            isPrivacyFilterEnabled = { isPrivacyFilterEnabled },
+            coroutineScope = coroutineScope,
+            cookieRepository = cookieRepository
+        )
     )
     val mutationBindings = interactionBindings.mutationBindings
     val runtimeBindings = interactionBindings.runtimeBindings
@@ -312,7 +338,7 @@ fun CatalogScreen(
         lifecycleBindings.onInitialLoad()
     }
     val overlayBindings = interactionBindings.overlayBindings
-    val hostBindings = buildCatalogScreenHostBindings(
+    val scaffoldBindings = CatalogScreenScaffoldBindings(
         history = history,
         onHistoryEntryDismissed = onHistoryEntryDismissed,
         historyDrawerCallbacks = historyDrawerCallbacks,
@@ -339,7 +365,9 @@ fun CatalogScreen(
         catalogDisplayStyle = catalogDisplayStyle,
         catalogGridColumns = catalogGridColumns,
         catalogGridState = catalogGridState,
-        catalogListState = catalogListState,
+        catalogListState = catalogListState
+    )
+    val overlayHostBindings = CatalogScreenOverlayHostBindings(
         overlayState = overlayState,
         overlayBindings = overlayBindings,
         createThreadDraft = createThreadDraft,
@@ -349,20 +377,29 @@ fun CatalogScreen(
         setCreateThreadDialogVisible = { isVisible ->
             overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
         },
+        board = board,
         archiveSearchQuery = archiveSearchQuery,
+        searchQuery = searchQuery,
+        catalogMode = catalogMode,
+        catalogDisplayStyle = catalogDisplayStyle,
+        catalogGridColumns = catalogGridColumns,
         pastSearchRuntimeState = pastSearchRuntimeState,
+        watchWords = watchWords,
+        catalogNgWords = catalogNgWords,
+        catalogNgFilteringEnabled = catalogNgFilteringEnabled,
         isPrivacyFilterEnabled = isPrivacyFilterEnabled,
         createThreadBindings = createThreadBindings,
         preferencesState = preferencesState,
         preferencesCallbacks = preferencesCallbacks,
+        history = history,
         fileSystem = fileSystem,
         autoSavedThreadRepository = autoSavedThreadRepository,
         cookieRepository = cookieRepository
     )
 
-    CatalogScreenScaffold(bindings = hostBindings.scaffold, modifier = modifier)
+    CatalogScreenScaffold(bindings = scaffoldBindings, modifier = modifier)
 
-    CatalogScreenOverlayHost(bindings = hostBindings.overlay)
+    CatalogScreenOverlayHost(bindings = overlayHostBindings)
 }
 
 

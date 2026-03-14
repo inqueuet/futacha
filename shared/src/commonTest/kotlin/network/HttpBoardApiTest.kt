@@ -226,6 +226,32 @@ class HttpBoardApiTest {
     }
 
     @Test
+    fun fetchCatalogSetup_sendsExpectedFormParametersAndReferer() = runBlocking {
+        lateinit var capturedRequest: HttpRequestData
+        val api = createApi { request ->
+            capturedRequest = request
+            htmlResponse("ok")
+        }
+
+        try {
+            api.fetchCatalogSetup("https://may.2chan.net/b/")
+
+            val form = decodeFormBody(capturedRequest)
+            assertEquals("https://may.2chan.net/b/futaba.php?mode=catset", capturedRequest.url.toString())
+            assertEquals("https://may.2chan.net/b/futaba.php?mode=catset", capturedRequest.headers[HttpHeaders.Referrer])
+            assertEquals("catset", form["mode"])
+            assertEquals("5", form["cx"])
+            assertEquals("60", form["cy"])
+            assertEquals("4", form["cl"])
+            assertEquals("0", form["cm"])
+            assertEquals("0", form["ci"])
+            assertEquals("on", form["vh"])
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
     fun deleteByUser_sendsCompatibleDeletionFormFields() = runBlocking {
         lateinit var capturedRequest: HttpRequestData
         val api = createApi { request ->

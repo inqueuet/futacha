@@ -3,21 +3,24 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.NetworkException
-import com.valoser.futacha.shared.network.ArchiveSearchItem
-import com.valoser.futacha.shared.network.extractArchiveSearchScope
-import com.valoser.futacha.shared.network.fetchArchiveSearchResults
-import com.valoser.futacha.shared.network.selectLatestArchiveMatch
+import com.valoser.futacha.shared.service.ThreadSaveService
+import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
-import io.ktor.http.Url
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -25,22 +28,25 @@ import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 
+internal const val HISTORY_REFRESH_ABORT_REASON_PREFIX =
+    "Aborting history refresh due to persistent"
+
 internal data class HistoryRefreshWindowSelection(
     val entries: List<ThreadHistoryEntry>,
     val nextCursor: Int
+)
+
+internal data class HistoryRefreshResolvedEntry(
+    val entry: ThreadHistoryEntry,
+    val board: BoardSummary?,
+    val key: HistoryRefreshKey,
+    val baseUrl: String
 )
 
 internal data class HistoryRefreshKey(
     val boardKey: String,
     val threadId: String
 )
-
-internal sealed interface ArchiveRefreshResult {
-    data class Success(val entry: ThreadHistoryEntry) : ArchiveRefreshResult
-    data object NotFound : ArchiveRefreshResult
-    data object NoMatch : ArchiveRefreshResult
-    data class Error(val message: String) : ArchiveRefreshResult
-}
 
 internal fun buildHistoryBoardKey(
     entry: ThreadHistoryEntry,
@@ -81,56 +87,6 @@ internal fun normalizeHistoryBoardKey(url: String?): String? {
     return resolved.trimEnd('/').lowercase().ifBlank { null }
 }
 
-internal fun resolveArchiveBaseUrl(
-    threadUrl: String,
-    fallbackBoardUrl: String?
-): String? {
-    if (threadUrl.isBlank()) return fallbackBoardUrl?.takeIf { it.isNotBlank() }
-    if (!threadUrl.contains("://")) {
-        return fallbackBoardUrl?.takeIf { it.isNotBlank() }
-    }
-    return runCatching {
-        val url = Url(threadUrl)
-        val segments = url.encodedPath.split('/').filter { it.isNotBlank() }
-        val boardSegments = segments.takeWhile { it.lowercase() != "res" }
-        if (boardSegments.isEmpty()) {
-            fallbackBoardUrl?.takeIf { it.isNotBlank() }
-        } else {
-            val path = "/" + boardSegments.joinToString("/")
-            buildString {
-                append(url.protocol.name)
-                append("://")
-                append(url.host)
-                if (url.port != url.protocol.defaultPort) {
-                    append(":${url.port}")
-                }
-                append(path.trimEnd('/'))
-            }
-        }
-    }.getOrElse { fallbackBoardUrl?.takeIf { it.isNotBlank() } }
-}
-
-internal fun normalizeHistoryArchiveQuery(raw: String, maxLength: Int): String {
-    if (maxLength <= 0) return ""
-    val trimmed = raw.trim()
-    if (trimmed.isEmpty()) return ""
-    val builder = StringBuilder(minOf(trimmed.length, maxLength))
-    var previousWasWhitespace = false
-    for (ch in trimmed) {
-        val isWhitespace = ch.isWhitespace()
-        if (isWhitespace) {
-            if (!previousWasWhitespace && builder.isNotEmpty()) {
-                builder.append(' ')
-            }
-        } else {
-            builder.append(ch)
-            if (builder.length >= maxLength) break
-        }
-        previousWasWhitespace = isWhitespace
-    }
-    return builder.toString().trim()
-}
-
 internal fun isHistoryRefreshAbortSignal(t: Throwable, reasonPrefix: String): Boolean {
     return t is NetworkException && t.message?.startsWith(reasonPrefix) == true
 }
@@ -156,6 +112,208 @@ internal fun buildHistoryRefreshError(
         errors = details.take(10),
         stageCounts = stageCounts
     )
+}
+
+internal fun resolveHistoryRefreshEntry(
+    entry: ThreadHistoryEntry,
+    boardById: Map<String, BoardSummary>,
+    boardByBaseUrl: Map<String, BoardSummary>,
+    skipThreadIds: StateFlow<Map<HistoryRefreshKey, Long>>,
+    nowMillis: Long,
+    skipThreadTtlMillis: Long
+): HistoryRefreshResolvedEntry? {
+    val board = resolveHistoryBoardForEntry(entry, boardById, boardByBaseUrl)
+    val key = buildHistoryRefreshKey(entry, boardById, boardByBaseUrl)
+    if (isHistoryThreadSkipped(skipThreadIds, key, nowMillis, skipThreadTtlMillis)) {
+        return null
+    }
+    val baseUrl = board?.url
+        ?: entry.boardUrl.takeIf { it.isNotBlank() }?.let {
+            runCatching { BoardUrlResolver.resolveBoardBaseUrl(it) }.getOrNull()
+        }
+    if (baseUrl.isNullOrBlank() || baseUrl.contains("example.com", ignoreCase = true)) {
+        return null
+    }
+    return HistoryRefreshResolvedEntry(
+        entry = entry,
+        board = board,
+        key = key,
+        baseUrl = baseUrl
+    )
+}
+
+internal class HistoryRefreshRunProcessor(
+    private val stateStore: AppStateStore,
+    private val repository: BoardRepository,
+    private val httpClient: HttpClient?,
+    private val archiveSearchJson: Json,
+    private val fetchSemaphore: Semaphore,
+    private val autoSaveSemaphore: Semaphore,
+    private val autoSaveScope: CoroutineScope,
+    private val autoSaveService: ThreadSaveService?,
+    private val autoSavedThreadRepository: SavedThreadRepository?,
+    private val skipThreadIds: MutableStateFlow<Map<HistoryRefreshKey, Long>>,
+    private val refreshStartedAt: Long,
+    private val skipThreadTtlMillis: Long,
+    private val fetchTimeoutMillis: Long,
+    private val autoSaveThreadTimeoutMillis: Long,
+    private val autoSaveDeadline: Long?,
+    private val maxAutoSavesPerRefresh: Int,
+    private val threadRefreshAbortThreshold: HistoryRefreshAbortThreshold,
+    private val archiveLookupAbortThreshold: HistoryRefreshAbortThreshold,
+    private val stats: HistoryRefreshRunStats,
+    private val errors: HistoryRefreshErrorTracker,
+    private val updates: HistoryRefreshUpdateBuffer,
+    private val threadRefreshStage: String,
+    private val archiveLookupStage: String,
+    private val refreshAbortStage: String,
+    private val tag: String
+) {
+    private val autoSaveLauncher = HistoryRefreshAutoSaveLauncher(
+        stateStore = stateStore,
+        autoSaveScope = autoSaveScope,
+        autoSaveSemaphore = autoSaveSemaphore,
+        autoSaveService = autoSaveService,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        autoSaveThreadTimeoutMillis = autoSaveThreadTimeoutMillis,
+        autoSaveDeadline = autoSaveDeadline,
+        maxAutoSavesPerRefresh = maxAutoSavesPerRefresh,
+        stats = stats,
+        tag = tag
+    )
+    private val missingEntryDependencies = HistoryRefreshMissingEntryDependencies(
+        httpClient = httpClient,
+        repository = repository,
+        archiveSearchJson = archiveSearchJson,
+        fetchTimeoutMillis = fetchTimeoutMillis,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        skipThreadIds = skipThreadIds,
+        stats = stats,
+        errors = errors,
+        updates = updates,
+        archiveLookupAbortThreshold = archiveLookupAbortThreshold,
+        archiveLookupStage = archiveLookupStage,
+        refreshAbortStage = refreshAbortStage,
+        tag = tag
+    )
+
+    suspend fun processEntry(
+        entry: ThreadHistoryEntry,
+        boardById: Map<String, BoardSummary>,
+        boardByBaseUrl: Map<String, BoardSummary>
+    ) {
+        try {
+            val resolvedEntry = resolveHistoryRefreshEntry(
+                entry = entry,
+                boardById = boardById,
+                boardByBaseUrl = boardByBaseUrl,
+                skipThreadIds = skipThreadIds,
+                nowMillis = refreshStartedAt,
+                skipThreadTtlMillis = skipThreadTtlMillis
+            ) ?: return
+            fetchSemaphore.withPermit {
+                refreshResolvedEntry(resolvedEntry)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Throwable) {
+            if (isHistoryRefreshAbortSignal(error, HISTORY_REFRESH_ABORT_REASON_PREFIX)) {
+                throw error
+            }
+            Logger.e(tag, "Unexpected failure while refreshing ${entry.threadId}", error)
+            errors.record(
+                threadId = entry.threadId,
+                message = error.message ?: "Unexpected refresh failure",
+                stage = threadRefreshStage
+            )
+            stats.recordThreadRefreshFailure()
+        }
+    }
+
+    private suspend fun refreshResolvedEntry(
+        resolvedEntry: HistoryRefreshResolvedEntry
+    ) {
+        val entry = resolvedEntry.entry
+        val board = resolvedEntry.board
+        val key = resolvedEntry.key
+        val baseUrl = resolvedEntry.baseUrl
+        try {
+            stats.markAttempt()
+            val page = withTimeoutOrNull(fetchTimeoutMillis) {
+                repository.getThread(baseUrl, entry.threadId)
+            } ?: throw NetworkException("Thread fetch timed out for ${entry.threadId}")
+            val opPost = page.posts.firstOrNull()
+            val resolvedTitle = resolveThreadTitle(opPost, entry.title)
+            stats.markSuccess()
+            val updatedEntry = entry.copy(
+                title = resolvedTitle,
+                titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
+                boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                replyCount = page.posts.size,
+                hasAutoSave = entry.hasAutoSave
+            )
+            updates.put(key, updatedEntry)
+
+            if (shouldAutoSaveRefreshedEntry(entry, page.posts.size)) {
+                autoSaveLauncher.launch(
+                    HistoryRefreshAutoSavePlan(
+                        resolvedEntry = resolvedEntry,
+                        updatedEntry = updatedEntry,
+                        resolvedTitle = resolvedTitle,
+                        boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
+                        expiresAtLabel = page.expiresAtLabel,
+                        posts = page.posts
+                    )
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Throwable) {
+            if (isHistoryRefreshNotFound(error)) {
+                handleHistoryRefreshNotFound(
+                    resolvedEntry = resolvedEntry,
+                    dependencies = missingEntryDependencies
+                )
+            } else {
+                Logger.e(tag, "Failed to refresh ${entry.threadId}", error)
+                errors.record(
+                    threadId = entry.threadId,
+                    message = error.message ?: "Unknown error",
+                    stage = threadRefreshStage
+                )
+                stats.recordThreadRefreshFailure()
+                val abortReason = stats.threadRefreshAbortReason(threadRefreshAbortThreshold)
+                if (abortReason != null) {
+                    errors.record(
+                        threadId = "refresh-abort",
+                        message = abortReason,
+                        stage = refreshAbortStage
+                    )
+                    Logger.e(tag, abortReason, error)
+                    throw NetworkException(abortReason)
+                }
+            }
+        }
+    }
+
+    private fun shouldAutoSaveRefreshedEntry(
+        entry: ThreadHistoryEntry,
+        replyCount: Int
+    ): Boolean {
+        return !entry.hasAutoSave || replyCount != entry.replyCount
+    }
+}
+
+internal fun resolveHistoryEntryBoardId(
+    entry: ThreadHistoryEntry,
+    board: BoardSummary?,
+    baseUrl: String
+): String {
+    return entry.boardId.ifBlank {
+        board?.id
+            ?.takeIf { it.isNotBlank() }
+            ?: runCatching { BoardUrlResolver.resolveBoardSlug(baseUrl) }.getOrDefault("")
+    }
 }
 
 internal fun markHistoryThreadSkipped(
@@ -198,116 +356,6 @@ internal suspend fun bestEffortHistoryRefreshFlushOnAbort(
 
     if (flushed == false) {
         Logger.w(tag, "Best-effort flush on abort did not persist all updates ($reason)")
-    }
-}
-
-internal suspend fun tryRefreshHistoryEntryFromArchive(
-    entry: ThreadHistoryEntry,
-    board: BoardSummary?,
-    httpClient: HttpClient?,
-    repository: BoardRepository,
-    fetchTimeoutMillis: Long,
-    archiveSearchJson: Json,
-    tag: String
-): ArchiveRefreshResult {
-    val client = httpClient ?: return ArchiveRefreshResult.NoMatch
-    val scope = extractArchiveSearchScope(board?.url ?: entry.boardUrl)
-    val queryCandidates = buildList {
-        normalizeHistoryArchiveQuery(entry.threadId, maxLength = 64)
-            .takeIf { it.isNotBlank() }
-            ?.let { add(it) }
-        normalizeHistoryArchiveQuery(entry.title, maxLength = 120)
-            .takeIf { it.isNotBlank() }
-            ?.let { add(it) }
-    }.distinct()
-    if (queryCandidates.isEmpty()) return ArchiveRefreshResult.NoMatch
-
-    var lastErrorMessage: String? = null
-    var hadSuccessfulSearch = false
-    queryCandidates.forEach { query ->
-        val results = try {
-            withTimeoutOrNull(fetchTimeoutMillis) {
-                fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
-            } ?: run {
-                val detail = "Archive search timed out"
-                lastErrorMessage = detail
-                Logger.w(tag, "Archive search timed out for ${entry.threadId}")
-                return@forEach
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (error: Throwable) {
-            val detail = error.message ?: "Archive search failed"
-            lastErrorMessage = detail
-            Logger.w(tag, "Archive search failed for ${entry.threadId}: $detail")
-            return@forEach
-        }
-        hadSuccessfulSearch = true
-        val matched = selectLatestArchiveMatch(results, entry.threadId) ?: return@forEach
-        return resolveHistoryArchiveEntry(
-            entry = entry,
-            board = board,
-            match = matched,
-            repository = repository,
-            fetchTimeoutMillis = fetchTimeoutMillis,
-            tag = tag
-        )
-    }
-    if (hadSuccessfulSearch) return ArchiveRefreshResult.NoMatch
-    return lastErrorMessage?.let { ArchiveRefreshResult.Error(it) } ?: ArchiveRefreshResult.NoMatch
-}
-
-internal suspend fun resolveHistoryArchiveEntry(
-    entry: ThreadHistoryEntry,
-    board: BoardSummary?,
-    match: ArchiveSearchItem,
-    repository: BoardRepository,
-    fetchTimeoutMillis: Long,
-    tag: String
-): ArchiveRefreshResult {
-    val baseUrl = resolveArchiveBaseUrl(match.htmlUrl, board?.url ?: entry.boardUrl)
-    val boardName = entry.boardName.ifBlank { board?.name.orEmpty() }
-    val pageResult = try {
-        val page = withTimeoutOrNull(fetchTimeoutMillis) {
-            if (match.htmlUrl.isNotBlank()) {
-                repository.getThreadByUrl(match.htmlUrl)
-            } else {
-                baseUrl?.let { repository.getThread(it, entry.threadId) }
-            }
-        }
-        if (page == null) {
-            Result.failure(NetworkException("Archive thread fetch timed out"))
-        } else {
-            Result.success(page)
-        }
-    } catch (e: CancellationException) {
-        throw e
-    } catch (t: Throwable) {
-        Result.failure(t)
-    }
-    val page = pageResult.getOrNull()
-    val pageError = pageResult.exceptionOrNull()
-    if (page == null && pageError != null && isHistoryRefreshNotFound(pageError)) {
-        Logger.i(tag, "Archive thread missing for ${entry.threadId}")
-        return ArchiveRefreshResult.NotFound
-    }
-    return if (page != null) {
-        val opPost = page.posts.firstOrNull()
-        val resolvedTitle = resolveThreadTitle(opPost, match.title ?: entry.title)
-        val resolvedImage = opPost?.thumbnailUrl ?: match.thumbUrl ?: entry.titleImageUrl
-        Logger.i(tag, "Archive refresh succeeded for ${entry.threadId}")
-        ArchiveRefreshResult.Success(
-            entry.copy(
-                title = resolvedTitle,
-                titleImageUrl = resolvedImage,
-                boardName = page.boardTitle ?: boardName,
-                boardUrl = baseUrl ?: entry.boardUrl,
-                replyCount = page.posts.size
-            )
-        )
-    } else {
-        val detail = pageError?.message?.takeIf { it.isNotBlank() } ?: "Archive thread fetch failed"
-        ArchiveRefreshResult.Error(detail)
     }
 }
 

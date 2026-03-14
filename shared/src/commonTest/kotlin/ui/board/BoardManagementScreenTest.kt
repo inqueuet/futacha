@@ -285,6 +285,28 @@ class BoardManagementScreenTest {
     }
 
     @Test
+    fun resolveBoardManagementDrawerOpenState_checksCurrentAndTargetValues() {
+        assertTrue(
+            resolveBoardManagementDrawerOpenState(
+                currentValue = DrawerValue.Open,
+                targetValue = DrawerValue.Closed
+            )
+        )
+        assertTrue(
+            resolveBoardManagementDrawerOpenState(
+                currentValue = DrawerValue.Closed,
+                targetValue = DrawerValue.Open
+            )
+        )
+        assertFalse(
+            resolveBoardManagementDrawerOpenState(
+                currentValue = DrawerValue.Closed,
+                targetValue = DrawerValue.Closed
+            )
+        )
+    }
+
+    @Test
     fun boardManagementOverlayHelpers_updateDialogAndSettingsVisibility() {
         val base = BoardManagementOverlayState()
         val board = board(name = "target")
@@ -477,6 +499,39 @@ class BoardManagementScreenTest {
     }
 
     @Test
+    fun performBoardManagementBackAction_routesDrawerAndEditModes() = runBlocking {
+        var closedDrawer = false
+        var clearedEditModes = false
+
+        performBoardManagementBackAction(
+            action = BoardManagementBackAction.NONE,
+            coroutineScope = this,
+            closeDrawer = { closedDrawer = true },
+            clearEditModes = { clearedEditModes = true }
+        )
+        yield()
+        assertFalse(closedDrawer)
+        assertFalse(clearedEditModes)
+
+        performBoardManagementBackAction(
+            action = BoardManagementBackAction.CLOSE_DRAWER,
+            coroutineScope = this,
+            closeDrawer = { closedDrawer = true },
+            clearEditModes = { clearedEditModes = true }
+        )
+        yield()
+        assertTrue(closedDrawer)
+
+        performBoardManagementBackAction(
+            action = BoardManagementBackAction.CLEAR_EDIT_MODES,
+            coroutineScope = this,
+            closeDrawer = { closedDrawer = false },
+            clearEditModes = { clearedEditModes = true }
+        )
+        assertTrue(clearedEditModes)
+    }
+
+    @Test
     fun boardManagementInteractionBindings_bundle_routesOverlayCallbacks() = runBlocking {
         var overlayState = BoardManagementOverlayState()
         var deletedBoard: BoardSummary? = null
@@ -484,29 +539,37 @@ class BoardManagementScreenTest {
         var selectedBoard: BoardSummary? = null
         var reorderedBoards: List<BoardSummary>? = null
         val bundle = buildBoardManagementInteractionBindingsBundle(
-            coroutineScope = this,
-            closeDrawer = {},
-            openDrawer = {},
-            onExternalMenuAction = {},
-            onHistoryEntrySelected = {},
-            onHistoryRefresh = {},
-            onHistoryCleared = {},
-            onAddBoard = { _, _ -> },
-            onBoardDeleted = { deletedBoard = it },
-            showSnackbar = {},
-            currentIsDeleteMode = { false },
-            currentIsReorderMode = { false },
-            currentIsHistoryRefreshing = { false },
-            setIsDeleteMode = {},
-            setIsReorderMode = {},
-            setIsHistoryRefreshing = {},
-            currentOverlayState = { overlayState },
-            setOverlayState = { overlayState = it },
-            hasCookieRepository = true,
-            currentIsMenuExpanded = { isMenuExpanded },
-            setIsMenuExpanded = { isMenuExpanded = it },
-            onBoardSelected = { selectedBoard = it },
-            onBoardsReordered = { reorderedBoards = it }
+            historyInputs = BoardManagementHistoryInteractionInputs(
+                coroutineScope = this,
+                closeDrawer = {},
+                openDrawer = {},
+                onExternalMenuAction = {},
+                onHistoryEntrySelected = {},
+                onHistoryRefresh = {},
+                onHistoryCleared = {},
+                showSnackbar = {}
+            ),
+            stateInputs = BoardManagementStateInteractionInputs(
+                currentIsDeleteMode = { false },
+                currentIsReorderMode = { false },
+                currentIsHistoryRefreshing = { false },
+                setIsDeleteMode = {},
+                setIsReorderMode = {},
+                setIsHistoryRefreshing = {},
+                currentIsMenuExpanded = { isMenuExpanded },
+                setIsMenuExpanded = { isMenuExpanded = it }
+            ),
+            overlayInputs = BoardManagementOverlayInteractionInputs(
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                hasCookieRepository = true
+            ),
+            boardInputs = BoardManagementBoardInteractionInputs(
+                onAddBoard = { _, _ -> },
+                onBoardDeleted = { deletedBoard = it },
+                onBoardSelected = { selectedBoard = it },
+                onBoardsReordered = { reorderedBoards = it }
+            )
         )
         val board = board(name = "delete")
         val boards = listOf(board(id = "a", name = "A"), board(id = "b", name = "B"))
@@ -553,7 +616,7 @@ class BoardManagementScreenTest {
     }
 
     @Test
-    fun boardManagementScreenBindings_bundleScaffoldAndOverlayContracts() = runBlocking {
+    fun boardManagementBindings_contractsStayAlignedAcrossHosts() = runBlocking {
         val drawerState = DrawerState(initialValue = DrawerValue.Closed)
         val snackbarHostState = SnackbarHostState()
         val boards = listOf(board(id = "a", name = "A"))
@@ -571,36 +634,44 @@ class BoardManagementScreenTest {
         val preferencesState = ScreenPreferencesState(appVersion = "1.0.0")
         val preferencesCallbacks = ScreenPreferencesCallbacks()
         val interactionBindings = buildBoardManagementInteractionBindingsBundle(
-            coroutineScope = this,
-            closeDrawer = {},
-            openDrawer = {},
-            onExternalMenuAction = {},
-            onHistoryEntrySelected = {},
-            onHistoryRefresh = {},
-            onHistoryCleared = {},
-            onAddBoard = { _, _ -> },
-            onBoardDeleted = {},
-            showSnackbar = {},
-            currentIsDeleteMode = { false },
-            currentIsReorderMode = { true },
-            currentIsHistoryRefreshing = { false },
-            setIsDeleteMode = {},
-            setIsReorderMode = {},
-            setIsHistoryRefreshing = {},
-            currentOverlayState = { BoardManagementOverlayState(isGlobalSettingsVisible = true) },
-            setOverlayState = {},
-            hasCookieRepository = false,
-            currentIsMenuExpanded = { true },
-            setIsMenuExpanded = {},
-            onBoardSelected = {},
-            onBoardsReordered = {}
+            historyInputs = BoardManagementHistoryInteractionInputs(
+                coroutineScope = this,
+                closeDrawer = {},
+                openDrawer = {},
+                onExternalMenuAction = {},
+                onHistoryEntrySelected = {},
+                onHistoryRefresh = {},
+                onHistoryCleared = {},
+                showSnackbar = {}
+            ),
+            stateInputs = BoardManagementStateInteractionInputs(
+                currentIsDeleteMode = { false },
+                currentIsReorderMode = { true },
+                currentIsHistoryRefreshing = { false },
+                setIsDeleteMode = {},
+                setIsReorderMode = {},
+                setIsHistoryRefreshing = {},
+                currentIsMenuExpanded = { true },
+                setIsMenuExpanded = {}
+            ),
+            overlayInputs = BoardManagementOverlayInteractionInputs(
+                currentOverlayState = { BoardManagementOverlayState(isGlobalSettingsVisible = true) },
+                setOverlayState = {},
+                hasCookieRepository = false
+            ),
+            boardInputs = BoardManagementBoardInteractionInputs(
+                onAddBoard = { _, _ -> },
+                onBoardDeleted = {},
+                onBoardSelected = {},
+                onBoardsReordered = {}
+            )
         )
         val onHistoryDismissed: (ThreadHistoryEntry) -> Unit = {}
         val onDismissDrawerTap = {}
 
-        val bindings = buildBoardManagementScreenBindings(
-            boards = boards,
+        val scaffoldBindings = BoardManagementScaffoldBindings(
             history = history,
+            boards = boards,
             isDeleteMode = false,
             isReorderMode = true,
             isDrawerOpen = false,
@@ -613,33 +684,47 @@ class BoardManagementScreenTest {
             snackbarHostState = snackbarHostState,
             onHistoryEntryDismissed = onHistoryDismissed,
             onDismissDrawerTap = onDismissDrawerTap,
-            interactionBindings = interactionBindings,
+            historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks,
+            topBarCallbacks = interactionBindings.topBarCallbacks,
+            boardListCallbacks = interactionBindings.boardListCallbacks,
+            onHistorySettingsClick = interactionBindings.onHistorySettingsClick
+        )
+        val overlayBindings = BoardManagementOverlayBindings(
+            boards = boards,
+            history = history,
             overlayState = BoardManagementOverlayState(isGlobalSettingsVisible = true),
             preferencesState = preferencesState,
             preferencesCallbacks = preferencesCallbacks,
             autoSavedThreadRepository = null,
             fileSystem = null,
-            cookieRepository = null
+            cookieRepository = null,
+            onDismissAddDialog = interactionBindings.onDismissAddDialog,
+            onAddBoardSubmitted = interactionBindings.dialogCallbacks.onAddBoardSubmitted,
+            onDismissDeleteDialog = interactionBindings.onDismissDeleteDialog,
+            onDeleteBoardConfirmed = interactionBindings.dialogCallbacks.onDeleteBoardConfirmed,
+            onGlobalSettingsBack = interactionBindings.onGlobalSettingsBack,
+            onOpenCookieManagement = interactionBindings.onOpenCookieManagement,
+            onCookieManagementBack = interactionBindings.onCookieManagementBack
         )
 
-        assertEquals(boards, bindings.scaffold.boards)
-        assertEquals(history, bindings.scaffold.history)
-        assertTrue(bindings.scaffold.isReorderMode)
-        assertTrue(bindings.scaffold.isMenuExpanded)
-        assertTrue(bindings.scaffold.topBarCallbacks === interactionBindings.topBarCallbacks)
-        assertTrue(bindings.scaffold.boardListCallbacks === interactionBindings.boardListCallbacks)
-        assertTrue(bindings.scaffold.historyDrawerCallbacks === interactionBindings.historyDrawerCallbacks)
-        assertTrue(bindings.scaffold.onHistoryEntryDismissed === onHistoryDismissed)
-        assertTrue(bindings.scaffold.onDismissDrawerTap === onDismissDrawerTap)
-        assertTrue(bindings.scaffold.drawerState === drawerState)
-        assertTrue(bindings.scaffold.snackbarHostState === snackbarHostState)
-        assertEquals(boards, bindings.overlay.boards)
-        assertEquals(history, bindings.overlay.history)
-        assertTrue(bindings.overlay.overlayState.isGlobalSettingsVisible)
-        assertEquals(preferencesState, bindings.overlay.preferencesState)
-        assertEquals(preferencesCallbacks, bindings.overlay.preferencesCallbacks)
-        assertTrue(bindings.overlay.onAddBoardSubmitted === interactionBindings.dialogCallbacks.onAddBoardSubmitted)
-        assertTrue(bindings.overlay.onGlobalSettingsBack === interactionBindings.onGlobalSettingsBack)
+        assertEquals(boards, scaffoldBindings.boards)
+        assertEquals(history, scaffoldBindings.history)
+        assertTrue(scaffoldBindings.isReorderMode)
+        assertTrue(scaffoldBindings.isMenuExpanded)
+        assertTrue(scaffoldBindings.topBarCallbacks === interactionBindings.topBarCallbacks)
+        assertTrue(scaffoldBindings.boardListCallbacks === interactionBindings.boardListCallbacks)
+        assertTrue(scaffoldBindings.historyDrawerCallbacks === interactionBindings.historyDrawerCallbacks)
+        assertTrue(scaffoldBindings.onHistoryEntryDismissed === onHistoryDismissed)
+        assertTrue(scaffoldBindings.onDismissDrawerTap === onDismissDrawerTap)
+        assertTrue(scaffoldBindings.drawerState === drawerState)
+        assertTrue(scaffoldBindings.snackbarHostState === snackbarHostState)
+        assertEquals(boards, overlayBindings.boards)
+        assertEquals(history, overlayBindings.history)
+        assertTrue(overlayBindings.overlayState.isGlobalSettingsVisible)
+        assertEquals(preferencesState, overlayBindings.preferencesState)
+        assertEquals(preferencesCallbacks, overlayBindings.preferencesCallbacks)
+        assertTrue(overlayBindings.onAddBoardSubmitted === interactionBindings.dialogCallbacks.onAddBoardSubmitted)
+        assertTrue(overlayBindings.onGlobalSettingsBack === interactionBindings.onGlobalSettingsBack)
     }
 
     private fun board(

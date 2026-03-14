@@ -17,15 +17,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
-import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.state.AppStateSeedDefaults
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
+import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
+import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
@@ -85,26 +87,32 @@ fun FutachaApp(
 
             val repositoryHolder = remember(httpClient, cookieRepository) {
                 buildFutachaRepositoryHolder(
-                    httpClient = httpClient,
-                    cookieRepository = cookieRepository
+                    FutachaRepositoryHolderInputs(
+                        httpClient = httpClient,
+                        cookieRepository = cookieRepository
+                    )
                 )
             }
 
             val effectiveAutoSavedThreadRepository = remember(fileSystem, autoSavedThreadRepository) {
                 buildFutachaAutoSavedThreadRepository(
-                    fileSystem = fileSystem,
-                    existingRepository = autoSavedThreadRepository
+                    FutachaAutoSavedThreadRepositoryInputs(
+                        fileSystem = fileSystem,
+                        existingRepository = autoSavedThreadRepository
+                    )
                 )
             }
 
             val historyRefresher = remember(repositoryHolder.repository, effectiveAutoSavedThreadRepository, httpClient, fileSystem, shouldUseLightweightMode) {
                 buildFutachaHistoryRefresher(
-                    stateStore = stateStore,
-                    repository = repositoryHolder.repository,
-                    autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                    httpClient = httpClient,
-                    fileSystem = fileSystem,
-                    shouldUseLightweightMode = shouldUseLightweightMode
+                    FutachaHistoryRefresherInputs(
+                        stateStore = stateStore,
+                        repository = repositoryHolder.repository,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                        httpClient = httpClient,
+                        fileSystem = fileSystem,
+                        shouldUseLightweightMode = shouldUseLightweightMode
+                    )
                 )
             }
 
@@ -118,11 +126,13 @@ fun FutachaApp(
 
             LaunchedEffect(stateStore, boardList, history) {
                 stateStore.seedIfEmpty(
-                    boardList,
-                    history,
-                    defaultSelfPostIdentifierMap = emptyMap(),
-                    defaultCatalogModeMap = emptyMap(),
-                    defaultLastUsedDeleteKey = ""
+                    AppStateSeedDefaults(
+                        boards = boardList,
+                        history = history,
+                        selfPostIdentifierMap = emptyMap(),
+                        catalogModeMap = emptyMap(),
+                        lastUsedDeleteKey = ""
+                    )
                 )
             }
 
@@ -145,6 +155,7 @@ fun FutachaApp(
             val threadMenuEntries by stateStore.threadMenuEntries.collectAsState(initial = defaultThreadMenuEntries())
             val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
             val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
+            val isAdsEnabled by stateStore.isAdsEnabled.collectAsState(initial = true)
             val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
             val manualSaveLocation = remember(manualSaveDirectory) {
                 com.valoser.futacha.shared.model.SaveLocation.fromString(manualSaveDirectory)
@@ -158,9 +169,11 @@ fun FutachaApp(
             }
             val savedThreadsRepositories = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
                 buildFutachaSavedThreadsRepositories(
-                    fileSystem = fileSystem,
-                    manualSaveDirectory = manualSaveDirectory,
-                    manualSaveLocation = manualSaveLocation
+                    FutachaSavedThreadsRepositoryInputs(
+                        fileSystem = fileSystem,
+                        manualSaveDirectory = manualSaveDirectory,
+                        manualSaveLocation = manualSaveLocation
+                    )
                 )
             }
             val activeSavedThreadsRepository by produceState<SavedThreadRepository?>(
@@ -169,8 +182,10 @@ fun FutachaApp(
                 key2 = savedThreadsRepositories.legacyRepository
             ) {
                 value = resolveActiveSavedThreadsRepository(
-                    currentRepository = savedThreadsRepositories.currentRepository,
-                    legacyRepository = savedThreadsRepositories.legacyRepository
+                    FutachaActiveSavedThreadsRepositoryInputs(
+                        currentRepository = savedThreadsRepositories.currentRepository,
+                        legacyRepository = savedThreadsRepositories.legacyRepository
+                    )
                 )
             }
             val attachmentPickerPreference by stateStore.attachmentPickerPreference.collectAsState(initial = AttachmentPickerPreference.MEDIA)
@@ -210,36 +225,21 @@ fun FutachaApp(
                 )
             }
             var openSaveDirectoryPicker: () -> Unit = {}
-            val appScreenBindings = buildFutachaAppScreenBindings(
+            val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
                 coroutineScope = coroutineScope,
-                stateStore = stateStore,
-                autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                currentBoards = { persistedBoards },
-                currentNavigationState = { navigationState },
-                setNavigationState = { navigationState = it },
-                appVersion = appVersion,
-                isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                isLightweightModeEnabled = shouldUseLightweightMode,
-                manualSaveDirectory = manualSaveDirectory,
-                manualSaveLocation = manualSaveLocation,
-                resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                attachmentPickerPreference = attachmentPickerPreference,
-                saveDirectorySelection = saveDirectorySelection,
-                preferredFileManagerPackage = preferredFileManager?.packageName,
-                preferredFileManagerLabel = preferredFileManager?.label,
-                threadMenuEntries = threadMenuEntries,
-                catalogNavEntries = catalogNavEntries,
-                onOpenSaveDirectoryPicker = { openSaveDirectoryPicker() },
-                onHistoryRefresh = refreshHistoryEntries,
-                onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
-                onAutoSavedThreadDeleteFailure = { entry, error ->
-                    Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", error)
-                },
-                onAutoSavedThreadClearFailure = {
-                    Logger.e(TAG, "Failed to clear auto saved threads", it)
-                }
+                inputs = FutachaPreferenceMutationInputs(
+                    setBackgroundRefreshEnabled = stateStore::setBackgroundRefreshEnabled,
+                    setAdsEnabled = stateStore::setAdsEnabled,
+                    setLightweightModeEnabled = stateStore::setLightweightModeEnabled,
+                    setManualSaveDirectory = stateStore::setManualSaveDirectory,
+                    setAttachmentPickerPreference = stateStore::setAttachmentPickerPreference,
+                    setSaveDirectorySelection = stateStore::setSaveDirectorySelection,
+                    setManualSaveLocation = stateStore::setManualSaveLocation,
+                    setPreferredFileManager = stateStore::setPreferredFileManager,
+                    setThreadMenuEntries = stateStore::setThreadMenuEntries,
+                    setCatalogNavEntries = stateStore::setCatalogNavEntries
+                )
             )
-            val preferenceMutations = appScreenBindings.preferenceMutations
             val directoryPickerLauncher = rememberDirectoryPickerLauncher(
                 onDirectorySelected = { pickedLocation ->
                     preferenceMutations.onManualSaveLocationChanged(pickedLocation)
@@ -248,18 +248,70 @@ fun FutachaApp(
                 preferredFileManagerPackage = preferredFileManager?.packageName
             )
             openSaveDirectoryPicker = directoryPickerLauncher
-            val boardScreenCallbacks = appScreenBindings.boardScreenCallbacks
-            val navigationCallbacks = appScreenBindings.navigationCallbacks
-            val screenPreferencesState = appScreenBindings.screenPreferencesState
-            val screenPreferencesCallbacks = appScreenBindings.screenPreferencesCallbacks
-            val screenHistoryCallbacks = appScreenBindings.screenHistoryCallbacks
+            val historyMutations = buildFutachaHistoryMutationCallbacks(
+                coroutineScope = coroutineScope,
+                dismissHistoryEntry = { entry ->
+                    dismissHistoryEntry(
+                        stateStore = stateStore,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                        entry = entry,
+                        onAutoSavedThreadDeleteFailure = {
+                            Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
+                        }
+                    )
+                },
+                updateHistoryEntry = stateStore::upsertHistoryEntry,
+                clearHistory = {
+                    clearHistory(
+                        stateStore = stateStore,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                        onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
+                        onAutoSavedThreadDeleteFailure = {
+                            Logger.e(TAG, "Failed to clear auto saved threads", it)
+                        }
+                    )
+                }
+            )
+            val screenBindings = buildFutachaScreenBindingsBundle(
+                coroutineScope = coroutineScope,
+                inputs = FutachaScreenBindingsInputs(
+                    history = persistedHistory,
+                    currentBoards = { persistedBoards },
+                    currentNavigationState = { navigationState },
+                    setNavigationState = { navigationState = it },
+                    updateBoards = stateStore::updateBoards,
+                    preferenceMutations = preferenceMutations,
+                    historyMutations = historyMutations,
+                    preferencesStateInputs = FutachaScreenPreferencesStateInputs(
+                        appVersion = appVersion,
+                        isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
+                        isAdsEnabled = isAdsEnabled,
+                        isLightweightModeEnabled = shouldUseLightweightMode,
+                        manualSaveDirectory = manualSaveDirectory,
+                        manualSaveLocation = manualSaveLocation,
+                        resolvedManualSaveDirectory = resolvedManualSaveDirectory,
+                        attachmentPickerPreference = attachmentPickerPreference,
+                        saveDirectorySelection = saveDirectorySelection,
+                        preferredFileManagerPackage = preferredFileManager?.packageName,
+                        preferredFileManagerLabel = preferredFileManager?.label,
+                        threadMenuEntries = threadMenuEntries,
+                        catalogNavEntries = catalogNavEntries
+                    ),
+                    onOpenSaveDirectoryPicker = { openSaveDirectoryPicker() },
+                    onHistoryRefresh = refreshHistoryEntries
+                )
+            )
+            val navigationCallbacks = screenBindings.navigationCallbacks
+            val boardScreenCallbacks = screenBindings.boardScreenCallbacks
+            val screenContract = screenBindings.screenContract
 
             when (destination) {
                 FutachaDestination.SavedThreads -> FutachaSavedThreadsDestination(
                     props = activeSavedThreadsRepository?.let {
-                        buildFutachaSavedThreadsDestinationProps(
+                        FutachaSavedThreadsDestinationProps(
                             repository = it,
-                            navigationCallbacks = navigationCallbacks
+                            onThreadClick = navigationCallbacks.onSavedThreadSelected,
+                            onBack = navigationCallbacks.onSavedThreadsDismissed
                         )
                     },
                     onUnavailable = navigationCallbacks.onSavedThreadsDismissed
@@ -267,15 +319,14 @@ fun FutachaApp(
 
                 FutachaDestination.BoardManagement -> FutachaBoardManagementDestination(
                     buildFutachaBoardManagementDestinationProps(
-                        boards = persistedBoards,
-                        history = persistedHistory,
-                        cookieRepository = cookieRepository,
-                        boardScreenCallbacks = boardScreenCallbacks,
-                        historyCallbacks = screenHistoryCallbacks,
-                        preferencesState = screenPreferencesState,
-                        preferencesCallbacks = screenPreferencesCallbacks,
-                        fileSystem = fileSystem,
-                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository
+                        FutachaBoardManagementDestinationInputs(
+                            boards = persistedBoards,
+                            boardCallbacks = boardScreenCallbacks,
+                            screenContract = screenContract,
+                            cookieRepository = cookieRepository,
+                            fileSystem = fileSystem,
+                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository
+                        )
                     )
                 )
 
@@ -289,17 +340,16 @@ fun FutachaApp(
                 is FutachaDestination.Catalog -> {
                     FutachaCatalogDestination(
                         props = buildFutachaCatalogDestinationProps(
-                            board = destination.board,
-                            history = persistedHistory,
-                            navigationCallbacks = navigationCallbacks,
-                            historyCallbacks = screenHistoryCallbacks,
-                            sharedRepository = repositoryHolder.repository,
-                            stateStore = stateStore,
-                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            preferencesState = screenPreferencesState,
-                            preferencesCallbacks = screenPreferencesCallbacks,
-                            cookieRepository = cookieRepository,
-                            httpClient = httpClient
+                            FutachaCatalogDestinationInputs(
+                                board = destination.board,
+                                stateStore = stateStore,
+                                sharedRepository = repositoryHolder.repository,
+                                screenContract = screenContract,
+                                navigationCallbacks = navigationCallbacks,
+                                autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                                cookieRepository = cookieRepository,
+                                httpClient = httpClient
+                            )
                         ),
                         saveableStateHolder = saveableStateHolder
                     )
@@ -322,22 +372,21 @@ fun FutachaApp(
                     )
                     FutachaThreadDestination(
                         props = buildFutachaThreadDestinationProps(
-                            board = currentBoard,
-                            history = persistedHistory,
-                            threadId = activeThreadId,
-                            historyContext = historyContext,
-                            navigationState = navigationState,
-                            navigationCallbacks = navigationCallbacks,
-                            historyCallbacks = screenHistoryCallbacks,
-                            threadMutations = threadMutations,
-                            sharedRepository = repositoryHolder.repository,
-                            httpClient = httpClient,
-                            fileSystem = fileSystem,
-                            cookieRepository = cookieRepository,
-                            stateStore = stateStore,
-                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            preferencesState = screenPreferencesState,
-                            preferencesCallbacks = screenPreferencesCallbacks
+                            FutachaThreadDestinationInputs(
+                                board = currentBoard,
+                                threadId = activeThreadId,
+                                navigationState = navigationState,
+                                historyContext = historyContext,
+                                screenContract = screenContract,
+                                navigationCallbacks = navigationCallbacks,
+                                onScrollPositionPersist = threadMutations.onScrollPositionPersist,
+                                sharedRepository = repositoryHolder.repository,
+                                httpClient = httpClient,
+                                fileSystem = fileSystem,
+                                cookieRepository = cookieRepository,
+                                stateStore = stateStore,
+                                autoSavedThreadRepository = effectiveAutoSavedThreadRepository
+                            )
                         )
                     )
                 }

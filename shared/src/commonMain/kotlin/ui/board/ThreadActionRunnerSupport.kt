@@ -108,32 +108,42 @@ internal fun <T> CoroutineScope.launchManagedThreadAction(
     }
     val launchedJob = launch {
         callbacks.onActionInProgressChanged(true)
-        callbacks.onDebugLog(
-            buildThreadActionStartLogMessage(
-                successMessage = successMessage,
-                failurePrefix = failurePrefix
+        try {
+            callbacks.onDebugLog(
+                buildThreadActionStartLogMessage(
+                    successMessage = successMessage,
+                    failurePrefix = failurePrefix
+                )
             )
-        )
-        when (val result = block()) {
-            is ThreadActionRunResult.Success -> {
-                callbacks.onInfoLog(buildThreadActionSuccessLogMessage(successMessage))
-                callbacks.onSuccess(result.value)
-                callbacks.onShowMessage(successMessage)
+            val result = try {
+                block()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                ThreadActionRunResult.Failure(error)
             }
-            is ThreadActionRunResult.Failure -> {
-                callbacks.onErrorLog(
-                    buildThreadActionFailureLogMessage(failurePrefix),
-                    result.error
-                )
-                callbacks.onShowMessage(
-                    buildThreadActionFailureMessage(
-                        failurePrefix = failurePrefix,
-                        error = result.error
+            when (result) {
+                is ThreadActionRunResult.Success -> {
+                    callbacks.onInfoLog(buildThreadActionSuccessLogMessage(successMessage))
+                    callbacks.onSuccess(result.value)
+                    callbacks.onShowMessage(successMessage)
+                }
+                is ThreadActionRunResult.Failure -> {
+                    callbacks.onErrorLog(
+                        buildThreadActionFailureLogMessage(failurePrefix),
+                        result.error
                     )
-                )
+                    callbacks.onShowMessage(
+                        buildThreadActionFailureMessage(
+                            failurePrefix = failurePrefix,
+                            error = result.error
+                        )
+                    )
+                }
             }
+        } finally {
+            callbacks.onActionInProgressChanged(false)
         }
-        callbacks.onActionInProgressChanged(false)
     }
     return ThreadActionLaunchResult(
         nextLastBusyNoticeAtMillis = launchState.nextLastBusyNoticeAtMillis,

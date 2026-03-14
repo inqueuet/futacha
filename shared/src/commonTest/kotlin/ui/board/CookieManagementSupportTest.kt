@@ -50,7 +50,11 @@ class CookieManagementSupportTest {
             beginCookieReload(3L)
         )
         assertEquals(
-            listOf(cookie(name = "fresh")) to false,
+            CookieReloadResult(
+                cookies = listOf(cookie(name = "fresh")),
+                isLoading = false,
+                shouldApply = true
+            ),
             applyCookieReloadResult(
                 currentGeneration = 4L,
                 requestGeneration = 4L,
@@ -59,7 +63,11 @@ class CookieManagementSupportTest {
             )
         )
         assertEquals(
-            listOf(cookie(name = "stale")) to true,
+            CookieReloadResult(
+                cookies = listOf(cookie(name = "stale")),
+                isLoading = true,
+                shouldApply = false
+            ),
             applyCookieReloadResult(
                 currentGeneration = 5L,
                 requestGeneration = 4L,

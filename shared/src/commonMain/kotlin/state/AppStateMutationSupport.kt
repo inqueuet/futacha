@@ -34,6 +34,22 @@ internal suspend fun setAppStateBackgroundRefreshEnabled(
     )
 }
 
+internal suspend fun setAppStateAdsEnabled(
+    storage: PlatformStateStorage,
+    enabled: Boolean,
+    tag: String,
+    rethrowIfCancellation: (Throwable) -> Unit
+) {
+    persistAppStatePreference(
+        value = enabled,
+        update = storage::updateAdsEnabled,
+        onFailure = { error ->
+            Logger.e(tag, "Failed to save ads enabled state: $enabled", error)
+        },
+        rethrowIfCancellation = rethrowIfCancellation
+    )
+}
+
 internal suspend fun setAppStateLastUsedDeleteKey(
     storage: PlatformStateStorage,
     deleteKey: String,

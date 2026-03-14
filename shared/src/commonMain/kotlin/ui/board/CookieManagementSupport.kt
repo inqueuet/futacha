@@ -15,6 +15,12 @@ internal data class CookieReloadState(
     val isLoading: Boolean
 )
 
+internal data class CookieReloadResult(
+    val cookies: List<StoredCookie>,
+    val isLoading: Boolean,
+    val shouldApply: Boolean
+)
+
 internal sealed interface CookieManagementContentState {
     data object Loading : CookieManagementContentState
     data object Empty : CookieManagementContentState
@@ -43,12 +49,13 @@ internal fun applyCookieReloadResult(
     requestGeneration: Long,
     cookies: List<StoredCookie>,
     isLoading: Boolean
-): Pair<List<StoredCookie>, Boolean> {
-    return if (currentGeneration == requestGeneration) {
-        cookies to false
-    } else {
-        cookies to isLoading
-    }
+): CookieReloadResult {
+    val shouldApply = currentGeneration == requestGeneration
+    return CookieReloadResult(
+        cookies = cookies,
+        isLoading = if (shouldApply) false else isLoading,
+        shouldApply = shouldApply
+    )
 }
 
 internal fun resolveCookieManagementContentState(

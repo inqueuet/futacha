@@ -7,6 +7,49 @@ import kotlin.test.assertEquals
 
 class SavePathDisplaySupportTest {
     @Test
+    fun resolveManualSaveInputResolution_classifiesShorthandsAndPaths() {
+        assertEquals(
+            ManualSaveInputResolution(
+                normalizedInput = "saved_threads",
+                kind = ManualSaveInputKind.RELATIVE,
+                relativePath = "saved_threads"
+            ),
+            resolveManualSaveInputResolution("  ")
+        )
+        assertEquals(
+            ManualSaveInputResolution(
+                normalizedInput = "Documents/work",
+                kind = ManualSaveInputKind.DOCUMENTS,
+                relativePath = "work"
+            ),
+            resolveManualSaveInputResolution("Documents/work")
+        )
+        assertEquals(
+            ManualSaveInputResolution(
+                normalizedInput = "Download/futacha",
+                kind = ManualSaveInputKind.DOWNLOAD,
+                relativePath = "futacha"
+            ),
+            resolveManualSaveInputResolution("downloads/futacha")
+        )
+        assertEquals(
+            ManualSaveInputResolution(
+                normalizedInput = "/storage/emulated/0/custom",
+                kind = ManualSaveInputKind.ABSOLUTE
+            ),
+            resolveManualSaveInputResolution("/storage/emulated/0/custom")
+        )
+        assertEquals(
+            ManualSaveInputResolution(
+                normalizedInput = "custom/path",
+                kind = ManualSaveInputKind.RELATIVE,
+                relativePath = "custom/path"
+            ),
+            resolveManualSaveInputResolution("custom/path")
+        )
+    }
+
+    @Test
     fun normalizeManualSaveInputValue_normalizesDocumentsAndDownloadShorthands() {
         assertEquals("saved_threads", normalizeManualSaveInputValue("  "))
         assertEquals("Documents", normalizeManualSaveInputValue("documents"))
@@ -29,6 +72,10 @@ class SavePathDisplaySupportTest {
         assertEquals(
             "Documents/custom/path",
             resolveFallbackManualSavePathValue("Documents/custom/path")
+        )
+        assertEquals(
+            "Documents/futacha/custom/path",
+            resolveFallbackManualSavePathValue("custom/path")
         )
     }
 

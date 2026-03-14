@@ -206,6 +206,11 @@ internal data class ThreadFilterSheetCallbacks(
     val onDismiss: () -> Unit
 )
 
+internal data class ThreadFilterSelectionUpdateResult(
+    val selectedOptions: Set<ThreadFilterOption>,
+    val selectedSortOption: ThreadFilterSortOption?
+)
+
 internal data class ThreadFilterComputationState(
     val criteria: ThreadFilterCriteria,
     val hasNgFilters: Boolean,
@@ -300,7 +305,7 @@ internal fun updateThreadFilterSelection(
     selectedOptions: Set<ThreadFilterOption>,
     selectedSortOption: ThreadFilterSortOption?,
     toggledOption: ThreadFilterOption
-): Pair<Set<ThreadFilterOption>, ThreadFilterSortOption?> {
+): ThreadFilterSelectionUpdateResult {
     val currentlySelected = toggledOption in selectedOptions
     var updatedOptions = if (currentlySelected) {
         selectedOptions - toggledOption
@@ -319,21 +324,24 @@ internal fun updateThreadFilterSelection(
     } else {
         selectedSortOption
     }
-    return updatedOptions to updatedSortOption
+    return ThreadFilterSelectionUpdateResult(
+        selectedOptions = updatedOptions,
+        selectedSortOption = updatedSortOption
+    )
 }
 
 internal fun toggleThreadFilterOption(
     state: ThreadFilterUiState,
     toggledOption: ThreadFilterOption
 ): ThreadFilterUiState {
-    val (updatedOptions, updatedSortOption) = updateThreadFilterSelection(
+    val selectionUpdate = updateThreadFilterSelection(
         selectedOptions = state.options,
         selectedSortOption = state.sortOption,
         toggledOption = toggledOption
     )
     return state.copy(
-        options = updatedOptions,
-        sortOption = updatedSortOption
+        options = selectionUpdate.selectedOptions,
+        sortOption = selectionUpdate.selectedSortOption
     )
 }
 

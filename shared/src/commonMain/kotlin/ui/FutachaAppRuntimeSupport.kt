@@ -27,56 +27,79 @@ internal data class RepositoryHolder(
     val ownsRepository: Boolean
 )
 
+internal data class FutachaRepositoryHolderInputs(
+    val httpClient: HttpClient?,
+    val cookieRepository: com.valoser.futacha.shared.repository.CookieRepository?,
+    val createSharedRepository: (HttpClient, com.valoser.futacha.shared.repository.CookieRepository?) -> BoardRepository =
+        { client, cookies -> createRemoteBoardRepository(client, cookieRepository = cookies) },
+    val createOwnedRepository: () -> BoardRepository = { createRemoteBoardRepository() }
+)
+
 internal data class FutachaSavedThreadsRepositories(
     val currentRepository: SavedThreadRepository?,
     val legacyRepository: SavedThreadRepository?
 )
 
+internal data class FutachaAutoSavedThreadRepositoryInputs(
+    val fileSystem: FileSystem?,
+    val existingRepository: SavedThreadRepository?
+)
+
+internal data class FutachaHistoryRefresherInputs(
+    val stateStore: AppStateStore,
+    val repository: BoardRepository,
+    val autoSavedThreadRepository: SavedThreadRepository?,
+    val httpClient: HttpClient?,
+    val fileSystem: FileSystem?,
+    val shouldUseLightweightMode: Boolean
+)
+
+internal data class FutachaSavedThreadsRepositoryInputs(
+    val fileSystem: FileSystem?,
+    val manualSaveDirectory: String,
+    val manualSaveLocation: SaveLocation
+)
+
+internal data class FutachaActiveSavedThreadsRepositoryInputs(
+    val currentRepository: SavedThreadRepository?,
+    val legacyRepository: SavedThreadRepository?
+)
+
 internal fun buildFutachaRepositoryHolder(
-    httpClient: HttpClient?,
-    cookieRepository: com.valoser.futacha.shared.repository.CookieRepository?,
-    createSharedRepository: (HttpClient, com.valoser.futacha.shared.repository.CookieRepository?) -> BoardRepository =
-        { client, cookies -> createRemoteBoardRepository(client, cookieRepository = cookies) },
-    createOwnedRepository: () -> BoardRepository = { createRemoteBoardRepository() }
+    inputs: FutachaRepositoryHolderInputs
 ): RepositoryHolder {
-    return if (httpClient != null) {
+    return if (inputs.httpClient != null) {
         RepositoryHolder(
-            repository = createSharedRepository(httpClient, cookieRepository),
+            repository = inputs.createSharedRepository(inputs.httpClient, inputs.cookieRepository),
             ownsRepository = false
         )
     } else {
         RepositoryHolder(
-            repository = createOwnedRepository(),
+            repository = inputs.createOwnedRepository(),
             ownsRepository = true
         )
     }
 }
 
 internal fun buildFutachaAutoSavedThreadRepository(
-    fileSystem: FileSystem?,
-    existingRepository: SavedThreadRepository?
+    inputs: FutachaAutoSavedThreadRepositoryInputs
 ): SavedThreadRepository? {
-    return existingRepository ?: fileSystem?.let {
+    return inputs.existingRepository ?: inputs.fileSystem?.let {
         SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY)
     }
 }
 
 internal fun buildFutachaHistoryRefresher(
-    stateStore: AppStateStore,
-    repository: BoardRepository,
-    autoSavedThreadRepository: SavedThreadRepository?,
-    httpClient: HttpClient?,
-    fileSystem: FileSystem?,
-    shouldUseLightweightMode: Boolean
+    inputs: FutachaHistoryRefresherInputs
 ): HistoryRefresher {
     return HistoryRefresher(
-        stateStore = stateStore,
-        repository = repository,
+        stateStore = inputs.stateStore,
+        repository = inputs.repository,
         dispatcher = AppDispatchers.io,
-        autoSavedThreadRepository = autoSavedThreadRepository,
-        httpClient = httpClient,
-        fileSystem = fileSystem,
-        maxConcurrency = if (shouldUseLightweightMode) 2 else 4
+        autoSavedThreadRepository = inputs.autoSavedThreadRepository,
+        httpClient = inputs.httpClient,
+        fileSystem = inputs.fileSystem,
+        maxConcurrency = if (inputs.shouldUseLightweightMode) 2 else 4
     )
 }
 
@@ -121,24 +144,23 @@ internal fun resolveFutachaBoardRepository(
 }
 
 internal fun buildFutachaSavedThreadsRepositories(
-    fileSystem: FileSystem?,
-    manualSaveDirectory: String,
-    manualSaveLocation: SaveLocation
+    inputs: FutachaSavedThreadsRepositoryInputs
 ): FutachaSavedThreadsRepositories {
-    val currentRepository = fileSystem?.let { fs ->
+    val currentRepository = inputs.fileSystem?.let { fs ->
         SavedThreadRepository(
             fs,
-            baseDirectory = manualSaveDirectory,
-            baseSaveLocation = manualSaveLocation
+            baseDirectory = inputs.manualSaveDirectory,
+            baseSaveLocation = inputs.manualSaveLocation
         )
     }
-    val shouldUseLegacyFallback = fileSystem != null &&
-        !(manualSaveLocation is SaveLocation.Path && isDefaultManualSaveRoot(manualSaveDirectory))
+    val shouldUseLegacyFallback = inputs.fileSystem != null &&
+        !(inputs.manualSaveLocation is SaveLocation.Path &&
+            isDefaultManualSaveRoot(inputs.manualSaveDirectory))
     val legacyRepository = if (!shouldUseLegacyFallback) {
         null
     } else {
         SavedThreadRepository(
-            fileSystem,
+            inputs.fileSystem,
             baseDirectory = DEFAULT_MANUAL_SAVE_ROOT,
             baseSaveLocation = SaveLocation.Path(DEFAULT_MANUAL_SAVE_ROOT)
         )
@@ -193,19 +215,18 @@ internal fun selectPreferredSavedThreadsRepository(
 }
 
 internal suspend fun resolveActiveSavedThreadsRepository(
-    currentRepository: SavedThreadRepository?,
-    legacyRepository: SavedThreadRepository?
+    inputs: FutachaActiveSavedThreadsRepositoryInputs
 ): SavedThreadRepository? {
-    if (currentRepository == null) {
-        return legacyRepository
+    if (inputs.currentRepository == null) {
+        return inputs.legacyRepository
     }
-    val currentCount = runCatching { currentRepository.getThreadCount() }.getOrDefault(0)
-    val legacyCount = legacyRepository?.let {
+    val currentCount = runCatching { inputs.currentRepository.getThreadCount() }.getOrDefault(0)
+    val legacyCount = inputs.legacyRepository?.let {
         runCatching { it.getThreadCount() }.getOrDefault(0)
     } ?: 0
     return selectPreferredSavedThreadsRepository(
-        currentRepository = currentRepository,
-        legacyRepository = legacyRepository,
+        currentRepository = inputs.currentRepository,
+        legacyRepository = inputs.legacyRepository,
         currentCount = currentCount,
         legacyCount = legacyCount
     )

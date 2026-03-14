@@ -14,6 +14,38 @@ data class StorageError(
     val timestamp: Long
 )
 
+internal data class AppStateHistoryScrollUpdateRequest(
+    val threadId: String,
+    val index: Int,
+    val offset: Int,
+    val boardId: String,
+    val title: String,
+    val titleImageUrl: String,
+    val boardName: String,
+    val boardUrl: String,
+    val replyCount: Int
+)
+
+internal data class AppStateSeedDefaults(
+    val boards: List<com.valoser.futacha.shared.model.BoardSummary>,
+    val history: List<ThreadHistoryEntry>,
+    val ngHeaders: List<String> = emptyList(),
+    val ngWords: List<String> = emptyList(),
+    val catalogNgWords: List<String> = emptyList(),
+    val watchWords: List<String> = emptyList(),
+    val selfPostIdentifierMap: Map<String, List<String>> = emptyMap(),
+    val catalogModeMap: Map<String, com.valoser.futacha.shared.model.CatalogMode> = emptyMap(),
+    val threadMenuConfig: List<com.valoser.futacha.shared.model.ThreadMenuItemConfig> =
+        com.valoser.futacha.shared.model.defaultThreadMenuConfig(),
+    val threadSettingsMenuConfig: List<com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig> =
+        com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig(),
+    val threadMenuEntries: List<com.valoser.futacha.shared.model.ThreadMenuEntryConfig> =
+        com.valoser.futacha.shared.model.defaultThreadMenuEntries(),
+    val catalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig> =
+        com.valoser.futacha.shared.model.defaultCatalogNavEntries(),
+    val lastUsedDeleteKey: String = ""
+)
+
 /**
  * Thread-safe Job registry used for debounced scroll-position writes.
  */

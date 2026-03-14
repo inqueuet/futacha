@@ -49,16 +49,16 @@ internal fun FutachaBoardManagementDestination(
 ) {
     BoardManagementScreen(
         boards = props.boards,
-        history = props.history,
+        history = props.screenContract.history,
         onBoardSelected = props.onBoardSelected,
         onAddBoard = props.onAddBoard,
         onMenuAction = props.onMenuAction,
-        historyCallbacks = props.historyCallbacks,
+        historyCallbacks = props.screenContract.historyCallbacks,
         onBoardDeleted = props.onBoardDeleted,
         onBoardsReordered = props.onBoardsReordered,
         dependencies = props.dependencies,
-        preferencesState = props.preferencesState,
-        preferencesCallbacks = props.preferencesCallbacks
+        preferencesState = props.screenContract.preferencesState,
+        preferencesCallbacks = props.screenContract.preferencesCallbacks
     )
 }
 
@@ -93,7 +93,7 @@ internal fun FutachaCatalogDestination(
     saveableStateHolder.SaveableStateProvider(props.saveableStateKey) {
         CatalogScreen(
             board = props.board,
-            history = props.history,
+            history = props.screenContract.history,
             onBack = props.onBack,
             onThreadSelected = { item ->
                 props.onThreadSelected(
@@ -107,10 +107,10 @@ internal fun FutachaCatalogDestination(
                     )
                 )
             },
-            historyCallbacks = props.historyCallbacks,
+            historyCallbacks = props.screenContract.historyCallbacks,
             dependencies = props.dependencies,
-            preferencesState = props.preferencesState,
-            preferencesCallbacks = props.preferencesCallbacks,
+            preferencesState = props.screenContract.preferencesState,
+            preferencesCallbacks = props.screenContract.preferencesCallbacks,
         )
     }
 }
@@ -123,7 +123,7 @@ internal fun FutachaThreadDestination(
     LaunchedEffect(props.threadId, props.board.id) {
         recordFutachaVisitedThread(
             stateStore = requireNotNull(props.dependencies.stateStore),
-            history = props.history,
+            history = props.screenContract.history,
             threadId = props.threadId,
             board = props.board,
             context = props.historyContext,
@@ -133,17 +133,17 @@ internal fun FutachaThreadDestination(
 
     ThreadScreen(
         board = props.board,
-        history = props.history,
+        history = props.screenContract.history,
         threadId = props.threadId,
         threadTitle = props.threadTitle,
         threadUrlOverride = props.threadUrlOverride,
         initialReplyCount = props.initialReplyCount,
         onBack = props.onBack,
-        historyCallbacks = props.historyCallbacks,
+        historyCallbacks = props.screenContract.historyCallbacks,
         onScrollPositionPersist = props.onScrollPositionPersist,
         dependencies = props.dependencies,
-        preferencesState = props.preferencesState,
-        preferencesCallbacks = props.preferencesCallbacks,
+        preferencesState = props.screenContract.preferencesState,
+        preferencesCallbacks = props.screenContract.preferencesCallbacks,
         onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick
     )
 }

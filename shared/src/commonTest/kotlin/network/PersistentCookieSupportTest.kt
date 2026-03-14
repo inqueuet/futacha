@@ -1,10 +1,13 @@
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import io.ktor.http.Cookie
 import io.ktor.util.date.GMTDate
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -135,5 +138,75 @@ class PersistentCookieSupportTest {
                 )
             )
         )
+    }
+
+    @Test
+    fun snapshotHelpers_restoreFromBackupWhenPrimaryIsBroken() = kotlinx.coroutines.runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
+        val snapshot = """{"version":1,"cookies":[{"name":"ok","value":"1","domain":"dec.2chan.net","path":"/"}]}"""
+
+        fileSystem.writeString("private/cookies/test.json", "{broken").getOrThrow()
+        fileSystem.writeString("private/cookies/test.json.backup", snapshot).getOrThrow()
+
+        val loaded = loadPersistentCookieSnapshot(
+            fileSystem = fileSystem,
+            storagePath = "private/cookies/test.json",
+            json = json,
+            maxCookieFileBytes = 1024L,
+            logTag = "PersistentCookieSupportTest"
+        )
+
+        assertNotNull(loaded)
+        assertTrue(loaded.restoredFromBackup)
+        assertEquals(listOf("ok"), loaded.cookies.map { it.name })
+    }
+
+    @Test
+    fun snapshotHelpers_persistSnapshotCreatesBackup() = kotlinx.coroutines.runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        fileSystem.writeString("private/cookies/test.json", """{"version":1,"cookies":[]}""").getOrThrow()
+
+        persistPersistentCookieSnapshot(
+            fileSystem = fileSystem,
+            storagePath = "private/cookies/test.json",
+            content = """{"version":1,"cookies":[{"name":"next","value":"1","domain":"dec.2chan.net","path":"/"}]}""",
+            logTag = "PersistentCookieSupportTest"
+        )
+
+        assertEquals(
+            """{"version":1,"cookies":[]}""",
+            fileSystem.readString("private/cookies/test.json.backup").getOrThrow()
+        )
+        assertTrue(fileSystem.readString("private/cookies/test.json").getOrThrow().contains("next"))
+    }
+
+    @Test
+    fun transactionCoordinator_commitAndRollbackFollowTransactionState() {
+        val coordinator = PersistentCookieTransactionCoordinator<String, String>("PersistentCookieSupportTest")
+        val snapshot = linkedMapOf("a" to "1")
+        val transactionId = coordinator.begin(snapshot)
+
+        assertFalse(coordinator.shouldPersistImmediately(transactionId))
+        assertTrue(coordinator.shouldPersistImmediately(null))
+
+        var restored = emptyMap<String, String>()
+        val rollbackPayload = coordinator.rollback(
+            transactionId = transactionId,
+            restoreSnapshot = { restored = it },
+            encodeSnapshot = { "rolled-back" }
+        )
+
+        assertEquals(snapshot, restored)
+        assertEquals("rolled-back", rollbackPayload)
+
+        val committedId = coordinator.begin(snapshot)
+        val commitPayload = coordinator.commit(
+            transactionId = committedId,
+            encodeSnapshot = { "committed" }
+        )
+
+        assertEquals("committed", commitPayload)
+        assertTrue(coordinator.shouldPersistImmediately(null))
     }
 }

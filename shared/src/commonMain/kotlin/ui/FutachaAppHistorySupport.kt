@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.state.AppStateHistoryScrollUpdateRequest
 import com.valoser.futacha.shared.state.AppStateStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -173,15 +174,17 @@ internal suspend fun persistFutachaThreadScrollPosition(
     context: FutachaThreadHistoryContext
 ) {
     stateStore.updateHistoryScrollPosition(
-        threadId = threadId,
-        index = index,
-        offset = offset,
-        boardId = board.id,
-        title = context.title,
-        titleImageUrl = context.thumbnailUrl,
-        boardName = board.name,
-        boardUrl = context.threadUrl,
-        replyCount = context.replyCount
+        AppStateHistoryScrollUpdateRequest(
+            threadId = threadId,
+            index = index,
+            offset = offset,
+            boardId = board.id,
+            title = context.title,
+            titleImageUrl = context.thumbnailUrl,
+            boardName = board.name,
+            boardUrl = context.threadUrl,
+            replyCount = context.replyCount
+        )
     )
 }
 

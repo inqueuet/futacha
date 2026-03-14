@@ -6,10 +6,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
@@ -43,6 +46,7 @@ internal data class ThreadScreenScaffoldBindings(
     val topBarCallbacks: ThreadTopBarCallbacks,
     val threadMenuEntries: List<ThreadMenuEntryConfig>,
     val actionBarCallbacks: ThreadActionBarCallbacks,
+    val isAdsEnabled: Boolean,
     val isDrawerOpen: Boolean,
     val backSwipeEdgePx: Float,
     val backSwipeTriggerPx: Float,
@@ -109,10 +113,23 @@ internal fun ThreadScreenScaffoldHost(
                     typography = MaterialTheme.typography,
                     shapes = MaterialTheme.shapes
                 ) {
-                    ThreadActionBar(
-                        menuEntries = bindings.threadMenuEntries,
-                        onAction = bindings.actionBarCallbacks.onAction
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                    ) {
+                        ThreadActionBar(
+                            menuEntries = bindings.threadMenuEntries,
+                            onAction = bindings.actionBarCallbacks.onAction,
+                            applyNavigationBarsPadding = false
+                        )
+                        if (bindings.isAdsEnabled) {
+                            HorizontalDivider()
+                            ThreadScreenBannerAd(
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
             }
         ) { innerPadding ->

@@ -12,6 +12,7 @@ import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.NetworkException
@@ -538,6 +539,13 @@ class ThreadScreenLogicTest {
             draft.copy(subject = "subj")
         }
         assertEquals("subj", updated.draft.subject)
+        assertEquals(
+            ThreadReplyDialogState(
+                isVisible = true,
+                draft = ThreadReplyDraft(comment = "body", password = "stored", name = "name")
+            ),
+            updateThreadReplyDialogName(opened, "name")
+        )
         assertEquals("name", updateThreadReplyDialogName(updated, "name").draft.name)
         assertEquals("sage", updateThreadReplyDialogEmail(updated, "sage").draft.email)
         assertEquals("subj2", updateThreadReplyDialogSubject(updated, "subj2").draft.subject)
@@ -877,21 +885,24 @@ class ThreadScreenLogicTest {
         var updatedCatalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig>? = null
         val threadMenuEntries = emptyList<com.valoser.futacha.shared.model.ThreadMenuEntryConfig>()
         val catalogNavEntries = emptyList<com.valoser.futacha.shared.model.CatalogNavEntryConfig>()
-
-        val globalSettingsCallbacks = buildThreadGlobalSettingsCallbacks(
-            onBack = { backed = true },
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = { backgroundRefreshEnabled = it },
             onLightweightModeChanged = { lightweightEnabled = it },
             onManualSaveDirectoryChanged = { manualDirectory = it },
             onSaveDirectorySelectionChanged = { saveDirectorySelection = it },
             onOpenSaveDirectoryPicker = { pickerOpened = true },
-            onOpenCookieManager = { cookieManagerOpened = true },
             onFileManagerSelected = { packageName, label ->
                 selectedFileManager = packageName to label
             },
             onClearPreferredFileManager = { clearedFileManager = true },
             onThreadMenuEntriesChanged = { updatedThreadMenuEntries = it },
             onCatalogNavEntriesChanged = { updatedCatalogNavEntries = it }
+        )
+
+        val globalSettingsCallbacks = buildThreadGlobalSettingsCallbacks(
+            onBack = { backed = true },
+            onOpenCookieManager = { cookieManagerOpened = true },
+            preferencesCallbacks = preferencesCallbacks
         )
 
         globalSettingsCallbacks.onBack()
@@ -931,28 +942,24 @@ class ThreadScreenLogicTest {
     @Test
     fun threadScreenBindingSupport_wrapsCallbackBuilders() {
         var replyState = emptyThreadReplyDialogState().copy(isVisible = true)
-        val replyCallbacks = buildThreadScreenReplyDialogCallbacks(
-            replyDialogBinding = ThreadReplyDialogStateBinding(
-                currentState = { replyState },
-                setState = { replyState = it }
-            )
+        val replyCallbacks = buildThreadReplyDialogCallbacks(
+            currentState = { replyState },
+            setState = { replyState = it }
         )
         replyCallbacks.onCommentChange("body")
         assertEquals("body", replyState.draft.comment)
 
         var filterState = ThreadFilterUiState()
-        val filterCallbacks = buildThreadScreenFilterSheetCallbacks(
-            threadFilterBinding = ThreadFilterUiStateBinding(
-                currentState = { filterState },
-                setState = { filterState = it }
-            ),
+        val filterCallbacks = buildThreadFilterSheetCallbacks(
+            currentState = { filterState },
+            setState = { filterState = it },
             onDismiss = {}
         )
         filterCallbacks.onKeywordChange("abc")
         assertEquals("abc", filterState.keyword)
 
         var saveCancelled = false
-        val saveProgressCallbacks = buildThreadScreenSaveProgressDialogCallbacks(
+        val saveProgressCallbacks = buildThreadSaveProgressDialogCallbacks(
             onDismissRequest = {},
             onCancelRequest = { saveCancelled = true }
         )
@@ -960,7 +967,7 @@ class ThreadScreenLogicTest {
         assertTrue(saveCancelled)
 
         var cookieBacked = false
-        val cookieCallbacks = buildThreadScreenCookieManagementCallbacks(
+        val cookieCallbacks = buildThreadCookieManagementCallbacks(
             onBack = { cookieBacked = true }
         )
         cookieCallbacks.onBack()
@@ -973,18 +980,18 @@ class ThreadScreenLogicTest {
         var fallbackWords = emptyList<String>()
         var filteringEnabled = true
         val messageNgBindings = buildThreadScreenMessageNgBindings(
-            coroutineScope = this,
-            showSnackbar = {},
-            onManualSaveDirectoryChanged = {},
-            onSaveDirectorySelectionChanged = {},
-            onOpenSaveDirectoryPicker = null,
-            stateStore = null,
-            onFallbackHeadersChanged = { fallbackHeaders = it },
-            onFallbackWordsChanged = { fallbackWords = it },
-            currentHeaders = { fallbackHeaders },
-            currentWords = { fallbackWords },
-            isFilteringEnabled = { filteringEnabled },
-            setFilteringEnabled = { filteringEnabled = it }
+            ThreadScreenMessageNgInputs(
+                coroutineScope = this,
+                showSnackbar = {},
+                screenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+                stateStore = null,
+                onFallbackHeadersChanged = { fallbackHeaders = it },
+                onFallbackWordsChanged = { fallbackWords = it },
+                currentHeaders = { fallbackHeaders },
+                currentWords = { fallbackWords },
+                isFilteringEnabled = { filteringEnabled },
+                setFilteringEnabled = { filteringEnabled = it }
+            )
         )
         messageNgBindings.ngMutationCallbacks.onAddHeader("header")
         messageNgBindings.ngMutationCallbacks.onAddWord("word")
@@ -1006,26 +1013,34 @@ class ThreadScreenLogicTest {
         var replyImageData: ImageData? = null
         var isReplyDialogVisible = false
         val formBindings = buildThreadScreenFormBindings(
-            currentFilterOptions = { filterOptions },
-            currentSortOption = { filterSortOption },
-            currentKeyword = { filterKeyword },
-            setFilterOptions = { filterOptions = it },
-            setSortOption = { filterSortOption = it },
-            setKeyword = { filterKeyword = it },
-            currentReplyName = { replyName },
-            currentReplyEmail = { replyEmail },
-            currentReplySubject = { replySubject },
-            currentReplyComment = { replyComment },
-            currentReplyPassword = { replyPassword },
-            currentReplyImageData = { replyImageData },
-            setReplyName = { replyName = it },
-            setReplyEmail = { replyEmail = it },
-            setReplySubject = { replySubject = it },
-            setReplyComment = { replyComment = it },
-            setReplyPassword = { replyPassword = it },
-            setReplyImageData = { replyImageData = it },
-            isReplyDialogVisible = { isReplyDialogVisible },
-            setReplyDialogVisible = { isReplyDialogVisible = it }
+            ThreadScreenFormInputs(
+                filterInputs = ThreadScreenFilterBindingInputs(
+                    currentOptions = { filterOptions },
+                    currentSortOption = { filterSortOption },
+                    currentKeyword = { filterKeyword },
+                    setOptions = { filterOptions = it },
+                    setSortOption = { filterSortOption = it },
+                    setKeyword = { filterKeyword = it }
+                ),
+                replyDraftInputs = ThreadScreenReplyDraftInputs(
+                    currentName = { replyName },
+                    currentEmail = { replyEmail },
+                    currentSubject = { replySubject },
+                    currentComment = { replyComment },
+                    currentPassword = { replyPassword },
+                    currentImageData = { replyImageData },
+                    setName = { replyName = it },
+                    setEmail = { replyEmail = it },
+                    setSubject = { replySubject = it },
+                    setComment = { replyComment = it },
+                    setPassword = { replyPassword = it },
+                    setImageData = { replyImageData = it }
+                ),
+                replyDialogInputs = ThreadScreenReplyDialogInputs(
+                    isVisible = { isReplyDialogVisible },
+                    setVisible = { isReplyDialogVisible = it }
+                )
+            )
         )
         val imageData = ImageData(
             bytes = byteArrayOf(1, 2, 3),
@@ -1081,38 +1096,48 @@ class ThreadScreenLogicTest {
         var isReplyDialogVisible = false
 
         val bundle = buildThreadScreenMessageFormBindingsBundle(
-            coroutineScope = this,
-            showSnackbar = {},
-            onManualSaveDirectoryChanged = {},
-            onSaveDirectorySelectionChanged = {},
-            onOpenSaveDirectoryPicker = null,
-            stateStore = null,
-            onFallbackHeadersChanged = { fallbackHeaders = it },
-            onFallbackWordsChanged = { fallbackWords = it },
-            currentHeaders = { fallbackHeaders },
-            currentWords = { fallbackWords },
-            isFilteringEnabled = { filteringEnabled },
-            setFilteringEnabled = { filteringEnabled = it },
-            currentFilterOptions = { filterOptions },
-            currentSortOption = { filterSortOption },
-            currentKeyword = { filterKeyword },
-            setFilterOptions = { filterOptions = it },
-            setSortOption = { filterSortOption = it },
-            setKeyword = { filterKeyword = it },
-            currentReplyName = { replyName },
-            currentReplyEmail = { replyEmail },
-            currentReplySubject = { replySubject },
-            currentReplyComment = { replyComment },
-            currentReplyPassword = { replyPassword },
-            currentReplyImageData = { replyImageData },
-            setReplyName = { replyName = it },
-            setReplyEmail = { replyEmail = it },
-            setReplySubject = { replySubject = it },
-            setReplyComment = { replyComment = it },
-            setReplyPassword = { replyPassword = it },
-            setReplyImageData = { replyImageData = it },
-            isReplyDialogVisible = { isReplyDialogVisible },
-            setReplyDialogVisible = { isReplyDialogVisible = it }
+            ThreadScreenMessageFormInputs(
+                messageNgInputs = ThreadScreenMessageNgInputs(
+                    coroutineScope = this,
+                    showSnackbar = {},
+                    screenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+                    stateStore = null,
+                    onFallbackHeadersChanged = { fallbackHeaders = it },
+                    onFallbackWordsChanged = { fallbackWords = it },
+                    currentHeaders = { fallbackHeaders },
+                    currentWords = { fallbackWords },
+                    isFilteringEnabled = { filteringEnabled },
+                    setFilteringEnabled = { filteringEnabled = it }
+                ),
+                formInputs = ThreadScreenFormInputs(
+                    filterInputs = ThreadScreenFilterBindingInputs(
+                        currentOptions = { filterOptions },
+                        currentSortOption = { filterSortOption },
+                        currentKeyword = { filterKeyword },
+                        setOptions = { filterOptions = it },
+                        setSortOption = { filterSortOption = it },
+                        setKeyword = { filterKeyword = it }
+                    ),
+                    replyDraftInputs = ThreadScreenReplyDraftInputs(
+                        currentName = { replyName },
+                        currentEmail = { replyEmail },
+                        currentSubject = { replySubject },
+                        currentComment = { replyComment },
+                        currentPassword = { replyPassword },
+                        currentImageData = { replyImageData },
+                        setName = { replyName = it },
+                        setEmail = { replyEmail = it },
+                        setSubject = { replySubject = it },
+                        setComment = { replyComment = it },
+                        setPassword = { replyPassword = it },
+                        setImageData = { replyImageData = it }
+                    ),
+                    replyDialogInputs = ThreadScreenReplyDialogInputs(
+                        isVisible = { isReplyDialogVisible },
+                        setVisible = { isReplyDialogVisible = it }
+                    )
+                )
+            )
         )
 
         bundle.messageNgBindings.ngMutationCallbacks.onAddHeader("header")
@@ -2139,6 +2164,115 @@ class ThreadScreenLogicTest {
     }
 
     @Test
+    fun threadScreenOverlayActionBindingsSupport_handlesDeleteAndReplySubmit() = runBlocking {
+        val targetPost = Post(
+            id = "55",
+            author = null,
+            subject = "subject",
+            timestamp = "now",
+            messageHtml = "body",
+            imageUrl = null,
+            thumbnailUrl = null
+        )
+        var overlayState = ThreadPostOverlayState(
+            deleteDialogState = ThreadDeleteDialogState(
+                targetPost = targetPost,
+                password = " 1234 ",
+                imageOnly = true
+            ),
+            actionSheetState = ThreadPostActionSelectionState(
+                isActionSheetVisible = true,
+                targetPost = targetPost
+            ),
+            quoteSelectionState = ThreadQuoteSelectionState(targetPost = targetPost)
+        )
+        var replyState = ThreadReplyDialogState(
+            isVisible = true,
+            draft = ThreadReplyDraft(
+                name = "name",
+                email = "sage",
+                subject = "subject",
+                comment = "comment",
+                password = " 5678 "
+            )
+        )
+        val shownMessages = mutableListOf<String>()
+        val updatedDeleteKeys = mutableListOf<String>()
+        val deleteConfigs = mutableListOf<ThreadDeleteByUserActionConfig>()
+        val replyConfigs = mutableListOf<ThreadReplyActionConfig>()
+        var refreshCount = 0
+        var actionInProgress = false
+        var lastBusyNoticeAtMillis = 0L
+        val actionBindings = buildThreadScreenActionBindings(
+            coroutineScope = this,
+            stateBindings = ThreadScreenActionStateBindings(
+                currentActionInProgress = { actionInProgress },
+                setActionInProgress = { actionInProgress = it },
+                currentLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis },
+                setLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis = it }
+            ),
+            dependencies = ThreadScreenActionDependencies(
+                currentTimeMillis = { 0L },
+                busyNoticeIntervalMillis = 1_000L,
+                showMessage = { shownMessages += it },
+                onDebugLog = {},
+                onInfoLog = {},
+                onErrorLog = { _, _ -> }
+            )
+        )
+
+        val callbacks = buildThreadScreenOverlayActionCallbacks(
+            ThreadScreenOverlayActionInputs(
+                currentPostOverlayState = { overlayState },
+                setPostOverlayState = { overlayState = it },
+                isSelfPost = { false },
+                replyDialogBinding = ThreadReplyDialogStateBinding(
+                    currentState = { replyState },
+                    setState = { replyState = it }
+                ),
+                effectiveBoardUrl = "https://example.com/test",
+                threadId = "123",
+                boardId = "board",
+                stateStore = null,
+                coroutineScope = this,
+                updateLastUsedDeleteKey = { updatedDeleteKeys += it },
+                showMessage = { shownMessages += it },
+                refreshThread = { refreshCount += 1 },
+                actionBindings = actionBindings,
+                threadDeleteByUserActionCallbacks = ThreadDeleteByUserActionCallbacks { config ->
+                    deleteConfigs += config
+                },
+                threadReplyActionCallbacks = ThreadReplyActionCallbacks { config ->
+                    replyConfigs += config
+                    "999"
+                }
+            )
+        )
+
+        callbacks.onDismissPostActionSheet()
+        callbacks.onDeleteDialogPasswordChange(" 9999 ")
+        callbacks.onDeleteDialogImageOnlyChange(false)
+        callbacks.onQuoteSelectionDismiss()
+        callbacks.onDeleteDialogConfirm(targetPost)
+        callbacks.onReplySubmit()
+        yield()
+        yield()
+
+        assertFalse(overlayState.actionSheetState.isActionSheetVisible)
+        assertNull(overlayState.quoteSelectionState.targetPost)
+        assertNull(overlayState.deleteDialogState.targetPost)
+        assertEquals("55", deleteConfigs.single().postId)
+        assertEquals(false, deleteConfigs.single().imageOnly)
+        assertEquals("comment", replyConfigs.single().comment)
+        assertEquals(listOf("9999", "5678"), updatedDeleteKeys)
+        assertEquals(2, refreshCount)
+        assertFalse(replyState.isVisible)
+        assertEquals("", replyState.draft.comment)
+        assertTrue(shownMessages.contains("本人削除を実行しました"))
+        assertTrue(shownMessages.contains("返信を送信しました"))
+    }
+
+    @Test
     fun threadScreenDerivedStateSupport_buildsHeaderAndReadAloudState() {
         val successState = ThreadUiState.Success(
             ThreadPage(
@@ -2433,20 +2567,24 @@ class ThreadScreenLogicTest {
         var dismissReadAloudOverlayCalled = false
 
         val bundle = buildThreadScreenRuntimeJobBindingsBundle(
-            currentReadAloudState = { readAloudState },
-            setReadAloudState = { readAloudState = it },
-            onStopPlayback = { stopPlaybackCalled = true },
-            currentAutoSaveJob = { autoJob },
-            setAutoSaveJob = { autoJob = it },
-            currentManualSaveJob = { manualJob },
-            setManualSaveJob = { manualJob = it },
-            currentSingleMediaSaveJob = { singleMediaJob },
-            setSingleMediaSaveJob = { singleMediaJob = it },
-            currentRefreshThreadJob = { refreshJob },
-            setRefreshThreadJob = { refreshJob = it },
-            setIsManualSaveInProgress = { manualSaveInProgress = it },
-            setIsSingleMediaSaveInProgress = { singleMediaSaveInProgress = it },
-            onDismissReadAloudOverlay = { dismissReadAloudOverlayCalled = true }
+            ThreadScreenRuntimeJobInputs(
+                readAloudStateBindings = ThreadScreenReadAloudStateBindings(
+                    currentState = { readAloudState },
+                    setState = { readAloudState = it }
+                ),
+                onStopPlayback = { stopPlaybackCalled = true },
+                currentAutoSaveJob = { autoJob },
+                setAutoSaveJob = { autoJob = it },
+                currentManualSaveJob = { manualJob },
+                setManualSaveJob = { manualJob = it },
+                currentSingleMediaSaveJob = { singleMediaJob },
+                setSingleMediaSaveJob = { singleMediaJob = it },
+                currentRefreshThreadJob = { refreshJob },
+                setRefreshThreadJob = { refreshJob = it },
+                setIsManualSaveInProgress = { manualSaveInProgress = it },
+                setIsSingleMediaSaveInProgress = { singleMediaSaveInProgress = it },
+                onDismissReadAloudOverlay = { dismissReadAloudOverlayCalled = true }
+            )
         )
 
         assertNotNull(bundle.readAloudRuntimeBindings.pause())
@@ -2495,53 +2633,70 @@ class ThreadScreenLogicTest {
         var replyImageData: ImageData? = null
         var isReplyDialogVisible = false
 
+        val readAloudStateBindings = ThreadScreenReadAloudStateBindings(
+            currentState = { readAloudState },
+            setState = { readAloudState = it }
+        )
         val bundle = buildThreadScreenStateRuntimeBindingsBundle(
-            currentReadAloudState = { readAloudState },
-            setReadAloudState = { readAloudState = it },
-            onStopPlayback = { stopPlaybackCalled = true },
-            currentAutoSaveJob = { autoJob },
-            setAutoSaveJob = { autoJob = it },
-            currentManualSaveJob = { manualJob },
-            setManualSaveJob = { manualJob = it },
-            currentSingleMediaSaveJob = { singleMediaJob },
-            setSingleMediaSaveJob = { singleMediaJob = it },
-            currentRefreshThreadJob = { refreshJob },
-            setRefreshThreadJob = { refreshJob = it },
-            setIsManualSaveInProgress = { manualSaveInProgress = it },
-            setIsSingleMediaSaveInProgress = { singleMediaSaveInProgress = it },
-            onDismissReadAloudOverlay = { dismissReadAloudOverlayCalled = true },
-            coroutineScope = this,
-            showSnackbar = {},
-            onManualSaveDirectoryChanged = {},
-            onSaveDirectorySelectionChanged = {},
-            onOpenSaveDirectoryPicker = null,
-            stateStore = null,
-            onFallbackHeadersChanged = { fallbackHeaders = it },
-            onFallbackWordsChanged = { fallbackWords = it },
-            currentHeaders = { fallbackHeaders },
-            currentWords = { fallbackWords },
-            isFilteringEnabled = { filteringEnabled },
-            setFilteringEnabled = { filteringEnabled = it },
-            currentFilterOptions = { filterOptions },
-            currentSortOption = { filterSortOption },
-            currentKeyword = { filterKeyword },
-            setFilterOptions = { filterOptions = it },
-            setSortOption = { filterSortOption = it },
-            setKeyword = { filterKeyword = it },
-            currentReplyName = { replyName },
-            currentReplyEmail = { replyEmail },
-            currentReplySubject = { replySubject },
-            currentReplyComment = { replyComment },
-            currentReplyPassword = { replyPassword },
-            currentReplyImageData = { replyImageData },
-            setReplyName = { replyName = it },
-            setReplyEmail = { replyEmail = it },
-            setReplySubject = { replySubject = it },
-            setReplyComment = { replyComment = it },
-            setReplyPassword = { replyPassword = it },
-            setReplyImageData = { replyImageData = it },
-            isReplyDialogVisible = { isReplyDialogVisible },
-            setReplyDialogVisible = { isReplyDialogVisible = it }
+            ThreadScreenStateRuntimeInputs(
+                runtimeJobInputs = ThreadScreenRuntimeJobInputs(
+                    readAloudStateBindings = readAloudStateBindings,
+                    onStopPlayback = { stopPlaybackCalled = true },
+                    currentAutoSaveJob = { autoJob },
+                    setAutoSaveJob = { autoJob = it },
+                    currentManualSaveJob = { manualJob },
+                    setManualSaveJob = { manualJob = it },
+                    currentSingleMediaSaveJob = { singleMediaJob },
+                    setSingleMediaSaveJob = { singleMediaJob = it },
+                    currentRefreshThreadJob = { refreshJob },
+                    setRefreshThreadJob = { refreshJob = it },
+                    setIsManualSaveInProgress = { manualSaveInProgress = it },
+                    setIsSingleMediaSaveInProgress = { singleMediaSaveInProgress = it },
+                    onDismissReadAloudOverlay = { dismissReadAloudOverlayCalled = true }
+                ),
+                messageFormInputs = ThreadScreenMessageFormInputs(
+                    messageNgInputs = ThreadScreenMessageNgInputs(
+                        coroutineScope = this,
+                        showSnackbar = {},
+                        screenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+                        stateStore = null,
+                        onFallbackHeadersChanged = { fallbackHeaders = it },
+                        onFallbackWordsChanged = { fallbackWords = it },
+                        currentHeaders = { fallbackHeaders },
+                        currentWords = { fallbackWords },
+                        isFilteringEnabled = { filteringEnabled },
+                        setFilteringEnabled = { filteringEnabled = it }
+                    ),
+                    formInputs = ThreadScreenFormInputs(
+                        filterInputs = ThreadScreenFilterBindingInputs(
+                            currentOptions = { filterOptions },
+                            currentSortOption = { filterSortOption },
+                            currentKeyword = { filterKeyword },
+                            setOptions = { filterOptions = it },
+                            setSortOption = { filterSortOption = it },
+                            setKeyword = { filterKeyword = it }
+                        ),
+                        replyDraftInputs = ThreadScreenReplyDraftInputs(
+                            currentName = { replyName },
+                            currentEmail = { replyEmail },
+                            currentSubject = { replySubject },
+                            currentComment = { replyComment },
+                            currentPassword = { replyPassword },
+                            currentImageData = { replyImageData },
+                            setName = { replyName = it },
+                            setEmail = { replyEmail = it },
+                            setSubject = { replySubject = it },
+                            setComment = { replyComment = it },
+                            setPassword = { replyPassword = it },
+                            setImageData = { replyImageData = it }
+                        ),
+                        replyDialogInputs = ThreadScreenReplyDialogInputs(
+                            isVisible = { isReplyDialogVisible },
+                            setVisible = { isReplyDialogVisible = it }
+                        )
+                    )
+                )
+            )
         )
 
         bundle.threadNgMutationCallbacks.onAddHeader("header")
@@ -2898,30 +3053,32 @@ class ThreadScreenLogicTest {
         val deletedPosts = mutableListOf<Post>()
         val updatedLabels = mutableMapOf<String, String>()
         val handlers = buildThreadScreenPostActionHandlers(
-            currentOverlayState = { overlayState },
-            setOverlayState = { overlayState = it },
-            lastUsedDeleteKey = "stored",
-            currentSaidaneLabel = { currentPost -> currentPost.saidaneLabel },
-            isSelfPost = { false },
-            onShowOptionalMessage = { message ->
-                if (message != null) {
-                    shownMessages += message
+            inputs = ThreadScreenPostActionInputs(
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                lastUsedDeleteKey = "stored",
+                currentSaidaneLabel = { currentPost -> currentPost.saidaneLabel },
+                isSelfPost = { false },
+                onShowOptionalMessage = { message ->
+                    if (message != null) {
+                        shownMessages += message
+                    }
+                },
+                onSaidaneLabelUpdated = { currentPost, updatedLabel ->
+                    updatedLabels[currentPost.id] = updatedLabel
+                },
+                launchUnitAction = { successMessage, failurePrefix, onSuccess, block ->
+                    launchedActions += successMessage to failurePrefix
+                    runBlocking { block() }
+                    onSuccess()
+                },
+                voteSaidane = { currentPost ->
+                    votedPosts += currentPost
+                },
+                requestDeletion = { currentPost ->
+                    deletedPosts += currentPost
                 }
-            },
-            onSaidaneLabelUpdated = { currentPost, updatedLabel ->
-                updatedLabels[currentPost.id] = updatedLabel
-            },
-            launchUnitAction = { successMessage, failurePrefix, onSuccess, block ->
-                launchedActions += successMessage to failurePrefix
-                runBlocking { block() }
-                onSuccess()
-            },
-            voteSaidane = { currentPost ->
-                votedPosts += currentPost
-            },
-            requestDeletion = { currentPost ->
-                deletedPosts += currentPost
-            }
+            )
         )
 
         handlers.onSaidane(post)
@@ -3083,67 +3240,76 @@ class ThreadScreenLogicTest {
         var updatedCatalogNavEntries: List<CatalogNavEntryConfig>? = null
         var dismissedCookieManagement = false
 
-        val bundle = buildThreadScreenUiBindingsBundle(
-            searchNavigationCallbacks = ThreadSearchNavigationCallbacks(
-                onSearchSubmit = { submittedSearch = true },
-                onSearchPrev = { searchedPrev = true },
-                onSearchNext = { searchedNext = true }
-            ),
-            onSearchQueryChange = { searchQuery = it },
-            onSearchClose = { closedSearch = true },
-            onBack = { backed = true },
-            onOpenHistory = { openedHistory = true },
-            onSearch = { startedSearch = true },
-            onOpenGlobalSettings = { openedSettings = true },
-            onAction = { actionEntry = it },
-            replyDialogBinding = replyDialogBinding,
-            currentPostOverlayState = { overlayState },
-            setPostOverlayState = { overlayState = it },
-            mediaPreviewState = { mediaPreviewState },
-            setMediaPreviewState = { mediaPreviewState = it },
-            mediaPreviewEntryCount = 2,
-            onSavePreviewMedia = { savedMediaEntry = it },
-            galleryPosts = posts,
-            onDismissGallery = { galleryDismissed = true },
-            onScrollToPostIndex = { scrolledIndex = it },
-            threadFilterBinding = filterBinding,
-            onDismissSettingsSheet = { settingsDismissed = true },
-            onDismissFilterSheet = { filterDismissed = true },
-            onApplySettingsActionState = {},
-            onOpenNgManagement = { openedNgManagement = true },
-            onOpenExternalApp = {},
-            onTogglePrivacy = {},
-            firstVisibleSegmentIndex = { 1 },
-            onSeekToReadAloudIndex = { index, restart -> seekTarget = index to restart },
-            onPlayReadAloud = { playedReadAloud = true },
-            onPauseReadAloud = { pausedReadAloud = true },
-            onStopReadAloud = { stoppedReadAloud = true },
-            onShowReadAloudStoppedMessage = { showedStoppedMessage = true },
-            onDismissReadAloudControls = { dismissedReadAloud = true },
-            onDismissNgManagement = { dismissedNgManagement = true },
-            ngMutationCallbacks = ThreadNgMutationCallbacks(
-                onAddHeader = { addedNgHeader = it },
-                onAddWord = {},
-                onRemoveHeader = {},
-                onRemoveWord = {},
-                onToggleFiltering = {}
-            ),
-            onDismissSaveProgress = { dismissedSaveProgress = true },
-            onCancelSaveProgress = { cancelledSaveProgress = true },
-            onDismissGlobalSettings = { dismissedGlobalSettings = true },
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = { backgroundRefreshChanged = it },
             onLightweightModeChanged = { lightweightModeChanged = it },
             onManualSaveDirectoryChanged = { manualSaveDirectory = it },
             onSaveDirectorySelectionChanged = { saveDirectorySelection = it },
             onOpenSaveDirectoryPicker = { openedDirectoryPicker = true },
-            onOpenCookieManager = { openedCookieManager = true },
             onFileManagerSelected = { packageName, label ->
                 selectedFileManager = packageName to label
             },
             onClearPreferredFileManager = { clearedPreferredFileManager = true },
             onThreadMenuEntriesChanged = { updatedThreadMenuEntries = it },
-            onCatalogNavEntriesChanged = { updatedCatalogNavEntries = it },
-            onDismissCookieManagement = { dismissedCookieManagement = true }
+            onCatalogNavEntriesChanged = { updatedCatalogNavEntries = it }
+        )
+        val bundle = buildThreadScreenUiBindingsBundle(
+            topBarInputs = ThreadScreenTopBarUiInputs(
+                searchNavigationCallbacks = ThreadSearchNavigationCallbacks(
+                    onSearchSubmit = { submittedSearch = true },
+                    onSearchPrev = { searchedPrev = true },
+                    onSearchNext = { searchedNext = true }
+                ),
+                onSearchQueryChange = { searchQuery = it },
+                onSearchClose = { closedSearch = true },
+                onBack = { backed = true },
+                onOpenHistory = { openedHistory = true },
+                onSearch = { startedSearch = true },
+                onOpenGlobalSettings = { openedSettings = true },
+                onAction = { actionEntry = it }
+            ),
+            overlayInputs = ThreadScreenOverlayUiInputs(
+                replyDialogBinding = replyDialogBinding,
+                currentPostOverlayState = { overlayState },
+                setPostOverlayState = { overlayState = it },
+                mediaPreviewState = { mediaPreviewState },
+                setMediaPreviewState = { mediaPreviewState = it },
+                mediaPreviewEntryCount = 2,
+                onSavePreviewMedia = { savedMediaEntry = it },
+                galleryPosts = posts,
+                onDismissGallery = { galleryDismissed = true },
+                onScrollToPostIndex = { scrolledIndex = it },
+                threadFilterBinding = filterBinding,
+                onDismissSettingsSheet = { settingsDismissed = true },
+                onDismissFilterSheet = { filterDismissed = true },
+                onApplySettingsActionState = {},
+                onOpenNgManagement = { openedNgManagement = true },
+                onOpenExternalApp = {},
+                onTogglePrivacy = {},
+                firstVisibleSegmentIndex = { 1 },
+                onSeekToReadAloudIndex = { index, restart -> seekTarget = index to restart },
+                onPlayReadAloud = { playedReadAloud = true },
+                onPauseReadAloud = { pausedReadAloud = true },
+                onStopReadAloud = { stoppedReadAloud = true },
+                onShowReadAloudStoppedMessage = { showedStoppedMessage = true },
+                onDismissReadAloudControls = { dismissedReadAloud = true },
+                onDismissNgManagement = { dismissedNgManagement = true },
+                ngMutationCallbacks = ThreadNgMutationCallbacks(
+                    onAddHeader = { addedNgHeader = it },
+                    onAddWord = {},
+                    onRemoveHeader = {},
+                    onRemoveWord = {},
+                    onToggleFiltering = {}
+                ),
+                onDismissSaveProgress = { dismissedSaveProgress = true },
+                onCancelSaveProgress = { cancelledSaveProgress = true }
+            ),
+            settingsInputs = ThreadScreenSettingsUiInputs(
+                onDismissGlobalSettings = { dismissedGlobalSettings = true },
+                screenPreferencesCallbacks = preferencesCallbacks,
+                onOpenCookieManager = { openedCookieManager = true },
+                onDismissCookieManagement = { dismissedCookieManagement = true }
+            )
         )
 
         bundle.topBarCallbacks.onSearchQueryChange("abc")
@@ -3353,56 +3519,66 @@ class ThreadScreenLogicTest {
         var currentSearchIndex = 0
         val scrollTargets = mutableListOf<Int?>()
         val bundle = buildThreadScreenInteractionBindingsBundle(
-            isRefreshing = { false },
-            onOpenReplyDialog = { replyOpened = true },
-            onScrollTop = {},
-            onScrollBottom = {},
-            onShowRefreshBusyMessage = {},
-            onStartRefreshFromMenu = { startedRefreshFromMenu = true },
-            onOpenGallery = {},
-            onDelegateToSaveHandler = {},
-            onShowFilterSheet = {},
-            onShowSettingsSheet = {},
-            onClearNgHeaderPrefill = {},
-            onShowNgManagement = {},
-            onOpenExternalApp = {},
-            onShowReadAloudControls = {},
-            onTogglePrivacy = {},
-            currentSearchIndex = { currentSearchIndex },
-            setCurrentSearchIndex = { currentSearchIndex = it },
-            currentSearchMatches = {
-                listOf(
-                    ThreadSearchMatch(
-                        postId = "1",
-                        postIndex = 2,
-                        highlightRanges = listOf(0..1)
+            menuInputs = ThreadScreenMenuInteractionInputs(
+                isRefreshing = { false },
+                onOpenReplyDialog = { replyOpened = true },
+                onScrollTop = {},
+                onScrollBottom = {},
+                onShowRefreshBusyMessage = {},
+                onStartRefreshFromMenu = { startedRefreshFromMenu = true },
+                onOpenGallery = {},
+                onDelegateToSaveHandler = {},
+                onShowFilterSheet = {},
+                onShowSettingsSheet = {},
+                onClearNgHeaderPrefill = {},
+                onShowNgManagement = {},
+                onOpenExternalApp = {},
+                onShowReadAloudControls = {},
+                onTogglePrivacy = {}
+            ),
+            searchInputs = ThreadScreenSearchInteractionInputs(
+                currentSearchIndex = { currentSearchIndex },
+                setCurrentSearchIndex = { currentSearchIndex = it },
+                currentSearchMatches = {
+                    listOf(
+                        ThreadSearchMatch(
+                            postId = "1",
+                            postIndex = 2,
+                            highlightRanges = listOf(0..1)
+                        )
                     )
-                )
-            },
-            onScrollToSearchMatchPostIndex = { scrollTargets += it },
-            onCloseDrawerAfterHistorySelection = { drawerClosed = true },
-            onHistoryEntrySelected = { selectedHistory = it },
-            currentOverlayState = { overlayState },
-            setOverlayState = { overlayState = it },
-            lastUsedDeleteKey = "stored",
-            currentSaidaneLabel = { null },
-            isSelfPost = { false },
-            onShowOptionalMessage = {},
-            onSaidaneLabelUpdated = { _, _ -> },
-            launchUnitAction = { _, _, onSuccess, block ->
-                runBlocking { block() }
-                onSuccess()
-            },
-            voteSaidane = {},
-            requestDeletion = {},
-            currentFirstVisibleItemIndex = { 3 },
-            currentFirstVisibleItemOffset = { 12 },
-            onStartRefreshFromPull = { index, offset -> startedRefreshFromPull = index to offset },
-            onHistoryEntryDismissed = {},
-            onBoardClick = { boardClicked = true },
-            onHistoryRefreshClick = { historyRefreshed = true },
-            onHistoryBatchDeleteClick = { batchDeleted = true },
-            onHistorySettingsClick = { settingsOpened = true }
+                },
+                onScrollToSearchMatchPostIndex = { scrollTargets += it },
+                onCloseDrawerAfterHistorySelection = { drawerClosed = true },
+                onHistoryEntrySelected = { selectedHistory = it }
+            ),
+            postActionInputs = ThreadScreenPostActionInputs(
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                lastUsedDeleteKey = "stored",
+                currentSaidaneLabel = { null },
+                isSelfPost = { false },
+                onShowOptionalMessage = {},
+                onSaidaneLabelUpdated = { _, _ -> },
+                launchUnitAction = { _, _, onSuccess, block ->
+                    runBlocking { block() }
+                    onSuccess()
+                },
+                voteSaidane = {},
+                requestDeletion = {}
+            ),
+            refreshInputs = ThreadScreenRefreshInteractionInputs(
+                currentFirstVisibleItemIndex = { 3 },
+                currentFirstVisibleItemOffset = { 12 },
+                onStartRefreshFromPull = { index, offset -> startedRefreshFromPull = index to offset }
+            ),
+            historyDrawerInputs = ThreadScreenHistoryDrawerInputs(
+                onHistoryEntryDismissed = {},
+                onBoardClick = { boardClicked = true },
+                onHistoryRefreshClick = { historyRefreshed = true },
+                onHistoryBatchDeleteClick = { batchDeleted = true },
+                onHistorySettingsClick = { settingsOpened = true }
+            )
         )
 
         bundle.menuEntryHandler(ThreadMenuEntryId.Reply)
@@ -3456,65 +3632,88 @@ class ThreadScreenLogicTest {
         )
         var selectedEntry: ThreadHistoryEntry? = null
         var overlayState = emptyThreadPostOverlayState()
-        val bundle = buildThreadScreenControllerBindingsBundle(
-            coroutineScope = this,
+        val actionStateBindings = ThreadScreenActionStateBindings(
             currentActionInProgress = { actionInProgress },
             setActionInProgress = { actionInProgress = it },
             currentLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis },
-            setLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis = it },
+            setLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis = it }
+        )
+        val actionDependencies = ThreadScreenActionDependencies(
             busyNoticeIntervalMillis = ACTION_BUSY_NOTICE_INTERVAL_MS,
             showMessage = {},
-            showOptionalMessage = {},
-            onActionDebugLog = {},
-            onActionInfoLog = {},
-            onActionErrorLog = { _, _ -> },
+            onDebugLog = {},
+            onInfoLog = {},
+            onErrorLog = { _, _ -> }
+        )
+        val historyRefreshStateBindings = ThreadScreenHistoryRefreshStateBindings(
             currentIsHistoryRefreshing = { historyRefreshing },
-            setIsHistoryRefreshing = { historyRefreshing = it },
-            onHistoryRefresh = { historyRefreshCount++ },
-            showHistoryRefreshMessage = {},
-            currentReadAloudState = { readAloudState },
-            setReadAloudState = { readAloudState = it },
-            scrollToReadAloudPostIndex = {},
-            speakReadAloudText = {},
-            cancelActiveReadAloud = {},
-            currentReadAloudSegments = { emptyList() },
-            isRefreshing = { false },
-            onOpenReplyDialog = { replyOpened = true },
-            onScrollTop = {},
-            onScrollBottom = {},
-            onShowRefreshBusyMessage = {},
-            onStartRefreshFromMenu = { refreshStarted = true },
-            onOpenGallery = {},
-            onDelegateToSaveHandler = {},
-            onShowFilterSheet = {},
-            onShowSettingsSheet = { openedSettings = true },
-            onClearNgHeaderPrefill = {},
-            onShowNgManagement = {},
-            onOpenExternalApp = {},
-            onShowReadAloudControls = {},
-            onTogglePrivacy = {},
-            currentSearchIndex = { 0 },
-            setCurrentSearchIndex = {},
-            currentSearchMatches = { emptyList() },
-            onScrollToSearchMatchPostIndex = {},
-            onCloseDrawerAfterHistorySelection = {},
-            onHistoryEntrySelected = { selectedEntry = it },
-            currentOverlayState = { overlayState },
-            setOverlayState = { overlayState = it },
-            lastUsedDeleteKey = "",
-            currentSaidaneLabel = { null },
-            isSelfPost = { false },
-            onSaidaneLabelUpdated = { _, _ -> },
-            repository = FakeBoardRepository(),
-            effectiveBoardUrl = "https://example.com/test",
-            threadId = "123",
-            currentFirstVisibleItemIndex = { 0 },
-            currentFirstVisibleItemOffset = { 0 },
-            onStartRefreshFromPull = { _, _ -> },
-            onHistoryEntryDismissed = {},
-            onBoardClick = {},
-            onHistoryBatchDeleteClick = {},
-            onHistorySettingsClick = { openedSettings = true }
+            setIsHistoryRefreshing = { historyRefreshing = it }
+        )
+        val readAloudStateBindings = ThreadScreenReadAloudStateBindings(
+            currentState = { readAloudState },
+            setState = { readAloudState = it }
+        )
+        val readAloudCallbacks = ThreadScreenReadAloudCallbacks(
+            showMessage = {},
+            showOptionalMessage = {},
+            scrollToPostIndex = {},
+            speakText = {},
+            cancelActiveReadAloud = {}
+        )
+        val readAloudDependencies = ThreadScreenReadAloudDependencies(
+            currentSegments = { emptyList() }
+        )
+        val bundle = buildThreadScreenControllerBindingsBundle(
+            actionInputs = ThreadScreenControllerActionInputs(
+                coroutineScope = this,
+                actionStateBindings = actionStateBindings,
+                actionDependencies = actionDependencies,
+                historyRefreshStateBindings = historyRefreshStateBindings,
+                onHistoryRefresh = { historyRefreshCount++ },
+                showHistoryRefreshMessage = {},
+                readAloudStateBindings = readAloudStateBindings,
+                readAloudCallbacks = readAloudCallbacks,
+                readAloudDependencies = readAloudDependencies
+            ),
+            interactionInputs = ThreadScreenControllerInteractionInputs(
+                isRefreshing = { false },
+                onOpenReplyDialog = { replyOpened = true },
+                onScrollTop = {},
+                onScrollBottom = {},
+                onShowRefreshBusyMessage = {},
+                onStartRefreshFromMenu = { refreshStarted = true },
+                onOpenGallery = {},
+                onDelegateToSaveHandler = {},
+                onShowFilterSheet = {},
+                onShowSettingsSheet = { openedSettings = true },
+                onClearNgHeaderPrefill = {},
+                onShowNgManagement = {},
+                onOpenExternalApp = {},
+                onShowReadAloudControls = {},
+                onTogglePrivacy = {},
+                currentSearchIndex = { 0 },
+                setCurrentSearchIndex = {},
+                currentSearchMatches = { emptyList() },
+                onScrollToSearchMatchPostIndex = {},
+                onCloseDrawerAfterHistorySelection = {},
+                onHistoryEntrySelected = { selectedEntry = it },
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                lastUsedDeleteKey = "",
+                currentSaidaneLabel = { null },
+                isSelfPost = { false },
+                onSaidaneLabelUpdated = { _, _ -> },
+                repository = FakeBoardRepository(),
+                effectiveBoardUrl = "https://example.com/test",
+                threadId = "123",
+                currentFirstVisibleItemIndex = { 0 },
+                currentFirstVisibleItemOffset = { 0 },
+                onStartRefreshFromPull = { _, _ -> },
+                onHistoryEntryDismissed = {},
+                onBoardClick = {},
+                onHistoryBatchDeleteClick = {},
+                onHistorySettingsClick = { openedSettings = true }
+            )
         )
 
         bundle.interactionBindings.menuEntryHandler(ThreadMenuEntryId.Reply)
@@ -3633,114 +3832,144 @@ class ThreadScreenLogicTest {
         )
         var selectedHistoryEntry: ThreadHistoryEntry? = null
         var drawerClosed = false
-
-        val bundle = buildThreadScreenInteractionUiAggregateBundle(
-            currentPreviewState = { previewState },
-            setPreviewState = { previewState = it },
-            currentMediaEntries = { mediaEntries },
-            coroutineScope = this,
+        val actionStateBindings = ThreadScreenActionStateBindings(
             currentActionInProgress = { actionInProgress },
             setActionInProgress = { actionInProgress = it },
             currentLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis },
-            setLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis = it },
+            setLastBusyNoticeAtMillis = { lastBusyNoticeAtMillis = it }
+        )
+        val actionDependencies = ThreadScreenActionDependencies(
             busyNoticeIntervalMillis = ACTION_BUSY_NOTICE_INTERVAL_MS,
             showMessage = {},
-            showOptionalMessage = {},
-            onActionDebugLog = {},
-            onActionInfoLog = {},
-            onActionErrorLog = { _, _ -> },
+            onDebugLog = {},
+            onInfoLog = {},
+            onErrorLog = { _, _ -> }
+        )
+        val historyRefreshStateBindings = ThreadScreenHistoryRefreshStateBindings(
             currentIsHistoryRefreshing = { historyRefreshing },
-            setIsHistoryRefreshing = { historyRefreshing = it },
-            onHistoryRefresh = {},
-            showHistoryRefreshMessage = {},
-            currentReadAloudState = { readAloudState },
-            setReadAloudState = { readAloudState = it },
-            scrollToReadAloudPostIndex = {},
-            speakReadAloudText = {},
-            cancelActiveReadAloud = {},
-            currentReadAloudSegments = { emptyList() },
-            isRefreshing = { false },
-            onOpenReplyDialog = { replyOpened = true },
-            onScrollTop = {},
-            onScrollBottom = {},
-            onShowRefreshBusyMessage = {},
-            onStartRefreshFromMenu = { startedRefreshFromMenu = true },
-            onOpenGallery = {},
-            onDelegateToSaveHandler = {},
-            onShowFilterSheet = {},
-            onShowSettingsSheet = {},
-            onClearNgHeaderPrefill = {},
-            onShowNgManagement = {},
-            onOpenExternalApp = {},
-            onShowReadAloudControls = {},
-            onTogglePrivacy = {},
-            currentSearchIndex = { currentSearchIndex },
-            setCurrentSearchIndex = { currentSearchIndex = it },
-            currentSearchMatches = { searchMatches },
-            onScrollToSearchMatchPostIndex = {},
-            onCloseDrawerAfterHistorySelection = { drawerClosed = true },
-            onHistoryEntrySelected = { selectedHistoryEntry = it },
-            currentOverlayState = { overlayState },
-            setOverlayState = { overlayState = it },
-            lastUsedDeleteKey = "stored",
-            currentSaidaneLabel = { null },
-            isSelfPost = { false },
-            onSaidaneLabelUpdated = { _, _ -> },
-            repository = FakeBoardRepository(),
-            effectiveBoardUrl = "https://example.com/board",
-            threadId = "thread-1",
-            currentFirstVisibleItemIndex = { 0 },
-            currentFirstVisibleItemOffset = { 0 },
-            onStartRefreshFromPull = { _, _ -> },
-            onHistoryEntryDismissed = {},
-            onBoardClick = {},
-            onHistoryBatchDeleteClick = {},
-            onHistorySettingsClick = {},
-            onSearchQueryChange = { searchQuery = it },
-            onSearchClose = { searchClosed = true },
-            onBack = {},
-            onOpenHistory = { historyOpened = true },
-            onSearch = { searchOpened = true },
-            onOpenGlobalSettings = { globalSettingsOpened = true },
-            replyDialogBinding = replyDialogBinding,
-            mediaPreviewEntryCount = mediaEntries.size,
-            onSavePreviewMedia = {},
-            galleryPosts = galleryPosts,
-            onDismissGallery = { dismissedGallery = true },
-            onScrollToPostIndex = { scrolledToPostIndex = it },
-            threadFilterBinding = filterBinding,
-            onDismissSettingsSheet = {},
-            onDismissFilterSheet = {},
-            onApplySettingsActionState = {},
-            firstVisibleSegmentIndex = { 1 },
-            onPauseReadAloud = {},
-            onStopReadAloud = {},
-            onShowReadAloudStoppedMessage = {},
-            onDismissReadAloudControls = {},
-            onDismissNgManagement = { dismissedNgManagement = true },
-            ngMutationCallbacks = ThreadNgMutationCallbacks(
-                onAddHeader = { addedNgHeader = it },
-                onAddWord = {},
-                onRemoveHeader = {},
-                onRemoveWord = {},
-                onToggleFiltering = {}
-            ),
-            onDismissSaveProgress = { dismissedSaveProgress = true },
-            onCancelSaveProgress = { cancelledSaveProgress = true },
-            onDismissGlobalSettings = { dismissedGlobalSettings = true },
+            setIsHistoryRefreshing = { historyRefreshing = it }
+        )
+        val readAloudStateBindings = ThreadScreenReadAloudStateBindings(
+            currentState = { readAloudState },
+            setState = { readAloudState = it }
+        )
+        val readAloudCallbacks = ThreadScreenReadAloudCallbacks(
+            showMessage = {},
+            showOptionalMessage = {},
+            scrollToPostIndex = {},
+            speakText = {},
+            cancelActiveReadAloud = {}
+        )
+        val readAloudDependencies = ThreadScreenReadAloudDependencies(
+            currentSegments = { emptyList() }
+        )
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = { backgroundRefreshChanged = it },
             onLightweightModeChanged = { lightweightModeChanged = it },
             onManualSaveDirectoryChanged = { manualSaveDirectory = it },
             onSaveDirectorySelectionChanged = { saveDirectorySelection = it },
             onOpenSaveDirectoryPicker = { openedDirectoryPicker = true },
-            onOpenCookieManager = { openedCookieManager = true },
             onFileManagerSelected = { packageName, label ->
                 selectedFileManager = packageName to label
             },
             onClearPreferredFileManager = { clearedPreferredFileManager = true },
             onThreadMenuEntriesChanged = { updatedThreadMenuEntries = it },
-            onCatalogNavEntriesChanged = { updatedCatalogNavEntries = it },
-            onDismissCookieManagement = { dismissedCookieManagement = true }
+            onCatalogNavEntriesChanged = { updatedCatalogNavEntries = it }
+        )
+
+        val bundle = buildThreadScreenInteractionUiAggregateBundle(
+            mediaInputs = ThreadScreenAggregateMediaInputs(
+                currentPreviewState = { previewState },
+                setPreviewState = { previewState = it },
+                currentMediaEntries = { mediaEntries }
+            ),
+            controllerActionInputs = ThreadScreenControllerActionInputs(
+                coroutineScope = this,
+                actionStateBindings = actionStateBindings,
+                actionDependencies = actionDependencies,
+                historyRefreshStateBindings = historyRefreshStateBindings,
+                onHistoryRefresh = {},
+                showHistoryRefreshMessage = {},
+                readAloudStateBindings = readAloudStateBindings,
+                readAloudCallbacks = readAloudCallbacks,
+                readAloudDependencies = readAloudDependencies
+            ),
+            controllerInteractionInputs = ThreadScreenControllerInteractionInputs(
+                isRefreshing = { false },
+                onOpenReplyDialog = { replyOpened = true },
+                onScrollTop = {},
+                onScrollBottom = {},
+                onShowRefreshBusyMessage = {},
+                onStartRefreshFromMenu = { startedRefreshFromMenu = true },
+                onOpenGallery = {},
+                onDelegateToSaveHandler = {},
+                onShowFilterSheet = {},
+                onShowSettingsSheet = {},
+                onClearNgHeaderPrefill = {},
+                onShowNgManagement = {},
+                onOpenExternalApp = {},
+                onShowReadAloudControls = {},
+                onTogglePrivacy = {},
+                currentSearchIndex = { currentSearchIndex },
+                setCurrentSearchIndex = { currentSearchIndex = it },
+                currentSearchMatches = { searchMatches },
+                onScrollToSearchMatchPostIndex = {},
+                onCloseDrawerAfterHistorySelection = { drawerClosed = true },
+                onHistoryEntrySelected = { selectedHistoryEntry = it },
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                lastUsedDeleteKey = "stored",
+                currentSaidaneLabel = { null },
+                isSelfPost = { false },
+                onSaidaneLabelUpdated = { _, _ -> },
+                repository = FakeBoardRepository(),
+                effectiveBoardUrl = "https://example.com/board",
+                threadId = "thread-1",
+                currentFirstVisibleItemIndex = { 0 },
+                currentFirstVisibleItemOffset = { 0 },
+                onStartRefreshFromPull = { _, _ -> },
+                onHistoryEntryDismissed = {},
+                onBoardClick = {},
+                onHistoryBatchDeleteClick = {},
+                onHistorySettingsClick = {}
+            ),
+            uiInputs = ThreadScreenAggregateUiInputs(
+                onSearchQueryChange = { searchQuery = it },
+                onSearchClose = { searchClosed = true },
+                onBack = {},
+                onOpenHistory = { historyOpened = true },
+                onSearch = { searchOpened = true },
+                onOpenGlobalSettings = { globalSettingsOpened = true },
+                replyDialogBinding = replyDialogBinding,
+                mediaPreviewEntryCount = mediaEntries.size,
+                onSavePreviewMedia = {},
+                galleryPosts = galleryPosts,
+                onDismissGallery = { dismissedGallery = true },
+                onScrollToPostIndex = { scrolledToPostIndex = it },
+                threadFilterBinding = filterBinding,
+                onDismissSettingsSheet = {},
+                onDismissFilterSheet = {},
+                onApplySettingsActionState = {},
+                firstVisibleSegmentIndex = { 1 },
+                onPauseReadAloud = {},
+                onStopReadAloud = {},
+                onShowReadAloudStoppedMessage = {},
+                onDismissReadAloudControls = {},
+                onDismissNgManagement = { dismissedNgManagement = true },
+                ngMutationCallbacks = ThreadNgMutationCallbacks(
+                    onAddHeader = { addedNgHeader = it },
+                    onAddWord = {},
+                    onRemoveHeader = {},
+                    onRemoveWord = {},
+                    onToggleFiltering = {}
+                ),
+                onDismissSaveProgress = { dismissedSaveProgress = true },
+                onCancelSaveProgress = { cancelledSaveProgress = true },
+                onDismissGlobalSettings = { dismissedGlobalSettings = true },
+                screenPreferencesCallbacks = preferencesCallbacks,
+                onOpenCookieManager = { openedCookieManager = true },
+                onDismissCookieManagement = { dismissedCookieManagement = true }
+            )
         )
 
         bundle.mediaBindings.onMediaClick(mediaEntries[1].url, mediaEntries[1].mediaType)
@@ -3866,6 +4095,8 @@ class ThreadScreenLogicTest {
         val openedQuote = openThreadQuoteOverlay(confirmedDelete, post)
         assertEquals(post, openedQuote.quoteSelectionState.targetPost)
         assertEquals(null, dismissThreadQuoteOverlay(openedQuote).quoteSelectionState.targetPost)
+        assertFalse(openedQuote.actionSheetState.isActionSheetVisible)
+        assertEquals(null, openedQuote.deleteDialogState.targetPost)
 
         val ngOverlay = resolveThreadNgRegistrationOverlayState(initial, post)
         assertTrue(ngOverlay.overlayState.isNgManagementVisible)
@@ -5576,6 +5807,38 @@ class ThreadScreenLogicTest {
         )
         assertNull(normalized.previewMediaIndex)
         assertEquals(
+            null,
+            resolveThreadMediaPreviewNormalizationState(
+                currentState = ThreadMediaPreviewState(previewMediaIndex = 0),
+                totalCount = 2
+            )
+        )
+        assertEquals(
+            ThreadMediaPreviewState(previewMediaIndex = null),
+            resolveThreadMediaPreviewNormalizationState(
+                currentState = ThreadMediaPreviewState(previewMediaIndex = 0),
+                totalCount = 0
+            )
+        )
+        assertEquals(
+            ThreadMediaPreviewState(previewMediaIndex = 0),
+            resolveThreadMediaClickState(
+                currentState = initial,
+                entries = entries,
+                url = entries[0].url,
+                mediaType = MediaType.Image
+            )
+        )
+        assertEquals(
+            null,
+            resolveThreadMediaClickState(
+                currentState = initial,
+                entries = entries,
+                url = "missing",
+                mediaType = MediaType.Image
+            )
+        )
+        assertEquals(
             initial,
             openThreadMediaPreview(
                 currentState = initial,
@@ -5824,6 +6087,34 @@ class ThreadScreenLogicTest {
                 effectiveBoardUrl = "https://may.2chan.net/img/futaba.php",
                 threadId = "123"
             )
+        )
+    }
+
+    @Test
+    fun threadMenuEntryResolvers_filterNormalizedEntriesByPlacement() {
+        val entries = defaultThreadMenuEntries()
+
+        assertEquals(
+            listOf(
+                ThreadMenuEntryId.Reply,
+                ThreadMenuEntryId.ScrollToTop,
+                ThreadMenuEntryId.ScrollToBottom,
+                ThreadMenuEntryId.Refresh,
+                ThreadMenuEntryId.Gallery,
+                ThreadMenuEntryId.Save,
+                ThreadMenuEntryId.Filter,
+                ThreadMenuEntryId.Settings
+            ),
+            resolveThreadActionBarEntries(entries).map { it.id }
+        )
+        assertEquals(
+            listOf(
+                ThreadMenuEntryId.NgManagement,
+                ThreadMenuEntryId.ExternalApp,
+                ThreadMenuEntryId.ReadAloud,
+                ThreadMenuEntryId.Privacy
+            ),
+            resolveThreadSettingsMenuEntries(entries).map { it.id }
         )
     }
 
@@ -6605,29 +6896,35 @@ class ThreadScreenLogicTest {
 
     @Test
     fun updateThreadFilterSelection_enforcesSingleSortOption() {
-        val (withSaidane, sortA) = updateThreadFilterSelection(
+        val withSaidane = updateThreadFilterSelection(
             selectedOptions = setOf(ThreadFilterOption.Url),
             selectedSortOption = null,
             toggledOption = ThreadFilterOption.HighSaidane
         )
-        assertEquals(setOf(ThreadFilterOption.Url, ThreadFilterOption.HighSaidane), withSaidane)
-        assertEquals(ThreadFilterSortOption.Saidane, sortA)
+        assertEquals(
+            setOf(ThreadFilterOption.Url, ThreadFilterOption.HighSaidane),
+            withSaidane.selectedOptions
+        )
+        assertEquals(ThreadFilterSortOption.Saidane, withSaidane.selectedSortOption)
 
-        val (withReplies, sortB) = updateThreadFilterSelection(
-            selectedOptions = withSaidane,
-            selectedSortOption = sortA,
+        val withReplies = updateThreadFilterSelection(
+            selectedOptions = withSaidane.selectedOptions,
+            selectedSortOption = withSaidane.selectedSortOption,
             toggledOption = ThreadFilterOption.HighReplies
         )
-        assertEquals(setOf(ThreadFilterOption.Url, ThreadFilterOption.HighReplies), withReplies)
-        assertEquals(ThreadFilterSortOption.Replies, sortB)
+        assertEquals(
+            setOf(ThreadFilterOption.Url, ThreadFilterOption.HighReplies),
+            withReplies.selectedOptions
+        )
+        assertEquals(ThreadFilterSortOption.Replies, withReplies.selectedSortOption)
 
-        val (withoutReplies, sortC) = updateThreadFilterSelection(
-            selectedOptions = withReplies,
-            selectedSortOption = sortB,
+        val withoutReplies = updateThreadFilterSelection(
+            selectedOptions = withReplies.selectedOptions,
+            selectedSortOption = withReplies.selectedSortOption,
             toggledOption = ThreadFilterOption.HighReplies
         )
-        assertEquals(setOf(ThreadFilterOption.Url), withoutReplies)
-        assertEquals(null, sortC)
+        assertEquals(setOf(ThreadFilterOption.Url), withoutReplies.selectedOptions)
+        assertEquals(null, withoutReplies.selectedSortOption)
     }
 
     @Test

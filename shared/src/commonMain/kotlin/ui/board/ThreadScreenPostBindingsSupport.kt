@@ -11,81 +11,85 @@ internal data class ThreadPostActionHandlers(
     val onNgRegister: (Post) -> Unit
 )
 
-internal fun buildThreadScreenPostActionHandlers(
-    currentOverlayState: () -> ThreadPostOverlayState,
-    setOverlayState: (ThreadPostOverlayState) -> Unit,
-    lastUsedDeleteKey: String,
-    currentSaidaneLabel: (Post) -> String?,
-    isSelfPost: (Post) -> Boolean,
-    onShowOptionalMessage: (String?) -> Unit,
-    onSaidaneLabelUpdated: (Post, String) -> Unit,
-    launchUnitAction: (
+internal data class ThreadScreenPostActionInputs(
+    val currentOverlayState: () -> ThreadPostOverlayState,
+    val setOverlayState: (ThreadPostOverlayState) -> Unit,
+    val lastUsedDeleteKey: String,
+    val currentSaidaneLabel: (Post) -> String?,
+    val isSelfPost: (Post) -> Boolean,
+    val onShowOptionalMessage: (String?) -> Unit,
+    val onSaidaneLabelUpdated: (Post, String) -> Unit,
+    val launchUnitAction: (
         successMessage: String,
         failurePrefix: String,
         onSuccess: () -> Unit,
         block: suspend () -> Unit
     ) -> Unit,
-    voteSaidane: suspend (Post) -> Unit,
-    requestDeletion: suspend (Post) -> Unit
+    val voteSaidane: suspend (Post) -> Unit,
+    val requestDeletion: suspend (Post) -> Unit
+)
+
+internal fun buildThreadScreenPostActionHandlers(
+    inputs: ThreadScreenPostActionInputs
 ): ThreadPostActionHandlers {
     return ThreadPostActionHandlers(
         onSaidane = saidane@{ post ->
             val actionState = resolveThreadSaidaneActionState(
-                isSelfPost = isSelfPost(post),
-                currentLabel = currentSaidaneLabel(post)
+                isSelfPost = inputs.isSelfPost(post),
+                currentLabel = inputs.currentSaidaneLabel(post)
             )
-            setOverlayState(dismissThreadPostActionOverlay(currentOverlayState()))
+            inputs.setOverlayState(dismissThreadPostActionOverlay(inputs.currentOverlayState()))
             if (!actionState.shouldProceed) {
-                onShowOptionalMessage(actionState.blockedMessage)
+                inputs.onShowOptionalMessage(actionState.blockedMessage)
                 return@saidane
             }
-            launchUnitAction(
+            inputs.launchUnitAction(
                 actionState.successMessage,
                 actionState.failurePrefix,
                 {
                     actionState.updatedLabel?.let { updatedLabel ->
-                        onSaidaneLabelUpdated(post, updatedLabel)
+                        inputs.onSaidaneLabelUpdated(post, updatedLabel)
                     }
                 }
             ) {
-                voteSaidane(post)
+                inputs.voteSaidane(post)
             }
         },
         onDelRequest = { post ->
-            setOverlayState(dismissThreadPostActionOverlay(currentOverlayState()))
+            inputs.setOverlayState(dismissThreadPostActionOverlay(inputs.currentOverlayState()))
             val actionState = resolveThreadDelRequestActionState()
-            launchUnitAction(
+            inputs.launchUnitAction(
                 actionState.successMessage,
                 actionState.failurePrefix,
                 {}
             ) {
-                requestDeletion(post)
+                inputs.requestDeletion(post)
             }
         },
         onOpenDeleteDialog = { post ->
-            setOverlayState(
+            inputs.setOverlayState(
                 openThreadDeleteOverlay(
-                    currentState = currentOverlayState(),
+                    currentState = inputs.currentOverlayState(),
                     post = post,
-                    lastUsedDeleteKey = lastUsedDeleteKey
+                    lastUsedDeleteKey = inputs.lastUsedDeleteKey
                 )
             )
         },
         onOpenQuoteSelection = { post ->
-            setOverlayState(
+            inputs.setOverlayState(
                 openThreadQuoteOverlay(
-                    currentState = currentOverlayState(),
+                    currentState = inputs.currentOverlayState(),
                     post = post
                 )
             )
         },
         onNgRegister = { post ->
             val overlayState = resolveThreadNgRegistrationOverlayState(
-                currentState = currentOverlayState(),
+                currentState = inputs.currentOverlayState(),
                 post = post
             )
-            setOverlayState(overlayState.overlayState)
-            onShowOptionalMessage(overlayState.message)
+            inputs.setOverlayState(overlayState.overlayState)
+            inputs.onShowOptionalMessage(overlayState.message)
         }
     )
 }

@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import io.ktor.http.ContentType
+import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlin.test.Test
@@ -119,6 +120,62 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun threadSaveMediaDownloadSupport_executesBatchAndAppliesAccumulator() = runBlocking {
+        val progressUpdates = mutableListOf<Pair<Int, Int>>()
+        var attempts = 0
+        val results = executeThreadSaveMediaBatch(
+            itemBatch = listOf(
+                ThreadSaveScheduledMediaItem(
+                    url = "https://may.2chan.net/b/src/2.webm",
+                    requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                    postId = "101"
+                )
+            ),
+            firstProgressIndex = 3,
+            execution = ThreadSaveMediaDownloadExecutionContext(
+                maxRetries = 2,
+                retryDelayMillis = 0L,
+                progressTotal = 5,
+                logTag = "ThreadSaveSupportTest",
+                updateProgress = { current, total -> progressUpdates += current to total },
+                downloadMedia = {
+                    attempts += 1
+                    if (attempts == 1) {
+                        Result.failure(IllegalStateException("retry"))
+                    } else {
+                        Result.success(
+                            ThreadSaveLocalFileInfo(
+                                relativePath = "b/src/2.webm",
+                                fileType = FileType.VIDEO,
+                                byteSize = 20L
+                            )
+                        )
+                    }
+                }
+            )
+        )
+        val accumulator = ThreadSaveMediaDownloadAccumulator(
+            urlToPathMap = linkedMapOf(),
+            mediaKeyToFileInfoMap = linkedMapOf()
+        )
+
+        applyThreadSaveMediaBatchResults(
+            results = results,
+            accumulator = accumulator,
+            opPostId = "100",
+            enforceBudget = { },
+            logTag = "ThreadSaveSupportTest"
+        )
+
+        assertEquals(2, attempts)
+        assertEquals(listOf(3 to 5), progressUpdates)
+        assertEquals(20L, accumulator.totalSizeBytes)
+        assertEquals(0, accumulator.downloadFailureCount)
+        assertEquals("b/src/2.webm", accumulator.urlToPathMap["https://may.2chan.net/b/src/2.webm"])
+        assertEquals(1, accumulator.mediaCounts.videoCount)
+    }
+
+    @Test
     fun threadSaveExecutionSupport_buildsSavedPostsFromDownloadedMedia() = runBlocking {
         val posts = listOf(
             Post(
@@ -165,6 +222,54 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun threadSaveSavedPostSupport_resolvesMediaAndBuildsSavedPost() {
+        val post = Post(
+            id = "100",
+            author = "a",
+            subject = "sub",
+            timestamp = "now",
+            messageHtml = """<a href="https://may.2chan.net/b/src/2.webm">video</a>""",
+            imageUrl = "https://may.2chan.net/b/src/2.webm",
+            thumbnailUrl = "https://may.2chan.net/b/thumb/2.jpg"
+        )
+        val mediaMap = mapOf(
+            buildThreadSaveMediaDownloadKey(
+                "https://may.2chan.net/b/src/2.webm",
+                ThreadSaveMediaRequestType.FULL_IMAGE
+            ) to ThreadSaveLocalFileInfo(
+                relativePath = "b/src/2.webm",
+                fileType = FileType.VIDEO,
+                byteSize = 20L
+            ),
+            buildThreadSaveMediaDownloadKey(
+                "https://may.2chan.net/b/thumb/2.jpg",
+                ThreadSaveMediaRequestType.THUMBNAIL
+            ) to ThreadSaveLocalFileInfo(
+                relativePath = "b/thumb/2.jpg",
+                fileType = FileType.THUMBNAIL,
+                byteSize = 10L
+            )
+        )
+
+        val resolvedMedia = resolveThreadSavePostMedia(
+            post = post,
+            mediaKeyToFileInfoMap = mediaMap
+        )
+        val savedPost = buildThreadSaveSavedPost(
+            post = post,
+            resolvedMedia = resolvedMedia,
+            urlToPathMap = mapOf("https://may.2chan.net/b/src/2.webm" to "b/src/2.webm")
+        )
+
+        assertEquals("https://may.2chan.net/b/src/2.webm", resolvedMedia.originalVideoUrl)
+        assertEquals("b/src/2.webm", resolvedMedia.localVideoPath)
+        assertEquals("b/thumb/2.jpg", resolvedMedia.localThumbnailPath)
+        assertEquals("b/src/2.webm", savedPost.localVideoPath)
+        assertTrue(savedPost.downloadSuccess)
+        assertTrue(savedPost.messageHtml.contains("""href="b/src/2.webm""""))
+    }
+
+    @Test
     fun threadSaveExecutionSupport_preparesOutputDirectories() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         fileSystem.createDirectory("manual").getOrThrow()
@@ -173,10 +278,12 @@ class ThreadSaveSupportTest {
 
         prepareThreadSaveOutput(
             fileSystem = fileSystem,
-            saveLocation = null,
-            request = ThreadSaveOutputPreparationRequest(
+            target = buildThreadSaveStorageTarget(
+                saveLocation = null,
                 baseDirectory = "manual",
-                storageId = "thread",
+                storageId = "thread"
+            ),
+            request = ThreadSaveOutputPreparationRequest(
                 boardPath = "b"
             )
         )
@@ -195,8 +302,11 @@ class ThreadSaveSupportTest {
         val payloadSize = writeThreadSaveMetadataIfEnabled(
             writeMetadata = true,
             fileSystem = fileSystem,
-            saveLocation = null,
-            baseDir = "manual/thread",
+            target = buildThreadSaveStorageTarget(
+                saveLocation = null,
+                baseDirectory = "manual",
+                storageId = "thread"
+            ),
             request = ThreadSaveMetadataWriteRequest(
                 threadId = "123",
                 boardId = "b",
@@ -230,9 +340,11 @@ class ThreadSaveSupportTest {
         val rawHtmlResult = saveThreadRawHtmlIfEnabled(
             enabled = true,
             fileSystem = fileSystem,
-            saveLocation = null,
-            storageId = "thread",
-            baseDir = "manual/thread",
+            target = buildThreadSaveStorageTarget(
+                saveLocation = null,
+                baseDirectory = "manual",
+                storageId = "thread"
+            ),
             threadId = "123",
             fetchOriginalHtml = { Result.success("<html>ok</html>") },
             rewriteHtml = { "$it<!-- saved -->" },
@@ -556,6 +668,48 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun threadSaveStreamBufferSupport_readsBoundedChannelBytes() {
+        runBlocking {
+        val bytes = readThreadSaveChannelBytes(
+            channel = ByteReadChannel("hello".encodeToByteArray()),
+            config = ThreadSaveChannelReadConfig(
+                maxBytes = 16,
+                streamReadBufferBytes = 4,
+                maxZeroReadRetries = 2,
+                zeroReadBackoffMillis = 0L,
+                readIdleTimeoutMillis = 1_000L,
+                stalledMessage = "stalled",
+                oversizeMessage = { "too large: $it" },
+                bufferExpandFailureMessage = "expand failed"
+            )
+        )
+
+        assertEquals("hello", bytes.decodeToString())
+        }
+    }
+
+    @Test
+    fun threadSaveStreamBufferSupport_rejectsOversizedChannelBytes() {
+        runBlocking {
+            assertFailsWith<IllegalStateException> {
+                readThreadSaveChannelBytes(
+                    channel = ByteReadChannel("toolarge".encodeToByteArray()),
+                    config = ThreadSaveChannelReadConfig(
+                        maxBytes = 4,
+                        streamReadBufferBytes = 2,
+                        maxZeroReadRetries = 2,
+                        zeroReadBackoffMillis = 0L,
+                        readIdleTimeoutMillis = 1_000L,
+                        stalledMessage = "stalled",
+                        oversizeMessage = { "too large: $it" },
+                        bufferExpandFailureMessage = "expand failed"
+                    )
+                )
+            }
+        }
+    }
+
+    @Test
     fun threadSaveExecutionSupport_cleansUpOutputsAndReleasesMediaLocks() = kotlinx.coroutines.runBlocking {
         val fileSystem = InMemoryFileSystem()
         fileSystem.createDirectory("manual").getOrThrow()
@@ -564,9 +718,11 @@ class ThreadSaveSupportTest {
 
         cleanupThreadSaveFailedOutput(
             fileSystem = fileSystem,
-            baseSaveLocation = null,
-            baseDirectory = "manual",
-            storageId = "thread"
+            target = buildThreadSaveStorageTarget(
+                saveLocation = null,
+                baseDirectory = "manual",
+                storageId = "thread"
+            )
         )
         assertFalse(fileSystem.exists("manual/thread"))
 

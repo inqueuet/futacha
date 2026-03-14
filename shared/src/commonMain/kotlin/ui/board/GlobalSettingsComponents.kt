@@ -110,6 +110,8 @@ internal fun GlobalSettingsScaffold(
                 GlobalSettingsBehaviorSection(
                     isBackgroundRefreshEnabled = bindings.behavior.isBackgroundRefreshEnabled,
                     onBackgroundRefreshChanged = bindings.behavior.onBackgroundRefreshChanged,
+                    isAdsEnabled = bindings.behavior.isAdsEnabled,
+                    onAdsEnabledChanged = bindings.behavior.onAdsEnabledChanged,
                     isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
                     onLightweightModeChanged = bindings.behavior.onLightweightModeChanged
                 )
@@ -215,6 +217,8 @@ internal fun SettingsSection(
 internal fun GlobalSettingsBehaviorSection(
     isBackgroundRefreshEnabled: Boolean,
     onBackgroundRefreshChanged: (Boolean) -> Unit,
+    isAdsEnabled: Boolean,
+    onAdsEnabledChanged: (Boolean) -> Unit,
     isLightweightModeEnabled: Boolean,
     onLightweightModeChanged: (Boolean) -> Unit
 ) {
@@ -236,6 +240,24 @@ internal fun GlobalSettingsBehaviorSection(
                 Switch(
                     checked = isBackgroundRefreshEnabled,
                     onCheckedChange = { onBackgroundRefreshChanged(it) }
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("広告表示") },
+            supportingContent = {
+                Text(
+                    text = "スレッド画面の下部メニューの下に AdMob バナーを表示します。OFF にすると広告枠ごと消えます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Switch(
+                    checked = isAdsEnabled,
+                    onCheckedChange = { onAdsEnabledChanged(it) }
                 )
             },
             modifier = Modifier.fillMaxWidth()

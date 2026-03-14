@@ -191,22 +191,17 @@ fun SavedThreadsScreen(
                     TextButton(
                         onClick = {
                             coroutineScope.launch {
-                                deleteSavedThreadAndReload(
+                                val deleteOutcome = resolveSavedThreadsDeleteUiOutcome(
+                                    deleteSavedThreadAndReload(
                                     repository = repository,
                                     thread = thread
                                 )
-                                    .onSuccess { snapshot ->
-                                        threads = snapshot.threads
-                                        totalSize = snapshot.totalSize
-                                        snackbarHostState.showSnackbar(
-                                            buildSavedThreadsDeleteMessage(Result.success(Unit))
-                                        )
-                                    }
-                                    .onFailure { e ->
-                                        snackbarHostState.showSnackbar(
-                                            buildSavedThreadsDeleteMessage(Result.failure(e))
-                                        )
-                                    }
+                                )
+                                deleteOutcome.updatedSnapshot?.let { snapshot ->
+                                    threads = snapshot.threads
+                                    totalSize = snapshot.totalSize
+                                }
+                                snackbarHostState.showSnackbar(deleteOutcome.message)
                                 deleteConfirmTarget = null
                             }
                         }

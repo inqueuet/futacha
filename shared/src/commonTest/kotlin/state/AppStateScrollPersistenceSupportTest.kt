@@ -89,4 +89,32 @@ class AppStateScrollPersistenceSupportTest {
             scope.coroutineContext[Job]?.cancel()
         }
     }
+
+    @Test
+    fun historyScrollPersistenceCoordinator_runsImmediateWithoutScope() {
+        runBlocking {
+            val requests = mutableListOf<AppStateHistoryScrollUpdateRequest>()
+            val coordinator = AppStateHistoryScrollPersistenceCoordinator(
+                debounceDelayMillis = 1_000L,
+                buildScrollKey = { request -> request.threadId },
+                performImmediateUpdate = { request -> requests += request }
+            )
+
+            coordinator.schedule(
+                AppStateHistoryScrollUpdateRequest(
+                    threadId = "123",
+                    index = 1,
+                    offset = 2,
+                    boardId = "b",
+                    title = "title",
+                    titleImageUrl = "",
+                    boardName = "board",
+                    boardUrl = "https://may.2chan.net/b/",
+                    replyCount = 3
+                )
+            )
+
+            assertEquals(listOf("123"), requests.map { it.threadId })
+        }
+    }
 }
