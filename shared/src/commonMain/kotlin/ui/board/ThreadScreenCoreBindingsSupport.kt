@@ -15,6 +15,26 @@ internal data class ThreadScreenStateRuntimeInputs(
     val messageFormInputs: ThreadScreenMessageFormInputs
 )
 
+internal data class ThreadScreenStateRuntimeAggregateInputs(
+    val runtimeJobInputs: ThreadScreenRuntimeJobInputs,
+    val messageNgInputs: ThreadScreenMessageNgInputs,
+    val formInputs: ThreadScreenFormInputs
+)
+
+internal fun buildThreadScreenStateRuntimeBindingsBundle(
+    inputs: ThreadScreenStateRuntimeAggregateInputs
+): ThreadScreenStateRuntimeBindingsBundle {
+    return buildThreadScreenStateRuntimeBindingsBundle(
+        ThreadScreenStateRuntimeInputs(
+            runtimeJobInputs = inputs.runtimeJobInputs,
+            messageFormInputs = ThreadScreenMessageFormInputs(
+                messageNgInputs = inputs.messageNgInputs,
+                formInputs = inputs.formInputs
+            )
+        )
+    )
+}
+
 internal fun buildThreadScreenStateRuntimeBindingsBundle(
     inputs: ThreadScreenStateRuntimeInputs
 ): ThreadScreenStateRuntimeBindingsBundle {

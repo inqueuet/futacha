@@ -9,7 +9,7 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val historyState = MutableStateFlow<String?>(null)
     val privacyFilterState = MutableStateFlow(false)
     val backgroundRefreshState = MutableStateFlow(false)
-    val adsEnabledState = MutableStateFlow(true)
+    val adsEnabledState = MutableStateFlow(false)
     val lightweightModeState = MutableStateFlow(false)
     val manualSaveDirectoryState = MutableStateFlow(DEFAULT_MANUAL_SAVE_ROOT)
     val attachmentPickerPreferenceState = MutableStateFlow<String?>(null)

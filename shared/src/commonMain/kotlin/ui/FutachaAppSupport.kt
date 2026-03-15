@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
+import com.valoser.futacha.shared.ui.board.ScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
@@ -60,7 +61,7 @@ internal data class FutachaBoardScreenCallbacks(
 internal data class FutachaScreenPreferencesStateInputs(
     val appVersion: String,
     val isBackgroundRefreshEnabled: Boolean,
-    val isAdsEnabled: Boolean = true,
+    val isAdsEnabled: Boolean = false,
     val isLightweightModeEnabled: Boolean,
     val manualSaveDirectory: String,
     val manualSaveLocation: SaveLocation,
@@ -103,7 +104,7 @@ internal data class FutachaScreenBindingsBundle(
     val screenPreferencesState: ScreenPreferencesState,
     val screenPreferencesCallbacks: ScreenPreferencesCallbacks,
     val screenHistoryCallbacks: ScreenHistoryCallbacks,
-    val screenContract: FutachaScreenContractContext
+    val screenContract: ScreenContract
 )
 
 private fun launchFutachaCallbackMutation(

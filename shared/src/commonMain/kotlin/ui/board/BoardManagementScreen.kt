@@ -317,6 +317,35 @@ import com.valoser.futacha.shared.ui.board.resolveEffectiveBoardUrl
 @Composable
 fun BoardManagementScreen(
     boards: List<BoardSummary>,
+    screenContract: ScreenContract,
+    onBoardSelected: (BoardSummary) -> Unit,
+    onAddBoard: (String, String) -> Unit,
+    onMenuAction: (BoardManagementMenuAction) -> Unit,
+    modifier: Modifier = Modifier,
+    onBoardDeleted: (BoardSummary) -> Unit = {},
+    onBoardsReordered: (List<BoardSummary>) -> Unit = {},
+    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies()
+) {
+    BoardManagementScreen(
+        boards = boards,
+        history = screenContract.history,
+        onBoardSelected = onBoardSelected,
+        onAddBoard = onAddBoard,
+        onMenuAction = onMenuAction,
+        historyCallbacks = screenContract.historyCallbacks,
+        modifier = modifier,
+        onBoardDeleted = onBoardDeleted,
+        onBoardsReordered = onBoardsReordered,
+        dependencies = dependencies,
+        preferencesState = screenContract.preferencesState,
+        preferencesCallbacks = screenContract.preferencesCallbacks
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@Composable
+fun BoardManagementScreen(
+    boards: List<BoardSummary>,
     history: List<ThreadHistoryEntry>,
     onBoardSelected: (BoardSummary) -> Unit,
     onAddBoard: (String, String) -> Unit,

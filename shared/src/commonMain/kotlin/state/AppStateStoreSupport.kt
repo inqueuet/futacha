@@ -1,5 +1,15 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
@@ -14,7 +24,11 @@ data class StorageError(
     val timestamp: Long
 )
 
-internal data class AppStateHistoryScrollUpdateRequest(
+/**
+ * Value object for debounced history scroll-position updates.
+ * This keeps call sites explicit and avoids long positional parameter lists.
+ */
+data class AppStateHistoryScrollUpdateRequest(
     val threadId: String,
     val index: Int,
     val offset: Int,
@@ -26,23 +40,24 @@ internal data class AppStateHistoryScrollUpdateRequest(
     val replyCount: Int
 )
 
-internal data class AppStateSeedDefaults(
-    val boards: List<com.valoser.futacha.shared.model.BoardSummary>,
+/**
+ * Value object for initial app-state seeding.
+ * This keeps startup call sites explicit without exposing a long positional API.
+ */
+data class AppStateSeedDefaults(
+    val boards: List<BoardSummary>,
     val history: List<ThreadHistoryEntry>,
     val ngHeaders: List<String> = emptyList(),
     val ngWords: List<String> = emptyList(),
     val catalogNgWords: List<String> = emptyList(),
     val watchWords: List<String> = emptyList(),
     val selfPostIdentifierMap: Map<String, List<String>> = emptyMap(),
-    val catalogModeMap: Map<String, com.valoser.futacha.shared.model.CatalogMode> = emptyMap(),
-    val threadMenuConfig: List<com.valoser.futacha.shared.model.ThreadMenuItemConfig> =
-        com.valoser.futacha.shared.model.defaultThreadMenuConfig(),
-    val threadSettingsMenuConfig: List<com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig> =
-        com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig(),
-    val threadMenuEntries: List<com.valoser.futacha.shared.model.ThreadMenuEntryConfig> =
-        com.valoser.futacha.shared.model.defaultThreadMenuEntries(),
-    val catalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig> =
-        com.valoser.futacha.shared.model.defaultCatalogNavEntries(),
+    val catalogModeMap: Map<String, CatalogMode> = emptyMap(),
+    val threadMenuConfig: List<ThreadMenuItemConfig> = defaultThreadMenuConfig(),
+    val threadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig> =
+        defaultThreadSettingsMenuConfig(),
+    val threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
+    val catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
     val lastUsedDeleteKey: String = ""
 )
 

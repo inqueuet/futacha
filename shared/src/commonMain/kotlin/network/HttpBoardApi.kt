@@ -4,18 +4,50 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
-import io.ktor.client.plugins.HttpRequestTimeoutException
-import io.ktor.client.plugins.ResponseException
-import io.ktor.client.network.sockets.SocketTimeoutException
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
+import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
 
 class HttpBoardApi(
     private val client: HttpClient
 ) : BoardApi, AutoCloseable {
+    private data class TextFetch(
+        val url: String,
+        val referer: String?,
+        val errorLabel: String,
+        val readMode: HttpBoardApiTextReadMode,
+        val maxLines: Int? = null,
+        val rangeHeader: String? = null,
+        val failureDescription: String
+    )
+
+    private data class PostSubmission(
+        val board: String,
+        val threadId: String?,
+        val name: String,
+        val email: String,
+        val subject: String,
+        val comment: String,
+        val password: String,
+        val imageFile: ByteArray?,
+        val imageFileName: String?,
+        val textOnly: Boolean,
+        val responseMode: HttpBoardApiPostResponseMode,
+        val requestFailureMessage: String,
+        val responseFailureLabel: String,
+        val forceAjaxResponse: Boolean = false
+    )
+
+    private data class ShortFormSubmission(
+        val url: String,
+        val referer: String,
+        val formParameters: Parameters,
+        val requestFailureMessage: String,
+        val responseFailureMessage: String
+    )
+
     companion object {
         private const val TAG = "HttpBoardApi"
         private const val DEFAULT_USER_AGENT =
@@ -81,37 +113,15 @@ class HttpBoardApi(
 
     override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
         val url = BoardUrlResolver.resolveCatalogUrl(board, mode)
-        return try {
-            withHttpBoardApiRetry(
-                logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
-            ) {
-                executeHttpBoardApiTextGet(
-                    client = client,
-                    request = HttpBoardApiTextGetRequest(
-                        url = url,
-                        referer = board,
-                        errorLabel = "catalog",
-                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
-                        readMode = HttpBoardApiTextReadMode.BODY
-                    ),
-                    userAgent = DEFAULT_USER_AGENT,
-                    accept = DEFAULT_ACCEPT,
-                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-                    readSmallResponseSummary = ::readSmallResponseSummary,
-                    readResponseBodyAsString = ::readResponseBodyAsString,
-                    readResponseHeadAsString = ::readResponseHeadAsString
-                )
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch catalog from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = board,
+                errorLabel = "catalog",
+                readMode = HttpBoardApiTextReadMode.BODY,
+                failureDescription = "Failed to fetch catalog from $url"
+            )
+        )
     }
 
     override suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int): String {
@@ -121,115 +131,43 @@ class HttpBoardApi(
             MIN_THREAD_HEAD_RANGE_BYTES,
             MAX_THREAD_HEAD_RANGE_BYTES
         )
-        return try {
-            withHttpBoardApiRetry(
-                logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
-            ) {
-                val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
-                    if (base.endsWith("/")) base else "$base/"
-                }
-                executeHttpBoardApiTextGet(
-                    client = client,
-                    request = HttpBoardApiTextGetRequest(
-                        url = url,
-                        referer = refererBase,
-                        rangeHeader = "bytes=0-${estimatedRangeBytes - 1}",
-                        errorLabel = "thread head",
-                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
-                        readMode = HttpBoardApiTextReadMode.HEAD,
-                        maxLines = maxLines
-                    ),
-                    userAgent = DEFAULT_USER_AGENT,
-                    accept = DEFAULT_ACCEPT,
-                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-                    readSmallResponseSummary = ::readSmallResponseSummary,
-                    readResponseBodyAsString = ::readResponseBodyAsString,
-                    readResponseHeadAsString = ::readResponseHeadAsString
-                )
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch thread head from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = resolveBoardRefererBase(board),
+                errorLabel = "thread head",
+                readMode = HttpBoardApiTextReadMode.HEAD,
+                maxLines = maxLines,
+                rangeHeader = "bytes=0-${estimatedRangeBytes - 1}",
+                failureDescription = "Failed to fetch thread head from $url"
+            )
+        )
     }
 
     override suspend fun fetchThread(board: String, threadId: String): String {
         val url = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        return try {
-            withHttpBoardApiRetry(
-                logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
-            ) {
-                val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
-                    if (base.endsWith("/")) base else "$base/"
-                }
-                executeHttpBoardApiTextGet(
-                    client = client,
-                    request = HttpBoardApiTextGetRequest(
-                        url = url,
-                        referer = refererBase,
-                        errorLabel = "thread",
-                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
-                        readMode = HttpBoardApiTextReadMode.BODY
-                    ),
-                    userAgent = DEFAULT_USER_AGENT,
-                    accept = DEFAULT_ACCEPT,
-                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-                    readSmallResponseSummary = ::readSmallResponseSummary,
-                    readResponseBodyAsString = ::readResponseBodyAsString,
-                    readResponseHeadAsString = ::readResponseHeadAsString
-                )
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch thread from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = resolveBoardRefererBase(board),
+                errorLabel = "thread",
+                readMode = HttpBoardApiTextReadMode.BODY,
+                failureDescription = "Failed to fetch thread from $url"
+            )
+        )
     }
 
     override suspend fun fetchThreadByUrl(threadUrl: String): String {
         val url = threadUrl
-        return try {
-            withHttpBoardApiRetry(
-                logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
-            ) {
-                executeHttpBoardApiTextGet(
-                    client = client,
-                    request = HttpBoardApiTextGetRequest(
-                        url = url,
-                        referer = resolveHttpBoardApiRefererBaseFromThreadUrl(url),
-                        errorLabel = "thread",
-                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
-                        readMode = HttpBoardApiTextReadMode.BODY
-                    ),
-                    userAgent = DEFAULT_USER_AGENT,
-                    accept = DEFAULT_ACCEPT,
-                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-                    readSmallResponseSummary = ::readSmallResponseSummary,
-                    readResponseBodyAsString = ::readResponseBodyAsString,
-                    readResponseHeadAsString = ::readResponseHeadAsString
-                )
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch thread from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = resolveHttpBoardApiRefererBaseFromThreadUrl(url),
+                errorLabel = "thread",
+                readMode = HttpBoardApiTextReadMode.BODY,
+                failureDescription = "Failed to fetch thread from $url"
+            )
+        )
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
@@ -282,6 +220,132 @@ class HttpBoardApi(
         )
     }
 
+    private fun resolveBoardRefererBase(board: String): String {
+        val base = BoardUrlResolver.resolveBoardBaseUrl(board)
+        return if (base.endsWith("/")) base else "$base/"
+    }
+
+    private suspend fun fetchText(fetch: TextFetch): String {
+        return try {
+            withHttpBoardApiRetry(
+                logTag = TAG,
+                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
+            ) {
+                executeHttpBoardApiTextGet(
+                    client = client,
+                    request = HttpBoardApiTextGetRequest(
+                        url = fetch.url,
+                        referer = fetch.referer,
+                        rangeHeader = fetch.rangeHeader,
+                        errorLabel = fetch.errorLabel,
+                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
+                        readMode = fetch.readMode,
+                        maxLines = fetch.maxLines
+                    ),
+                    userAgent = DEFAULT_USER_AGENT,
+                    accept = DEFAULT_ACCEPT,
+                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+                    readSmallResponseSummary = ::readSmallResponseSummary,
+                    readResponseBodyAsString = ::readResponseBodyAsString,
+                    readResponseHeadAsString = ::readResponseHeadAsString
+                )
+            }
+        } catch (e: NetworkException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val errorMsg = "${fetch.failureDescription}: ${e.message}"
+            Logger.e(TAG, errorMsg, e)
+            throw NetworkException(errorMsg, cause = e)
+        }
+    }
+
+    private suspend fun submitPost(submission: PostSubmission): String? {
+        validateHttpBoardApiPostInput(
+            submission.name,
+            submission.email,
+            submission.subject,
+            submission.comment,
+            submission.password,
+            submission.imageFile
+        )
+        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(submission.board)
+        val referer = submission.threadId
+            ?.let { BoardUrlResolver.resolveThreadUrl(submission.board, it) }
+            ?: buildString {
+                append(boardBase)
+                if (!boardBase.endsWith("/")) append('/')
+                append("futaba.htm")
+            }
+        val url = buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.php?guid=on")
+        }
+        val postingConfig = getPostingConfig(submission.board)
+        val formData = buildHttpBoardApiPostFormData(
+            logTag = TAG,
+            threadId = submission.threadId,
+            name = submission.name,
+            email = submission.email,
+            subject = submission.subject,
+            comment = submission.comment,
+            password = submission.password,
+            imageFile = submission.imageFile,
+            imageFileName = submission.imageFileName,
+            textOnly = submission.textOnly,
+            postingConfig = postingConfig,
+            forceAjaxResponse = submission.forceAjaxResponse
+        )
+        val response = submitHttpBoardApiBinaryForm(
+            client = client,
+            request = HttpBoardApiBinarySubmitRequest(
+                url = url,
+                referer = referer,
+                formData = formData,
+                failureMessage = submission.requestFailureMessage
+            ),
+            userAgent = DEFAULT_USER_AGENT,
+            accept = DEFAULT_ACCEPT,
+            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
+        )
+        try {
+            if (!response.status.isSuccess()) {
+                val detail = readSmallResponseSummary(response)
+                val suffix = detail?.let { ": $it" }.orEmpty()
+                throw NetworkException(
+                    "${submission.responseFailureLabel}に失敗しました (HTTP ${response.status.value}$suffix)"
+                )
+            }
+            val responseBody = readResponseBodyAsString(response)
+            return resolveHttpBoardApiPostResponseOrThrow(
+                mode = submission.responseMode,
+                responseBody = responseBody,
+                logTag = TAG
+            )
+        } finally {
+            // Body lifecycle is managed in readResponseBodyAsString.
+        }
+    }
+
+    private suspend fun submitShortForm(submission: ShortFormSubmission) {
+        executeHttpBoardApiShortFormRequest(
+            client = client,
+            request = HttpBoardApiShortFormRequest(
+                url = submission.url,
+                referer = submission.referer,
+                formParameters = submission.formParameters,
+                failureMessage = submission.requestFailureMessage,
+                responseFailureMessage = submission.responseFailureMessage
+            ),
+            userAgent = DEFAULT_USER_AGENT,
+            accept = DEFAULT_ACCEPT,
+            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+            readSmallResponseSummary = ::readSmallResponseSummary
+        )
+    }
+
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
         // FIX: 入力検証を最初に実行
         validateHttpBoardApiReasonCode(reasonCode)
@@ -291,26 +355,20 @@ class HttpBoardApi(
         }
         val boardSlug = BoardUrlResolver.resolveBoardSlug(board)
         val siteRoot = BoardUrlResolver.resolveSiteRoot(board)
-        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        executeHttpBoardApiShortFormRequest(
-            client = client,
-            request = HttpBoardApiShortFormRequest(
+        submitShortForm(
+            ShortFormSubmission(
                 url = "$siteRoot/del.php",
-                referer = referer,
-                formParameters = io.ktor.http.Parameters.build {
+                referer = BoardUrlResolver.resolveThreadUrl(board, threadId),
+                formParameters = Parameters.build {
                     append("mode", "post")
                     append("b", boardSlug)
                     append("d", sanitizedPostId)
                     append("reason", reasonCode)
                     append("responsemode", "ajax")
                 },
-                failureMessage = "Failed to send del request",
+                requestFailureMessage = "Failed to send del request",
                 responseFailureMessage = "del依頼に失敗しました"
-            ),
-            userAgent = DEFAULT_USER_AGENT,
-            accept = DEFAULT_ACCEPT,
-            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-            readSmallResponseSummary = ::readSmallResponseSummary
+            )
         )
     }
 
@@ -328,18 +386,16 @@ class HttpBoardApi(
             throw IllegalArgumentException("Invalid post ID for user deletion")
         }
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         val url = buildString {
             append(boardBase)
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
-        executeHttpBoardApiShortFormRequest(
-            client = client,
-            request = HttpBoardApiShortFormRequest(
+        submitShortForm(
+            ShortFormSubmission(
                 url = url,
-                referer = referer,
-                formParameters = io.ktor.http.Parameters.build {
+                referer = BoardUrlResolver.resolveThreadUrl(board, threadId),
+                formParameters = Parameters.build {
                     append("guid", "on")
                     // Futaba variants exist in the wild: send both forms for compatibility.
                     append("delete", sanitizedPostId)
@@ -349,13 +405,9 @@ class HttpBoardApi(
                     append("onlyimgdel", if (imageOnly) "on" else "")
                     append("mode", "usrdel")
                 },
-                failureMessage = "Failed to delete post",
+                requestFailureMessage = "Failed to delete post",
                 responseFailureMessage = "本人削除に失敗しました"
-            ),
-            userAgent = DEFAULT_USER_AGENT,
-            accept = DEFAULT_ACCEPT,
-            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
-            readSmallResponseSummary = ::readSmallResponseSummary
+            )
         )
     }
 
@@ -370,62 +422,24 @@ class HttpBoardApi(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        // FIX: 入力検証を最初に実行
-        validateHttpBoardApiPostInput(name, email, subject, comment, password, imageFile)
-        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val referer = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.htm")
-        }
-        val url = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.php?guid=on")
-        }
-        val postingConfig = getPostingConfig(board)
-        val formData = buildHttpBoardApiPostFormData(
-            logTag = TAG,
-            threadId = null,
-            name = name,
-            email = email,
-            subject = subject,
-            comment = comment,
-            password = password,
-            imageFile = imageFile,
-            imageFileName = imageFileName,
-            textOnly = textOnly,
-            postingConfig = postingConfig,
-            forceAjaxResponse = true
-        )
-        val response = submitHttpBoardApiBinaryForm(
-            client = client,
-            request = HttpBoardApiBinarySubmitRequest(
-                url = url,
-                referer = referer,
-                formData = formData,
-                failureMessage = "Failed to create thread"
-            ),
-            userAgent = DEFAULT_USER_AGENT,
-            accept = DEFAULT_ACCEPT,
-            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
-        )
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("スレッド作成に失敗しました (HTTP ${response.status.value}$suffix)")
-            }
-
-            val responseBody = readResponseBodyAsString(response)
-            return resolveHttpBoardApiPostResponseOrThrow(
-                mode = HttpBoardApiPostResponseMode.CREATE_THREAD,
-                responseBody = responseBody,
-                logTag = TAG
+        return submitPost(
+            PostSubmission(
+                board = board,
+                threadId = null,
+                name = name,
+                email = email,
+                subject = subject,
+                comment = comment,
+                password = password,
+                imageFile = imageFile,
+                imageFileName = imageFileName,
+                textOnly = textOnly,
+                responseMode = HttpBoardApiPostResponseMode.CREATE_THREAD,
+                requestFailureMessage = "Failed to create thread",
+                responseFailureLabel = "スレッド作成",
+                forceAjaxResponse = true
             )
-        } finally {
-            // Body lifecycle is managed in readResponseBodyAsString.
-        }
+        )
     }
 
     override suspend fun replyToThread(
@@ -440,56 +454,23 @@ class HttpBoardApi(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        // FIX: 入力検証を最初に実行
-        validateHttpBoardApiPostInput(name, email, subject, comment, password, imageFile)
-        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        val url = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.php?guid=on")
-        }
-        val postingConfig = getPostingConfig(board)
-        val formData = buildHttpBoardApiPostFormData(
-            logTag = TAG,
-            threadId = threadId,
-            name = name,
-            email = email,
-            subject = subject,
-            comment = comment,
-            password = password,
-            imageFile = imageFile,
-            imageFileName = imageFileName,
-            textOnly = textOnly,
-            postingConfig = postingConfig
-        )
-        val response = submitHttpBoardApiBinaryForm(
-            client = client,
-            request = HttpBoardApiBinarySubmitRequest(
-                url = url,
-                referer = referer,
-                formData = formData,
-                failureMessage = "Failed to reply to thread"
-            ),
-            userAgent = DEFAULT_USER_AGENT,
-            accept = DEFAULT_ACCEPT,
-            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
-        )
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("返信に失敗しました (HTTP ${response.status.value}$suffix)")
-            }
-            val responseBody = readResponseBodyAsString(response)
-            return resolveHttpBoardApiPostResponseOrThrow(
-                mode = HttpBoardApiPostResponseMode.REPLY,
-                responseBody = responseBody,
-                logTag = TAG
+        return submitPost(
+            PostSubmission(
+                board = board,
+                threadId = threadId,
+                name = name,
+                email = email,
+                subject = subject,
+                comment = comment,
+                password = password,
+                imageFile = imageFile,
+                imageFileName = imageFileName,
+                textOnly = textOnly,
+                responseMode = HttpBoardApiPostResponseMode.REPLY,
+                requestFailureMessage = "Failed to reply to thread",
+                responseFailureLabel = "返信"
             )
-        } finally {
-            // Body lifecycle is managed in readResponseBodyAsString.
-        }
+        )
     }
 
     private suspend fun getPostingConfig(board: String): HttpBoardApiPostingConfig {

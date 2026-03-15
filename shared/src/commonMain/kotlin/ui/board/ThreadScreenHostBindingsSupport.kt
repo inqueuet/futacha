@@ -13,11 +13,81 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.util.FileSystem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 internal data class ThreadScreenHostBindingsBundle(
     val scaffoldBindings: ThreadScreenScaffoldBindings,
     val contentBindings: ThreadScreenContentHostBindings,
     val overlayBindings: ThreadScreenOverlayHostBindings
+)
+
+internal data class ThreadScreenHostRuntimeInputs(
+    val modifier: Modifier,
+    val coroutineScope: CoroutineScope,
+    val drawerState: DrawerState,
+    val snackbarHostState: SnackbarHostState,
+    val history: List<ThreadHistoryEntry>,
+    val historyDrawerCallbacks: ThreadHistoryDrawerCallbacks,
+    val boardName: String,
+    val resolvedThreadTitle: String,
+    val resolvedReplyCount: Int?,
+    val statusLabel: String?,
+    val isSearchActive: Boolean,
+    val searchQuery: String,
+    val currentSearchResultIndex: Int,
+    val totalSearchMatches: Int,
+    val uiState: ThreadUiState,
+    val refreshThread: () -> Unit,
+    val threadFilterBinding: ThreadFilterUiStateBinding,
+    val persistedSelfPostIdentifiers: List<String>,
+    val ngHeaders: List<String>,
+    val ngWords: List<String>,
+    val ngFilteringEnabled: Boolean,
+    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val lazyListState: LazyListState,
+    val saidaneOverrides: Map<String, String>,
+    val selfPostIdentifierSet: Set<String>,
+    val postHighlightRanges: Map<String, List<IntRange>>,
+    val postOverlayState: ThreadPostOverlayState,
+    val setPostOverlayState: (ThreadPostOverlayState) -> Unit,
+    val onSaidaneClick: (Post) -> Unit,
+    val onMediaClick: ((String, MediaType) -> Unit)?,
+    val onUrlClick: (String) -> Unit,
+    val onRefresh: () -> Unit,
+    val isRefreshing: Boolean,
+    val sheetOverlayState: ThreadSheetOverlayState,
+    val modalOverlayState: ThreadModalOverlayState,
+    val replyDialogState: ThreadReplyDialogState,
+    val mediaPreviewState: ThreadMediaPreviewState,
+    val mediaPreviewEntries: List<MediaPreviewEntry>,
+    val galleryPosts: List<Post>?,
+    val isSingleMediaSaveInProgress: Boolean,
+    val readAloudSegments: List<ReadAloudSegment>,
+    val currentReadAloudIndex: Int,
+    val firstVisibleSegmentIndex: Int,
+    val readAloudStatus: ReadAloudStatus,
+    val isPrivacyFilterEnabled: Boolean,
+    val saveProgress: SaveProgress?,
+    val preferencesState: ScreenPreferencesState,
+    val uiBindings: ThreadScreenUiBindingsBundle,
+    val filterUiState: ThreadFilterUiState,
+    val fileSystem: FileSystem?,
+    val autoSavedThreadRepository: SavedThreadRepository?,
+    val cookieRepository: CookieRepository?,
+    val appColorScheme: ColorScheme,
+    val overlayActionCallbacks: ThreadScreenOverlayActionCallbacks,
+    val onQuoteFromActionSheet: (Post) -> Unit,
+    val onNgRegisterFromActionSheet: (Post) -> Unit,
+    val onSaidaneFromActionSheet: (Post) -> Unit,
+    val onDelRequestFromActionSheet: (Post) -> Unit,
+    val onDeleteFromActionSheet: (Post) -> Unit,
+    val onBackSwipe: () -> Unit,
+    val actionInProgress: Boolean,
+    val readAloudIndicatorSegment: ReadAloudSegment?,
+    val isDrawerOpen: Boolean,
+    val backSwipeEdgePx: Float,
+    val backSwipeTriggerPx: Float
 )
 
 internal data class ThreadScreenHostScaffoldInputs(
@@ -202,6 +272,98 @@ internal fun buildThreadScreenHostBindingsBundle(
             onDeleteDialogConfirm = overlayInputs.actionCallbacks.onDeleteDialogConfirm,
             onQuoteSelectionDismiss = overlayInputs.actionCallbacks.onQuoteSelectionDismiss,
             onReplySubmit = overlayInputs.onReplySubmit ?: overlayInputs.actionCallbacks.onReplySubmit
+        )
+    )
+}
+
+internal fun buildThreadScreenHostBindingsBundle(
+    inputs: ThreadScreenHostRuntimeInputs
+): ThreadScreenHostBindingsBundle {
+    return buildThreadScreenHostBindingsBundle(
+        scaffoldInputs = ThreadScreenHostScaffoldInputs(
+            modifier = inputs.modifier,
+            drawerState = inputs.drawerState,
+            snackbarHostState = inputs.snackbarHostState,
+            history = inputs.history,
+            historyDrawerCallbacks = inputs.historyDrawerCallbacks,
+            boardName = inputs.boardName,
+            resolvedThreadTitle = inputs.resolvedThreadTitle,
+            resolvedReplyCount = inputs.resolvedReplyCount,
+            statusLabel = inputs.statusLabel,
+            isSearchActive = inputs.isSearchActive,
+            searchQuery = inputs.searchQuery,
+            currentSearchResultIndex = inputs.currentSearchResultIndex,
+            totalSearchMatches = inputs.totalSearchMatches,
+            topBarCallbacks = inputs.uiBindings.topBarCallbacks,
+            threadMenuEntries = inputs.preferencesState.threadMenuEntries,
+            actionBarCallbacks = inputs.uiBindings.actionBarCallbacks,
+            isAdsEnabled = inputs.preferencesState.isAdsEnabled,
+            isDrawerOpen = inputs.isDrawerOpen,
+            backSwipeEdgePx = inputs.backSwipeEdgePx,
+            backSwipeTriggerPx = inputs.backSwipeTriggerPx,
+            onDismissDrawerTap = {
+                inputs.coroutineScope.launch { inputs.drawerState.close() }
+            },
+            onBackSwipe = inputs.onBackSwipe,
+            actionInProgress = inputs.actionInProgress,
+            readAloudIndicatorSegment = inputs.readAloudIndicatorSegment,
+            appColorScheme = inputs.appColorScheme
+        ),
+        contentInputs = ThreadScreenHostContentInputs(
+            uiState = inputs.uiState,
+            refreshThread = inputs.refreshThread,
+            threadFilterBinding = inputs.threadFilterBinding,
+            persistedSelfPostIdentifiers = inputs.persistedSelfPostIdentifiers,
+            ngHeaders = inputs.ngHeaders,
+            ngWords = inputs.ngWords,
+            ngFilteringEnabled = inputs.ngFilteringEnabled,
+            threadFilterCache = inputs.threadFilterCache,
+            lazyListState = inputs.lazyListState,
+            saidaneOverrides = inputs.saidaneOverrides,
+            selfPostIdentifierSet = inputs.selfPostIdentifierSet,
+            postHighlightRanges = inputs.postHighlightRanges,
+            postOverlayState = inputs.postOverlayState,
+            setPostOverlayState = inputs.setPostOverlayState,
+            onSaidaneClick = inputs.onSaidaneClick,
+            onMediaClick = inputs.onMediaClick,
+            onUrlClick = inputs.onUrlClick,
+            onRefresh = inputs.onRefresh,
+            isRefreshing = inputs.isRefreshing
+        ),
+        overlayInputs = ThreadScreenHostOverlayInputs(
+            postOverlayState = inputs.postOverlayState,
+            sheetOverlayState = inputs.sheetOverlayState,
+            modalOverlayState = inputs.modalOverlayState,
+            history = inputs.history,
+            boardName = inputs.boardName,
+            resolvedThreadTitle = inputs.resolvedThreadTitle,
+            replyDialogState = inputs.replyDialogState,
+            mediaPreviewState = inputs.mediaPreviewState,
+            mediaPreviewEntries = inputs.mediaPreviewEntries,
+            galleryPosts = inputs.galleryPosts,
+            isSingleMediaSaveInProgress = inputs.isSingleMediaSaveInProgress,
+            ngHeaders = inputs.ngHeaders,
+            ngWords = inputs.ngWords,
+            ngFilteringEnabled = inputs.ngFilteringEnabled,
+            readAloudSegments = inputs.readAloudSegments,
+            currentReadAloudIndex = inputs.currentReadAloudIndex,
+            firstVisibleSegmentIndex = inputs.firstVisibleSegmentIndex,
+            readAloudStatus = inputs.readAloudStatus,
+            isPrivacyFilterEnabled = inputs.isPrivacyFilterEnabled,
+            saveProgress = inputs.saveProgress,
+            preferencesState = inputs.preferencesState,
+            uiBindings = inputs.uiBindings,
+            filterUiState = inputs.filterUiState,
+            fileSystem = inputs.fileSystem,
+            autoSavedThreadRepository = inputs.autoSavedThreadRepository,
+            cookieRepository = inputs.cookieRepository,
+            appColorScheme = inputs.appColorScheme,
+            actionCallbacks = inputs.overlayActionCallbacks,
+            onQuoteFromActionSheet = inputs.onQuoteFromActionSheet,
+            onNgRegisterFromActionSheet = inputs.onNgRegisterFromActionSheet,
+            onSaidaneFromActionSheet = inputs.onSaidaneFromActionSheet,
+            onDelRequestFromActionSheet = inputs.onDelRequestFromActionSheet,
+            onDeleteFromActionSheet = inputs.onDeleteFromActionSheet
         )
     )
 }

@@ -17,10 +17,13 @@ import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.FakePlatformStateStorage
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
+import com.valoser.futacha.shared.ui.board.BoardManagementScreenDependencies
+import com.valoser.futacha.shared.ui.board.CatalogScreenDependencies
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
+import com.valoser.futacha.shared.ui.board.ThreadScreenDependencies
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -338,6 +341,18 @@ class FutachaAppTest {
             )
         )
 
+        val services = buildScreenServiceDependencies(
+            stateStore = AppStateStore(FakePlatformStateStorage()),
+            autoSavedThreadRepository = SavedThreadRepository(InMemoryFileSystem()),
+            fileSystem = InMemoryFileSystem()
+        )
+        val boardDependencies = BoardManagementScreenDependencies(services = services)
+        val catalogDependencies = CatalogScreenDependencies(repository = repository, services = services)
+        val threadDependencies = ThreadScreenDependencies(repository = repository, services = services)
+        assertSame(services.fileSystem, boardDependencies.fileSystem)
+        assertSame(services.stateStore, catalogDependencies.stateStore)
+        assertSame(services.autoSavedThreadRepository, threadDependencies.autoSavedThreadRepository)
+
         val baseState = FutachaNavigationState(
             selectedBoardId = "img",
             selectedThreadId = "123",
@@ -521,10 +536,34 @@ class FutachaAppTest {
             }
         )
 
-        val savedProps = FutachaSavedThreadsDestinationProps(
+        val screenBindings = FutachaScreenBindingsBundle(
+            navigationCallbacks = navigationCallbacks,
+            boardScreenCallbacks = boardCallbacks,
+            screenPreferencesState = ScreenPreferencesState(appVersion = "1.2.3"),
+            screenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+            screenHistoryCallbacks = ScreenHistoryCallbacks(),
+            screenContract = screenContract
+        )
+        val assemblyContext = buildFutachaDestinationAssemblyContext(
+            screenBindings = screenBindings,
+            stateStore = stateStore,
+            sharedRepository = sharedRepository,
+            httpClient = null,
+            fileSystem = null,
+            cookieRepository = null,
+            autoSavedThreadRepository = null,
+            navigationState = FutachaNavigationState(
+                selectedBoardId = board.id,
+                selectedThreadId = "321",
+                selectedThreadTitle = "thread title",
+                selectedThreadReplies = 12,
+                selectedThreadUrl = "https://may.2chan.net/img/res/321.htm"
+            )
+        )
+
+        val savedProps = buildFutachaSavedThreadsDestinationProps(
             repository = manualRepository,
-            onThreadClick = navigationCallbacks.onSavedThreadSelected,
-            onBack = navigationCallbacks.onSavedThreadsDismissed
+            navigationCallbacks = navigationCallbacks
         )
         val savedThread = savedThread(threadId = "saved-123", boardId = "img", boardName = "img")
         savedProps.onThreadClick(savedThread)
@@ -534,14 +573,8 @@ class FutachaAppTest {
         assertTrue(savedThreadsDismissed)
 
         val boardProps = buildFutachaBoardManagementDestinationProps(
-            FutachaBoardManagementDestinationInputs(
-                boards = listOf(board),
-                boardCallbacks = boardCallbacks,
-                screenContract = screenContract,
-                cookieRepository = null,
-                fileSystem = null,
-                autoSavedThreadRepository = null
-            )
+            boards = listOf(board),
+            context = assemblyContext
         )
         boardProps.onBoardSelected(board)
         assertEquals(board, selectedBoard)
@@ -550,16 +583,8 @@ class FutachaAppTest {
         assertNull(boardProps.dependencies.autoSavedThreadRepository)
 
         val catalogProps = buildFutachaCatalogDestinationProps(
-            FutachaCatalogDestinationInputs(
-                board = board,
-                stateStore = stateStore,
-                sharedRepository = sharedRepository,
-                screenContract = screenContract,
-                navigationCallbacks = navigationCallbacks,
-                autoSavedThreadRepository = null,
-                cookieRepository = null,
-                httpClient = null
-            )
+            board = board,
+            context = assemblyContext
         )
         catalogProps.onThreadSelected(
             FutachaThreadSelection(
@@ -586,16 +611,8 @@ class FutachaAppTest {
         )
         assertNull(
             buildFutachaCatalogDestinationProps(
-                FutachaCatalogDestinationInputs(
-                    board = mockBoard,
-                    stateStore = stateStore,
-                    sharedRepository = sharedRepository,
-                    screenContract = screenContract,
-                    navigationCallbacks = navigationCallbacks,
-                    autoSavedThreadRepository = null,
-                    cookieRepository = null,
-                    httpClient = null
-                )
+                board = mockBoard,
+                context = assemblyContext
             ).dependencies.repository
         )
 
@@ -606,27 +623,11 @@ class FutachaAppTest {
             thumbnailUrl = "thumb"
         )
         val threadProps = buildFutachaThreadDestinationProps(
-            FutachaThreadDestinationInputs(
-                board = board,
-                threadId = "321",
-                navigationState = FutachaNavigationState(
-                    selectedBoardId = board.id,
-                    selectedThreadId = "321",
-                    selectedThreadTitle = "thread title",
-                    selectedThreadReplies = 12,
-                    selectedThreadUrl = "https://may.2chan.net/img/res/321.htm"
-                ),
-                historyContext = threadContext,
-                screenContract = screenContract,
-                navigationCallbacks = navigationCallbacks,
-                onScrollPositionPersist = { _, _, _ -> },
-                sharedRepository = sharedRepository,
-                httpClient = null,
-                fileSystem = null,
-                cookieRepository = null,
-                stateStore = stateStore,
-                autoSavedThreadRepository = null
-            )
+            board = board,
+            threadId = "321",
+            historyContext = threadContext,
+            onScrollPositionPersist = { _, _, _ -> },
+            context = assemblyContext
         )
         assertEquals(threadContext, threadProps.historyContext)
         assertSame(sharedRepository, threadProps.dependencies.repository)

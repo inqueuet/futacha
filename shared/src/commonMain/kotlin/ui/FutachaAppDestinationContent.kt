@@ -49,16 +49,13 @@ internal fun FutachaBoardManagementDestination(
 ) {
     BoardManagementScreen(
         boards = props.boards,
-        history = props.screenContract.history,
+        screenContract = props.screenContract,
         onBoardSelected = props.onBoardSelected,
         onAddBoard = props.onAddBoard,
         onMenuAction = props.onMenuAction,
-        historyCallbacks = props.screenContract.historyCallbacks,
         onBoardDeleted = props.onBoardDeleted,
         onBoardsReordered = props.onBoardsReordered,
-        dependencies = props.dependencies,
-        preferencesState = props.screenContract.preferencesState,
-        preferencesCallbacks = props.screenContract.preferencesCallbacks
+        dependencies = props.dependencies
     )
 }
 
@@ -93,7 +90,7 @@ internal fun FutachaCatalogDestination(
     saveableStateHolder.SaveableStateProvider(props.saveableStateKey) {
         CatalogScreen(
             board = props.board,
-            history = props.screenContract.history,
+            screenContract = props.screenContract,
             onBack = props.onBack,
             onThreadSelected = { item ->
                 props.onThreadSelected(
@@ -107,10 +104,7 @@ internal fun FutachaCatalogDestination(
                     )
                 )
             },
-            historyCallbacks = props.screenContract.historyCallbacks,
             dependencies = props.dependencies,
-            preferencesState = props.screenContract.preferencesState,
-            preferencesCallbacks = props.screenContract.preferencesCallbacks,
         )
     }
 }
@@ -133,17 +127,14 @@ internal fun FutachaThreadDestination(
 
     ThreadScreen(
         board = props.board,
-        history = props.screenContract.history,
+        screenContract = props.screenContract,
         threadId = props.threadId,
         threadTitle = props.threadTitle,
-        threadUrlOverride = props.threadUrlOverride,
         initialReplyCount = props.initialReplyCount,
         onBack = props.onBack,
-        historyCallbacks = props.screenContract.historyCallbacks,
         onScrollPositionPersist = props.onScrollPositionPersist,
+        threadUrlOverride = props.threadUrlOverride,
         dependencies = props.dependencies,
-        preferencesState = props.screenContract.preferencesState,
-        preferencesCallbacks = props.screenContract.preferencesCallbacks,
         onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick
     )
 }

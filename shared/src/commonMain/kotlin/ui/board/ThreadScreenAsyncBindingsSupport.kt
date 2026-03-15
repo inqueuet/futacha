@@ -16,6 +16,34 @@ internal data class ThreadScreenAsyncBindingsBundle(
     val loadBindings: ThreadScreenLoadBindings
 )
 
+internal data class ThreadScreenAsyncBindingsInputs(
+    val coroutineScope: CoroutineScope,
+    val repository: BoardRepository,
+    val history: List<ThreadHistoryEntry>,
+    val threadId: String,
+    val threadTitle: String?,
+    val board: BoardSummary,
+    val boardUrl: String,
+    val effectiveBoardUrl: String,
+    val threadUrlOverride: String?,
+    val archiveSearchJson: Json,
+    val offlineLookupContext: OfflineThreadLookupContext,
+    val offlineSources: List<OfflineThreadSource>,
+    val currentThreadUrlOverride: () -> String?,
+    val httpClient: HttpClient?,
+    val fileSystem: FileSystem?,
+    val autoSaveRepository: SavedThreadRepository?,
+    val manualSaveRepository: SavedThreadRepository?,
+    val minAutoSaveIntervalMillis: Long,
+    val runtimeBindings: ThreadScreenAsyncRuntimeBindingsBundle,
+    val manualSaveDirectory: String,
+    val manualSaveLocation: SaveLocation?,
+    val resolvedManualSaveDirectory: String?,
+    val requiresManualLocationSelection: Boolean,
+    val onWarning: (String) -> Unit = {},
+    val onInfo: (String) -> Unit = {}
+)
+
 internal data class ThreadScreenAsyncRuntimeBindingsBundle(
     val autoSaveStateBindings: ThreadScreenAutoSaveStateBindings,
     val manualSaveStateBindings: ThreadScreenManualSaveStateBindings,
@@ -24,6 +52,38 @@ internal data class ThreadScreenAsyncRuntimeBindingsBundle(
     val singleMediaSaveCallbacks: ThreadScreenSingleMediaSaveCallbacks,
     val loadStateBindings: ThreadScreenLoadStateBindings,
     val loadUiCallbacks: ThreadScreenLoadUiCallbacks
+)
+
+internal data class ThreadScreenAsyncRuntimeInputs(
+    val currentAutoSaveJob: () -> kotlinx.coroutines.Job?,
+    val setAutoSaveJob: (kotlinx.coroutines.Job?) -> Unit,
+    val currentLastAutoSaveTimestampMillis: () -> Long,
+    val setLastAutoSaveTimestampMillis: (Long) -> Unit,
+    val currentIsShowingOfflineCopy: () -> Boolean,
+    val currentManualSaveJob: () -> kotlinx.coroutines.Job?,
+    val setManualSaveJob: (kotlinx.coroutines.Job?) -> Unit,
+    val setIsManualSaveInProgress: (Boolean) -> Unit,
+    val currentIsManualSaveInProgress: () -> Boolean,
+    val currentIsSingleMediaSaveInProgress: () -> Boolean,
+    val setSaveProgress: (com.valoser.futacha.shared.model.SaveProgress?) -> Unit,
+    val currentUiState: () -> ThreadUiState,
+    val showMessage: (String) -> Unit,
+    val applySaveErrorState: (ThreadManualSaveErrorState) -> Unit,
+    val onOpenSaveDirectoryPicker: (() -> Unit)?,
+    val currentSingleMediaSaveJob: () -> kotlinx.coroutines.Job?,
+    val setSingleMediaSaveJob: (kotlinx.coroutines.Job?) -> Unit,
+    val setIsSingleMediaSaveInProgress: (Boolean) -> Unit,
+    val showOptionalMessage: (String?) -> Unit,
+    val currentRefreshThreadJob: () -> kotlinx.coroutines.Job?,
+    val setRefreshThreadJob: (kotlinx.coroutines.Job?) -> Unit,
+    val currentManualRefreshGeneration: () -> Long,
+    val setManualRefreshGeneration: (Long) -> Unit,
+    val setIsRefreshing: (Boolean) -> Unit,
+    val setUiState: (ThreadUiState) -> Unit,
+    val setResolvedThreadUrlOverride: (String?) -> Unit,
+    val setIsShowingOfflineCopy: (Boolean) -> Unit,
+    val onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit,
+    val onRestoreManualRefreshScroll: suspend (ThreadUiState.Success, Int, Int) -> Unit
 )
 
 internal fun buildThreadScreenLoadUiCallbacks(
@@ -55,6 +115,42 @@ internal fun buildThreadScreenLoadUiCallbacks(
             outcome.uiState?.let(onUiStateChanged)
             onShowOptionalMessage(outcome.snackbarMessage)
         }
+    )
+}
+
+internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
+    inputs: ThreadScreenAsyncRuntimeInputs
+): ThreadScreenAsyncRuntimeBindingsBundle {
+    return buildThreadScreenAsyncRuntimeBindingsBundle(
+        currentAutoSaveJob = inputs.currentAutoSaveJob,
+        setAutoSaveJob = inputs.setAutoSaveJob,
+        currentLastAutoSaveTimestampMillis = inputs.currentLastAutoSaveTimestampMillis,
+        setLastAutoSaveTimestampMillis = inputs.setLastAutoSaveTimestampMillis,
+        currentIsShowingOfflineCopy = inputs.currentIsShowingOfflineCopy,
+        currentManualSaveJob = inputs.currentManualSaveJob,
+        setManualSaveJob = inputs.setManualSaveJob,
+        setIsManualSaveInProgress = inputs.setIsManualSaveInProgress,
+        currentIsManualSaveInProgress = inputs.currentIsManualSaveInProgress,
+        currentIsSingleMediaSaveInProgress = inputs.currentIsSingleMediaSaveInProgress,
+        setSaveProgress = inputs.setSaveProgress,
+        currentUiState = inputs.currentUiState,
+        showMessage = inputs.showMessage,
+        applySaveErrorState = inputs.applySaveErrorState,
+        onOpenSaveDirectoryPicker = inputs.onOpenSaveDirectoryPicker,
+        currentSingleMediaSaveJob = inputs.currentSingleMediaSaveJob,
+        setSingleMediaSaveJob = inputs.setSingleMediaSaveJob,
+        setIsSingleMediaSaveInProgress = inputs.setIsSingleMediaSaveInProgress,
+        showOptionalMessage = inputs.showOptionalMessage,
+        currentRefreshThreadJob = inputs.currentRefreshThreadJob,
+        setRefreshThreadJob = inputs.setRefreshThreadJob,
+        currentManualRefreshGeneration = inputs.currentManualRefreshGeneration,
+        setManualRefreshGeneration = inputs.setManualRefreshGeneration,
+        setIsRefreshing = inputs.setIsRefreshing,
+        setUiState = inputs.setUiState,
+        setResolvedThreadUrlOverride = inputs.setResolvedThreadUrlOverride,
+        setIsShowingOfflineCopy = inputs.setIsShowingOfflineCopy,
+        onHistoryEntryUpdated = inputs.onHistoryEntryUpdated,
+        onRestoreManualRefreshScroll = inputs.onRestoreManualRefreshScroll
     )
 }
 
@@ -139,6 +235,44 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
             onShowOptionalMessage = showOptionalMessage,
             onRestoreManualRefreshScroll = onRestoreManualRefreshScroll
         )
+    )
+}
+
+internal fun buildThreadScreenAsyncBindingsBundle(
+    inputs: ThreadScreenAsyncBindingsInputs
+): ThreadScreenAsyncBindingsBundle {
+    return buildThreadScreenAsyncBindingsBundle(
+        coroutineScope = inputs.coroutineScope,
+        repository = inputs.repository,
+        history = inputs.history,
+        threadId = inputs.threadId,
+        threadTitle = inputs.threadTitle,
+        board = inputs.board,
+        boardUrl = inputs.boardUrl,
+        effectiveBoardUrl = inputs.effectiveBoardUrl,
+        threadUrlOverride = inputs.threadUrlOverride,
+        archiveSearchJson = inputs.archiveSearchJson,
+        offlineLookupContext = inputs.offlineLookupContext,
+        offlineSources = inputs.offlineSources,
+        currentThreadUrlOverride = inputs.currentThreadUrlOverride,
+        httpClient = inputs.httpClient,
+        fileSystem = inputs.fileSystem,
+        autoSaveRepository = inputs.autoSaveRepository,
+        manualSaveRepository = inputs.manualSaveRepository,
+        minAutoSaveIntervalMillis = inputs.minAutoSaveIntervalMillis,
+        autoSaveStateBindings = inputs.runtimeBindings.autoSaveStateBindings,
+        manualSaveStateBindings = inputs.runtimeBindings.manualSaveStateBindings,
+        manualSaveDirectory = inputs.manualSaveDirectory,
+        manualSaveLocation = inputs.manualSaveLocation,
+        resolvedManualSaveDirectory = inputs.resolvedManualSaveDirectory,
+        requiresManualLocationSelection = inputs.requiresManualLocationSelection,
+        manualSaveCallbacks = inputs.runtimeBindings.manualSaveCallbacks,
+        singleMediaSaveStateBindings = inputs.runtimeBindings.singleMediaSaveStateBindings,
+        singleMediaSaveCallbacks = inputs.runtimeBindings.singleMediaSaveCallbacks,
+        loadStateBindings = inputs.runtimeBindings.loadStateBindings,
+        loadUiCallbacks = inputs.runtimeBindings.loadUiCallbacks,
+        onWarning = inputs.onWarning,
+        onInfo = inputs.onInfo
     )
 }
 

@@ -64,6 +64,29 @@ import kotlin.time.ExperimentalTime
 @Composable
 fun CatalogScreen(
     board: BoardSummary?,
+    screenContract: ScreenContract,
+    onBack: () -> Unit,
+    onThreadSelected: (CatalogItem) -> Unit,
+    dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
+    modifier: Modifier = Modifier
+) {
+    CatalogScreen(
+        board = board,
+        history = screenContract.history,
+        onBack = onBack,
+        onThreadSelected = onThreadSelected,
+        historyCallbacks = screenContract.historyCallbacks,
+        dependencies = dependencies,
+        preferencesState = screenContract.preferencesState,
+        preferencesCallbacks = screenContract.preferencesCallbacks,
+        modifier = modifier
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@Composable
+fun CatalogScreen(
+    board: BoardSummary?,
     history: List<ThreadHistoryEntry>,
     onBack: () -> Unit,
     onThreadSelected: (CatalogItem) -> Unit,

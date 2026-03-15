@@ -107,7 +107,7 @@ private class AndroidPlatformStateStorage(
         safeData.map { prefs -> prefs[backgroundRefreshKey] ?: false }
 
     override val adsEnabled: Flow<Boolean> =
-        safeData.map { prefs -> prefs[adsEnabledKey] ?: true }
+        safeData.map { prefs -> prefs[adsEnabledKey] ?: false }
 
     override val lightweightModeEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
@@ -246,7 +246,7 @@ private class AndroidPlatformStateStorage(
         seedRequiredStringPreference(boardsKey, seedBundles.boards.boardsJson)
         seedRequiredStringPreference(historyKey, seedBundles.history.historyJson)
         seedRequiredStringPreference(manualSaveDirectoryKey, DEFAULT_MANUAL_SAVE_ROOT)
-        seedRequiredBooleanPreference(adsEnabledKey, true)
+        seedRequiredBooleanPreference(adsEnabledKey, false)
         seedOptionalStringPreference(ngHeadersKey, seedBundles.preferences.ngHeadersJson)
         seedOptionalStringPreference(ngWordsKey, seedBundles.preferences.ngWordsJson)
         seedOptionalStringPreference(catalogNgWordsKey, seedBundles.preferences.catalogNgWordsJson)

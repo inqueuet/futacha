@@ -20,7 +20,7 @@ import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 
-private const val THREAD_SCREEN_BANNER_AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
+private const val THREAD_SCREEN_BANNER_AD_UNIT_ID = "ca-app-pub-6403856201304924/8151063815"
 
 @Composable
 internal actual fun ThreadScreenBannerAd(

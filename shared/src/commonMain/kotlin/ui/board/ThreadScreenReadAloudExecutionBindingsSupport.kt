@@ -11,6 +11,38 @@ internal data class ThreadScreenReadAloudStateBindings(
     val setState: (ThreadReadAloudRuntimeState) -> Unit
 )
 
+internal data class ThreadScreenReadAloudStateInputs(
+    val currentJob: () -> Job?,
+    val currentStatus: () -> ReadAloudStatus,
+    val currentIndex: () -> Int,
+    val currentCancelRequestedByUser: () -> Boolean,
+    val setJob: (Job?) -> Unit,
+    val setStatus: (ReadAloudStatus) -> Unit,
+    val setIndex: (Int) -> Unit,
+    val setCancelRequestedByUser: (Boolean) -> Unit
+)
+
+internal fun buildThreadScreenReadAloudStateBindings(
+    inputs: ThreadScreenReadAloudStateInputs
+): ThreadScreenReadAloudStateBindings {
+    return ThreadScreenReadAloudStateBindings(
+        currentState = {
+            ThreadReadAloudRuntimeState(
+                job = inputs.currentJob(),
+                status = inputs.currentStatus(),
+                currentIndex = inputs.currentIndex(),
+                cancelRequestedByUser = inputs.currentCancelRequestedByUser()
+            )
+        },
+        setState = { state ->
+            inputs.setJob(state.job)
+            inputs.setStatus(state.status)
+            inputs.setIndex(state.currentIndex)
+            inputs.setCancelRequestedByUser(state.cancelRequestedByUser)
+        }
+    )
+}
+
 internal data class ThreadScreenReadAloudCallbacks(
     val showMessage: (String) -> Unit,
     val showOptionalMessage: (String?) -> Unit,

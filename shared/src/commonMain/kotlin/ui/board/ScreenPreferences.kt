@@ -12,7 +12,7 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 data class ScreenPreferencesState(
     val appVersion: String,
     val isBackgroundRefreshEnabled: Boolean = false,
-    val isAdsEnabled: Boolean = true,
+    val isAdsEnabled: Boolean = false,
     val isLightweightModeEnabled: Boolean = false,
     val manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     val manualSaveLocation: SaveLocation? = null,

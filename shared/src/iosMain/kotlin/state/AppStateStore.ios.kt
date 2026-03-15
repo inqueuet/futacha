@@ -48,7 +48,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val privacyFilterState = MutableStateFlow(defaults.boolForKey(PRIVACY_FILTER_KEY))
     private val backgroundRefreshState = MutableStateFlow(defaults.boolForKey(BACKGROUND_REFRESH_KEY))
     private val adsEnabledState = MutableStateFlow(
-        if (defaults.objectForKey(ADS_ENABLED_KEY) == null) true else defaults.boolForKey(ADS_ENABLED_KEY)
+        if (defaults.objectForKey(ADS_ENABLED_KEY) == null) false else defaults.boolForKey(ADS_ENABLED_KEY)
     )
     private val lightweightModeState = MutableStateFlow(defaults.boolForKey(LIGHTWEIGHT_MODE_KEY))
     private val manualSaveDirectoryState = MutableStateFlow(
@@ -199,7 +199,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private fun seedFrom(seedBundles: AppStateSeedBundles) {
         seedRequiredStringState(BOARDS_KEY, seedBundles.boards.boardsJson, boardsState)
         seedRequiredStringState(HISTORY_KEY, seedBundles.history.historyJson, historyState)
-        seedRequiredBooleanState(ADS_ENABLED_KEY, true, adsEnabledState)
+        seedRequiredBooleanState(ADS_ENABLED_KEY, false, adsEnabledState)
         seedRequiredStringState(
             MANUAL_SAVE_DIRECTORY_KEY,
             DEFAULT_MANUAL_SAVE_ROOT,

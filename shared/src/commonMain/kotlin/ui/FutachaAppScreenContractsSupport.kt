@@ -10,6 +10,8 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.BoardManagementScreenDependencies
 import com.valoser.futacha.shared.ui.board.CatalogScreenDependencies
+import com.valoser.futacha.shared.ui.board.ScreenContract
+import com.valoser.futacha.shared.ui.board.ScreenServiceDependencies
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
@@ -17,17 +19,23 @@ import com.valoser.futacha.shared.ui.board.ThreadScreenDependencies
 import com.valoser.futacha.shared.util.FileSystem
 import io.ktor.client.HttpClient
 
-internal data class FutachaScreenContractContext(
-    val history: List<ThreadHistoryEntry>,
-    val historyCallbacks: ScreenHistoryCallbacks,
-    val preferencesState: ScreenPreferencesState,
-    val preferencesCallbacks: ScreenPreferencesCallbacks
-)
-
 internal data class FutachaSavedThreadsDestinationProps(
     val repository: SavedThreadRepository,
     val onThreadClick: (SavedThread) -> Unit,
     val onBack: () -> Unit
+)
+
+internal data class FutachaDestinationAssemblyContext(
+    val screenContract: ScreenContract,
+    val navigationCallbacks: FutachaNavigationCallbacks,
+    val boardCallbacks: FutachaBoardScreenCallbacks,
+    val stateStore: AppStateStore,
+    val sharedRepository: BoardRepository,
+    val httpClient: HttpClient?,
+    val fileSystem: FileSystem?,
+    val cookieRepository: CookieRepository?,
+    val autoSavedThreadRepository: SavedThreadRepository?,
+    val navigationState: FutachaNavigationState
 )
 
 internal data class FutachaBoardManagementDestinationProps(
@@ -38,7 +46,7 @@ internal data class FutachaBoardManagementDestinationProps(
     val onBoardDeleted: (BoardSummary) -> Unit,
     val onBoardsReordered: (List<BoardSummary>) -> Unit,
     val dependencies: BoardManagementScreenDependencies,
-    val screenContract: FutachaScreenContractContext
+    val screenContract: ScreenContract
 )
 
 internal data class FutachaCatalogDestinationProps(
@@ -46,7 +54,7 @@ internal data class FutachaCatalogDestinationProps(
     val onBack: () -> Unit,
     val onThreadSelected: (FutachaThreadSelection) -> Unit,
     val dependencies: CatalogScreenDependencies,
-    val screenContract: FutachaScreenContractContext,
+    val screenContract: ScreenContract,
     val saveableStateKey: String
 )
 
@@ -60,44 +68,8 @@ internal data class FutachaThreadDestinationProps(
     val onBack: () -> Unit,
     val onScrollPositionPersist: (String, Int, Int) -> Unit,
     val dependencies: ThreadScreenDependencies,
-    val screenContract: FutachaScreenContractContext,
+    val screenContract: ScreenContract,
     val onRegisteredThreadUrlClick: (String) -> Boolean
-)
-
-internal data class FutachaBoardManagementDestinationInputs(
-    val boards: List<BoardSummary>,
-    val boardCallbacks: FutachaBoardScreenCallbacks,
-    val screenContract: FutachaScreenContractContext,
-    val cookieRepository: CookieRepository?,
-    val fileSystem: FileSystem?,
-    val autoSavedThreadRepository: SavedThreadRepository?
-)
-
-internal data class FutachaCatalogDestinationInputs(
-    val board: BoardSummary,
-    val stateStore: AppStateStore,
-    val sharedRepository: BoardRepository,
-    val screenContract: FutachaScreenContractContext,
-    val navigationCallbacks: FutachaNavigationCallbacks,
-    val autoSavedThreadRepository: SavedThreadRepository?,
-    val cookieRepository: CookieRepository?,
-    val httpClient: HttpClient?
-)
-
-internal data class FutachaThreadDestinationInputs(
-    val board: BoardSummary,
-    val threadId: String,
-    val navigationState: FutachaNavigationState,
-    val historyContext: FutachaThreadHistoryContext,
-    val screenContract: FutachaScreenContractContext,
-    val navigationCallbacks: FutachaNavigationCallbacks,
-    val onScrollPositionPersist: (String, Int, Int) -> Unit,
-    val sharedRepository: BoardRepository,
-    val httpClient: HttpClient?,
-    val fileSystem: FileSystem?,
-    val cookieRepository: CookieRepository?,
-    val stateStore: AppStateStore,
-    val autoSavedThreadRepository: SavedThreadRepository?
 )
 
 internal fun buildFutachaScreenContractContext(
@@ -105,8 +77,8 @@ internal fun buildFutachaScreenContractContext(
     historyCallbacks: ScreenHistoryCallbacks,
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks
-): FutachaScreenContractContext {
-    return FutachaScreenContractContext(
+): ScreenContract {
+    return ScreenContract(
         history = history,
         historyCallbacks = historyCallbacks,
         preferencesState = preferencesState,
@@ -120,9 +92,62 @@ internal fun buildBoardManagementScreenDependencies(
     autoSavedThreadRepository: SavedThreadRepository?
 ): BoardManagementScreenDependencies {
     return BoardManagementScreenDependencies(
+        services = buildScreenServiceDependencies(
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository,
+            fileSystem = fileSystem
+        )
+    )
+}
+
+internal fun buildFutachaSavedThreadsDestinationProps(
+    repository: SavedThreadRepository,
+    navigationCallbacks: FutachaNavigationCallbacks
+): FutachaSavedThreadsDestinationProps {
+    return FutachaSavedThreadsDestinationProps(
+        repository = repository,
+        onThreadClick = navigationCallbacks.onSavedThreadSelected,
+        onBack = navigationCallbacks.onSavedThreadsDismissed
+    )
+}
+
+internal fun buildFutachaDestinationAssemblyContext(
+    screenBindings: FutachaScreenBindingsBundle,
+    stateStore: AppStateStore,
+    sharedRepository: BoardRepository,
+    httpClient: HttpClient?,
+    fileSystem: FileSystem?,
+    cookieRepository: CookieRepository?,
+    autoSavedThreadRepository: SavedThreadRepository?,
+    navigationState: FutachaNavigationState
+): FutachaDestinationAssemblyContext {
+    return FutachaDestinationAssemblyContext(
+        screenContract = screenBindings.screenContract,
+        navigationCallbacks = screenBindings.navigationCallbacks,
+        boardCallbacks = screenBindings.boardScreenCallbacks,
+        stateStore = stateStore,
+        sharedRepository = sharedRepository,
+        httpClient = httpClient,
+        fileSystem = fileSystem,
+        cookieRepository = cookieRepository,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        navigationState = navigationState
+    )
+}
+
+internal fun buildScreenServiceDependencies(
+    stateStore: AppStateStore? = null,
+    autoSavedThreadRepository: SavedThreadRepository? = null,
+    cookieRepository: CookieRepository? = null,
+    fileSystem: FileSystem? = null,
+    httpClient: HttpClient? = null
+): ScreenServiceDependencies {
+    return ScreenServiceDependencies(
+        stateStore = stateStore,
+        autoSavedThreadRepository = autoSavedThreadRepository,
         cookieRepository = cookieRepository,
         fileSystem = fileSystem,
-        autoSavedThreadRepository = autoSavedThreadRepository
+        httpClient = httpClient
     )
 }
 
@@ -136,11 +161,12 @@ internal fun buildCatalogScreenDependencies(
 ): CatalogScreenDependencies {
     return CatalogScreenDependencies(
         repository = resolveFutachaBoardRepository(board, sharedRepository),
-        stateStore = stateStore,
-        autoSavedThreadRepository = autoSavedThreadRepository,
-        cookieRepository = cookieRepository,
-        fileSystem = null,
-        httpClient = httpClient
+        services = buildScreenServiceDependencies(
+            stateStore = stateStore,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository,
+            httpClient = httpClient
+        )
     )
 }
 
@@ -155,41 +181,45 @@ internal fun buildThreadScreenDependencies(
 ): ThreadScreenDependencies {
     return ThreadScreenDependencies(
         repository = resolveFutachaBoardRepository(board, sharedRepository),
-        httpClient = httpClient,
-        fileSystem = fileSystem,
-        cookieRepository = cookieRepository,
-        stateStore = stateStore,
-        autoSavedThreadRepository = autoSavedThreadRepository
+        services = buildScreenServiceDependencies(
+            stateStore = stateStore,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository,
+            fileSystem = fileSystem,
+            httpClient = httpClient
+        )
     )
 }
 
 internal fun buildFutachaBoardManagementDestinationProps(
-    inputs: FutachaBoardManagementDestinationInputs
+    boards: List<BoardSummary>,
+    context: FutachaDestinationAssemblyContext
 ): FutachaBoardManagementDestinationProps {
     return FutachaBoardManagementDestinationProps(
-        boards = inputs.boards,
-        onBoardSelected = inputs.boardCallbacks.onBoardSelected,
-        onAddBoard = inputs.boardCallbacks.onAddBoard,
-        onMenuAction = inputs.boardCallbacks.onMenuAction,
-        onBoardDeleted = inputs.boardCallbacks.onBoardDeleted,
-        onBoardsReordered = inputs.boardCallbacks.onBoardsReordered,
+        boards = boards,
+        onBoardSelected = context.boardCallbacks.onBoardSelected,
+        onAddBoard = context.boardCallbacks.onAddBoard,
+        onMenuAction = context.boardCallbacks.onMenuAction,
+        onBoardDeleted = context.boardCallbacks.onBoardDeleted,
+        onBoardsReordered = context.boardCallbacks.onBoardsReordered,
         dependencies = buildBoardManagementScreenDependencies(
-            cookieRepository = inputs.cookieRepository,
-            fileSystem = inputs.fileSystem,
-            autoSavedThreadRepository = inputs.autoSavedThreadRepository
+            cookieRepository = context.cookieRepository,
+            fileSystem = context.fileSystem,
+            autoSavedThreadRepository = context.autoSavedThreadRepository
         ),
-        screenContract = inputs.screenContract
+        screenContract = context.screenContract
     )
 }
 
 internal fun buildFutachaCatalogDestinationProps(
-    inputs: FutachaCatalogDestinationInputs
+    board: BoardSummary,
+    context: FutachaDestinationAssemblyContext
 ): FutachaCatalogDestinationProps {
     return FutachaCatalogDestinationProps(
-        board = inputs.board,
-        onBack = inputs.navigationCallbacks.onBoardSelectionCleared,
+        board = board,
+        onBack = context.navigationCallbacks.onBoardSelectionCleared,
         onThreadSelected = { selection ->
-            inputs.navigationCallbacks.onCatalogThreadSelected(
+            context.navigationCallbacks.onCatalogThreadSelected(
                 selection.threadId,
                 selection.threadTitle,
                 selection.threadReplies,
@@ -198,40 +228,44 @@ internal fun buildFutachaCatalogDestinationProps(
             )
         },
         dependencies = buildCatalogScreenDependencies(
-            board = inputs.board,
-            sharedRepository = inputs.sharedRepository,
-            stateStore = inputs.stateStore,
-            autoSavedThreadRepository = inputs.autoSavedThreadRepository,
-            cookieRepository = inputs.cookieRepository,
-            httpClient = inputs.httpClient
+            board = board,
+            sharedRepository = context.sharedRepository,
+            stateStore = context.stateStore,
+            autoSavedThreadRepository = context.autoSavedThreadRepository,
+            cookieRepository = context.cookieRepository,
+            httpClient = context.httpClient
         ),
-        screenContract = inputs.screenContract,
-        saveableStateKey = "catalog-${inputs.board.id}"
+        screenContract = context.screenContract,
+        saveableStateKey = "catalog-${board.id}"
     )
 }
 
 internal fun buildFutachaThreadDestinationProps(
-    inputs: FutachaThreadDestinationInputs
+    board: BoardSummary,
+    threadId: String,
+    historyContext: FutachaThreadHistoryContext,
+    onScrollPositionPersist: (String, Int, Int) -> Unit,
+    context: FutachaDestinationAssemblyContext
 ): FutachaThreadDestinationProps {
     return FutachaThreadDestinationProps(
-        board = inputs.board,
-        threadId = inputs.threadId,
-        historyContext = inputs.historyContext,
-        threadTitle = inputs.navigationState.selectedThreadTitle,
-        threadUrlOverride = inputs.navigationState.selectedThreadUrl,
-        initialReplyCount = inputs.navigationState.selectedThreadReplies,
-        onBack = inputs.navigationCallbacks.onThreadDismissed,
-        onScrollPositionPersist = inputs.onScrollPositionPersist,
+        board = board,
+        threadId = threadId,
+        historyContext = historyContext,
+        threadTitle = context.navigationState.selectedThreadTitle,
+        threadUrlOverride = context.navigationState.selectedThreadUrl,
+        initialReplyCount = context.navigationState.selectedThreadReplies,
+        onBack = context.navigationCallbacks.onThreadDismissed,
+        onScrollPositionPersist = onScrollPositionPersist,
         dependencies = buildThreadScreenDependencies(
-            board = inputs.board,
-            sharedRepository = inputs.sharedRepository,
-            httpClient = inputs.httpClient,
-            fileSystem = inputs.fileSystem,
-            cookieRepository = inputs.cookieRepository,
-            stateStore = inputs.stateStore,
-            autoSavedThreadRepository = inputs.autoSavedThreadRepository
+            board = board,
+            sharedRepository = context.sharedRepository,
+            httpClient = context.httpClient,
+            fileSystem = context.fileSystem,
+            cookieRepository = context.cookieRepository,
+            stateStore = context.stateStore,
+            autoSavedThreadRepository = context.autoSavedThreadRepository
         ),
-        screenContract = inputs.screenContract,
-        onRegisteredThreadUrlClick = inputs.navigationCallbacks.onRegisteredThreadUrlClick
+        screenContract = context.screenContract,
+        onRegisteredThreadUrlClick = context.navigationCallbacks.onRegisteredThreadUrlClick
     )
 }

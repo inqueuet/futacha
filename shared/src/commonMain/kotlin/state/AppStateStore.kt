@@ -203,25 +203,13 @@ class AppStateStore internal constructor(
         mutateSelfPostIdentifierMap = preferenceSnapshotCoordinator::mutateSelfPostIdentifierMap
     )
 
-    suspend fun setBoards(boards: List<BoardSummary>) = setBoardsInternal(boards)
+    suspend fun setBoards(boards: List<BoardSummary>) = boardsCoordinator.setBoards(boards)
 
-    suspend fun updateBoards(transform: (List<BoardSummary>) -> List<BoardSummary>) = updateBoardsInternal(transform)
-
-    private suspend fun setBoardsInternal(boards: List<BoardSummary>) {
-        boardsCoordinator.setBoards(boards)
-    }
-
-    private suspend fun updateBoardsInternal(
+    suspend fun updateBoards(
         transform: (List<BoardSummary>) -> List<BoardSummary>
-    ) {
-        boardsCoordinator.updateBoards(transform)
-    }
+    ) = boardsCoordinator.updateBoards(transform)
 
-    suspend fun setHistory(history: List<ThreadHistoryEntry>) = setHistoryInternal(history)
-
-    private suspend fun setHistoryInternal(history: List<ThreadHistoryEntry>) {
-        historyOperations.setHistory(history)
-    }
+    suspend fun setHistory(history: List<ThreadHistoryEntry>) = historyOperations.setHistory(history)
 
     suspend fun setBackgroundRefreshEnabled(enabled: Boolean) =
         preferenceOperations.setBackgroundRefreshEnabled(enabled)
@@ -307,35 +295,18 @@ class AppStateStore internal constructor(
      * This is used for incremental updates (e.g., refreshing metadata) without
      * requiring the caller to manage the whole list manually.
      */
-    suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) = upsertHistoryEntryInternal(entry)
+    suspend fun upsertHistoryEntry(entry: ThreadHistoryEntry) = historyOperations.upsertHistoryEntry(entry)
 
-    private suspend fun upsertHistoryEntryInternal(entry: ThreadHistoryEntry) {
-        historyOperations.upsertHistoryEntry(entry)
-    }
-
-    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry) = prependOrReplaceHistoryEntryInternal(entry)
-
-    private suspend fun prependOrReplaceHistoryEntryInternal(entry: ThreadHistoryEntry) {
+    suspend fun prependOrReplaceHistoryEntry(entry: ThreadHistoryEntry) =
         historyOperations.prependOrReplaceHistoryEntry(entry)
-    }
 
-    suspend fun prependOrReplaceHistoryEntries(entries: List<ThreadHistoryEntry>) = prependOrReplaceHistoryEntriesInternal(entries)
-
-    private suspend fun prependOrReplaceHistoryEntriesInternal(entries: List<ThreadHistoryEntry>) {
+    suspend fun prependOrReplaceHistoryEntries(entries: List<ThreadHistoryEntry>) =
         historyOperations.prependOrReplaceHistoryEntries(entries)
-    }
 
-    suspend fun mergeHistoryEntries(entries: Collection<ThreadHistoryEntry>) = mergeHistoryEntriesInternal(entries)
-
-    private suspend fun mergeHistoryEntriesInternal(entries: Collection<ThreadHistoryEntry>) {
+    suspend fun mergeHistoryEntries(entries: Collection<ThreadHistoryEntry>) =
         historyOperations.mergeHistoryEntries(entries)
-    }
 
-    suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) = removeHistoryEntryInternal(entry)
-
-    private suspend fun removeHistoryEntryInternal(entry: ThreadHistoryEntry) {
-        historyOperations.removeHistoryEntry(entry)
-    }
+    suspend fun removeHistoryEntry(entry: ThreadHistoryEntry) = historyOperations.removeHistoryEntry(entry)
 
     /**
      * Thread-safe update of scroll position in history with debouncing.
@@ -344,40 +315,8 @@ class AppStateStore internal constructor(
      * Note: This should only be called for scroll position updates, not initial navigation.
      */
     suspend fun updateHistoryScrollPosition(
-        threadId: String,
-        index: Int,
-        offset: Int,
-        boardId: String,
-        title: String,
-        titleImageUrl: String,
-        boardName: String,
-        boardUrl: String,
-        replyCount: Int
-    ) {
-        updateHistoryScrollPosition(
-            AppStateHistoryScrollUpdateRequest(
-                threadId = threadId,
-                index = index,
-                offset = offset,
-                boardId = boardId,
-                title = title,
-                titleImageUrl = titleImageUrl,
-                boardName = boardName,
-                boardUrl = boardUrl,
-                replyCount = replyCount
-            )
-        )
-    }
-
-    internal suspend fun updateHistoryScrollPosition(
         request: AppStateHistoryScrollUpdateRequest
-    ) = updateHistoryScrollPositionInternal(request)
-
-    private suspend fun updateHistoryScrollPositionInternal(
-        request: AppStateHistoryScrollUpdateRequest
-    ) {
-        historyOperations.scheduleHistoryScrollPositionUpdate(request)
-    }
+    ) = historyOperations.scheduleHistoryScrollPositionUpdate(request)
 
     /**
      * Immediate update of scroll position without debouncing.
@@ -390,41 +329,7 @@ class AppStateStore internal constructor(
         historyOperations.updateHistoryScrollPositionImmediate(request)
     }
 
-    suspend fun seedIfEmpty(
-        defaultBoards: List<BoardSummary>,
-        defaultHistory: List<ThreadHistoryEntry>,
-        defaultNgHeaders: List<String> = emptyList(),
-        defaultNgWords: List<String> = emptyList(),
-        defaultCatalogNgWords: List<String> = emptyList(),
-        defaultWatchWords: List<String> = emptyList(),
-        defaultSelfPostIdentifierMap: Map<String, List<String>> = emptyMap(),
-        defaultCatalogModeMap: Map<String, CatalogMode> = emptyMap(),
-        defaultThreadMenuConfig: List<ThreadMenuItemConfig> = defaultThreadMenuConfig(),
-        defaultThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig> = defaultThreadSettingsMenuConfig(),
-        defaultThreadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-        defaultCatalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
-        defaultLastUsedDeleteKey: String = ""
-    ) {
-        seedIfEmpty(
-            AppStateSeedDefaults(
-                boards = defaultBoards,
-                history = defaultHistory,
-                ngHeaders = defaultNgHeaders,
-                ngWords = defaultNgWords,
-                catalogNgWords = defaultCatalogNgWords,
-                watchWords = defaultWatchWords,
-                selfPostIdentifierMap = defaultSelfPostIdentifierMap,
-                catalogModeMap = defaultCatalogModeMap,
-                threadMenuConfig = defaultThreadMenuConfig,
-                threadSettingsMenuConfig = defaultThreadSettingsMenuConfig,
-                threadMenuEntries = defaultThreadMenuEntries,
-                catalogNavEntries = defaultCatalogNavEntries,
-                lastUsedDeleteKey = defaultLastUsedDeleteKey
-            )
-        )
-    }
-
-    internal suspend fun seedIfEmpty(defaults: AppStateSeedDefaults) {
+    suspend fun seedIfEmpty(defaults: AppStateSeedDefaults) {
         try {
             val seedBundles = buildAppStateSeedPayload(
                 AppStateSeedPayloadInputs(

@@ -14,6 +14,13 @@ internal data class ThreadScreenInteractionUiAggregateBundle(
     val uiBindings: ThreadScreenUiBindingsBundle
 )
 
+internal data class ThreadScreenInteractionUiAggregateRuntimeInputs(
+    val mediaInputs: ThreadScreenAggregateMediaInputs,
+    val controllerActionInputs: ThreadScreenControllerActionInputs,
+    val controllerInteractionRuntimeInputs: ThreadScreenControllerInteractionRuntimeInputs,
+    val uiRuntimeInputs: ThreadScreenUiRuntimeInputs
+)
+
 internal data class ThreadScreenAggregateMediaInputs(
     val currentPreviewState: () -> ThreadMediaPreviewState,
     val setPreviewState: (ThreadMediaPreviewState) -> Unit,
@@ -389,5 +396,18 @@ internal fun buildThreadScreenInteractionUiAggregateBundle(
                 onDismissCookieManagement = uiInputs.onDismissCookieManagement
             )
         )
+    )
+}
+
+internal fun buildThreadScreenInteractionUiAggregateBundle(
+    inputs: ThreadScreenInteractionUiAggregateRuntimeInputs
+): ThreadScreenInteractionUiAggregateBundle {
+    return buildThreadScreenInteractionUiAggregateBundle(
+        mediaInputs = inputs.mediaInputs,
+        controllerActionInputs = inputs.controllerActionInputs,
+        controllerInteractionInputs = buildThreadScreenControllerInteractionInputs(
+            inputs.controllerInteractionRuntimeInputs
+        ),
+        uiInputs = buildThreadScreenAggregateUiInputs(inputs.uiRuntimeInputs)
     )
 }
