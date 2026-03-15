@@ -22,6 +22,7 @@ internal fun buildThreadScreenLifecycleBindings(
     onCancelAllJobs: () -> Unit,
     isDrawerOpen: () -> Boolean,
     onCloseDrawer: suspend () -> Unit,
+    onPersistCurrentScrollPosition: () -> Unit,
     onBack: () -> Unit,
     onRefreshThread: () -> Unit
 ): ThreadScreenLifecycleBindings {
@@ -38,11 +39,17 @@ internal fun buildThreadScreenLifecycleBindings(
             onCloseTextSpeaker()
         },
         onThreadChanged = onResetJobsForThreadChange,
-        onScreenDispose = onCancelAllJobs,
+        onScreenDispose = {
+            onPersistCurrentScrollPosition()
+            onCancelAllJobs()
+        },
         onBackPressed = {
             when (resolveThreadBackAction(isDrawerOpen())) {
                 ThreadBackAction.CloseDrawer -> coroutineScope.launch { onCloseDrawer() }
-                ThreadBackAction.NavigateBack -> onBack()
+                ThreadBackAction.NavigateBack -> {
+                    onPersistCurrentScrollPosition()
+                    onBack()
+                }
             }
         },
         onInitialRefresh = onRefreshThread

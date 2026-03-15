@@ -310,6 +310,50 @@ class HttpBoardApiTest {
         }
     }
 
+    @Test
+    fun voteSaidane_acceptsNumericResponseBody() = runBlocking {
+        lateinit var capturedRequest: HttpRequestData
+        val api = createApi { request ->
+            capturedRequest = request
+            htmlResponse("2")
+        }
+
+        try {
+            api.voteSaidane(
+                board = "https://may.2chan.net/b/",
+                threadId = "777",
+                postId = "123"
+            )
+
+            assertEquals("https://may.2chan.net/sd.php?b.123", capturedRequest.url.toString())
+            assertEquals("https://may.2chan.net/b/res/777.htm", capturedRequest.headers[HttpHeaders.Referrer])
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun voteSaidane_rejectsNonNumericResponseBody() = runBlocking {
+        val api = createApi { _ ->
+            htmlResponse("error")
+        }
+
+        try {
+            val error = assertFailsWith<NetworkException> {
+                api.voteSaidane(
+                    board = "https://may.2chan.net/b/",
+                    threadId = "777",
+                    postId = "123"
+                )
+            }
+
+            assertTrue(error.message!!.contains("そうだね投票に失敗しました"))
+            assertTrue(error.message!!.contains("error"))
+        } finally {
+            api.close()
+        }
+    }
+
     private fun createApi(handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData): HttpBoardApi {
         val engine = MockEngine(MockEngineConfig().apply {
             addHandler(handler)

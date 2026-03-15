@@ -96,7 +96,7 @@ class AppStateStore internal constructor(
         buildScrollKey = { request ->
             buildHistoryScrollJobKey(request.threadId, request.boardId, request.boardUrl)
         },
-        performImmediateUpdate = ::updateHistoryScrollPositionImmediate
+        performImmediateUpdate = ::performHistoryScrollPositionImmediateUpdate
     )
 
     // Error propagation
@@ -318,12 +318,16 @@ class AppStateStore internal constructor(
         request: AppStateHistoryScrollUpdateRequest
     ) = historyOperations.scheduleHistoryScrollPositionUpdate(request)
 
+    suspend fun updateHistoryScrollPositionImmediately(
+        request: AppStateHistoryScrollUpdateRequest
+    ) = performHistoryScrollPositionImmediateUpdate(request)
+
     /**
      * Immediate update of scroll position without debouncing.
      * Internal method used by the debounced public method.
      * FIX: スクロール専用Mutexを使用して、他のhistory操作とのロック競合を減らす
      */
-    private suspend fun updateHistoryScrollPositionImmediate(
+    private suspend fun performHistoryScrollPositionImmediateUpdate(
         request: AppStateHistoryScrollUpdateRequest
     ) {
         historyOperations.updateHistoryScrollPositionImmediate(request)

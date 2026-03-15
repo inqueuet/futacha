@@ -16,7 +16,8 @@ internal data class FutachaHistoryMutationCallbacks(
 )
 
 internal data class FutachaThreadMutationCallbacks(
-    val onScrollPositionPersist: (String, Int, Int) -> Unit
+    val onScrollPositionPersist: (String, Int, Int) -> Unit,
+    val onScrollPositionPersistImmediately: (String, Int, Int) -> Unit
 )
 
 internal data class FutachaThreadHistoryContext(
@@ -55,6 +56,18 @@ internal fun buildFutachaThreadMutationCallbacks(
         onScrollPositionPersist = { threadId, index, offset ->
             coroutineScope.launch {
                 persistFutachaThreadScrollPosition(
+                    stateStore = stateStore,
+                    threadId = threadId,
+                    index = index,
+                    offset = offset,
+                    board = board,
+                    context = historyContext
+                )
+            }
+        },
+        onScrollPositionPersistImmediately = { threadId, index, offset ->
+            coroutineScope.launch {
+                persistFutachaThreadScrollPositionImmediately(
                     stateStore = stateStore,
                     threadId = threadId,
                     index = index,
@@ -184,6 +197,30 @@ internal suspend fun persistFutachaThreadScrollPosition(
             boardName = board.name,
             boardUrl = context.threadUrl,
             replyCount = context.replyCount
+        )
+    )
+}
+
+internal suspend fun persistFutachaThreadScrollPositionImmediately(
+    stateStore: AppStateStore,
+    threadId: String,
+    index: Int,
+    offset: Int,
+    board: BoardSummary,
+    context: FutachaThreadHistoryContext
+) {
+    stateStore.updateHistoryScrollPositionImmediately(
+        AppStateHistoryScrollUpdateRequest(
+            threadId = threadId,
+            index = index,
+            offset = offset,
+            boardId = board.id,
+            title = context.title,
+            titleImageUrl = context.thumbnailUrl,
+            boardName = board.name,
+            boardUrl = context.threadUrl,
+            replyCount = context.replyCount,
+            forcePersist = true
         )
     )
 }

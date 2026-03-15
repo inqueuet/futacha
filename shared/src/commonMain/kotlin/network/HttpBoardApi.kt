@@ -195,7 +195,7 @@ class HttpBoardApi(
                     throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)")
                 }
                 val result = readResponseBodyAsString(response).trim()
-                if (result != "1") {
+                if (!isSuccessfulHttpBoardApiSaidaneResponse(result)) {
                     throw NetworkException("そうだね投票に失敗しました (応答: '$result')")
                 }
             } finally {

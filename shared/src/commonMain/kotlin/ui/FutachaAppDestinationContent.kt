@@ -133,6 +133,7 @@ internal fun FutachaThreadDestination(
         initialReplyCount = props.initialReplyCount,
         onBack = props.onBack,
         onScrollPositionPersist = props.onScrollPositionPersist,
+        onScrollPositionPersistImmediately = props.onScrollPositionPersistImmediately,
         threadUrlOverride = props.threadUrlOverride,
         dependencies = props.dependencies,
         onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick

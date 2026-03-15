@@ -104,6 +104,7 @@ fun ThreadScreen(
     initialReplyCount: Int?,
     onBack: () -> Unit,
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
+    onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
     threadUrlOverride: String? = null,
     dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
@@ -119,6 +120,7 @@ fun ThreadScreen(
         onBack = onBack,
         historyCallbacks = screenContract.historyCallbacks,
         onScrollPositionPersist = onScrollPositionPersist,
+        onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
         dependencies = dependencies,
         preferencesState = screenContract.preferencesState,
         preferencesCallbacks = screenContract.preferencesCallbacks,
@@ -144,6 +146,7 @@ fun ThreadScreen(
     onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
     onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
+    onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit = { _, _, _ -> },
     dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
     repository: BoardRepository? = dependencies.repository,
     httpClient: io.ktor.client.HttpClient? = dependencies.httpClient,
@@ -474,6 +477,19 @@ fun ThreadScreen(
     val loadBindings = asyncBindingsBundle.loadBindings
     val startManualRefresh = loadBindings.startManualRefresh
     val handleThreadSaveRequest = manualSaveBindings.handleThreadSaveRequest
+    val persistCurrentScrollPositionImmediately = remember(
+        lazyListState,
+        threadId,
+        onScrollPositionPersistImmediately
+    ) {
+        {
+            onScrollPositionPersistImmediately(
+                threadId,
+                lazyListState.firstVisibleItemIndex,
+                lazyListState.firstVisibleItemScrollOffset
+            )
+        }
+    }
     val runtimeLifecycleBindings = buildThreadScreenLifecycleBindings(
         coroutineScope = coroutineScope,
         resolvePauseMessage = readAloudRuntimeBindings.pause,
@@ -484,6 +500,7 @@ fun ThreadScreen(
         onCancelAllJobs = { jobBindings.cancelAll() },
         isDrawerOpen = { isDrawerOpen },
         onCloseDrawer = drawerState::close,
+        onPersistCurrentScrollPosition = persistCurrentScrollPositionImmediately,
         onBack = onBack,
         onRefreshThread = loadBindings.refreshThread
     )

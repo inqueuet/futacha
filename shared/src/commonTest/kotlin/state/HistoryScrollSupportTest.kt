@@ -52,6 +52,25 @@ class HistoryScrollSupportTest {
     }
 
     @Test
+    fun shouldSkipHistoryScrollUpdate_allowsForcedPersistForNearbyRecentUpdates() {
+        val existing = historyEntry(
+            lastVisitedEpochMillis = 10_000L,
+            lastReadItemIndex = 5,
+            lastReadItemOffset = 100
+        )
+
+        assertFalse(
+            shouldSkipHistoryScrollUpdate(
+                existingEntry = existing,
+                index = 7,
+                offset = 150,
+                nowMillis = 11_000L,
+                forcePersist = true
+            )
+        )
+    }
+
+    @Test
     fun applyHistoryScrollUpdate_updatesVisitedTimeOnlyWhenNeeded() {
         val existing = historyEntry(
             lastVisitedEpochMillis = 10_000L,

@@ -30,6 +30,15 @@ internal fun isSuccessfulHttpBoardApiPostResponse(body: String): Boolean {
     return SUCCESS_KEYWORDS.any { keyword -> trimmed.contains(keyword) }
 }
 
+internal fun isSuccessfulHttpBoardApiSaidaneResponse(body: String): Boolean {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty()) return false
+    if (looksLikeHttpBoardApiJson(trimmed) && isHttpBoardApiJsonStatusOk(trimmed)) {
+        return true
+    }
+    return trimmed.all(Char::isDigit)
+}
+
 internal fun extractHttpBoardApiServerError(body: String): String? {
     val normalized = body.replace("\r\n", "\n")
     if (looksLikeHttpBoardApiJson(normalized)) {

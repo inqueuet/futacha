@@ -212,6 +212,7 @@ class ThreadScreenLogicTest {
         var closedDrawer = false
         var navigatedBack = false
         var refreshed = false
+        var persistedScroll = 0
 
         val bindings = buildThreadScreenLifecycleBindings(
             coroutineScope = this,
@@ -223,6 +224,7 @@ class ThreadScreenLogicTest {
             onCancelAllJobs = { cancelledJobs = true },
             isDrawerOpen = { true },
             onCloseDrawer = { closedDrawer = true },
+            onPersistCurrentScrollPosition = { persistedScroll += 1 },
             onBack = { navigatedBack = true },
             onRefreshThread = { refreshed = true }
         )
@@ -244,6 +246,7 @@ class ThreadScreenLogicTest {
         assertTrue(closedDrawer)
         assertFalse(navigatedBack)
         assertTrue(refreshed)
+        assertEquals(1, persistedScroll)
 
         val backBindings = buildThreadScreenLifecycleBindings(
             coroutineScope = this,
@@ -255,11 +258,13 @@ class ThreadScreenLogicTest {
             onCancelAllJobs = {},
             isDrawerOpen = { false },
             onCloseDrawer = { closedDrawer = true },
+            onPersistCurrentScrollPosition = { persistedScroll += 1 },
             onBack = { navigatedBack = true },
             onRefreshThread = {}
         )
         backBindings.onBackPressed()
         assertTrue(navigatedBack)
+        assertEquals(2, persistedScroll)
     }
 
     @Test

@@ -37,7 +37,8 @@ data class AppStateHistoryScrollUpdateRequest(
     val titleImageUrl: String,
     val boardName: String,
     val boardUrl: String,
-    val replyCount: Int
+    val replyCount: Int,
+    val forcePersist: Boolean = false
 )
 
 /**

@@ -627,6 +627,7 @@ class FutachaAppTest {
             threadId = "321",
             historyContext = threadContext,
             onScrollPositionPersist = { _, _, _ -> },
+            onScrollPositionPersistImmediately = { _, _, _ -> },
             context = assemblyContext
         )
         assertEquals(threadContext, threadProps.historyContext)
@@ -933,6 +934,51 @@ class FutachaAppTest {
         )
         assertEquals(
             21,
+            store.history.first().first().lastReadItemOffset
+        )
+    }
+
+    @Test
+    fun futachaThreadMutationCallbacks_forceImmediateScrollPersistForShortNearbyMove() = runBlocking {
+        val store = AppStateStore(FakePlatformStateStorage())
+        val board = board(id = "img-b", name = "img", url = "https://may.2chan.net/img/futaba.php")
+        val context = FutachaThreadHistoryContext(
+            title = "thread title",
+            threadUrl = "https://may.2chan.net/img/res/123.htm",
+            replyCount = 12,
+            thumbnailUrl = "thumb"
+        )
+        store.setHistory(
+            listOf(
+                historyEntry(
+                    threadId = "123",
+                    boardId = "img-b",
+                    boardName = "img",
+                    boardUrl = "https://may.2chan.net/img/res/123.htm"
+                ).copy(
+                    lastVisitedEpochMillis = kotlin.time.Clock.System.now().toEpochMilliseconds(),
+                    lastReadItemIndex = 9,
+                    lastReadItemOffset = 21
+                )
+            )
+        )
+        val callbacks = buildFutachaThreadMutationCallbacks(
+            coroutineScope = this,
+            stateStore = store,
+            board = board,
+            historyContext = context
+        )
+
+        callbacks.onScrollPositionPersistImmediately("123", 10, 40)
+        yield()
+        delay(1)
+
+        assertEquals(
+            10,
+            store.history.first().first().lastReadItemIndex
+        )
+        assertEquals(
+            40,
             store.history.first().first().lastReadItemOffset
         )
     }

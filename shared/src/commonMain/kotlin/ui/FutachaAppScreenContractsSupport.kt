@@ -67,6 +67,7 @@ internal data class FutachaThreadDestinationProps(
     val initialReplyCount: Int?,
     val onBack: () -> Unit,
     val onScrollPositionPersist: (String, Int, Int) -> Unit,
+    val onScrollPositionPersistImmediately: (String, Int, Int) -> Unit,
     val dependencies: ThreadScreenDependencies,
     val screenContract: ScreenContract,
     val onRegisteredThreadUrlClick: (String) -> Boolean
@@ -245,6 +246,7 @@ internal fun buildFutachaThreadDestinationProps(
     threadId: String,
     historyContext: FutachaThreadHistoryContext,
     onScrollPositionPersist: (String, Int, Int) -> Unit,
+    onScrollPositionPersistImmediately: (String, Int, Int) -> Unit,
     context: FutachaDestinationAssemblyContext
 ): FutachaThreadDestinationProps {
     return FutachaThreadDestinationProps(
@@ -256,6 +258,7 @@ internal fun buildFutachaThreadDestinationProps(
         initialReplyCount = context.navigationState.selectedThreadReplies,
         onBack = context.navigationCallbacks.onThreadDismissed,
         onScrollPositionPersist = onScrollPositionPersist,
+        onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
         dependencies = buildThreadScreenDependencies(
             board = board,
             sharedRepository = context.sharedRepository,

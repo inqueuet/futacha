@@ -123,7 +123,8 @@ internal class AppStateHistoryOperations(
                     boardName = request.boardName,
                     boardUrl = request.boardUrl,
                     replyCount = request.replyCount,
-                    nowMillis = Clock.System.now().toEpochMilliseconds()
+                    nowMillis = Clock.System.now().toEpochMilliseconds(),
+                    forcePersist = request.forcePersist
                 )
             }
         ) { targetThreadId ->

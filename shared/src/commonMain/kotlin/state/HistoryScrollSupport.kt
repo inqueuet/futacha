@@ -11,7 +11,8 @@ internal fun shouldSkipHistoryScrollUpdate(
     existingEntry: ThreadHistoryEntry?,
     index: Int,
     offset: Int,
-    nowMillis: Long
+    nowMillis: Long,
+    forcePersist: Boolean = false
 ): Boolean {
     existingEntry ?: return false
 
@@ -20,6 +21,10 @@ internal fun shouldSkipHistoryScrollUpdate(
         abs(existingEntry.lastReadItemOffset - offset) < HISTORY_SCROLL_OFFSET_WRITE_THRESHOLD_PX
     ) {
         return true
+    }
+
+    if (forcePersist) {
+        return false
     }
 
     val indexDelta = abs(existingEntry.lastReadItemIndex - index)

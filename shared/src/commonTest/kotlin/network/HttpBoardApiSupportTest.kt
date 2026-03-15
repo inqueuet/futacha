@@ -39,6 +39,10 @@ class HttpBoardApiSupportTest {
         assertTrue(isSuccessfulHttpBoardApiPostResponse("""{"status":"ok","thisno":10}"""))
         assertTrue(isSuccessfulHttpBoardApiPostResponse("""<meta http-equiv="refresh" content="0;URL=res/10.htm">"""))
         assertFalse(isSuccessfulHttpBoardApiPostResponse("""{"status":"error","message":"規制中"}"""))
+        assertTrue(isSuccessfulHttpBoardApiSaidaneResponse("1"))
+        assertTrue(isSuccessfulHttpBoardApiSaidaneResponse("42"))
+        assertTrue(isSuccessfulHttpBoardApiSaidaneResponse("""{"status":"ok"}"""))
+        assertFalse(isSuccessfulHttpBoardApiSaidaneResponse("error"))
 
         assertEquals(
             "規制中",

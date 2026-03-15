@@ -169,12 +169,13 @@ internal fun resolveAppStateHistoryScrollUpdatePlan(
     boardName: String,
     boardUrl: String,
     replyCount: Int,
-    nowMillis: Long
+    nowMillis: Long,
+    forcePersist: Boolean = false
 ): AppStateHistoryMutationPlan<String>? {
     val existingEntry = currentHistory.firstOrNull {
         matchesHistoryEntryIdentity(it, threadId, boardId, boardUrl)
     }
-    if (shouldSkipHistoryScrollUpdate(existingEntry, index, offset, nowMillis)) {
+    if (shouldSkipHistoryScrollUpdate(existingEntry, index, offset, nowMillis, forcePersist)) {
         return null
     }
     val updatedHistory = if (existingEntry != null) {

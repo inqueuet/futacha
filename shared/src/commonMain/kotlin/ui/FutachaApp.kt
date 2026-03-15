@@ -384,6 +384,7 @@ fun FutachaApp(
                                 threadId = activeThreadId,
                                 historyContext = historyContext,
                                 onScrollPositionPersist = threadMutations.onScrollPositionPersist,
+                                onScrollPositionPersistImmediately = threadMutations.onScrollPositionPersistImmediately,
                                 context = assemblyContext
                             )
                         )
