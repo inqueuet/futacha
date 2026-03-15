@@ -102,8 +102,38 @@ class IosFileSystem : FileSystem {
         return when (base) {
             is SaveLocation.Path -> block(resolveSaveLocationPath(base.path, relativePath))
             is SaveLocation.Bookmark -> withBookmarkPath(base.bookmarkData, relativePath, block)
-            is SaveLocation.TreeUri -> onTreeUri()
+            is SaveLocation.TreeUri -> {
+                val resolvedPath = resolveTreeUriPath(base.uri)
+                if (resolvedPath == null) {
+                    onTreeUri()
+                } else {
+                    block(joinBaseAndRelativePath(resolvedPath, relativePath))
+                }
+            }
         }
+    }
+
+    private fun resolveTreeUriPath(uri: String): String? {
+        val trimmed = uri.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith("/")) {
+            return trimmed
+        }
+        val url = NSURL(string = trimmed)
+        if (url?.scheme == "file") {
+            return url.path
+        }
+        if (trimmed.startsWith("content://")) {
+            val treeSegment = trimmed.substringAfter("/tree/", "")
+            if (treeSegment.isNotEmpty()) {
+                val decoded = (treeSegment as NSString).stringByRemovingPercentEncoding ?: treeSegment
+                val normalized = decoded.substringAfter("primary:", decoded)
+                if (normalized.isNotBlank()) {
+                    return resolveSaveLocationPath(normalized)
+                }
+            }
+        }
+        return null
     }
 
     private fun parentDirectory(path: String): String =

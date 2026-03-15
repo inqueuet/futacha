@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.kotlin.compose)
+    id("org.jetbrains.kotlin.native.cocoapods")
 }
 
 kotlin {
@@ -36,8 +37,16 @@ kotlin {
     ).forEach {
         it.binaries.framework {
             baseName = "shared"
-            isStatic = true
+            isStatic = false
+            linkerOpts("-framework", "FileProvider")
         }
+    }
+
+    cocoapods {
+        summary = "Futacha shared module"
+        homepage = "https://github.com/valoser/futacha"
+        version = "1.8"
+        ios.deploymentTarget = "15.0"
     }
 
     sourceSets {

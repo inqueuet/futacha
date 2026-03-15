@@ -25,6 +25,9 @@ import platform.UIKit.UIViewController
 import platform.UIKit.UIWindow
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
+import platform.FileProvider.NSFileProviderDomain
+import platform.FileProvider.NSFileProviderItemIdentifierRootContainer
+import platform.FileProvider.NSFileProviderManager
 import platform.darwin.NSObject
 import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
 import platform.darwin.dispatch_async
@@ -68,7 +71,7 @@ fun releaseSecurityScopedResource() {
 /**
  * UIDocumentPicker で Files.app 経由の画像を選択
  */
-suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuation ->
+suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null): ImageData? = suspendCoroutine { continuation ->
     val rootViewController = getRootViewController()
     if (rootViewController == null) {
         Logger.w("ImagePicker.ios", "Cannot present document image picker: root view controller is unavailable")
@@ -90,11 +93,6 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
         platform.UniformTypeIdentifiers.UTTypeGIF,
         platform.UniformTypeIdentifiers.UTTypeWebP
     )
-    val picker = UIDocumentPickerViewController(
-        forOpeningContentTypes = imageTypes,
-        asCopy = true
-    )
-
     val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol {
         override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
             controller.dismissViewControllerAnimated(true, null)
@@ -151,12 +149,20 @@ suspend fun pickImageFromDocuments(): ImageData? = suspendCoroutine { continuati
 
     delegateRef = delegate
     retainPickerDelegate(delegate)
-    picker.delegate = delegate
-    runCatching {
-        rootViewController.presentViewController(picker, animated = true, completion = null)
-    }.onFailure { error ->
-        Logger.e("ImagePicker.ios", "Failed to present document image picker", error)
-        complete(null)
+    resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
+        val picker = UIDocumentPickerViewController(
+            forOpeningContentTypes = imageTypes,
+            asCopy = true
+        ).apply {
+            directoryURL = preferredUrl
+            this.delegate = delegate
+        }
+        runCatching {
+            rootViewController.presentViewController(picker, animated = true, completion = null)
+        }.onFailure { error ->
+            Logger.e("ImagePicker.ios", "Failed to present document image picker", error)
+            complete(null)
+        }
     }
 }
 
@@ -324,7 +330,10 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
  * iOS ディレクトリピッカーで SaveLocation を選択
  * セキュアブックマークを作成して永続化可能にする
  */
-actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine { continuation ->
+actual suspend fun pickDirectorySaveLocation(): SaveLocation? =
+    pickDirectorySaveLocation(preferredProviderIdentifier = null)
+
+suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): SaveLocation? = suspendCoroutine { continuation ->
     val rootViewController = getRootViewController()
     if (rootViewController == null) {
         Logger.w("ImagePicker.ios", "Cannot present save-location picker: root view controller is unavailable")
@@ -339,10 +348,6 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
         continuation.resume(value)
     }
 
-    val picker = UIDocumentPickerViewController(
-        forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
-        asCopy = false
-    )
     val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol {
         override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
             controller.dismissViewControllerAnimated(true, null)
@@ -372,12 +377,55 @@ actual suspend fun pickDirectorySaveLocation(): SaveLocation? = suspendCoroutine
     }
     delegateRef = delegate
     retainPickerDelegate(delegate)
-    picker.delegate = delegate
-    runCatching {
-        rootViewController.presentViewController(picker, animated = true, completion = null)
-    }.onFailure { error ->
-        Logger.e("ImagePicker.ios", "Failed to present save-location picker", error)
-        complete(null)
+    resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
+        val picker = UIDocumentPickerViewController(
+            forOpeningContentTypes = listOf<UTType>(UTTypeFolder),
+            asCopy = false
+        ).apply {
+            directoryURL = preferredUrl
+            this.delegate = delegate
+        }
+        runCatching {
+            rootViewController.presentViewController(picker, animated = true, completion = null)
+        }.onFailure { error ->
+            Logger.e("ImagePicker.ios", "Failed to present save-location picker", error)
+            complete(null)
+        }
+    }
+}
+
+private fun resolvePreferredProviderUrl(
+    providerIdentifier: String?,
+    completion: (NSURL?) -> Unit
+) {
+    if (providerIdentifier.isNullOrBlank()) {
+        dispatch_async(dispatch_get_main_queue()) {
+            completion(null)
+        }
+        return
+    }
+    NSFileProviderManager.getDomainsWithCompletionHandler { domains, _ ->
+        val domain = domains
+            ?.filterIsInstance<NSFileProviderDomain>()
+            ?.firstOrNull { it.identifier == providerIdentifier }
+        if (domain == null) {
+            dispatch_async(dispatch_get_main_queue()) {
+                completion(null)
+            }
+            return@getDomainsWithCompletionHandler
+        }
+        val manager = NSFileProviderManager.managerForDomain(domain)
+        if (manager == null) {
+            dispatch_async(dispatch_get_main_queue()) {
+                completion(null)
+            }
+            return@getDomainsWithCompletionHandler
+        }
+        manager.getUserVisibleURLForItemIdentifier(NSFileProviderItemIdentifierRootContainer) { url, _ ->
+            dispatch_async(dispatch_get_main_queue()) {
+                completion(url)
+            }
+        }
     }
 }
 

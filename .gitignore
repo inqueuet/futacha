@@ -19,6 +19,9 @@ build/
 .cxx/
 captures/
 app-android/release/
+iosApp/Pods/
+iosApp/iosApp.xcworkspace/
+*.dSYM/
 
 ### Android ###
 local.properties
