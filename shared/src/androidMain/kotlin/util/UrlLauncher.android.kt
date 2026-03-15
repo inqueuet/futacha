@@ -15,19 +15,19 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
     return remember(context) {
         { url: String ->
             try {
-                val trimmed = url.trim()
-                if (trimmed.isEmpty()) {
+                val request = resolveUrlLaunchRequest(url)
+                if (request == null) {
                     Logger.w("UrlLauncher", "Ignoring empty URL")
                     Toast.makeText(context, "リンクを開けません", Toast.LENGTH_SHORT).show()
                 } else {
-                    val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
+                    val parsed = runCatching { Uri.parse(request.normalizedUrl) }.getOrNull()
                     if (parsed == null || parsed.scheme.isNullOrBlank()) {
-                        Logger.w("UrlLauncher", "Invalid URL: $trimmed")
+                        Logger.w("UrlLauncher", "Invalid URL: ${request.normalizedUrl}")
                         Toast.makeText(context, "リンクを開けません", Toast.LENGTH_SHORT).show()
                     } else {
-                        val intent = when (parsed.scheme?.lowercase()) {
-                            "mailto" -> Intent(Intent.ACTION_SENDTO, parsed)
-                            else -> Intent(Intent.ACTION_VIEW, parsed).apply {
+                        val intent = when (request.target) {
+                            UrlLaunchTarget.Mail -> Intent(Intent.ACTION_SENDTO, parsed)
+                            UrlLaunchTarget.Browser -> Intent(Intent.ACTION_VIEW, parsed).apply {
                                 addCategory(Intent.CATEGORY_BROWSABLE)
                             }
                         }
@@ -37,7 +37,7 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                         try {
                             context.startActivity(intent)
                         } catch (e: ActivityNotFoundException) {
-                            Logger.w("UrlLauncher", "No activity can handle URL: $trimmed")
+                            Logger.w("UrlLauncher", "No activity can handle URL: ${request.normalizedUrl}")
                             Toast.makeText(context, "このリンクは開けません", Toast.LENGTH_SHORT).show()
                         }
                     }

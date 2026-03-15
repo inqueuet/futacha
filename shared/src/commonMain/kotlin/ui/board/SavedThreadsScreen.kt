@@ -32,7 +32,6 @@ import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import kotlin.math.pow
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -65,24 +64,15 @@ fun SavedThreadsScreen(
             loadError = null
         }
         try {
-            withTimeout(15_000L) { // 15秒のタイムアウト
-                val index = repository.loadIndex()
-                threads = index.threads
-                totalSize = index.totalSize
+            loadSavedThreadsSnapshot(repository).getOrThrow().let { snapshot ->
+                threads = snapshot.threads
+                totalSize = snapshot.totalSize
             }
             return true
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            val message = "読み込みがタイムアウトしました"
-            if (showAsScreenError) {
-                loadError = message
-            } else {
-                snackbarHostState.showSnackbar(message)
-            }
-            return false
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            val message = "読み込みエラー: ${e.message}"
+            val message = buildSavedThreadsLoadErrorMessage(e)
             if (showAsScreenError) {
                 loadError = message
             } else {
@@ -101,21 +91,19 @@ fun SavedThreadsScreen(
         reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
     }
 
-    val refreshList: () -> Unit = {
-        coroutineScope.launch {
-            reloadSavedThreads(showLoadingState = false, showAsScreenError = false)
-        }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text("保存済みスレッド")
-                        if (!isLoading) {
+                        buildSavedThreadsSummaryText(
+                            threadCount = threads.size,
+                            totalSize = totalSize,
+                            isLoading = isLoading
+                        )?.let { summary ->
                             Text(
-                                text = "${threads.size} 件 / ${formatSize(totalSize)}",
+                                text = summary,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -140,25 +128,23 @@ fun SavedThreadsScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            when {
-                isLoading -> {
+            when (val contentState = resolveSavedThreadsContentState(isLoading, loadError, threads)) {
+                SavedThreadsContentState.Loading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                loadError != null -> {
+                is SavedThreadsContentState.Error -> {
                     Column(
                         modifier = Modifier.align(Alignment.Center),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        loadError?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
+                        Text(
+                            text = contentState.message,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error
+                        )
                         Button(onClick = {
                             coroutineScope.launch {
                                 reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
@@ -168,7 +154,7 @@ fun SavedThreadsScreen(
                         }
                     }
                 }
-                threads.isEmpty() -> {
+                SavedThreadsContentState.Empty -> {
                     Text(
                         text = "保存済みスレッドがありません",
                         style = MaterialTheme.typography.bodyLarge,
@@ -176,12 +162,12 @@ fun SavedThreadsScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                else -> {
+                is SavedThreadsContentState.Data -> {
                     LazyColumn(
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(threads, key = { it.storageId ?: "${it.boardId}:${it.threadId}" }) { thread ->
+                        items(contentState.threads, key = { it.storageId ?: "${it.boardId}:${it.threadId}" }) { thread ->
                             SavedThreadCard(
                                 thread = thread,
                                 onClick = { onThreadClick(thread) },
@@ -205,17 +191,17 @@ fun SavedThreadsScreen(
                     TextButton(
                         onClick = {
                             coroutineScope.launch {
-                                repository.deleteThread(
-                                    threadId = thread.threadId,
-                                    boardId = thread.boardId.ifBlank { null }
+                                val deleteOutcome = resolveSavedThreadsDeleteUiOutcome(
+                                    deleteSavedThreadAndReload(
+                                    repository = repository,
+                                    thread = thread
                                 )
-                                    .onSuccess {
-                                        snackbarHostState.showSnackbar("削除しました")
-                                        refreshList()
-                                    }
-                                    .onFailure { e ->
-                                        snackbarHostState.showSnackbar("削除に失敗しました: ${e.message}")
-                                    }
+                                )
+                                deleteOutcome.updatedSnapshot?.let { snapshot ->
+                                    threads = snapshot.threads
+                                    totalSize = snapshot.totalSize
+                                }
+                                snackbarHostState.showSnackbar(deleteOutcome.message)
                                 deleteConfirmTarget = null
                             }
                         }
@@ -319,10 +305,10 @@ private fun SavedThreadCard(
 @Composable
 private fun StatusBadge(status: SaveStatus) {
     val (text, color) = when (status) {
-        SaveStatus.DOWNLOADING -> "ダウンロード中" to MaterialTheme.colorScheme.primary
-        SaveStatus.COMPLETED -> "完了" to MaterialTheme.colorScheme.tertiary
-        SaveStatus.FAILED -> "失敗" to MaterialTheme.colorScheme.error
-        SaveStatus.PARTIAL -> "一部" to MaterialTheme.colorScheme.secondary
+        SaveStatus.DOWNLOADING -> savedThreadStatusLabel(status) to MaterialTheme.colorScheme.primary
+        SaveStatus.COMPLETED -> savedThreadStatusLabel(status) to MaterialTheme.colorScheme.tertiary
+        SaveStatus.FAILED -> savedThreadStatusLabel(status) to MaterialTheme.colorScheme.error
+        SaveStatus.PARTIAL -> savedThreadStatusLabel(status) to MaterialTheme.colorScheme.secondary
     }
 
     AssistChip(
@@ -362,7 +348,7 @@ private fun StatItem(label: String, value: String) {
 /**
  * ファイルサイズをフォーマット
  */
-private fun formatSize(bytes: Long): String {
+internal fun formatSize(bytes: Long): String {
     return when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
@@ -374,7 +360,7 @@ private fun formatSize(bytes: Long): String {
     }
 }
 
-private fun formatDecimal(value: Double, decimals: Int): String {
+internal fun formatDecimal(value: Double, decimals: Int): String {
     val factor = 10.0.pow(decimals)
     val rounded = kotlin.math.round(value * factor) / factor
     val parts = rounded.toString().split('.')
@@ -382,11 +368,20 @@ private fun formatDecimal(value: Double, decimals: Int): String {
     return "${parts.first()}.$fraction"
 }
 
+internal fun savedThreadStatusLabel(status: SaveStatus): String {
+    return when (status) {
+        SaveStatus.DOWNLOADING -> "ダウンロード中"
+        SaveStatus.COMPLETED -> "完了"
+        SaveStatus.FAILED -> "失敗"
+        SaveStatus.PARTIAL -> "一部"
+    }
+}
+
 /**
  * 日時をフォーマット
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
-private fun formatDate(epochMillis: Long): String {
+internal fun formatDate(epochMillis: Long): String {
     val instant = Instant.fromEpochMilliseconds(epochMillis)
     val dateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
     @Suppress("DEPRECATION")

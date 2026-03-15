@@ -36,18 +36,33 @@ fun buildHistoryEntryFromPage(
     board: BoardSummary,
     overrideThreadUrl: String? = null
 ): ThreadHistoryEntry {
+    return buildHistoryEntryFromPageAt(
+        page = page,
+        history = history,
+        threadId = threadId,
+        threadTitle = threadTitle,
+        board = board,
+        overrideThreadUrl = overrideThreadUrl,
+        timestampMillis = Clock.System.now().toEpochMilliseconds()
+    )
+}
+
+internal fun buildHistoryEntryFromPageAt(
+    page: ThreadPage,
+    history: List<ThreadHistoryEntry>,
+    threadId: String,
+    threadTitle: String?,
+    board: BoardSummary,
+    overrideThreadUrl: String? = null,
+    timestampMillis: Long
+): ThreadHistoryEntry {
     val existingEntry = history.firstOrNull {
         isSameHistoryContext(it, threadId, board)
     }
     val firstPost = page.posts.firstOrNull()
     val candidateTitle = resolveThreadTitle(firstPost, threadTitle, existingEntry?.title)
-    val resolvedImageUrl = existingEntry?.titleImageUrl?.takeIf { it.isNotBlank() }
-        ?: page.posts.firstOrNull()?.thumbnailUrl.orEmpty()
-    val resolvedBoardUrl = when {
-        overrideThreadUrl.isNullOrBlank() -> board.url
-        else -> overrideThreadUrl
-    }
-    val timestamp = Clock.System.now().toEpochMilliseconds()
+    val resolvedImageUrl = resolveHistoryEntryImageUrl(existingEntry, firstPost?.thumbnailUrl)
+    val resolvedBoardUrl = resolveHistoryEntryBoardUrl(board.url, overrideThreadUrl)
     return existingEntry?.copy(
         title = candidateTitle,
         titleImageUrl = resolvedImageUrl,
@@ -55,7 +70,7 @@ fun buildHistoryEntryFromPage(
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
         replyCount = page.posts.size,
-        lastVisitedEpochMillis = timestamp
+        lastVisitedEpochMillis = timestampMillis
     ) ?: ThreadHistoryEntry(
         threadId = threadId,
         boardId = board.id,
@@ -63,9 +78,28 @@ fun buildHistoryEntryFromPage(
         titleImageUrl = resolvedImageUrl,
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
-        lastVisitedEpochMillis = timestamp,
+        lastVisitedEpochMillis = timestampMillis,
         replyCount = page.posts.size
     )
+}
+
+internal fun resolveHistoryEntryImageUrl(
+    existingEntry: ThreadHistoryEntry?,
+    pageThumbnailUrl: String?
+): String {
+    return existingEntry?.titleImageUrl?.takeIf { it.isNotBlank() }
+        ?: pageThumbnailUrl.orEmpty()
+}
+
+internal fun resolveHistoryEntryBoardUrl(
+    boardUrl: String,
+    overrideThreadUrl: String?
+): String {
+    return if (overrideThreadUrl.isNullOrBlank()) {
+        boardUrl
+    } else {
+        overrideThreadUrl
+    }
 }
 
 private fun isSameHistoryContext(entry: ThreadHistoryEntry, threadId: String, board: BoardSummary): Boolean {

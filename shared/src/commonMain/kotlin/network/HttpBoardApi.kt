@@ -1,83 +1,53 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.CatalogMode
-import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.TextEncoding
-import com.valoser.futacha.shared.util.sanitizeForShiftJis
 import io.ktor.client.HttpClient
-import io.ktor.client.request.forms.FormBuilder
-import io.ktor.client.request.forms.formData
-import io.ktor.client.request.forms.submitForm
-import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
-import io.ktor.client.plugins.HttpRequestTimeoutException
-import io.ktor.client.plugins.ResponseException
-import io.ktor.client.network.sockets.SocketTimeoutException
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.ContentType
-import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
-import io.ktor.http.Url
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.cancel
-import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.yield
-import kotlinx.io.IOException
-import kotlin.coroutines.coroutineContext
-import kotlin.random.Random
-import kotlin.text.RegexOption
-import kotlin.time.Clock
-import kotlin.time.ExperimentalTime
-
-// FIX: KMP commonMainでも動くスレッドセーフLRUキャッシュ
-// NOTE: LinkedHashMapのaccessOrderコンストラクタ/継承がcommonMainで不可なため、手動で順序管理
-private class ThreadSafeLruCache<K, V>(private val maxSize: Int) {
-    private val mutex = Mutex()
-    private val cache: LinkedHashMap<K, V> = LinkedHashMap()
-
-    // FIX: 読み取り操作もMutexで保護（アクセス順を手動で更新）
-    suspend fun get(key: K): V? = mutex.withLock {
-        val value = cache.remove(key) ?: return@withLock null
-        cache[key] = value
-        value
-    }
-
-    // FIX: 書き込み操作はMutexで保護（サイズ制限は手動適用）
-    suspend fun put(key: K, value: V): V? = mutex.withLock {
-        val previous = cache.remove(key)
-        cache[key] = value
-        if (cache.size > maxSize) {
-            val eldestKey = cache.entries.firstOrNull()?.key
-            if (eldestKey != null) {
-                cache.remove(eldestKey)
-            }
-        }
-        previous
-    }
-
-    suspend fun clear() = mutex.withLock {
-        cache.clear()
-    }
-
-    suspend fun size(): Int = mutex.withLock {
-        cache.size
-    }
-}
 
 class HttpBoardApi(
     private val client: HttpClient
 ) : BoardApi, AutoCloseable {
+    private data class TextFetch(
+        val url: String,
+        val referer: String?,
+        val errorLabel: String,
+        val readMode: HttpBoardApiTextReadMode,
+        val maxLines: Int? = null,
+        val rangeHeader: String? = null,
+        val failureDescription: String
+    )
+
+    private data class PostSubmission(
+        val board: String,
+        val threadId: String?,
+        val name: String,
+        val email: String,
+        val subject: String,
+        val comment: String,
+        val password: String,
+        val imageFile: ByteArray?,
+        val imageFileName: String?,
+        val textOnly: Boolean,
+        val responseMode: HttpBoardApiPostResponseMode,
+        val requestFailureMessage: String,
+        val responseFailureLabel: String,
+        val forceAjaxResponse: Boolean = false
+    )
+
+    private data class ShortFormSubmission(
+        val url: String,
+        val referer: String,
+        val formParameters: Parameters,
+        val requestFailureMessage: String,
+        val responseFailureMessage: String
+    )
+
     companion object {
         private const val TAG = "HttpBoardApi"
         private const val DEFAULT_USER_AGENT =
@@ -88,132 +58,7 @@ class HttpBoardApi(
         // FIX: OOM防止のため、20MB→5MBに制限を削減
         // 通常のHTMLレスポンスは1-2MB程度なので5MBで十分
         private const val MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB limit
-        private const val DEFAULT_UPLOAD_FILE_NAME = "upload.bin"
-        private const val SHIFT_JIS_TEXT_MIME = "text/plain; charset=Shift_JIS"
-        private const val UTF8_TEXT_MIME = "text/plain; charset=UTF-8"
-        private const val ASCII_TEXT_MIME = "text/plain; charset=US-ASCII"
         private const val DEFAULT_SHIFT_JIS_CHRENC_SAMPLE = "文字"
-
-        // FIX: 投稿入力検証のための定数
-        private const val MAX_NAME_LENGTH = 100
-        private const val MAX_EMAIL_LENGTH = 100
-        private const val MAX_SUBJECT_LENGTH = 100
-        private const val MAX_COMMENT_LENGTH = 10000
-        private const val MAX_PASSWORD_LENGTH = 100
-        private const val MAX_IMAGE_FILE_SIZE = 8_192_000L // 8MB（フォームのMAX_FILE_SIZEと一致）
-
-        /**
-         * FIX: 投稿入力検証 - DoS攻撃・インジェクション攻撃防止
-         *
-         * @throws IllegalArgumentException 入力が不正な場合
-         */
-        private fun validatePostInput(
-            name: String,
-            email: String,
-            subject: String,
-            comment: String,
-            password: String,
-            imageFile: ByteArray?
-        ) {
-            // FIX: null文字チェック（全てのテキストフィールド）
-            listOf(
-                "name" to name,
-                "email" to email,
-                "subject" to subject,
-                "comment" to comment,
-                "password" to password
-            ).forEach { (fieldName, value) ->
-                if (value.contains('\u0000')) {
-                    throw IllegalArgumentException("$fieldName contains null character")
-                }
-            }
-
-            // FIX: 長さ制限チェック
-            if (name.length > MAX_NAME_LENGTH) {
-                throw IllegalArgumentException("Name exceeds maximum length ($MAX_NAME_LENGTH): ${name.length}")
-            }
-            if (email.length > MAX_EMAIL_LENGTH) {
-                throw IllegalArgumentException("Email exceeds maximum length ($MAX_EMAIL_LENGTH): ${email.length}")
-            }
-            if (subject.length > MAX_SUBJECT_LENGTH) {
-                throw IllegalArgumentException("Subject exceeds maximum length ($MAX_SUBJECT_LENGTH): ${subject.length}")
-            }
-            if (comment.length > MAX_COMMENT_LENGTH) {
-                throw IllegalArgumentException("Comment exceeds maximum length ($MAX_COMMENT_LENGTH): ${comment.length}")
-            }
-            if (password.length > MAX_PASSWORD_LENGTH) {
-                throw IllegalArgumentException("Password exceeds maximum length ($MAX_PASSWORD_LENGTH): ${password.length}")
-            }
-
-            // FIX: 画像ファイルサイズチェック
-            imageFile?.let { file ->
-                if (file.size > MAX_IMAGE_FILE_SIZE) {
-                    throw IllegalArgumentException("Image file size (${file.size} bytes) exceeds maximum ($MAX_IMAGE_FILE_SIZE bytes)")
-                }
-            }
-        }
-
-        /**
-         * FIX: 削除・投票操作の入力検証
-         *
-         * @throws IllegalArgumentException 入力が不正な場合
-         */
-        private fun validateDeletionInput(password: String) {
-            // FIX: null文字チェック
-            if (password.contains('\u0000')) {
-                throw IllegalArgumentException("password contains null character")
-            }
-
-            // FIX: 長さ制限チェック
-            if (password.length > MAX_PASSWORD_LENGTH) {
-                throw IllegalArgumentException("Password exceeds maximum length ($MAX_PASSWORD_LENGTH): ${password.length}")
-            }
-
-            // FIX: 空文字列チェック
-            if (password.isBlank()) {
-                throw IllegalArgumentException("Password must not be blank")
-            }
-        }
-
-        /**
-         * FIX: 削除理由コードの検証
-         *
-         * @throws IllegalArgumentException 入力が不正な場合
-         */
-        private fun validateReasonCode(reasonCode: String) {
-            // FIX: null文字チェック
-            if (reasonCode.contains('\u0000')) {
-                throw IllegalArgumentException("reasonCode contains null character")
-            }
-
-            // FIX: 長さ制限チェック（理由コードは通常短い）
-            if (reasonCode.length > 50) {
-                throw IllegalArgumentException("Reason code exceeds maximum length (50): ${reasonCode.length}")
-            }
-        }
-        private const val DEFAULT_SCREEN_SPEC = "1080x1920x24"
-        private const val DEFAULT_PTUA_VALUE = "1341647872"
-        private val THREAD_ID_REGEX = """res/(\d+)\.html?""".toRegex(RegexOption.IGNORE_CASE)
-        private val RES_QUERY_ID_REGEX = """\bres=(\d+)\b""".toRegex(RegexOption.IGNORE_CASE)
-        private val SUCCESS_KEYWORDS = listOf("書き込みました", "書き込みました。", "書き込みが完了", "書きこみました")
-        private val ERROR_KEYWORDS = listOf("エラー", "error", "荒らし", "規制", "拒否", "連続投稿", "大きすぎ", "時間を置いて")
-        private val WEBP_CONTENT_TYPE = ContentType.parse("image/webp")
-        private val WEBM_CONTENT_TYPE = ContentType.parse("video/webm")
-        private val BMP_CONTENT_TYPE = ContentType.parse("image/bmp")
-        private val MP4_CONTENT_TYPE = ContentType.parse("video/mp4")
-        private val JSON_STATUS_REGEX = """"status"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
-        private val JSON_MESSAGE_REGEX = """"(error|reason|message)"\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE)
-        private val JSON_JUMPTO_REGEX = """"jumpto"\s*:\s*(\d+)""".toRegex()
-        private val JSON_THISNO_REGEX = """"thisno"\s*:\s*(\d+)""".toRegex()
-        // FIX: ReDoS対策 - より具体的なパターンに変更して[^>]*の繰り返しを排除
-        // 元: <input[^>]*name="chrenc"[^>]*> は2つの[^>]*が指数的バックトラッキングを引き起こす
-        // 修正: nameとvalue属性の順序を限定して確実にマッチさせる
-        private val CHRENC_INPUT_REGEX =
-            Regex("""<input\s+[^>]{0,200}?name\s*=\s*["']chrenc["'][^>]{0,200}?>""", RegexOption.IGNORE_CASE)
-        private val VALUE_ATTR_REGEX =
-            Regex("""value\s*=\s*["']([^"']{0,500})["']""", RegexOption.IGNORE_CASE)
-        private const val CHRENC_NEARBY_SCAN_WINDOW = 4096
-        private const val CHRENC_FALLBACK_SCAN_MAX_BYTES = 512 * 1024
         // FIX: PostingConfigキャッシュサイズを削減（100→20）
         // PostingConfigは複雑なオブジェクトなので、メモリ節約のため制限
         // ほとんどのユーザーは数個の板しか使わないため、20で十分
@@ -228,355 +73,55 @@ class HttpBoardApi(
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
-        val bytes = readResponseBytesWithLimit(response, MAX_RESPONSE_SIZE)
-        return withContext(AppDispatchers.parsing) {
-            TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
-        }
+        return readHttpBoardApiResponseBodyAsString(
+            response = response,
+            maxBytes = MAX_RESPONSE_SIZE,
+            responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = RESPONSE_TOTAL_TIMEOUT_MILLIS
+        )
     }
 
     private suspend fun readResponseHeadAsString(response: HttpResponse, maxLines: Int): String {
-        val bytes = readResponseHeadBytesWithLimit(response, maxLines)
-        return withContext(AppDispatchers.parsing) {
-            TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType]).trimEnd('\n', '\r')
-        }
-    }
-
-    private suspend fun readResponseBytesWithLimit(response: HttpResponse, maxBytes: Int): ByteArray {
-        val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-        if (contentLength != null && contentLength > maxBytes) {
-            throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
-        }
-        return withContext(AppDispatchers.io) {
-            withTimeout(RESPONSE_TOTAL_TIMEOUT_MILLIS) {
-                val channel = response.bodyAsChannel()
-                val buffer = ByteArray(RESPONSE_READ_BUFFER_BYTES)
-                var output = ByteArray(minOf(RESPONSE_READ_BUFFER_BYTES, maxBytes.coerceAtLeast(1)))
-                var totalBytes = 0
-                var zeroReadCount = 0
-                var readLoopCount = 0L
-                var fullyConsumed = false
-                try {
-                    while (true) {
-                        coroutineContext.ensureActive()
-                        val read = channel.readAvailable(buffer, 0, buffer.size)
-                        if (read == -1) {
-                            fullyConsumed = true
-                            break
-                        }
-                        if (read == 0) {
-                            zeroReadCount += 1
-                            if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                                throw NetworkException("Response body read stalled")
-                            }
-                            delay(ZERO_READ_BACKOFF_MILLIS)
-                            continue
-                        }
-
-                        zeroReadCount = 0
-                        val requiredSize = totalBytes + read
-                        if (requiredSize > maxBytes) {
-                            throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
-                        }
-                        if (requiredSize > output.size) {
-                            var newSize = output.size
-                            while (newSize < requiredSize) {
-                                newSize = (newSize * 2).coerceAtMost(maxBytes)
-                                if (newSize == output.size) break
-                            }
-                            if (newSize < requiredSize) {
-                                throw NetworkException("Failed to expand response buffer safely")
-                            }
-                            output = output.copyOf(newSize)
-                        }
-                        buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
-                        totalBytes = requiredSize
-                        readLoopCount += 1
-                        if (readLoopCount % 32L == 0L) {
-                            yield()
-                        }
-                    }
-                    if (totalBytes == output.size) {
-                        output
-                    } else {
-                        output.copyOf(totalBytes)
-                    }
-                } finally {
-                    if (!fullyConsumed) {
-                        runCatching { channel.cancel() }
-                    }
-                }
-            }
-        }
-    }
-
-    private suspend fun readResponseHeadBytesWithLimit(response: HttpResponse, maxLines: Int): ByteArray {
-        val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-        if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-            throw NetworkException("Response size exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-        }
-        if (maxLines <= 0) {
-            return readResponseBytesWithLimit(response, MAX_RESPONSE_SIZE)
-        }
-        return withContext(AppDispatchers.io) {
-            withTimeout(RESPONSE_TOTAL_TIMEOUT_MILLIS) {
-                val channel = response.bodyAsChannel()
-                val buffer = ByteArray(RESPONSE_READ_BUFFER_BYTES)
-                var output = ByteArray(RESPONSE_READ_BUFFER_BYTES)
-                var totalBytes = 0
-                var lineCount = 0
-                var zeroReadCount = 0
-                var readLoopCount = 0L
-                var fullyConsumed = false
-                try {
-                    reading@ while (true) {
-                        coroutineContext.ensureActive()
-                        val read = channel.readAvailable(buffer, 0, buffer.size)
-                        if (read == -1) {
-                            fullyConsumed = true
-                            break
-                        }
-                        if (read == 0) {
-                            zeroReadCount += 1
-                            if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                                throw NetworkException("Response head read stalled")
-                            }
-                            delay(ZERO_READ_BACKOFF_MILLIS)
-                            continue
-                        }
-
-                        zeroReadCount = 0
-                        var writeCount = read
-                        for (i in 0 until read) {
-                            if (buffer[i] == '\n'.code.toByte()) {
-                                lineCount += 1
-                                if (lineCount >= maxLines) {
-                                    writeCount = i + 1
-                                    break
-                                }
-                            }
-                        }
-                        val requiredSize = totalBytes + writeCount
-                        if (requiredSize > MAX_RESPONSE_SIZE) {
-                            throw NetworkException("Response size exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                        }
-                        if (requiredSize > output.size) {
-                            var newSize = output.size
-                            while (newSize < requiredSize) {
-                                newSize = (newSize * 2).coerceAtMost(MAX_RESPONSE_SIZE)
-                                if (newSize == output.size) break
-                            }
-                            if (newSize < requiredSize) {
-                                throw NetworkException("Failed to expand response head buffer safely")
-                            }
-                            output = output.copyOf(newSize)
-                        }
-                        buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = writeCount)
-                        totalBytes = requiredSize
-                        if (lineCount >= maxLines) break@reading
-                        readLoopCount += 1
-                        if (readLoopCount % 32L == 0L) {
-                            yield()
-                        }
-                    }
-                    if (totalBytes == output.size) {
-                        output
-                    } else {
-                        output.copyOf(totalBytes)
-                    }
-                } finally {
-                    if (!fullyConsumed) {
-                        runCatching { channel.cancel() }
-                    }
-                }
-            }
-        }
-    }
-
-    // FIX: リトライロジック改善（無限ループ防止、一時的障害対策）
-    private suspend fun <T> withRetry(
-        maxAttempts: Int = 3, // FIX: 2→3に増加（一時的なネットワーク障害対策）
-        initialDelayMillis: Long = 500,
-        block: suspend () -> T
-    ): T {
-        val safeMaxAttempts = maxAttempts.coerceAtLeast(1)
-        var attempt = 0
-        var delayMillis = initialDelayMillis.coerceAtLeast(0L)
-        while (true) {
-            try {
-                return withTimeout(REQUEST_ATTEMPT_TIMEOUT_MILLIS) {
-                    block()
-                }
-            } catch (e: TimeoutCancellationException) {
-                attempt += 1
-                if (attempt >= safeMaxAttempts) {
-                    throw NetworkException(
-                        "Request timed out after $REQUEST_ATTEMPT_TIMEOUT_MILLIS ms (attempts=$attempt)",
-                        cause = e
-                    )
-                }
-                Logger.w(
-                    TAG,
-                    "Retrying request after timeout on attempt $attempt/$safeMaxAttempts"
-                )
-                if (delayMillis > 0L) {
-                    delay(delayMillis)
-                }
-                delayMillis = if (delayMillis >= 2_500L) {
-                    5_000L
-                } else {
-                    (delayMillis * 2).coerceAtMost(5_000L)
-                }
-            } catch (e: CancellationException) {
-                // FIX: キャンセル例外は即座に再スロー（リトライしない）
-                throw e
-            } catch (e: Exception) {
-                attempt += 1
-                if (attempt >= safeMaxAttempts || !shouldRetry(e)) {
-                    throw e
-                }
-                // FIX: 指数バックオフ（500ms→1s→2s→4s→5s上限）
-                Logger.w(TAG, "Retrying request after attempt $attempt due to ${e::class.simpleName}: ${e.message}")
-                if (delayMillis > 0L) {
-                    delay(delayMillis)
-                }
-                delayMillis = if (delayMillis >= 2_500L) {
-                    5_000L
-                } else {
-                    (delayMillis * 2).coerceAtMost(5_000L)
-                }
-            }
-        }
-    }
-
-    private fun shouldRetry(error: Exception): Boolean {
-        var current: Throwable? = error
-        while (current != null) {
-            when (current) {
-                is CancellationException -> return false
-                is SocketTimeoutException,
-                is HttpRequestTimeoutException,
-                is IOException -> return true
-                is NetworkException -> {
-                    val status = current.statusCode
-                    if (status != null && (status == 429 || status >= 500)) {
-                        return true
-                    }
-                }
-                is ResponseException -> {
-                    val status = current.response.status.value
-                    if (status == 429 || status >= 500) {
-                        return true
-                    }
-                }
-            }
-            current = current.cause
-        }
-        return false
+        return readHttpBoardApiResponseHeadAsString(
+            response = response,
+            maxLines = maxLines,
+            maxBytes = MAX_RESPONSE_SIZE,
+            responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = RESPONSE_TOTAL_TIMEOUT_MILLIS
+        )
     }
 
     // FIX: スレッドセーフなLRUキャッシュに変更
-    private val postingConfigCache = ThreadSafeLruCache<String, PostingConfig>(MAX_CACHE_SIZE)
-    private val postingConfigLocksGuard = Mutex()
-    private val postingConfigLocks = mutableMapOf<String, Mutex>()
+    private val postingRuntime = HttpBoardApiPostingRuntime(MAX_CACHE_SIZE)
 
     override suspend fun fetchCatalogSetup(board: String) {
-        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val url = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.php?mode=catset")
-        }
-        try {
-            withRetry {
-                val response: HttpResponse = client.submitForm(
-                    url = url,
-                    formParameters = Parameters.build {
-                        append("mode", "catset")
-                        append("cx", "5")   // カタログの横サイズ
-                        append("cy", "60")  // カタログの縦サイズ
-                        append("cl", "4")   // 文字数
-                        append("cm", "0")   // 文字位置 (0=下, 1=右)
-                        append("ci", "0")   // 画像サイズ (0=小)
-                        append("vh", "on")  // 見たスレッドを見歴に追加
-                    }
-                ) {
-                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                    headers[HttpHeaders.CacheControl] = "max-age=0"
-                    headers[HttpHeaders.Referrer] = url
-                }
-
-                try {
-                    if (!response.status.isSuccess()) {
-                        val detail = readSmallResponseSummary(response)
-                        val suffix = detail?.let { ": $it" }.orEmpty()
-                        val errorMsg = "HTTP error ${response.status.value} when fetching catalog setup from $url$suffix"
-                        Logger.w(TAG, errorMsg)
-                        throw NetworkException(errorMsg, response.status.value)
-                    }
-                    // Drain body so pooled connection is released promptly.
-                    readSmallResponseSummary(response)
-                } finally {
-                    // Body is already drained by readSmallResponseSummary.
-                }
-
-                // Cookies (posttime, cxyl, etc.) are automatically stored by HttpCookies plugin
-                Logger.i(TAG, "Catalog setup cookies initialized for board=$board (cx=5, cy=60)")
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch catalog setup from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        initializeHttpBoardApiCatalogSetup(
+            client = client,
+            board = board,
+            userAgent = DEFAULT_USER_AGENT,
+            accept = DEFAULT_ACCEPT,
+            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+            logTag = TAG,
+            requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
+            readSmallResponseSummary = ::readSmallResponseSummary
+        )
     }
 
     override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
         val url = BoardUrlResolver.resolveCatalogUrl(board, mode)
-        return try {
-            withRetry {
-                val response: HttpResponse = client.get(url) {
-                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                    headers[HttpHeaders.CacheControl] = "no-cache"
-                    headers[HttpHeaders.Pragma] = "no-cache"
-                    headers[HttpHeaders.Referrer] = board
-                }
-
-                try {
-                    if (!response.status.isSuccess()) {
-                        val detail = readSmallResponseSummary(response)
-                        val suffix = detail?.let { ": $it" }.orEmpty()
-                        val errorMsg = "HTTP error ${response.status.value} when fetching catalog from $url$suffix"
-                        Logger.w(TAG, errorMsg)
-                        throw NetworkException(errorMsg, response.status.value)
-                    }
-
-                    // Check content length before reading
-                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                    if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                        throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                    }
-
-                    readResponseBodyAsString(response)
-                } finally {
-                    // Body lifecycle is managed in readResponseBodyAsString.
-                }
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch catalog from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = board,
+                errorLabel = "catalog",
+                readMode = HttpBoardApiTextReadMode.BODY,
+                failureDescription = "Failed to fetch catalog from $url"
+            )
+        )
     }
 
     override suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int): String {
@@ -586,137 +131,43 @@ class HttpBoardApi(
             MIN_THREAD_HEAD_RANGE_BYTES,
             MAX_THREAD_HEAD_RANGE_BYTES
         )
-        return try {
-            withRetry {
-                val response: HttpResponse = client.get(url) {
-                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                    headers[HttpHeaders.CacheControl] = "no-cache"
-                    headers[HttpHeaders.Pragma] = "no-cache"
-                    val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
-                        if (base.endsWith("/")) base else "$base/"
-                    }
-                    headers[HttpHeaders.Referrer] = refererBase
-                    headers[HttpHeaders.Range] = "bytes=0-${estimatedRangeBytes - 1}"
-                }
-
-                try {
-                    if (!response.status.isSuccess()) {
-                        val detail = readSmallResponseSummary(response)
-                        val suffix = detail?.let { ": $it" }.orEmpty()
-                        val errorMsg = "HTTP error ${response.status.value} when fetching thread head from $url$suffix"
-                        Logger.w(TAG, errorMsg)
-                        throw NetworkException(errorMsg, response.status.value)
-                    }
-
-                    readResponseHeadAsString(response, maxLines)
-                } finally {
-                    // We intentionally read only the response head; close remaining body.
-                    runCatching { response.bodyAsChannel().cancel(null) }
-                }
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch thread head from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = resolveBoardRefererBase(board),
+                errorLabel = "thread head",
+                readMode = HttpBoardApiTextReadMode.HEAD,
+                maxLines = maxLines,
+                rangeHeader = "bytes=0-${estimatedRangeBytes - 1}",
+                failureDescription = "Failed to fetch thread head from $url"
+            )
+        )
     }
 
     override suspend fun fetchThread(board: String, threadId: String): String {
         val url = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        return try {
-            withRetry {
-                val response: HttpResponse = client.get(url) {
-                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                    headers[HttpHeaders.CacheControl] = "no-cache"
-                    headers[HttpHeaders.Pragma] = "no-cache"
-                    val refererBase = BoardUrlResolver.resolveBoardBaseUrl(board).let { base ->
-                        if (base.endsWith("/")) base else "$base/"
-                    }
-                    headers[HttpHeaders.Referrer] = refererBase
-                }
-
-                try {
-                    if (!response.status.isSuccess()) {
-                        val detail = readSmallResponseSummary(response)
-                        val suffix = detail?.let { ": $it" }.orEmpty()
-                        val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url$suffix"
-                        Logger.w(TAG, errorMsg)
-                        throw NetworkException(errorMsg, response.status.value)
-                    }
-
-                    // Check content length before reading
-                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                    if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                        throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                    }
-
-                    readResponseBodyAsString(response)
-                } finally {
-                    // Body lifecycle is managed in readResponseBodyAsString.
-                }
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch thread from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = resolveBoardRefererBase(board),
+                errorLabel = "thread",
+                readMode = HttpBoardApiTextReadMode.BODY,
+                failureDescription = "Failed to fetch thread from $url"
+            )
+        )
     }
 
     override suspend fun fetchThreadByUrl(threadUrl: String): String {
         val url = threadUrl
-        return try {
-            withRetry {
-                val response: HttpResponse = client.get(url) {
-                    headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                    headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                    headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                    headers[HttpHeaders.CacheControl] = "no-cache"
-                    headers[HttpHeaders.Pragma] = "no-cache"
-                    resolveRefererBaseFromThreadUrl(url)?.let { referer ->
-                        headers[HttpHeaders.Referrer] = referer
-                    }
-                }
-
-                try {
-                    if (!response.status.isSuccess()) {
-                        val detail = readSmallResponseSummary(response)
-                        val suffix = detail?.let { ": $it" }.orEmpty()
-                        val errorMsg = "HTTP error ${response.status.value} when fetching thread from $url$suffix"
-                        Logger.w(TAG, errorMsg)
-                        throw NetworkException(errorMsg, response.status.value)
-                    }
-
-                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                    if (contentLength != null && contentLength > MAX_RESPONSE_SIZE) {
-                        throw NetworkException("Response size ($contentLength bytes) exceeds maximum allowed ($MAX_RESPONSE_SIZE bytes)")
-                    }
-
-                    readResponseBodyAsString(response)
-                } finally {
-                    // Body lifecycle is managed in readResponseBodyAsString.
-                }
-            }
-        } catch (e: NetworkException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val errorMsg = "Failed to fetch thread from $url: ${e.message}"
-            Logger.e(TAG, errorMsg, e)
-            throw NetworkException(errorMsg, cause = e)
-        }
+        return fetchText(
+            TextFetch(
+                url = url,
+                referer = resolveHttpBoardApiRefererBaseFromThreadUrl(url),
+                errorLabel = "thread",
+                readMode = HttpBoardApiTextReadMode.BODY,
+                failureDescription = "Failed to fetch thread from $url"
+            )
+        )
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
@@ -744,7 +195,7 @@ class HttpBoardApi(
                     throw NetworkException("そうだね投票に失敗しました (HTTP ${response.status.value}$suffix)")
                 }
                 val result = readResponseBodyAsString(response).trim()
-                if (result != "1") {
+                if (!isSuccessfulHttpBoardApiSaidaneResponse(result)) {
                     throw NetworkException("そうだね投票に失敗しました (応答: '$result')")
                 }
             } finally {
@@ -759,92 +210,166 @@ class HttpBoardApi(
         }
     }
 
-    private fun resolveRefererBaseFromThreadUrl(threadUrl: String): String? {
-        return runCatching {
-            val parsed = Url(threadUrl)
-            val segments = parsed.encodedPath.split('/').filter { it.isNotBlank() }
-            if (segments.isEmpty()) return null
-            val baseSegments = segments.dropLast(1)
-            val path = if (baseSegments.isEmpty()) "" else "/" + baseSegments.joinToString("/")
-            buildString {
-                append(parsed.protocol.name)
-                append("://")
-                append(parsed.host)
-                if (parsed.port != parsed.protocol.defaultPort) {
-                    append(":${parsed.port}")
-                }
-                append(path.trimEnd('/'))
-                append("/")
-            }
-        }.getOrNull()
+    private suspend fun readSmallResponseSummary(response: HttpResponse): String? {
+        return readSmallHttpBoardApiResponseSummary(
+            response = response,
+            responseReadBufferBytes = RESPONSE_READ_BUFFER_BYTES,
+            maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = RESPONSE_TOTAL_TIMEOUT_MILLIS
+        )
     }
 
-    private suspend fun readSmallResponseSummary(response: HttpResponse): String? {
-        val bytes = try {
-            readResponseBytesWithLimit(response, 64 * 1024)
+    private fun resolveBoardRefererBase(board: String): String {
+        val base = BoardUrlResolver.resolveBoardBaseUrl(board)
+        return if (base.endsWith("/")) base else "$base/"
+    }
+
+    private suspend fun fetchText(fetch: TextFetch): String {
+        return try {
+            withHttpBoardApiRetry(
+                logTag = TAG,
+                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
+            ) {
+                executeHttpBoardApiTextGet(
+                    client = client,
+                    request = HttpBoardApiTextGetRequest(
+                        url = fetch.url,
+                        referer = fetch.referer,
+                        rangeHeader = fetch.rangeHeader,
+                        errorLabel = fetch.errorLabel,
+                        maxResponseSize = MAX_RESPONSE_SIZE.toLong(),
+                        readMode = fetch.readMode,
+                        maxLines = fetch.maxLines
+                    ),
+                    userAgent = DEFAULT_USER_AGENT,
+                    accept = DEFAULT_ACCEPT,
+                    acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+                    readSmallResponseSummary = ::readSmallResponseSummary,
+                    readResponseBodyAsString = ::readResponseBodyAsString,
+                    readResponseHeadAsString = ::readResponseHeadAsString
+                )
+            }
+        } catch (e: NetworkException) {
+            throw e
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Throwable) {
-            return null
+        } catch (e: Exception) {
+            val errorMsg = "${fetch.failureDescription}: ${e.message}"
+            Logger.e(TAG, errorMsg, e)
+            throw NetworkException(errorMsg, cause = e)
         }
-        val decoded = try {
-            TextEncoding.decodeToString(bytes, response.headers[HttpHeaders.ContentType])
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            return null
+    }
+
+    private suspend fun submitPost(submission: PostSubmission): String? {
+        validateHttpBoardApiPostInput(
+            submission.name,
+            submission.email,
+            submission.subject,
+            submission.comment,
+            submission.password,
+            submission.imageFile
+        )
+        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(submission.board)
+        val referer = submission.threadId
+            ?.let { BoardUrlResolver.resolveThreadUrl(submission.board, it) }
+            ?: buildString {
+                append(boardBase)
+                if (!boardBase.endsWith("/")) append('/')
+                append("futaba.htm")
+            }
+        val url = buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.php?guid=on")
         }
-        return decoded
-            .trim()
-            .lineSequence()
-            .firstOrNull { it.isNotBlank() }
-            ?.take(160)
+        val postingConfig = getPostingConfig(submission.board)
+        val formData = buildHttpBoardApiPostFormData(
+            logTag = TAG,
+            threadId = submission.threadId,
+            name = submission.name,
+            email = submission.email,
+            subject = submission.subject,
+            comment = submission.comment,
+            password = submission.password,
+            imageFile = submission.imageFile,
+            imageFileName = submission.imageFileName,
+            textOnly = submission.textOnly,
+            postingConfig = postingConfig,
+            forceAjaxResponse = submission.forceAjaxResponse
+        )
+        val response = submitHttpBoardApiBinaryForm(
+            client = client,
+            request = HttpBoardApiBinarySubmitRequest(
+                url = url,
+                referer = referer,
+                formData = formData,
+                failureMessage = submission.requestFailureMessage
+            ),
+            userAgent = DEFAULT_USER_AGENT,
+            accept = DEFAULT_ACCEPT,
+            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE
+        )
+        try {
+            if (!response.status.isSuccess()) {
+                val detail = readSmallResponseSummary(response)
+                val suffix = detail?.let { ": $it" }.orEmpty()
+                throw NetworkException(
+                    "${submission.responseFailureLabel}に失敗しました (HTTP ${response.status.value}$suffix)"
+                )
+            }
+            val responseBody = readResponseBodyAsString(response)
+            return resolveHttpBoardApiPostResponseOrThrow(
+                mode = submission.responseMode,
+                responseBody = responseBody,
+                logTag = TAG
+            )
+        } finally {
+            // Body lifecycle is managed in readResponseBodyAsString.
+        }
+    }
+
+    private suspend fun submitShortForm(submission: ShortFormSubmission) {
+        executeHttpBoardApiShortFormRequest(
+            client = client,
+            request = HttpBoardApiShortFormRequest(
+                url = submission.url,
+                referer = submission.referer,
+                formParameters = submission.formParameters,
+                failureMessage = submission.requestFailureMessage,
+                responseFailureMessage = submission.responseFailureMessage
+            ),
+            userAgent = DEFAULT_USER_AGENT,
+            accept = DEFAULT_ACCEPT,
+            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+            readSmallResponseSummary = ::readSmallResponseSummary
+        )
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
         // FIX: 入力検証を最初に実行
-        validateReasonCode(reasonCode)
+        validateHttpBoardApiReasonCode(reasonCode)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for del request")
         }
         val boardSlug = BoardUrlResolver.resolveBoardSlug(board)
         val siteRoot = BoardUrlResolver.resolveSiteRoot(board)
-        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        val response = try {
-            client.submitForm(
+        submitShortForm(
+            ShortFormSubmission(
                 url = "$siteRoot/del.php",
+                referer = BoardUrlResolver.resolveThreadUrl(board, threadId),
                 formParameters = Parameters.build {
                     append("mode", "post")
                     append("b", boardSlug)
                     append("d", sanitizedPostId)
                     append("reason", reasonCode)
                     append("responsemode", "ajax")
-                }
-            ) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                headers[HttpHeaders.Referrer] = referer
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw NetworkException("Failed to send del request: ${e.message}", cause = e)
-        }
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("del依頼に失敗しました (HTTP ${response.status.value}$suffix)")
-            }
-            // Drain short response body to promptly release underlying connection.
-            readSmallResponseSummary(response)
-        } finally {
-            // Body is already drained by readSmallResponseSummary.
-        }
+                },
+                requestFailureMessage = "Failed to send del request",
+                responseFailureMessage = "del依頼に失敗しました"
+            )
+        )
     }
 
     override suspend fun deleteByUser(
@@ -855,21 +380,21 @@ class HttpBoardApi(
         imageOnly: Boolean
     ) {
         // FIX: 入力検証を最初に実行（既存のチェックを統合）
-        validateDeletionInput(password)
+        validateHttpBoardApiDeletionPassword(password)
         val sanitizedPostId = BoardUrlResolver.sanitizePostId(postId)
         if (sanitizedPostId.isBlank()) {
             throw IllegalArgumentException("Invalid post ID for user deletion")
         }
         val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
         val url = buildString {
             append(boardBase)
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
-        val response = try {
-            client.submitForm(
+        submitShortForm(
+            ShortFormSubmission(
                 url = url,
+                referer = BoardUrlResolver.resolveThreadUrl(board, threadId),
                 formParameters = Parameters.build {
                     append("guid", "on")
                     // Futaba variants exist in the wild: send both forms for compatibility.
@@ -879,31 +404,11 @@ class HttpBoardApi(
                     append("pwd", password)
                     append("onlyimgdel", if (imageOnly) "on" else "")
                     append("mode", "usrdel")
-                }
-            ) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                headers[HttpHeaders.Referrer] = referer
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw NetworkException("Failed to delete post: ${e.message}", cause = e)
-        }
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("本人削除に失敗しました (HTTP ${response.status.value}$suffix)")
-            }
-            // Drain short response body to promptly release underlying connection.
-            readSmallResponseSummary(response)
-        } finally {
-            // Body is already drained by readSmallResponseSummary.
-        }
+                },
+                requestFailureMessage = "Failed to delete post",
+                responseFailureMessage = "本人削除に失敗しました"
+            )
+        )
     }
 
     override suspend fun createThread(
@@ -917,80 +422,24 @@ class HttpBoardApi(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        // FIX: 入力検証を最初に実行
-        validatePostInput(name, email, subject, comment, password, imageFile)
-        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val referer = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.htm")
-        }
-        val url = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.php?guid=on")
-        }
-        val postingConfig = getPostingConfig(board)
-        val formData = buildPostFormData(
-            threadId = null,
-            name = name,
-            email = email,
-            subject = subject,
-            comment = comment,
-            password = password,
-            imageFile = imageFile,
-            imageFileName = imageFileName,
-            textOnly = textOnly,
-            postingConfig = postingConfig,
-            forceAjaxResponse = true
+        return submitPost(
+            PostSubmission(
+                board = board,
+                threadId = null,
+                name = name,
+                email = email,
+                subject = subject,
+                comment = comment,
+                password = password,
+                imageFile = imageFile,
+                imageFileName = imageFileName,
+                textOnly = textOnly,
+                responseMode = HttpBoardApiPostResponseMode.CREATE_THREAD,
+                requestFailureMessage = "Failed to create thread",
+                responseFailureLabel = "スレッド作成",
+                forceAjaxResponse = true
+            )
         )
-        val response = try {
-            client.submitFormWithBinaryData(
-                url = url,
-                formData = formData
-            ) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                headers[HttpHeaders.Referrer] = referer
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw NetworkException("Failed to create thread: ${e.message}", cause = e)
-        }
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("スレッド作成に失敗しました (HTTP ${response.status.value}$suffix)")
-            }
-
-            // Parse response to extract thread ID
-            val responseBody = readResponseBodyAsString(response)
-            val extractedThreadId = tryExtractThreadId(responseBody)
-            if (!extractedThreadId.isNullOrBlank()) {
-                return extractedThreadId
-            }
-            val jsonThreadId = tryParseThreadIdFromJson(responseBody)
-            if (jsonThreadId != null) {
-                return jsonThreadId
-            }
-            val errorDetail = extractServerError(responseBody)
-            val summary = summarizeResponse(responseBody)
-            if (errorDetail != null) {
-                throw NetworkException("スレッド作成に失敗しました: $errorDetail")
-            }
-            if (isSuccessfulPostResponse(responseBody)) {
-                com.valoser.futacha.shared.util.Logger.w("HttpBoardApi", "Thread created but thread ID was not found in response")
-                return null
-            }
-            throw NetworkException("スレッドIDの取得に失敗しました: $summary")
-        } finally {
-            // Body lifecycle is managed in readResponseBodyAsString.
-        }
     }
 
     override suspend fun replyToThread(
@@ -1005,471 +454,49 @@ class HttpBoardApi(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        // FIX: 入力検証を最初に実行
-        validatePostInput(name, email, subject, comment, password, imageFile)
-        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val referer = BoardUrlResolver.resolveThreadUrl(board, threadId)
-        val url = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.php?guid=on")
-        }
-        val postingConfig = getPostingConfig(board)
-        val formData = buildPostFormData(
-            threadId = threadId,
-            name = name,
-            email = email,
-            subject = subject,
-            comment = comment,
-            password = password,
-            imageFile = imageFile,
-            imageFileName = imageFileName,
-            textOnly = textOnly,
-            postingConfig = postingConfig
-        )
-        val response = try {
-            client.submitFormWithBinaryData(
-                url = url,
-                formData = formData
-            ) {
-                headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-                headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-                headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-                headers[HttpHeaders.CacheControl] = "no-cache"
-                headers[HttpHeaders.Pragma] = "no-cache"
-                headers[HttpHeaders.Referrer] = referer
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw NetworkException("Failed to reply to thread: ${e.message}", cause = e)
-        }
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("返信に失敗しました (HTTP ${response.status.value}$suffix)")
-            }
-            val responseBody = readResponseBodyAsString(response)
-            if (!isSuccessfulPostResponse(responseBody)) {
-                val errorDetail = extractServerError(responseBody)
-                val summary = summarizeResponse(responseBody)
-                val detail = errorDetail ?: summary
-                throw NetworkException("返信に失敗しました: $detail")
-            }
-            return tryExtractThisNo(responseBody)
-        } finally {
-            // Body lifecycle is managed in readResponseBodyAsString.
-        }
-    }
-
-    // SECURITY NOTE: パスワードはStringで渡されるため、メモリダンプから漏洩する可能性があります。
-    // 将来的な改善案:
-    // 1. CharArrayを使用してパスワードを渡し、使用後即座にクリア
-    // 2. プラットフォーム固有のSecureString実装を使用
-    // 3. パスワードの保持時間を最小化
-    // 現状では、呼び出し元がパスワードの寿命管理を行う必要があります。
-    private fun buildPostFormData(
-        threadId: String?,
-        name: String,
-        email: String,
-        subject: String,
-        comment: String,
-        password: String,
-        imageFile: ByteArray?,
-        imageFileName: String?,
-        textOnly: Boolean,
-        postingConfig: PostingConfig,
-        forceAjaxResponse: Boolean = false
-    ) = formData {
-        appendAsciiField("guid", "on")
-        appendAsciiField("mode", "regist")
-        appendAsciiField("MAX_FILE_SIZE", "8192000")
-        appendTextField("name", name, postingConfig.encoding)
-        appendTextField("email", email, postingConfig.encoding)
-        appendTextField("sub", subject, postingConfig.encoding)
-        appendTextField("com", comment, postingConfig.encoding)
-        appendTextField("pwd", password, postingConfig.encoding)
-        appendTextField("chrenc", postingConfig.chrencValue, postingConfig.encoding)
-        appendAsciiField("js", "on")
-        appendAsciiField("baseform", "")
-        appendAsciiField("pthb", "")
-        appendAsciiField("pthc", generateClientTimestampSeed())
-        appendAsciiField("pthd", "")
-        appendAsciiField("ptua", DEFAULT_PTUA_VALUE)
-        appendAsciiField("scsz", DEFAULT_SCREEN_SPEC)
-        appendAsciiField("hash", generateClientHash())
-        threadId?.let {
-            appendAsciiField("resto", it)
-            appendAsciiField("responsemode", "ajax")
-        } ?: run {
-            if (forceAjaxResponse) {
-                appendAsciiField("responsemode", "ajax")
-            }
-        }
-
-        val attachImage = shouldAttachImage(imageFile, textOnly)
-        if (attachImage) {
-            val safeName = sanitizeFileName(imageFileName)
-            // FIX: requireNotNullの代わりにエルビス演算子で安全にフォールバック
-            // shouldAttachImageがtrueならimageFileはnullでないはずだが、
-            // 防御的プログラミングとして空配列にフォールバックする
-            val fileData = imageFile ?: ByteArray(0)
-            if (fileData.isEmpty()) {
-                com.valoser.futacha.shared.util.Logger.w("HttpBoardApi", "imageFile is unexpectedly null or empty when attachImage is true")
-            }
-            append(
-                "upfile",
-                fileData,
-                Headers.build {
-                    append(
-                        HttpHeaders.ContentDisposition,
-                        """form-data; name="upfile"; filename="$safeName""""
-                    )
-                    append(HttpHeaders.ContentType, guessMediaContentType(safeName).toString())
-                }
+        return submitPost(
+            PostSubmission(
+                board = board,
+                threadId = threadId,
+                name = name,
+                email = email,
+                subject = subject,
+                comment = comment,
+                password = password,
+                imageFile = imageFile,
+                imageFileName = imageFileName,
+                textOnly = textOnly,
+                responseMode = HttpBoardApiPostResponseMode.REPLY,
+                requestFailureMessage = "Failed to reply to thread",
+                responseFailureLabel = "返信"
             )
-        } else {
-            append("textonly", "on")
-            append(
-                "upfile",
-                ByteArray(0),
-                Headers.build {
-                    append(
-                        HttpHeaders.ContentDisposition,
-                        """form-data; name="upfile"; filename="""
-                    )
-                    append(HttpHeaders.ContentType, ContentType.Application.OctetStream.toString())
-                }
-            )
-        }
-    }
-
-    private fun shouldAttachImage(imageFile: ByteArray?, textOnly: Boolean): Boolean {
-        return !textOnly && imageFile != null && imageFile.isNotEmpty()
-    }
-
-    private fun sanitizeFileName(original: String?): String {
-        if (original.isNullOrBlank()) return DEFAULT_UPLOAD_FILE_NAME
-        val trimmed = original.trim()
-        val sanitized = buildString(trimmed.length) {
-            for (ch in trimmed) {
-                when {
-                    ch.isLetterOrDigit() -> append(ch)
-                    ch == '.' || ch == '-' || ch == '_' -> append(ch)
-                    ch.isWhitespace() -> append('_')
-                    else -> append('_')
-                }
-            }
-        }
-        return sanitized.ifBlank { DEFAULT_UPLOAD_FILE_NAME }
-    }
-
-    private fun guessMediaContentType(fileName: String): ContentType {
-        val extension = fileName.substringAfterLast('.', "").lowercase()
-        return when (extension) {
-            "jpg", "jpeg", "jpe" -> ContentType.Image.JPEG
-            "png" -> ContentType.Image.PNG
-            "gif" -> ContentType.Image.GIF
-            "bmp" -> BMP_CONTENT_TYPE
-            "webp" -> WEBP_CONTENT_TYPE
-            "webm" -> WEBM_CONTENT_TYPE
-            "mp4" -> MP4_CONTENT_TYPE
-            else -> ContentType.Application.OctetStream
-        }
-    }
-
-    private fun isSuccessfulPostResponse(body: String): Boolean {
-        val trimmed = body.trim()
-        if (trimmed.isEmpty()) return false
-        if (looksLikeJson(trimmed) && isJsonStatusOk(trimmed)) {
-            return true
-        }
-        if (containsThreadId(trimmed)) {
-            return true
-        }
-        return SUCCESS_KEYWORDS.any { keyword -> trimmed.contains(keyword) }
-    }
-
-    private fun extractServerError(body: String): String? {
-        val normalized = body.replace("\r\n", "\n")
-        if (looksLikeJson(normalized)) {
-            if (isJsonStatusOk(normalized)) {
-                return null
-            }
-            val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
-            if (message != null) {
-                return message
-            }
-            val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
-            return status?.let { "status=$it" }
-        }
-        return normalized.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { line ->
-                line.isNotEmpty() && ERROR_KEYWORDS.any { keyword ->
-                    line.contains(keyword, ignoreCase = true)
-                }
-            }
-    }
-
-    private fun summarizeResponse(body: String): String {
-        val normalized = body.replace("\r\n", "\n")
-        if (looksLikeJson(normalized)) {
-            val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
-            val message = JSON_MESSAGE_REGEX.find(normalized)?.groupValues?.getOrNull(2)
-            return buildString {
-                append("status=${status ?: "unknown"}")
-                if (!message.isNullOrBlank()) {
-                    append(", message=")
-                    append(message)
-                }
-            }
-        }
-        return normalized.lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isNotEmpty() }
-            ?.take(120)
-            ?: body.take(120)
-    }
-
-    private fun tryParseThreadIdFromJson(body: String): String? {
-        if (!looksLikeJson(body) || !isJsonStatusOk(body)) {
-            return null
-        }
-        val jumpto = JSON_JUMPTO_REGEX.find(body)?.groupValues?.getOrNull(1)
-        if (!jumpto.isNullOrBlank()) {
-            return jumpto
-        }
-        val thisNo = JSON_THISNO_REGEX.find(body)?.groupValues?.getOrNull(1)
-        if (!thisNo.isNullOrBlank()) {
-            return thisNo
-        }
-        return null
-    }
-
-    private fun tryExtractThreadId(body: String): String? {
-        THREAD_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.let { return it }
-        RES_QUERY_ID_REGEX.find(body)?.groupValues?.getOrNull(1)?.let { return it }
-        return null
-    }
-
-    private fun containsThreadId(body: String): Boolean {
-        return THREAD_ID_REGEX.containsMatchIn(body) || RES_QUERY_ID_REGEX.containsMatchIn(body)
-    }
-
-    private fun tryExtractThisNo(body: String): String? {
-        val match = JSON_THISNO_REGEX.find(body)
-        return match?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
-    }
-
-    private fun looksLikeJson(body: String): Boolean {
-        val firstNonWhitespace = body.firstOrNull { !it.isWhitespace() }
-        return firstNonWhitespace == '{' || firstNonWhitespace == '['
-    }
-
-    private fun isJsonStatusOk(body: String): Boolean {
-        val status = JSON_STATUS_REGEX.find(body)?.groupValues?.getOrNull(1)?.lowercase()
-        return status == "ok" || status == "success"
-    }
-
-    private fun FormBuilder.appendTextField(name: String, value: String, encoding: PostEncoding) {
-        val normalizedValue = when (encoding) {
-            PostEncoding.SHIFT_JIS -> {
-                val sanitized = sanitizeForShiftJis(value)
-                if (sanitized.escapedCodePointCount > 0 || sanitized.removedCodePointCount > 0) {
-                    Logger.w(
-                        TAG,
-                        "Escaped ${sanitized.escapedCodePointCount} and removed ${sanitized.removedCodePointCount} unsupported Shift_JIS character(s) from '$name'"
-                    )
-                }
-                sanitized.sanitizedText
-            }
-            PostEncoding.UTF8 -> value
-        }
-        val (bytes, contentType) = when (encoding) {
-            PostEncoding.SHIFT_JIS -> TextEncoding.encodeToShiftJis(normalizedValue) to SHIFT_JIS_TEXT_MIME
-            PostEncoding.UTF8 -> normalizedValue.encodeToByteArray() to UTF8_TEXT_MIME
-        }
-        append(
-            name,
-            bytes,
-            Headers.build {
-                append(HttpHeaders.ContentDisposition, """form-data; name="$name"""")
-                append(HttpHeaders.ContentType, contentType)
-            }
         )
     }
 
-    private fun FormBuilder.appendAsciiField(name: String, value: String) {
-        append(
-            name,
-            value,
-            Headers.build {
-                append(HttpHeaders.ContentDisposition, """form-data; name="$name"""")
-                append(HttpHeaders.ContentType, ASCII_TEXT_MIME)
-            }
+    private suspend fun getPostingConfig(board: String): HttpBoardApiPostingConfig {
+        return getOrLoadHttpBoardApiPostingConfig(
+            board = board,
+            runtime = postingRuntime,
+            fallbackChrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
+            logTag = TAG
+        ) {
+            fetchPostingConfig(board)
+        }
+    }
+
+    private suspend fun fetchPostingConfig(board: String): HttpBoardApiPostingConfig {
+        return fetchHttpBoardApiPostingConfig(
+            client = client,
+            board = board,
+            userAgent = DEFAULT_USER_AGENT,
+            accept = DEFAULT_ACCEPT,
+            acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
+            cacheControl = "no-cache",
+            logTag = TAG,
+            fallbackChrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
+            readSmallResponseSummary = ::readSmallResponseSummary,
+            readResponseBodyAsString = ::readResponseBodyAsString
         )
-    }
-
-    @OptIn(ExperimentalTime::class)
-    private fun generateClientHash(): String {
-        val timestamp = Clock.System.now().toEpochMilliseconds()
-        val randomHex = buildString(32) {
-            repeat(16) {
-                val value = Random.nextInt(0, 256)
-                append(value.toString(16).padStart(2, '0'))
-            }
-        }
-        return "$timestamp-$randomHex"
-    }
-
-    @OptIn(ExperimentalTime::class)
-    private fun generateClientTimestampSeed(): String =
-        Clock.System.now().toEpochMilliseconds().toString()
-
-    private suspend fun postingConfigLockFor(board: String): Mutex {
-        return postingConfigLocksGuard.withLock {
-            postingConfigLocks.getOrPut(board) { Mutex() }
-        }
-    }
-
-    private suspend fun getPostingConfig(board: String): PostingConfig {
-        postingConfigCache.get(board)?.let { return it }
-        val boardLock = postingConfigLockFor(board)
-        return boardLock.withLock {
-            postingConfigCache.get(board)?.let { return@withLock it }
-            try {
-                val fetched = fetchPostingConfig(board)
-                if (!fetched.fromFallback) {
-                    postingConfigCache.put(board, fetched)
-                }
-                fetched
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Logger.w(
-                    TAG,
-                    "Failed to fetch posting config for board '$board', using non-cached Shift_JIS fallback: ${e.message}"
-                )
-                PostingConfig(
-                    encoding = PostEncoding.SHIFT_JIS,
-                    chrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
-                    fromFallback = true
-                )
-            }
-        }
-    }
-
-    private suspend fun fetchPostingConfig(board: String): PostingConfig {
-        val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-        val url = buildString {
-            append(boardBase)
-            if (!boardBase.endsWith("/")) append('/')
-            append("futaba.htm")
-        }
-        val response = client.get(url) {
-            headers[HttpHeaders.UserAgent] = DEFAULT_USER_AGENT
-            headers[HttpHeaders.Accept] = DEFAULT_ACCEPT
-            headers[HttpHeaders.AcceptLanguage] = DEFAULT_ACCEPT_LANGUAGE
-            headers[HttpHeaders.CacheControl] = "no-cache"
-        }
-        try {
-            if (!response.status.isSuccess()) {
-                val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
-                throw NetworkException("HTTP error ${response.status.value} when fetching posting config from $url$suffix")
-            }
-            val html = readResponseBodyAsString(response)
-            val chrencValue = parseChrencValue(html)
-            if (chrencValue == null) {
-                Logger.w(TAG, "chrenc not found in posting config response for '$board'; using temporary fallback")
-            }
-            return PostingConfig(
-                encoding = determineEncoding(chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE),
-                chrencValue = chrencValue ?: DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
-                fromFallback = chrencValue == null
-            )
-        } finally {
-            // Body lifecycle is managed in readResponseBodyAsString.
-        }
-    }
-
-    private fun parseChrencValue(html: String): String? {
-        if (html.isBlank()) return null
-        val chrencIndex = html.indexOf("chrenc", ignoreCase = true)
-        val scanTarget = if (chrencIndex >= 0) {
-            val start = (chrencIndex - 1024).coerceAtLeast(0)
-            val end = (chrencIndex + CHRENC_NEARBY_SCAN_WINDOW).coerceAtMost(html.length)
-            html.substring(start, end)
-        } else {
-            html.take(CHRENC_FALLBACK_SCAN_MAX_BYTES)
-        }
-
-        val input = CHRENC_INPUT_REGEX.find(scanTarget)?.value ?: return null
-        val match = VALUE_ATTR_REGEX.find(input) ?: return null
-        val rawValue = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        if (rawValue.isEmpty()) return null
-        return decodeNumericEntities(rawValue)
-    }
-
-    private fun decodeNumericEntities(value: String): String {
-        if (!value.contains("&#")) return value
-        val numericEntityRegex = Regex("""&#(x?[0-9a-fA-F]+);""")
-        return numericEntityRegex.replace(value) { match ->
-            val payload = match.groupValues.getOrNull(1) ?: return@replace match.value
-            val codePoint = when {
-                payload.startsWith("x") || payload.startsWith("X") -> payload.drop(1).toIntOrNull(16)
-                else -> payload.toIntOrNull(10)
-            }
-            codePoint?.let {
-                // FIX: サロゲートペア計算の修正 - 範囲チェックと正しい変換
-                when {
-                    it in 0x0000..0xFFFF -> {
-                        // BMP (Basic Multilingual Plane) - 直接変換可能
-                        if (it in 0xD800..0xDFFF) {
-                            // サロゲート範囲は無効
-                            return@replace match.value
-                        }
-                        it.toChar().toString()
-                    }
-                    it in 0x10000..0x10FFFF -> {
-                        // 補助平面 - サロゲートペアが必要
-                        val adjusted = it - 0x10000
-                        val highSurrogate = 0xD800 + (adjusted shr 10)
-                        val lowSurrogate = 0xDC00 + (adjusted and 0x3FF)
-                        buildString {
-                            append(highSurrogate.toChar())
-                            append(lowSurrogate.toChar())
-                        }
-                    }
-                    else -> {
-                        // 範囲外のコードポイントは無視
-                        match.value
-                    }
-                }
-            } ?: match.value
-        }
-    }
-
-    private fun determineEncoding(chrencValue: String): PostEncoding {
-        val normalized = chrencValue.lowercase()
-        return if (normalized.contains("unicode") || normalized.contains("utf")) {
-            PostEncoding.UTF8
-        } else {
-            PostEncoding.SHIFT_JIS
-        }
-    }
-
-    private data class PostingConfig(
-        val encoding: PostEncoding,
-        val chrencValue: String,
-        val fromFallback: Boolean = false
-    )
-
-    private enum class PostEncoding {
-        SHIFT_JIS,
-        UTF8
     }
 
     override fun close() {

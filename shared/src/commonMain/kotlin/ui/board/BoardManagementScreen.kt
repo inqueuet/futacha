@@ -253,17 +253,13 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
-import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.HistoryRefresher
-import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.audio.createTextSpeaker
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.ui.normalizeBoardUrl
@@ -321,695 +317,173 @@ import com.valoser.futacha.shared.ui.board.resolveEffectiveBoardUrl
 @Composable
 fun BoardManagementScreen(
     boards: List<BoardSummary>,
-    history: List<ThreadHistoryEntry>,
-    cookieRepository: CookieRepository? = null,
+    screenContract: ScreenContract,
     onBoardSelected: (BoardSummary) -> Unit,
     onAddBoard: (String, String) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
-    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryRefresh: suspend () -> Unit = {},
     modifier: Modifier = Modifier,
-    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = {},
-    onHistoryCleared: () -> Unit = {},
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
-    appVersion: String,
-    isBackgroundRefreshEnabled: Boolean = false,
-    onBackgroundRefreshChanged: (Boolean) -> Unit = {},
-    isLightweightModeEnabled: Boolean = false,
-    onLightweightModeChanged: (Boolean) -> Unit = {},
-    manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
-    manualSaveLocation: com.valoser.futacha.shared.model.SaveLocation? = null,
-    resolvedManualSaveDirectory: String? = null,
-    onManualSaveDirectoryChanged: (String) -> Unit = {},
-    attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-    saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
-    onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
-    onOpenSaveDirectoryPicker: (() -> Unit)? = null,
-    httpClient: io.ktor.client.HttpClient? = null,
-    fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
-    autoSavedThreadRepository: SavedThreadRepository? = null,
-    preferredFileManagerPackage: String? = null,
-    preferredFileManagerLabel: String? = null,
-    onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
-    onClearPreferredFileManager: (() -> Unit)? = null,
-    threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
-    onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit = {},
-    catalogNavEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries(),
-    onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit = {}
+    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies()
 ) {
-    val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    var isMenuExpanded by remember { mutableStateOf(false) }
-    var isAddDialogVisible by rememberSaveable { mutableStateOf(false) }
-    var isDeleteMode by rememberSaveable { mutableStateOf(false) }
-    var isReorderMode by rememberSaveable { mutableStateOf(false) }
-    var boardToDelete by remember { mutableStateOf<BoardSummary?>(null) }
-    var isGlobalSettingsVisible by remember { mutableStateOf(false) }
-    var isCookieManagementVisible by remember { mutableStateOf(false) }
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val isDrawerOpen by remember {
-        derivedStateOf {
-            drawerState.currentValue == DrawerValue.Open ||
-                drawerState.targetValue == DrawerValue.Open
-        }
-    }
+    BoardManagementScreen(
+        boards = boards,
+        history = screenContract.history,
+        onBoardSelected = onBoardSelected,
+        onAddBoard = onAddBoard,
+        onMenuAction = onMenuAction,
+        historyCallbacks = screenContract.historyCallbacks,
+        modifier = modifier,
+        onBoardDeleted = onBoardDeleted,
+        onBoardsReordered = onBoardsReordered,
+        dependencies = dependencies,
+        preferencesState = screenContract.preferencesState,
+        preferencesCallbacks = screenContract.preferencesCallbacks
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@Composable
+fun BoardManagementScreen(
+    boards: List<BoardSummary>,
+    history: List<ThreadHistoryEntry>,
+    onBoardSelected: (BoardSummary) -> Unit,
+    onAddBoard: (String, String) -> Unit,
+    onMenuAction: (BoardManagementMenuAction) -> Unit,
+    historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    modifier: Modifier = Modifier,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
+    onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
+    onBoardDeleted: (BoardSummary) -> Unit = {},
+    onBoardsReordered: (List<BoardSummary>) -> Unit = {},
+    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies(),
+    cookieRepository: CookieRepository? = dependencies.cookieRepository,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
+    fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
+    autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
+) {
+    val runtimeObjects = rememberBoardManagementRuntimeObjectsBundle()
+    val mutableStateBundle = rememberBoardManagementMutableStateBundle()
+    val snackbarHostState = runtimeObjects.snackbarHostState
+    val scope = runtimeObjects.coroutineScope
+    val drawerState = runtimeObjects.drawerState
+    val isDrawerOpen = runtimeObjects.isDrawerOpen
+    var isMenuExpanded by mutableStateBundle.isMenuExpanded
+    var isDeleteMode by mutableStateBundle.isDeleteMode
+    var isReorderMode by mutableStateBundle.isReorderMode
+    var overlayState by mutableStateBundle.overlayState
+    var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
+    val chromeState = resolveBoardManagementChromeState(
+        isDeleteMode = isDeleteMode,
+        isReorderMode = isReorderMode
+    )
     val onHistoryEntrySelectedState = rememberUpdatedState(onHistoryEntrySelected)
     val onHistoryRefreshState = rememberUpdatedState(onHistoryRefresh)
     val onHistoryClearedState = rememberUpdatedState(onHistoryCleared)
-    val handleHistorySelection: (ThreadHistoryEntry) -> Unit = remember(drawerState, scope) {
-        { entry ->
-            scope.launch { drawerState.close() }
-            onHistoryEntrySelectedState.value(entry)
-        }
-    }
-
-    var isHistoryRefreshing by remember { mutableStateOf(false) }
-    val handleHistoryRefresh: () -> Unit = remember(scope, snackbarHostState) {
-        handleHistoryRefresh@{
-            if (isHistoryRefreshing) return@handleHistoryRefresh
-            isHistoryRefreshing = true
-            scope.launch {
-                try {
-                    onHistoryRefreshState.value()
-                    snackbarHostState.showSnackbar("履歴を更新しました")
-                } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
-                    snackbarHostState.showSnackbar("履歴更新はすでに実行中です")
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    snackbarHostState.showSnackbar("履歴の更新に失敗しました: ${e.message ?: "不明なエラー"}")
-                } finally {
-                    isHistoryRefreshing = false
-                }
-            }
-        }
-    }
-
-    val handleBatchDelete: () -> Unit = remember(scope, snackbarHostState, drawerState) {
-        {
-            scope.launch {
-                onHistoryClearedState.value()
-                snackbarHostState.showSnackbar("履歴を一括削除しました")
-                drawerState.close()
-            }
-        }
-    }
-
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = true,
-        drawerContent = {
-            HistoryDrawerContent(
-                history = history,
-                onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryEntrySelected = handleHistorySelection,
-                onBoardClick = {
-                    scope.launch {
-                        drawerState.close()
-                    }
-                },
-                onRefreshClick = handleHistoryRefresh,
-                onBatchDeleteClick = handleBatchDelete,
-                onSettingsClick = {
-                    isGlobalSettingsVisible = true
-                }
+    val interactionBindings = remember(
+        drawerState,
+        scope,
+        snackbarHostState,
+        cookieRepository,
+        onMenuAction,
+        onAddBoard,
+        onBoardDeleted
+    ) {
+        buildBoardManagementInteractionBindingsBundle(
+            historyInputs = BoardManagementHistoryInteractionInputs(
+                coroutineScope = scope,
+                closeDrawer = { drawerState.close() },
+                openDrawer = { drawerState.open() },
+                onExternalMenuAction = onMenuAction,
+                onHistoryEntrySelected = { onHistoryEntrySelectedState.value(it) },
+                onHistoryRefresh = { onHistoryRefreshState.value() },
+                onHistoryCleared = { onHistoryClearedState.value() },
+                showSnackbar = snackbarHostState::showSnackbar
+            ),
+            stateInputs = BoardManagementStateInteractionInputs(
+                currentIsDeleteMode = { isDeleteMode },
+                currentIsReorderMode = { isReorderMode },
+                currentIsHistoryRefreshing = { isHistoryRefreshing },
+                setIsDeleteMode = { isDeleteMode = it },
+                setIsReorderMode = { isReorderMode = it },
+                setIsHistoryRefreshing = { isHistoryRefreshing = it },
+                currentIsMenuExpanded = { isMenuExpanded },
+                setIsMenuExpanded = { isMenuExpanded = it }
+            ),
+            overlayInputs = BoardManagementOverlayInteractionInputs(
+                currentOverlayState = { overlayState },
+                setOverlayState = { overlayState = it },
+                hasCookieRepository = cookieRepository != null
+            ),
+            boardInputs = BoardManagementBoardInteractionInputs(
+                onAddBoard = onAddBoard,
+                onBoardDeleted = onBoardDeleted,
+                onBoardSelected = onBoardSelected,
+                onBoardsReordered = onBoardsReordered
             )
-        }
-    ) {
-        Scaffold(
-            modifier = modifier,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
-                CenterAlignedTopAppBar(
-                    navigationIcon = {
-                        if (isDeleteMode || isReorderMode) {
-                            IconButton(onClick = {
-                                isDeleteMode = false
-                                isReorderMode = false
-                            }) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                    contentDescription = "戻る"
-                                )
-                            }
-                        } else {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Menu,
-                                    contentDescription = "履歴を開く"
-                                )
-                            }
-                        }
-                    },
-                    title = {
-                        Text(
-                            when {
-                                isDeleteMode -> "削除する板を選択"
-                                isReorderMode -> "板の順序を変更"
-                                else -> "ふたば"
-                            }
-                        )
-                    },
-                    actions = {
-                        IconButton(onClick = { isMenuExpanded = true }) {
-                            Icon(
-                                imageVector = Icons.Outlined.MoreVert,
-                                contentDescription = "メニュー"
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = isMenuExpanded,
-                            onDismissRequest = { isMenuExpanded = false }
-                        ) {
-                            BoardManagementMenuAction.entries.forEach { action ->
-                                DropdownMenuItem(
-                                    text = { Text(action.label) },
-                                    onClick = {
-                                        isMenuExpanded = false
-                                        onMenuAction(action)
-                                        when (action) {
-                                            BoardManagementMenuAction.ADD -> {
-                                                isAddDialogVisible = true
-                                            }
-                                            BoardManagementMenuAction.DELETE -> {
-                                                isDeleteMode = !isDeleteMode
-                                                isReorderMode = false
-                                            }
-                                            BoardManagementMenuAction.REORDER -> {
-                                                isReorderMode = !isReorderMode
-                                                isDeleteMode = false
-                                            }
-                                            BoardManagementMenuAction.SAVED_THREADS -> {
-                                                // Handled by parent via onMenuAction callback.
-                                            }
-                                            BoardManagementMenuAction.SETTINGS -> {
-                                                isGlobalSettingsVisible = true
-                                            }
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
-                    )
+        )
+    }
+    val lifecycleBindings = remember(drawerState, scope, isDrawerOpen, isDeleteMode, isReorderMode) {
+        buildBoardManagementLifecycleBindings(
+            coroutineScope = scope,
+            currentBackAction = {
+                resolveBoardManagementBackAction(
+                    isDrawerOpen = isDrawerOpen,
+                    isDeleteMode = isDeleteMode,
+                    isReorderMode = isReorderMode
                 )
-            }
-        ) { innerPadding ->
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 16.dp)
-                    .pointerInput(isDrawerOpen) {
-                        if (!isDrawerOpen) return@pointerInput
-                        awaitPointerEventScope {
-                            awaitFirstDown()
-                            scope.launch { drawerState.close() }
-                        }
-                    },
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 12.dp)
-            ) {
-                itemsIndexed(
-                    items = boards,
-                    key = { _, board -> board.id }
-                ) { index, board ->
-                    when {
-                        isDeleteMode -> {
-                            BoardSummaryCardWithDelete(
-                                board = board,
-                                onDelete = {
-                                    boardToDelete = board
-                                }
-                            )
-                        }
-                        isReorderMode -> {
-                            BoardSummaryCardWithReorder(
-                                board = board,
-                                onMoveUp = {
-                                    if (index > 0) {
-                                        val newBoards = boards.toMutableList()
-                                        newBoards.removeAt(index)
-                                        newBoards.add(index - 1, board)
-                                        onBoardsReordered(newBoards)
-                                    }
-                                },
-                                onMoveDown = {
-                                    if (index < boards.size - 1) {
-                                        val newBoards = boards.toMutableList()
-                                        newBoards.removeAt(index)
-                                        newBoards.add(index + 1, board)
-                                        onBoardsReordered(newBoards)
-                                    }
-                                },
-                                canMoveUp = index > 0,
-                                canMoveDown = index < boards.size - 1
-                            )
-                        }
-                        else -> {
-                            BoardSummaryCard(
-                                board = board,
-                                onClick = { onBoardSelected(board) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (isAddDialogVisible) {
-        AddBoardDialog(
-            existingBoards = boards,
-            onDismiss = { isAddDialogVisible = false },
-            onSubmit = { name, url ->
-                onAddBoard(name, url)
-                isAddDialogVisible = false
-                scope.launch {
-                    snackbarHostState.showSnackbar("\"$name\" を追加しました")
-                }
-            }
-        )
-    }
-
-    boardToDelete?.let { board ->
-        DeleteBoardDialog(
-            board = board,
-            onDismiss = { boardToDelete = null },
-            onConfirm = {
-                onBoardDeleted(board)
-                boardToDelete = null
-                scope.launch {
-                    snackbarHostState.showSnackbar("\"${board.name}\" を削除しました")
-                }
-            }
-        )
-    }
-
-    if (isGlobalSettingsVisible) {
-        GlobalSettingsScreen(
-            onBack = { isGlobalSettingsVisible = false },
-            appVersion = appVersion,
-            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-            onBackgroundRefreshChanged = onBackgroundRefreshChanged,
-            isLightweightModeEnabled = isLightweightModeEnabled,
-            onLightweightModeChanged = onLightweightModeChanged,
-            manualSaveDirectory = manualSaveDirectory,
-            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-            onManualSaveDirectoryChanged = onManualSaveDirectoryChanged,
-            saveDirectorySelection = saveDirectorySelection,
-            onSaveDirectorySelectionChanged = onSaveDirectorySelectionChanged,
-            onOpenSaveDirectoryPicker = onOpenSaveDirectoryPicker,
-            onOpenCookieManager = cookieRepository?.let {
-                {
-                    isGlobalSettingsVisible = false
-                    isCookieManagementVisible = true
-                }
             },
-            preferredFileManagerLabel = preferredFileManagerLabel,
-            onFileManagerSelected = onFileManagerSelected,
-            onClearPreferredFileManager = onClearPreferredFileManager,
-            historyEntries = history,
-            fileSystem = fileSystem,
-            autoSavedThreadRepository = autoSavedThreadRepository,
-            threadMenuEntries = threadMenuEntries,
-            onThreadMenuEntriesChanged = onThreadMenuEntriesChanged,
-            catalogNavEntries = catalogNavEntries,
-            onCatalogNavEntriesChanged = onCatalogNavEntriesChanged
+            closeDrawer = { drawerState.close() },
+            clearEditModes = {
+                val clearedState = clearBoardManagementEditModes()
+                isDeleteMode = clearedState.isDeleteMode
+                isReorderMode = clearedState.isReorderMode
+            }
         )
     }
-
-    if (isCookieManagementVisible && cookieRepository != null) {
-        CookieManagementScreen(
-            onBack = { isCookieManagementVisible = false },
-            repository = cookieRepository
-        )
-    }
-}
-
-@Composable
-private fun AddBoardDialog(
-    existingBoards: List<BoardSummary>,
-    onDismiss: () -> Unit,
-    onSubmit: (String, String) -> Unit
-) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var url by rememberSaveable { mutableStateOf("") }
-    val trimmedName = name.trim()
-    val trimmedUrl = url.trim()
-    val hasName = trimmedName.isNotEmpty()
-    val hasUrl = trimmedUrl.isNotEmpty()
-    val ipv4Regex = remember { Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$") }
-    val urlHasScheme = trimmedUrl.startsWith("http://", ignoreCase = true) ||
-        trimmedUrl.startsWith("https://", ignoreCase = true)
-    val normalizedInputUrl = remember(trimmedUrl) {
-        runCatching { normalizeBoardUrl(trimmedUrl) }.getOrDefault(trimmedUrl)
-    }
-    val existingBoardUrls = remember(existingBoards) {
-        existingBoards.map { it.url.trim() }
-    }
-    val normalizedExistingUrls = remember(existingBoardUrls) {
-        existingBoardUrls.map { urlValue ->
-            runCatching { normalizeBoardUrl(urlValue) }.getOrDefault(urlValue)
-        }
-    }
-
-    // Enhanced URL validation
-    val isValidUrl = hasUrl && urlHasScheme && run {
-        val urlWithoutScheme = trimmedUrl.removePrefix("https://").removePrefix("http://")
-        // Check for valid domain/host structure
-        val hostPart = urlWithoutScheme.substringBefore("/").substringBefore("?").substringBefore("#")
-
-        hostPart.isNotEmpty() &&
-            !hostPart.startsWith(".") &&
-            !hostPart.endsWith(".") &&
-            !hostPart.contains("..") && // No consecutive dots
-             !hostPart.contains(" ") && // No spaces
-             (hostPart.contains(".") || // Must have at least one dot for domain
-             hostPart.equals("localhost", ignoreCase = true) || // Allow localhost
-             hostPart.matches(ipv4Regex)) // Allow IP addresses
-    }
-
-    val isDuplicateUrl = hasUrl && isValidUrl &&
-        normalizedExistingUrls.any { it.equals(normalizedInputUrl, ignoreCase = true) }
-    val canSubmit = hasName && isValidUrl && !isDuplicateUrl
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(text = "板を追加") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("板の名前") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = !hasName && name.isNotEmpty()
-                )
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("板のURL") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = hasUrl && (!isValidUrl || isDuplicateUrl)
-                )
-                val helperText = when {
-                    isDuplicateUrl -> "同じURLの板が既に登録されています"
-                    hasUrl && !urlHasScheme -> "http:// もしくは https:// から始まるURLを入力してください"
-                    hasUrl && !isValidUrl -> "有効なURLを入力してください（例: https://example.com/board）"
-                    else -> null
-                }
-                helperText?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = canSubmit,
-                onClick = {
-                    onSubmit(trimmedName, normalizedInputUrl)
-                    name = ""
-                    url = ""
-                }
-            ) {
-                Text("追加")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("キャンセル")
-            }
-        }
+    val scaffoldBindings = BoardManagementScaffoldBindings(
+        history = history,
+        boards = boards,
+        isDeleteMode = isDeleteMode,
+        isReorderMode = isReorderMode,
+        isDrawerOpen = isDrawerOpen,
+        chromeState = chromeState,
+        isMenuExpanded = isMenuExpanded,
+        drawerState = drawerState,
+        snackbarHostState = snackbarHostState,
+        onHistoryEntryDismissed = onHistoryEntryDismissed,
+        onDismissDrawerTap = { scope.launch { drawerState.close() } },
+        historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks,
+        topBarCallbacks = interactionBindings.topBarCallbacks,
+        boardListCallbacks = interactionBindings.boardListCallbacks,
+        onHistorySettingsClick = interactionBindings.onHistorySettingsClick
     )
-}
-
-@Composable
-private fun BoardSummaryCard(
-    board: BoardSummary,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.small,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = if (board.pinned) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                contentColor = if (board.pinned) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (board.pinned) {
-                            Icons.Outlined.PushPin
-                        } else {
-                            Icons.Outlined.Folder
-                        },
-                        contentDescription = null
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = board.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = board.url,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DeleteBoardDialog(
-    board: BoardSummary,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("板を削除") },
-        text = {
-            Text("「${board.name}」を削除してもよろしいですか？")
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text("削除")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("キャンセル")
-            }
-        }
+    val overlayBindings = BoardManagementOverlayBindings(
+        boards = boards,
+        history = history,
+        overlayState = overlayState,
+        preferencesState = preferencesState,
+        preferencesCallbacks = preferencesCallbacks,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        fileSystem = fileSystem,
+        cookieRepository = cookieRepository,
+        onDismissAddDialog = interactionBindings.onDismissAddDialog,
+        onAddBoardSubmitted = interactionBindings.dialogCallbacks.onAddBoardSubmitted,
+        onDismissDeleteDialog = interactionBindings.onDismissDeleteDialog,
+        onDeleteBoardConfirmed = interactionBindings.dialogCallbacks.onDeleteBoardConfirmed,
+        onGlobalSettingsBack = interactionBindings.onGlobalSettingsBack,
+        onOpenCookieManagement = interactionBindings.onOpenCookieManagement,
+        onCookieManagementBack = interactionBindings.onCookieManagementBack
     )
-}
 
-@Composable
-private fun BoardSummaryCardWithDelete(
-    board: BoardSummary,
-    onDelete: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.small,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = if (board.pinned) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                contentColor = if (board.pinned) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (board.pinned) {
-                            Icons.Outlined.PushPin
-                        } else {
-                            Icons.Outlined.Folder
-                        },
-                        contentDescription = null
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = board.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = board.url,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Rounded.Delete,
-                    contentDescription = "削除",
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
-        }
+    PlatformBackHandler(enabled = lifecycleBindings.backAction != BoardManagementBackAction.NONE) {
+        lifecycleBindings.onBack()
     }
-}
 
-@Composable
-private fun BoardSummaryCardWithReorder(
-    board: BoardSummary,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.small,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = if (board.pinned) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                contentColor = if (board.pinned) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (board.pinned) {
-                            Icons.Outlined.PushPin
-                        } else {
-                            Icons.Outlined.Folder
-                        },
-                        contentDescription = null
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = board.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = board.url,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Column {
-                IconButton(
-                    onClick = onMoveUp,
-                    enabled = canMoveUp
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ArrowUpward,
-                        contentDescription = "上へ移動"
-                    )
-                }
-                IconButton(
-                    onClick = onMoveDown,
-                    enabled = canMoveDown
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ArrowDownward,
-                        contentDescription = "下へ移動"
-                    )
-                }
-            }
-        }
-    }
+    BoardManagementScaffold(bindings = scaffoldBindings, modifier = modifier)
+
+    BoardManagementOverlayHost(bindings = overlayBindings)
 }

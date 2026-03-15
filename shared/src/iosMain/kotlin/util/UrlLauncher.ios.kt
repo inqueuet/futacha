@@ -10,15 +10,20 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
     return remember {
         { url: String ->
             try {
-                val nsUrl = NSURL.URLWithString(url)
-                if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
-                    UIApplication.sharedApplication.openURL(
-                        nsUrl,
-                        options = emptyMap<Any?, Any?>(),
-                        completionHandler = null
-                    )
-                } else {
+                val request = resolveUrlLaunchRequest(url)
+                if (request == null) {
                     Logger.e("UrlLauncher", "Failed to open URL: $url", null)
+                } else {
+                    val nsUrl = NSURL.URLWithString(request.normalizedUrl)
+                    if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
+                        UIApplication.sharedApplication.openURL(
+                            nsUrl,
+                            options = emptyMap<Any?, Any?>(),
+                            completionHandler = null
+                        )
+                    } else {
+                        Logger.e("UrlLauncher", "Failed to open URL: ${request.normalizedUrl}", null)
+                    }
                 }
             } catch (e: Exception) {
                 Logger.e("UrlLauncher", "Failed to open URL: $url", e)

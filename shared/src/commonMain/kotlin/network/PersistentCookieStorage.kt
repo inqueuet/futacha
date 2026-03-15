@@ -19,7 +19,6 @@ import kotlinx.serialization.json.Json
 import kotlin.math.max
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Clock
 
 private fun currentTimeMillis(): Long = Clock.System.now().toEpochMilliseconds()
@@ -38,7 +37,7 @@ data class StoredCookie(
 )
 
 @Serializable
-private data class StoredCookieFile(
+internal data class StoredCookieFile(
     val version: Int = 1,
     val cookies: List<StoredCookie>
 )
@@ -59,45 +58,39 @@ class PersistentCookieStorage(
     private val fileSystem: FileSystem,
     private val storagePath: String = "private/cookies/cookies.json"
 ) : CookiesStorage {
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
+    private val transactionCoordinator =
+        PersistentCookieTransactionCoordinator<CookieKey, StoredCookie>("PersistentCookieStorage")
+    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
     private val mutex = Mutex()
     private val transactionMutex = Mutex()
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
-    private var transactionSnapshot: Map<CookieKey, StoredCookie>? = null
-    private var activeTransactionId: Long? = null
-    private var transactionSequence = 0L
-    private var externalMutationDuringTransaction = false
     // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
     private var lastPurgeTimeMillis = 0L
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
-    private val knownPublicSuffixes = setOf(
-        "com", "net", "org", "edu", "gov", "io", "dev",
-        "jp", "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp"
-    )
 
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
             val now = currentTimeMillis()
-            val domain = resolveDomain(cookie.domain, requestUrl.host)
+            val domain = resolvePersistentCookieDomain(cookie.domain, requestUrl.host)
             if (domain == null) {
                 Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' with invalid domain: ${cookie.domain} for host: ${requestUrl.host}")
                 return
             }
-            if (!isCookieNameAllowed(cookie.name) || !isCookieValueAllowed(cookie.value)) {
+            if (!isPersistentCookieNameAllowed(cookie.name) || !isPersistentCookieValueAllowed(cookie.value)) {
                 Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' due to invalid size/format")
                 return
             }
-            val path = normalizePath(cookie.path)
-            if (shouldDeleteCookie(cookie, now)) {
+            val path = normalizePersistentCookiePath(cookie.path)
+            if (shouldDeletePersistentCookie(cookie, now)) {
                 if (removeCookieLocked(domain, path, cookie.name)) {
                     savePayload = encodeSnapshotLocked()
                 }
                 return@withLock
             }
-            val expiresAt = resolveExpiresAt(cookie, now)
+            val expiresAt = resolvePersistentCookieExpiresAt(cookie, now)
             val key = CookieKey(domain, path, cookie.name)
             val stored = StoredCookie(
                 name = cookie.name,
@@ -112,14 +105,9 @@ class PersistentCookieStorage(
                 }.toMap(),
                 createdAtMillis = now
             )
-            val transactionId = coroutineContext[CookieTransactionContext]?.id
-            val isInActiveTransaction = activeTransactionId != null && transactionId == activeTransactionId
-            if (activeTransactionId != null && !isInActiveTransaction) {
-                externalMutationDuringTransaction = true
-            }
             cookies[key] = stored
             enforceCookieCapacityLocked(now)
-            if (transactionSnapshot == null || !isInActiveTransaction) {
+            if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
                 savePayload = encodeSnapshotLocked()
             }
         }
@@ -135,11 +123,11 @@ class PersistentCookieStorage(
                 savePayload = encodeSnapshotLocked()
             }
             val host = requestUrl.host.lowercase()
-            val path = normalizePath(requestUrl.encodedPath)
+            val path = normalizePersistentCookiePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
             cookies.values.filter { stored ->
                 !isExpiredAt(now, stored) &&
-                domainMatches(host, stored.domain) &&
+                persistentCookieDomainMatches(host, stored.domain) &&
                     pathMatches(path, stored.path) &&
                     (!stored.secure || isSecure)
             }.map { stored ->
@@ -174,11 +162,11 @@ class PersistentCookieStorage(
                 savePayload = encodeSnapshotLocked()
             }
             val host = requestUrl.host.lowercase()
-            val path = normalizePath(requestUrl.encodedPath)
+            val path = normalizePersistentCookiePath(requestUrl.encodedPath)
             val isSecure = requestUrl.isSecure()
             val candidates = cookies.values.filter { stored ->
                 !isExpiredAt(now, stored) &&
-                domainMatches(host, stored.domain) &&
+                persistentCookieDomainMatches(host, stored.domain) &&
                     pathMatches(path, stored.path) &&
                     (!stored.secure || isSecure)
             }
@@ -213,13 +201,8 @@ class PersistentCookieStorage(
         var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
-            val transactionId = coroutineContext[CookieTransactionContext]?.id
-            val isInActiveTransaction = activeTransactionId != null && transactionId == activeTransactionId
-            if (activeTransactionId != null && !isInActiveTransaction) {
-                externalMutationDuringTransaction = true
-            }
-            cookies.remove(CookieKey(domain.lowercase(), normalizePath(path), name))
-            if (transactionSnapshot == null || !isInActiveTransaction) {
+            cookies.remove(CookieKey(domain.lowercase(), normalizePersistentCookiePath(path), name))
+            if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
                 savePayload = encodeSnapshotLocked()
             }
         }
@@ -230,13 +213,8 @@ class PersistentCookieStorage(
         var savePayload: String? = null
         mutex.withLock {
             ensureLoadedLocked()
-            val transactionId = coroutineContext[CookieTransactionContext]?.id
-            val isInActiveTransaction = activeTransactionId != null && transactionId == activeTransactionId
-            if (activeTransactionId != null && !isInActiveTransaction) {
-                externalMutationDuringTransaction = true
-            }
             cookies.clear()
-            if (transactionSnapshot == null || !isInActiveTransaction) {
+            if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
                 savePayload = encodeSnapshotLocked()
             }
         }
@@ -254,11 +232,7 @@ class PersistentCookieStorage(
         return transactionMutex.withLock {
             val transactionId = mutex.withLock {
                 ensureLoadedLocked()
-                transactionSnapshot = HashMap(cookies)
-                externalMutationDuringTransaction = false
-                transactionSequence += 1
-                activeTransactionId = transactionSequence
-                transactionSequence
+                transactionCoordinator.begin(cookies)
             }
             runCatching {
                 withContext(CookieTransactionContext(transactionId)) {
@@ -275,11 +249,10 @@ class PersistentCookieStorage(
     private suspend fun persistTransaction(transactionId: Long?) {
         var savePayload: String? = null
         mutex.withLock {
-            if (activeTransactionId != transactionId) return@withLock
-            savePayload = encodeSnapshotLocked()
-            transactionSnapshot = null
-            activeTransactionId = null
-            externalMutationDuringTransaction = false
+            savePayload = transactionCoordinator.commit(
+                transactionId = transactionId,
+                encodeSnapshot = ::encodeSnapshotLocked
+            )
         }
         savePayload?.let { persistSnapshot(it) }
     }
@@ -287,21 +260,14 @@ class PersistentCookieStorage(
     private suspend fun rollbackTransaction(transactionId: Long?) {
         var savePayload: String? = null
         mutex.withLock {
-            if (activeTransactionId != transactionId) return@withLock
-            if (externalMutationDuringTransaction) {
-                Logger.w(
-                    "PersistentCookieStorage",
-                    "Rolling back transaction while discarding external cookie mutations"
-                )
-            }
-            transactionSnapshot?.let { snapshot ->
+            savePayload = transactionCoordinator.rollback(
+                transactionId = transactionId,
+                restoreSnapshot = { snapshot ->
                 cookies.clear()
                 cookies.putAll(snapshot)
-                savePayload = encodeSnapshotLocked()
-            }
-            transactionSnapshot = null
-            activeTransactionId = null
-            externalMutationDuringTransaction = false
+                },
+                encodeSnapshot = ::encodeSnapshotLocked
+            )
         }
         savePayload?.let { persistSnapshot(it) }
     }
@@ -312,54 +278,32 @@ class PersistentCookieStorage(
             isLoaded = true
             return
         }
-        val content = readBoundedCookieFile(storagePath).orEmpty()
-        if (content.isNotBlank()) {
-            // FIX: エラーログを追加し、破損時はバックアップから復元を試みる
-            runCatching<Unit> {
-                val parsed = json.decodeFromString<StoredCookieFile>(content)
-                cookies.clear()
-                parsed.cookies.forEach { stored ->
-                    if (!isStoredCookieAllowed(stored)) return@forEach
-                    val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
-                    cookies[key] = stored
-                }
-                enforceCookieCapacityLocked(currentTimeMillis())
-            }.onFailure { error ->
-                Logger.e("PersistentCookieStorage", "Failed to parse cookie file: ${error.message}")
-                // FIX: バックアップから復元を試みる
-                val backupPath = "$storagePath.backup"
-                if (fileSystem.exists(backupPath)) {
-                    val backupContent = readBoundedCookieFile(backupPath).orEmpty()
-                    runCatching<Unit> {
-                        val parsed = json.decodeFromString<StoredCookieFile>(backupContent)
-                        cookies.clear()
-                        parsed.cookies.forEach { stored ->
-                            if (!isStoredCookieAllowed(stored)) return@forEach
-                            val key = CookieKey(stored.domain.lowercase(), normalizePath(stored.path), stored.name)
-                            cookies[key] = stored
-                        }
-                        enforceCookieCapacityLocked(currentTimeMillis())
-                        Logger.i("PersistentCookieStorage", "Successfully restored from backup")
-                    }.onFailure { backupError ->
-                        Logger.e("PersistentCookieStorage", "Backup restoration also failed: ${backupError.message}")
-                    }
-                }
+        loadPersistentCookieSnapshot(
+            fileSystem = fileSystem,
+            storagePath = storagePath,
+            json = json,
+            maxCookieFileBytes = MAX_COOKIE_FILE_BYTES,
+            logTag = "PersistentCookieStorage"
+        )?.let { loadResult ->
+            cookies.clear()
+            loadResult.cookies.forEach { stored ->
+                if (!isStoredPersistentCookieAllowed(stored)) return@forEach
+                val key = CookieKey(
+                    stored.domain.lowercase(),
+                    normalizePersistentCookiePath(stored.path),
+                    stored.name
+                )
+                cookies[key] = stored
+            }
+            enforceCookieCapacityLocked(currentTimeMillis())
+            if (loadResult.restoredFromBackup) {
+                Logger.i("PersistentCookieStorage", "Successfully restored from backup")
             }
         }
-        purgeExpiredLocked(currentTimeMillis(), force = true)
-        isLoaded = true
-    }
-
-    private suspend fun readBoundedCookieFile(path: String): String? {
-        val size = runCatching { fileSystem.getFileSize(path) }.getOrNull()
-        if (size != null && size > MAX_COOKIE_FILE_BYTES) {
-            Logger.w(
-                "PersistentCookieStorage",
-                "Skipping oversized cookie file '$path' (${size} bytes > $MAX_COOKIE_FILE_BYTES bytes)"
-            )
-            return null
+        if (purgeExpiredLocked(currentTimeMillis(), force = true)) {
+            persistSnapshot(encodeSnapshotLocked())
         }
-        return fileSystem.readString(path).getOrNull()
+        isLoaded = true
     }
 
     private fun encodeSnapshotLocked(): String {
@@ -368,26 +312,12 @@ class PersistentCookieStorage(
     }
 
     private suspend fun persistSnapshot(content: String) {
-        val parentDir = storagePath.substringBeforeLast('/', "")
-        if (parentDir.isNotEmpty()) {
-            fileSystem.createDirectory(parentDir)
-        }
-        // FIX: 保存前に現在のファイルをバックアップ
-        val backupPath = "$storagePath.backup"
-        if (fileSystem.exists(storagePath)) {
-            val currentContent = fileSystem.readString(storagePath).getOrNull()
-            if (currentContent != null && currentContent.isNotBlank()) {
-                fileSystem.writeString(backupPath, currentContent)
-                    .onFailure { error ->
-                        Logger.w("PersistentCookieStorage", "Failed to create backup: ${error.message}")
-                    }
-            }
-        }
-        fileSystem.writeString(storagePath, content)
-            .onFailure { error ->
-                Logger.e("PersistentCookieStorage", "Failed to save cookie file: ${error.message}", error)
-            }
-            .getOrThrow()
+        persistPersistentCookieSnapshot(
+            fileSystem = fileSystem,
+            storagePath = storagePath,
+            content = content,
+            logTag = "PersistentCookieStorage"
+        )
     }
 
     private fun purgeExpiredLocked(now: Long, force: Boolean = false): Boolean {
@@ -409,94 +339,9 @@ class PersistentCookieStorage(
         return false
     }
 
-    private fun shouldDeleteCookie(cookie: Cookie, now: Long): Boolean {
-        val maxAgeSeconds = cookie.maxAge
-        if (maxAgeSeconds == 0) return true
-        val expiresAt = cookie.expires?.timestamp
-        return expiresAt != null && expiresAt <= now
-    }
-
-    private fun resolveExpiresAt(cookie: Cookie, now: Long): Long? {
-        val maxAgeSeconds = cookie.maxAge
-        if (maxAgeSeconds != null) {
-            if (maxAgeSeconds > 0) {
-                return now + maxAgeSeconds.seconds.inWholeMilliseconds
-            }
-            if (maxAgeSeconds < 0) {
-                return null
-            }
-        }
-        return cookie.expires?.timestamp
-    }
-
     private fun isExpiredAt(now: Long, cookie: StoredCookie): Boolean {
         val expires = cookie.expiresAtMillis ?: return false
         return expires <= now
-    }
-
-    private fun resolveDomain(setCookieDomain: String?, requestHost: String): String? {
-        val request = requestHost.trim().trimEnd('.').lowercase()
-        if (request.isBlank()) return null
-        if (!isDomainAllowedForCookies(request)) return null
-        val candidate = setCookieDomain
-            ?.ifBlank { null }
-            ?.trim()
-            ?.trimStart('.')
-            ?.trimEnd('.')
-            ?.lowercase()
-            ?: request
-        if (!isDomainAllowedForCookies(candidate)) return null
-        if (candidate in knownPublicSuffixes) return null
-        val isSameHost = request == candidate
-        val isParentDomain = request.endsWith(".$candidate") && !isLikelyIpAddress(candidate)
-        return if (isSameHost || isParentDomain) candidate else null
-    }
-
-    private fun normalizePath(path: String?): String {
-        val normalized = path?.trim().orEmpty()
-        if (normalized.isBlank()) return "/"
-        return if (normalized.startsWith("/")) normalized else "/$normalized"
-    }
-
-    private fun domainMatches(host: String, cookieDomain: String): Boolean {
-        val normalizedDomain = cookieDomain.trimStart('.').lowercase()
-        val normalizedHost = host.lowercase()
-        return normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain")
-    }
-
-    private fun isDomainAllowedForCookies(domain: String): Boolean {
-        if (domain.isBlank() || domain.length > MAX_COOKIE_DOMAIN_LENGTH) return false
-        if (domain.startsWith(".") || domain.endsWith(".")) return false
-        if (!COOKIE_DOMAIN_REGEX.matches(domain)) return false
-        val labels = domain.split('.').filter { it.isNotBlank() }
-        if (labels.size < 2 && !isLikelyIpAddress(domain)) return false
-        return true
-    }
-
-    private fun isLikelyIpAddress(value: String): Boolean {
-        val parts = value.split('.')
-        return parts.size == 4 && parts.all { part ->
-            part.isNotBlank() && part.all { it.isDigit() } && part.toIntOrNull() in 0..255
-        }
-    }
-
-    private fun isCookieNameAllowed(name: String): Boolean {
-        if (name.isBlank()) return false
-        if (name.length > MAX_COOKIE_NAME_LENGTH) return false
-        return COOKIE_NAME_REGEX.matches(name)
-    }
-
-    private fun isCookieValueAllowed(value: String): Boolean {
-        if (value.length > MAX_COOKIE_VALUE_LENGTH) return false
-        if (value.any { it == '\u0000' || it == '\r' || it == '\n' }) return false
-        return true
-    }
-
-    private fun isStoredCookieAllowed(stored: StoredCookie): Boolean {
-        if (!isDomainAllowedForCookies(stored.domain)) return false
-        if (!isCookieNameAllowed(stored.name)) return false
-        if (!isCookieValueAllowed(stored.value)) return false
-        return true
     }
 
     private fun enforceCookieCapacityLocked(now: Long) {
@@ -512,7 +357,7 @@ class PersistentCookieStorage(
                 .sortedBy { it.createdAtMillis }
                 .take(overflow)
                 .forEach { cookie ->
-                    cookies.remove(CookieKey(domain, normalizePath(cookie.path), cookie.name))
+                    cookies.remove(CookieKey(domain, normalizePersistentCookiePath(cookie.path), cookie.name))
                 }
         }
     }
@@ -545,11 +390,6 @@ class PersistentCookieStorage(
     companion object {
         private const val MAX_COOKIES_TOTAL = 256
         private const val MAX_COOKIES_PER_DOMAIN = 64
-        private const val MAX_COOKIE_NAME_LENGTH = 128
-        private const val MAX_COOKIE_VALUE_LENGTH = 2048
-        private const val MAX_COOKIE_DOMAIN_LENGTH = 253
         private const val MAX_COOKIE_FILE_BYTES = 1_048_576L // 1 MiB
-        private val COOKIE_NAME_REGEX = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
-        private val COOKIE_DOMAIN_REGEX = Regex("^[A-Za-z0-9.-]+$")
     }
 }

@@ -23,6 +23,12 @@ kotlin {
         }
     }
 
+    jvm {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_11)
+        }
+    }
+
     listOf(
         iosX64(),
         iosArm64(),
@@ -54,6 +60,7 @@ kotlin {
         val commonTest by getting {
             dependencies {
                 implementation(kotlin("test"))
+                implementation(libs.ktor.client.mock)
             }
         }
         val androidMain by getting {
@@ -67,12 +74,19 @@ kotlin {
                 implementation(libs.androidx.documentfile)
                 implementation(libs.coil3.video)
                 implementation(libs.coil3.gif)
+                implementation(libs.google.mobile.ads)
             }
         }
 
         val iosMain by getting {
             dependencies {
                 implementation(libs.ktor.client.darwin)
+            }
+        }
+
+        val jvmMain by getting {
+            dependencies {
+                implementation(libs.ktor.client.okhttp)
             }
         }
     }

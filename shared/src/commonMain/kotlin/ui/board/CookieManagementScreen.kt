@@ -43,9 +43,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 import kotlin.time.ExperimentalTime
-import kotlin.time.Instant
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,18 +58,25 @@ fun CookieManagementScreen(
     var reloadGeneration by remember { mutableStateOf(0L) }
 
     fun reload() {
-        val requestGeneration = reloadGeneration + 1L
-        reloadGeneration = requestGeneration
+        val reloadState = beginCookieReload(reloadGeneration)
+        val requestGeneration = reloadState.reloadGeneration
+        reloadGeneration = reloadState.reloadGeneration
         scope.launch {
-            isLoading = true
+            isLoading = reloadState.isLoading
             val loaded = runCatching {
                 withContext(AppDispatchers.io) {
                     repository.listCookies()
                 }
             }.getOrElse { emptyList() }
-            if (reloadGeneration == requestGeneration) {
-                cookies = loaded
-                isLoading = false
+            val reloadResult = applyCookieReloadResult(
+                currentGeneration = reloadGeneration,
+                requestGeneration = requestGeneration,
+                cookies = loaded,
+                isLoading = isLoading
+            )
+            if (reloadResult.shouldApply) {
+                cookies = reloadResult.cookies
+                isLoading = reloadResult.isLoading
             }
         }
     }
@@ -92,14 +97,14 @@ fun CookieManagementScreen(
                     }
                 },
                 actions = {
-                    if (cookies.isNotEmpty()) {
+                    if (shouldShowCookieClearAllAction(cookies)) {
                         IconButton(onClick = {
                             scope.launch {
                                 withContext(AppDispatchers.io) {
                                     repository.clearAll()
                                 }
                                 reload()
-                                snackbarHostState.showSnackbar("すべてのCookieを削除しました")
+                                snackbarHostState.showSnackbar(buildCookieClearAllMessage())
                             }
                         }) {
                             Icon(
@@ -113,70 +118,69 @@ fun CookieManagementScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
-        if (isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("読み込み中...")
-            }
-            return@Scaffold
-        }
-
-        if (cookies.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Cookie はありません")
-            }
-            return@Scaffold
-        }
-
-        val grouped = cookies.groupBy { it.domain }
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(vertical = 12.dp)
-        ) {
-            grouped.forEach { (domain, domainCookies) ->
-                item(key = "header-$domain") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = domain,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "${domainCookies.size} 件",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+        when (val contentState = resolveCookieManagementContentState(isLoading, cookies)) {
+            CookieManagementContentState.Loading -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("読み込み中...")
                 }
-                items(domainCookies, key = { "${it.domain}-${it.path}-${it.name}" }) { cookie ->
-                    CookieRow(
-                        cookie = cookie,
-                        onDelete = {
-                            scope.launch {
-                                withContext(AppDispatchers.io) {
-                                    repository.deleteCookie(cookie.domain, cookie.path, cookie.name)
-                                }
-                                reload()
-                                snackbarHostState.showSnackbar("削除しました: ${cookie.name}")
+            }
+            CookieManagementContentState.Empty -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Cookie はありません")
+                }
+            }
+            is CookieManagementContentState.Data -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(vertical = 12.dp)
+                ) {
+                    contentState.sections.forEach { section ->
+                        item(key = "header-${section.domain}") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = section.domain,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${section.cookies.size} 件",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
-                    )
+                        items(section.cookies, key = { "${it.domain}-${it.path}-${it.name}" }) { cookie ->
+                            CookieRow(
+                                cookie = cookie,
+                                onDelete = {
+                                    scope.launch {
+                                        withContext(AppDispatchers.io) {
+                                            repository.deleteCookie(cookie.domain, cookie.path, cookie.name)
+                                        }
+                                        reload()
+                                        snackbarHostState.showSnackbar(buildCookieDeleteMessage(cookie.name))
+                                    }
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -189,12 +193,10 @@ private fun CookieRow(
     cookie: StoredCookie,
     onDelete: () -> Unit
 ) {
-    val expiresLabel = cookie.expiresAtMillis?.let {
-        val instant = Instant.fromEpochMilliseconds(it)
-        val local = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-        @Suppress("DEPRECATION")
-        "${local.year}/${local.monthNumber.toString().padStart(2, '0')}/${local.dayOfMonth.toString().padStart(2, '0')} ${local.hour.toString().padStart(2, '0')}:${local.minute.toString().padStart(2, '0')}"
-    } ?: "セッション"
+    val expiresLabel = formatCookieExpiresLabel(
+        expiresAtMillis = cookie.expiresAtMillis,
+        timeZone = TimeZone.currentSystemDefault()
+    )
 
     ListItem(
         leadingContent = {

@@ -1,45 +1,24 @@
 package com.valoser.futacha.shared.service
 
-import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
-import com.valoser.futacha.shared.model.SaveStatus
-import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
-import com.valoser.futacha.shared.model.SavedThreadMetadata
-import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.TextEncoding
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.isSuccess
-import io.ktor.utils.io.cancel
-import io.ktor.utils.io.readAvailable
-import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
-import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
-import kotlin.text.RegexOption
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 
@@ -61,13 +40,9 @@ class ThreadSaveService(
 ) {
     private val _saveProgress = MutableStateFlow<SaveProgress?>(null)
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
-    private val counterMutex = Mutex()
     private val mediaWriteLocksGuard = Mutex()
-    private val mediaWriteLocks = mutableMapOf<String, MediaPathLock>()
+    private val mediaWriteLocks = mutableMapOf<String, ThreadSaveMediaPathLock>()
     private val json = Json { prettyPrint = true }
-
-    // グローバルダウンロード並行数制限
-    private val downloadSemaphore = Semaphore(MAX_PARALLEL_DOWNLOADS)
 
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
@@ -97,77 +72,6 @@ class ThreadSaveService(
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val MAX_PARALLEL_DOWNLOADS = 1
-
-        // FIX: Regexプリコンパイル（パフォーマンス最適化）
-        private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val LINK_HREF_REGEX = Regex("""<a[^>]+href\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-        private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src="([^"]+)"[^>]*>.*?</script>""")
-        private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>""")
-        private val CHARSET_REGEX = Regex("""<meta[^>]+charset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
-        private val CONTENT_TYPE_REGEX = Regex("""<meta[^>]+http-equiv\s*=\s*["']?Content-Type["']?[^>]+content\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
-    }
-
-    /**
-     * Simple LRU cache implementation for common code
-     */
-    private fun <K, V> createLruCache(maxSize: Int): MutableMap<K, V> {
-        return LruCache(maxSize)
-    }
-
-    private class LruCache<K, V>(private val maxSize: Int) : MutableMap<K, V> {
-        private val backing = LinkedHashMap<K, V>()
-
-        override val size: Int
-            get() = backing.size
-
-        override fun isEmpty(): Boolean = backing.isEmpty()
-
-        override fun containsKey(key: K): Boolean = backing.containsKey(key)
-
-        override fun containsValue(value: V): Boolean = backing.containsValue(value)
-
-        override fun get(key: K): V? {
-            val value = backing.remove(key) ?: return null
-            backing[key] = value
-            return value
-        }
-
-        override fun put(key: K, value: V): V? {
-            val previous = backing.remove(key)
-            backing[key] = value
-            trimToSize()
-            return previous
-        }
-
-        override fun putAll(from: Map<out K, V>) {
-            from.forEach { (key, value) -> put(key, value) }
-        }
-
-        override fun remove(key: K): V? = backing.remove(key)
-
-        override fun clear() {
-            backing.clear()
-        }
-
-        override val keys: MutableSet<K>
-            get() = backing.keys
-
-        override val values: MutableCollection<V>
-            get() = backing.values
-
-        override val entries: MutableSet<MutableMap.MutableEntry<K, V>>
-            get() = backing.entries
-
-        private fun trimToSize() {
-            while (backing.size > maxSize) {
-                val iterator = backing.entries.iterator()
-                if (!iterator.hasNext()) return
-                iterator.next()
-                iterator.remove()
-            }
-        }
     }
 
     /**
@@ -190,6 +94,11 @@ class ThreadSaveService(
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
         val storageId = buildThreadStorageId(boardId, threadId)
+        val storageTarget = buildThreadSaveStorageTarget(
+            saveLocation = baseSaveLocation,
+            baseDirectory = baseDirectory,
+            storageId = storageId
+        )
         val storageLockKey = buildThreadStorageLockKey(
             storageId = storageId,
             baseDirectory = baseDirectory,
@@ -206,360 +115,159 @@ class ThreadSaveService(
                 // 準備フェーズ
                 updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
 
-                // SaveLocation対応: nullの場合は従来のパスベース、非nullの場合は新API使用
-                val useSaveLocation = baseSaveLocation != null
-                val baseDir = "$baseDirectory/$storageId"
                 val boardPath = extractBoardPath(boardUrl, boardId)
                 val opPostId = posts.firstOrNull()?.id
 
-                // 既存保存物が残っていると旧ファイル混在が起きるため、保存開始前に対象を掃除する。
-                if (useSaveLocation) {
-                    val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
-                    fileSystem.delete(location, storageId).getOrNull()
-                } else {
-                    fileSystem.deleteRecursively(baseDir).getOrNull()
-                }
-
-                if (useSaveLocation) {
-                    val location = requireNotNull(baseSaveLocation) { "baseSaveLocation must not be null when useSaveLocation is true" }
-                    fileSystem.createDirectory(location, storageId).getOrThrow()
-                    val boardMediaPath = if (boardPath.isNotBlank()) "$storageId/$boardPath" else storageId
-                    fileSystem.createDirectory(location, "$boardMediaPath/src").getOrThrow()
-                    fileSystem.createDirectory(location, "$boardMediaPath/thumb").getOrThrow()
-                } else {
-                    fileSystem.createDirectory(baseDirectory).getOrThrow()
-                    fileSystem.createDirectory(baseDir).getOrThrow()
-                    val boardMediaRoot = listOf(baseDir, boardPath)
-                        .filter { it.isNotBlank() }
-                        .joinToString("/")
-                    val srcDir = "$boardMediaRoot/src"
-                    val thumbDir = "$boardMediaRoot/thumb"
-                    fileSystem.createDirectory(boardMediaRoot).getOrThrow()
-                    fileSystem.createDirectory(srcDir).getOrThrow()
-                    fileSystem.createDirectory(thumbDir).getOrThrow()
-                }
-
-            // FIX: マップのサイズ制限とメモリ効率化
-            // LRUキャッシュを使用して自動的に古いエントリを削除
-            val urlToPathMap = createLruCache<String, String>(MAX_MEDIA_ITEMS)
-            val mediaKeyToFileInfoMap = createLruCache<String, LocalFileInfo>(MAX_MEDIA_ITEMS)
+                prepareThreadSaveOutput(
+                    fileSystem = fileSystem,
+                    target = storageTarget,
+                    request = ThreadSaveOutputPreparationRequest(
+                        boardPath = boardPath
+                    )
+                )
 
             // ダウンロードフェーズ
-            val savedPosts = mutableListOf<SavedPost>()
-            var thumbnailPath: String? = null
-            var imageCount = 0
-            var videoCount = 0
-            var totalSize = 0L
             var rawHtmlRelativePath: String? = null
-
-            // FIX: Process posts in chunks to prevent memory accumulation
-            // Instead of flatMap all at once, process in batches
-            val chunkSize = 50 // Process 50 posts at a time
-            var downloadFailureCount = 0
-
-            // FIX: Build media items in chunks to avoid massive list creation
-            // Use asSequence() to avoid creating intermediate collections
-            val scheduledMediaKeys = mutableSetOf<String>()
-            val allUniqueMediaKeys = mutableSetOf<String>()
-            posts.forEach { post ->
-                post.thumbnailUrl?.let { allUniqueMediaKeys.add(mediaDownloadKey(it, MediaType.THUMBNAIL)) }
-                post.imageUrl?.let { allUniqueMediaKeys.add(mediaDownloadKey(it, MediaType.FULL_IMAGE)) }
-            }
-            val totalMediaCount = allUniqueMediaKeys.size
+            val mediaPlan = buildThreadSaveMediaDownloadPlan(
+                posts = posts,
+                maxMediaItems = MAX_MEDIA_ITEMS
+            )
 
             // FIX: メディア数が異常に多い場合は警告
-            if (totalMediaCount > MAX_MEDIA_ITEMS) {
-                Logger.w("ThreadSaveService", "Thread has $totalMediaCount media items (max: $MAX_MEDIA_ITEMS), some may be skipped")
+            if (mediaPlan.totalMediaCount > MAX_MEDIA_ITEMS) {
+                Logger.w(
+                    "ThreadSaveService",
+                    "Thread has ${mediaPlan.totalMediaCount} media items (max: $MAX_MEDIA_ITEMS), some may be skipped"
+                )
             }
 
-            var processedMediaCount = 0
-
-            posts.chunked(chunkSize).forEach { postChunk ->
-                coroutineContext.ensureActive()
-                yield()
-                enforceBudget(totalSize, startedAtMillis)
-                val mediaItems = postChunk.flatMap { post ->
-                    buildList {
-                        post.thumbnailUrl?.let { add(MediaItem(it, MediaType.THUMBNAIL, post)) }
-                        post.imageUrl?.let { add(MediaItem(it, MediaType.FULL_IMAGE, post)) }
-                    }
+            val mediaDownloadResult = executeThreadSaveMediaDownloadPlan(
+                plan = mediaPlan,
+                opPostId = opPostId,
+                chunkSize = 50,
+                maxParallelDownloads = MAX_PARALLEL_DOWNLOADS,
+                maxRetries = MAX_RETRIES,
+                retryDelayMillis = RETRY_DELAY_MS,
+                logTag = "ThreadSaveService",
+                createUrlToPathMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
+                createMediaKeyToFileInfoMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
+                updateProgress = { current, total ->
+                    updateProgress(
+                        SavePhase.DOWNLOADING,
+                        current,
+                        total,
+                        "メディアダウンロード中... ($current/$total)"
+                    )
+                },
+                downloadMedia = { mediaItem ->
+                    downloadAndSaveMedia(
+                        url = mediaItem.url,
+                        storageTarget = storageTarget,
+                        boardPath = boardPath,
+                        requestType = mediaItem.requestType,
+                        postId = mediaItem.postId,
+                        startedAtMillis = startedAtMillis
+                    )
+                },
+                enforceBudget = { totalSizeBytes ->
+                    enforceBudget(totalSizeBytes, startedAtMillis)
                 }
-                val uniqueMediaItems = buildList {
-                    mediaItems.forEach { mediaItem ->
-                        val key = mediaDownloadKey(mediaItem.url, mediaItem.type)
-                        if (scheduledMediaKeys.add(key)) {
-                            add(mediaItem)
-                        }
-                    }
+            )
+            val urlToPathMap = mediaDownloadResult.urlToPathMap
+            val mediaKeyToFileInfoMap = mediaDownloadResult.mediaKeyToFileInfoMap
+            val mediaCounts = mediaDownloadResult.mediaCounts
+            var totalSize = mediaDownloadResult.totalSizeBytes
+            val downloadFailureCount = mediaDownloadResult.downloadFailureCount
+            val totalMediaCount = mediaPlan.totalMediaCount
+
+            val rawHtmlWriteResult = saveThreadRawHtmlIfEnabled(
+                enabled = rawHtmlOptions.enable,
+                fileSystem = fileSystem,
+                target = storageTarget,
+                threadId = threadId,
+                fetchOriginalHtml = { fetchThreadHtml(boardUrl, threadId) },
+                rewriteHtml = { originalHtml ->
+                    rewriteOriginalHtml(
+                        html = originalHtml,
+                        boardPath = boardPath,
+                        urlToPathMap = urlToPathMap,
+                        stripExternalResources = rawHtmlOptions.stripExternalResources
+                    )
+                },
+                measureAbsolutePathSize = fileSystem::getFileSize,
+                logWarning = { message ->
+                    Logger.w("ThreadSaveService", message)
                 }
-                if (uniqueMediaItems.isEmpty()) {
-                    return@forEach
-                }
-
-                // FIX: 並列ダウンロードで処理速度を改善（セマフォで並行数を制限）
-                uniqueMediaItems.chunked(MAX_PARALLEL_DOWNLOADS).forEach { itemBatch ->
-                    coroutineContext.ensureActive()
-                    kotlinx.coroutines.coroutineScope {
-                        val deferredResults = itemBatch.map { mediaItem ->
-                            async(AppDispatchers.io) {
-                                coroutineContext.ensureActive()
-                                // セマフォでグローバルな並行数を制限
-                                downloadSemaphore.withPermit {
-                                    coroutineContext.ensureActive()
-                                    val currentCount = counterMutex.withLock {
-                                        if (processedMediaCount >= MAX_MEDIA_ITEMS) {
-                                            null
-                                        } else {
-                                            ++processedMediaCount
-                                        }
-                                    }
-                                    if (currentCount == null) {
-                                        Logger.w("ThreadSaveService", "Skipping media item (exceeds MAX_MEDIA_ITEMS)")
-                                        return@withPermit Pair<MediaItem?, Result<LocalFileInfo>?>(null, null)
-                                    }
-
-                                    updateProgress(
-                                        SavePhase.DOWNLOADING,
-                                        currentCount,
-                                        minOf(totalMediaCount, MAX_MEDIA_ITEMS),
-                                        "メディアダウンロード中... ($currentCount/${minOf(totalMediaCount, MAX_MEDIA_ITEMS)})"
-                                    )
-
-                                    // リトライロジック付きダウンロード
-                                    var downloadResult: Result<LocalFileInfo>? = null
-                                    var lastError: Throwable? = null
-                                    for (attempt in 1..MAX_RETRIES) {
-                                        coroutineContext.ensureActive()
-                                        downloadResult = downloadAndSaveMedia(
-                                            url = mediaItem.url,
-                                            saveLocation = baseSaveLocation,
-                                            baseDir = baseDir,
-                                            boardPath = boardPath,
-                                            storageId = storageId,
-                                            type = mediaItem.type,
-                                            postId = mediaItem.post.id,
-                                            startedAtMillis = startedAtMillis
-                                        )
-
-                                        if (downloadResult.isSuccess) break
-
-                                        lastError = downloadResult.exceptionOrNull()
-                                        if (attempt < MAX_RETRIES) {
-                                            Logger.w("ThreadSaveService", "Download attempt $attempt failed for ${mediaItem.url}, retrying...")
-                                            delay(RETRY_DELAY_MS * attempt) // 指数バックオフ
-                                        }
-                                    }
-
-                                    if (downloadResult?.isFailure == true) {
-                                        Logger.e("ThreadSaveService", "Failed to download ${mediaItem.url} after $MAX_RETRIES attempts: ${lastError?.message}")
-                                    }
-
-                                    Pair<MediaItem?, Result<LocalFileInfo>?>(mediaItem, downloadResult)
-                                }
-                            }
-                        }
-
-                        // すべての並列ダウンロードの完了を待つ
-                        deferredResults.forEach { deferred ->
-                            coroutineContext.ensureActive()
-                            val (mediaItem, downloadResult) = deferred.await()
-                            if (mediaItem == null || downloadResult == null) {
-                                downloadFailureCount++
-                                return@forEach
-                            }
-
-                            downloadResult
-                                .onSuccess { fileInfo ->
-                                    totalSize += fileInfo.byteSize
-                                    enforceBudget(totalSize, startedAtMillis)
-                                    // URL→ローカルパスマッピングに追加
-                                    val mediaKey = mediaDownloadKey(mediaItem.url, mediaItem.type)
-                                    mediaKeyToFileInfoMap[mediaKey] = fileInfo
-                                    when (mediaItem.type) {
-                                        MediaType.THUMBNAIL -> {
-                                            if (urlToPathMap[mediaItem.url] == null) {
-                                                urlToPathMap[mediaItem.url] = fileInfo.relativePath
-                                            }
-                                        }
-                                        MediaType.FULL_IMAGE -> {
-                                            // 本体URLはサムネより優先して紐付ける。
-                                            urlToPathMap[mediaItem.url] = fileInfo.relativePath
-                                        }
-                                    }
-
-                                    when (fileInfo.fileType) {
-                                        FileType.THUMBNAIL -> {
-                                            if (thumbnailPath == null && mediaItem.post.id == opPostId) {
-                                                thumbnailPath = fileInfo.relativePath
-                                            }
-                                        }
-                                        FileType.FULL_IMAGE -> imageCount++
-                                        FileType.VIDEO -> videoCount++
-                                    }
-                                }
-                                .onFailure { error ->
-                                    // ダウンロード失敗はログに記録してスキップ
-                                    downloadFailureCount++
-                                    Logger.e("ThreadSaveService", "Failed to download ${mediaItem.url}: ${error.message}")
-                                }
-                        }
-                    }
-                }
-            }
-
-            // 元HTML保存（リンクを書き換え、外部JS/広告を除去）
-            if (rawHtmlOptions.enable) {
-                fetchThreadHtml(boardUrl, threadId)
-                    .onSuccess { originalHtml ->
-                        val rewritten = rewriteOriginalHtml(
-                            html = originalHtml,
-                            boardPath = boardPath,
-                            urlToPathMap = urlToPathMap,
-                            stripExternalResources = rawHtmlOptions.stripExternalResources
-                        )
-                        val fileName = "$threadId.htm"
-                        if (baseSaveLocation != null) {
-                            fileSystem.writeString(baseSaveLocation, "$storageId/$fileName", rewritten).getOrThrow()
-                            // SaveLocation版ではファイルサイズ取得は省略（getFileSize未実装のため）
-                            totalSize += utf8ByteLength(rewritten)
-                        } else {
-                            val fullPath = "$baseDir/$fileName"
-                            fileSystem.writeString(fullPath, rewritten).getOrThrow()
-                            totalSize += fileSystem.getFileSize(fullPath)
-                        }
-                        rawHtmlRelativePath = fileName
-                    }
-                    .onFailure { error ->
-                        Logger.w("ThreadSaveService", "Failed to save raw HTML: ${error.message}")
-                    }
-            }
+            )
+            rawHtmlRelativePath = rawHtmlWriteResult.relativePath
+            totalSize += rawHtmlWriteResult.sizeBytes
 
             // 変換フェーズ
             updateProgress(SavePhase.CONVERTING, 0, posts.size, "HTML変換中...")
-
-            posts.forEachIndexed { index, post ->
-                coroutineContext.ensureActive()
-                if (index % 32 == 0) {
-                    yield()
-                }
-                updateProgress(
-                    SavePhase.CONVERTING,
-                    index + 1,
-                    posts.size,
-                    "投稿変換中... (${index + 1}/${posts.size})"
-                )
-
-                // マッピングからローカルパスを取得（再ダウンロードしない）
-                val imageFileInfo = post.imageUrl?.let {
-                    mediaKeyToFileInfoMap[mediaDownloadKey(it, MediaType.FULL_IMAGE)]
-                }
-                val thumbnailFileInfo = post.thumbnailUrl?.let {
-                    mediaKeyToFileInfoMap[mediaDownloadKey(it, MediaType.THUMBNAIL)]
-                }
-                val localImagePath = imageFileInfo
-                    ?.takeIf { it.fileType == FileType.FULL_IMAGE }
-                    ?.relativePath
-                val originalImageUrl = post.imageUrl
-                    ?.takeIf { imageFileInfo?.fileType == FileType.FULL_IMAGE }
-                val localVideoPath = imageFileInfo
-                    ?.takeIf { it.fileType == FileType.VIDEO }
-                    ?.relativePath
-                val originalVideoUrl = post.imageUrl
-                    ?.takeIf { imageFileInfo?.fileType == FileType.VIDEO }
-                val localThumbnailPath = thumbnailFileInfo?.relativePath
-
-                // HTML内のURLを相対パスに変換
-                val convertedHtml = convertHtmlPaths(post.messageHtml, urlToPathMap)
-
-                savedPosts.add(
-                    SavedPost(
-                        id = post.id,
-                        order = post.order,
-                        author = post.author,
-                        subject = post.subject,
-                        timestamp = post.timestamp,
-                        messageHtml = convertedHtml,
-                        originalImageUrl = originalImageUrl,
-                        localImagePath = localImagePath,
-                        originalVideoUrl = originalVideoUrl,
-                        localVideoPath = localVideoPath,
-                        originalThumbnailUrl = post.thumbnailUrl,
-                        localThumbnailPath = localThumbnailPath,
-                        downloadSuccess = post.imageUrl == null || localImagePath != null || localVideoPath != null
+            val savedPosts = buildThreadSaveSavedPosts(
+                posts = posts,
+                mediaKeyToFileInfoMap = mediaKeyToFileInfoMap,
+                urlToPathMap = urlToPathMap,
+                updateProgress = { current, total ->
+                    updateProgress(
+                        SavePhase.CONVERTING,
+                        current,
+                        total,
+                        "投稿変換中... ($current/$total)"
                     )
-                )
-            }
+                }
+            )
 
             // 完了フェーズ
             updateProgress(SavePhase.FINALIZING, 0, 1, "完了処理中...")
 
             updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
 
-            // ステータスを失敗数に応じて設定
-            val status = when {
-                downloadFailureCount == 0 -> SaveStatus.COMPLETED
-                downloadFailureCount < totalMediaCount -> SaveStatus.PARTIAL
-                else -> SaveStatus.FAILED
-            }
-
             // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
-            val metadataSize = if (writeMetadata) {
-                val metadata = SavedThreadMetadata(
+            val metadataSize = writeThreadSaveMetadataIfEnabled(
+                writeMetadata = writeMetadata,
+                fileSystem = fileSystem,
+                target = storageTarget,
+                request = ThreadSaveMetadataWriteRequest(
                     threadId = threadId,
                     boardId = boardId,
                     boardName = boardName,
                     boardUrl = boardUrl,
                     title = title,
                     storageId = storageId,
-                    savedAt = savedAtTimestamp,
+                    savedAtTimestamp = savedAtTimestamp,
                     expiresAtLabel = expiresAtLabel,
-                    posts = savedPosts,
-                    totalSize = 0L, // 一旦0、書き込み後に更新
-                    rawHtmlPath = rawHtmlRelativePath,
+                    savedPosts = savedPosts,
+                    rawHtmlRelativePath = rawHtmlRelativePath,
                     strippedExternalResources = rawHtmlOptions.stripExternalResources,
-                    version = 1
-                )
-                val (metadataPayload, payloadSize) = buildMetadataPayloadWithStableSize(
-                    metadata = metadata,
                     baseTotalSize = totalSize
-                )
-
-                if (baseSaveLocation != null) {
-                    val metadataRelativePath = "$storageId/metadata.json"
-                    fileSystem.writeString(baseSaveLocation, metadataRelativePath, metadataPayload).getOrThrow()
-                    payloadSize
-                } else {
-                    val metadataPath = "$baseDir/metadata.json"
-                    fileSystem.writeString(metadataPath, metadataPayload).getOrThrow()
-                    payloadSize
-                }
-            } else {
-                0L
-            }
+                ),
+                encodeMetadata = json::encodeToString
+            )
             val finalTotalSize = totalSize + metadataSize
             enforceBudget(finalTotalSize, startedAtMillis)
 
-                    SavedThread(
+                    buildThreadSaveSavedThread(
                 threadId = threadId,
                 boardId = boardId,
                 boardName = boardName,
                 title = title,
                 storageId = storageId,
-                thumbnailPath = thumbnailPath,
-                savedAt = savedAtTimestamp,
+                thumbnailPath = mediaCounts.thumbnailPath,
+                savedAtTimestamp = savedAtTimestamp,
                 postCount = posts.size,
-                imageCount = imageCount,
-                videoCount = videoCount,
+                imageCount = mediaCounts.imageCount,
+                videoCount = mediaCounts.videoCount,
                 totalSize = finalTotalSize,
-                status = status
+                downloadFailureCount = downloadFailureCount,
+                totalMediaCount = totalMediaCount
                 )
             })
             } catch (e: CancellationException) {
                 runCatching {
-                    cleanupFailedSave(
-                        baseSaveLocation = baseSaveLocation,
-                        baseDirectory = baseDirectory,
-                        storageId = storageId
+                    cleanupThreadSaveFailedOutput(
+                        fileSystem = fileSystem,
+                        target = storageTarget
                     )
                 }.onFailure { cleanupError ->
                     Logger.w("ThreadSaveService", "Failed to cleanup canceled save for $storageId: ${cleanupError.message}")
@@ -567,10 +275,9 @@ class ThreadSaveService(
                 throw e
             } catch (t: Throwable) {
                 runCatching {
-                    cleanupFailedSave(
-                        baseSaveLocation = baseSaveLocation,
-                        baseDirectory = baseDirectory,
-                        storageId = storageId
+                    cleanupThreadSaveFailedOutput(
+                        fileSystem = fileSystem,
+                        target = storageTarget
                     )
                 }.onFailure { cleanupError ->
                     Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
@@ -589,266 +296,37 @@ class ThreadSaveService(
      */
     private suspend fun downloadAndSaveMedia(
         url: String,
-        saveLocation: SaveLocation?,
-        baseDir: String,
+        storageTarget: ThreadSaveStorageTarget,
         boardPath: String,
-        storageId: String,
-        type: MediaType,
+        requestType: ThreadSaveMediaRequestType,
         postId: String,
         startedAtMillis: Long
-    ): Result<LocalFileInfo> = withContext(AppDispatchers.io) {
-        try {
-            Result.success(run {
-                // Download media directly and inspect headers from GET response
-                val response: HttpResponse = withTimeoutOrNull(MEDIA_REQUEST_TIMEOUT_MILLIS) {
-                    httpClient.get(url) {
-                        headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
-                    }
-                } ?: throw IllegalStateException("Download request timed out after ${MEDIA_REQUEST_TIMEOUT_MILLIS}ms: $url")
-                try {
-                    if (!response.status.isSuccess()) {
-                        throw Exception("Download failed: ${response.status}")
-                    }
-
-                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
-                    if (contentLength > MAX_FILE_SIZE_BYTES) {
-                        throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
-                    }
-
-                    val extension = (getExtensionFromUrl(url)
-                        ?: getExtensionFromContentType(response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }))
-                        .lowercase()
-                    val isSupported = extension in SUPPORTED_IMAGE_EXTENSIONS || extension in SUPPORTED_VIDEO_EXTENSIONS
-                    if (!isSupported) {
-                        throw Exception("Unsupported file type: $extension")
-                    }
-
-                    val fileType = when {
-                        type == MediaType.THUMBNAIL -> FileType.THUMBNAIL
-                        extension in SUPPORTED_VIDEO_EXTENSIONS -> FileType.VIDEO
-                        else -> FileType.FULL_IMAGE
-                    }
-                    val fileName = extractFileName(url, extension, postId)
-                    val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
-                    val subDir = when (fileType) {
-                        FileType.THUMBNAIL -> "${boardPrefix}thumb"
-                        FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
-                    }
-                    val relativePath = "$subDir/$fileName"
-
-                    if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
-                        throw IllegalStateException("Save aborted: exceeded time limit during download")
-                    }
-
-                    val totalBytesRead = withMediaWriteLock(relativePath) {
-                        if (saveLocation != null) {
-                            val fileRelativePath = "$storageId/$relativePath"
-                            var completed = false
-                            try {
-                                val writtenBytes = streamResponseToStorage(
-                                    response = response,
-                                    saveLocation = saveLocation,
-                                    saveLocationPath = fileRelativePath,
-                                    absolutePath = null,
-                                    startedAtMillis = startedAtMillis
-                                )
-                                completed = true
-                                writtenBytes
-                            } finally {
-                                if (!completed) {
-                                    fileSystem.delete(saveLocation, fileRelativePath).getOrNull()
-                                }
-                            }
-                        } else {
-                            val fullPath = "$baseDir/$relativePath"
-                            var completed = false
-                            try {
-                                val writtenBytes = streamResponseToStorage(
-                                    response = response,
-                                    saveLocation = null,
-                                    saveLocationPath = null,
-                                    absolutePath = fullPath,
-                                    startedAtMillis = startedAtMillis
-                                )
-                                completed = true
-                                writtenBytes
-                            } finally {
-                                if (!completed) {
-                                    fileSystem.delete(fullPath).getOrNull()
-                                }
-                            }
-                        }
-                    }
-
-                    LocalFileInfo(
-                        relativePath = relativePath,
-                        fileType = fileType,
-                        byteSize = totalBytesRead
-                    )
-                } finally {
-                    runCatching { response.bodyAsChannel().cancel() }
+    ): Result<ThreadSaveLocalFileInfo> {
+        return downloadAndStoreThreadSaveMedia(
+            httpClient = httpClient,
+            fileSystem = fileSystem,
+            logTag = "ThreadSaveService",
+            request = ThreadSaveMediaDownloadRequest(
+                url = url,
+                target = storageTarget,
+                boardPath = boardPath,
+                requestType = requestType,
+                postId = postId,
+                startedAtMillis = startedAtMillis,
+                mediaRequestTimeoutMillis = MEDIA_REQUEST_TIMEOUT_MILLIS,
+                maxFileSizeBytes = MAX_FILE_SIZE_BYTES,
+                maxSaveDurationMs = MAX_SAVE_DURATION_MS,
+                streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
+                maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+                zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+                readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS,
+                writeTimeoutMillis = WRITE_TIMEOUT_MILLIS,
+                nowMillis = { Clock.System.now().toEpochMilliseconds() },
+                withMediaWriteLock = { relativePath, block ->
+                    withMediaWriteLock(relativePath, block)
                 }
-            })
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Result.failure(t)
-        }
-    }
-
-    private suspend fun streamResponseToStorage(
-        response: HttpResponse,
-        saveLocation: SaveLocation?,
-        saveLocationPath: String?,
-        absolutePath: String?,
-        startedAtMillis: Long
-    ): Long {
-        val channel = response.bodyAsChannel()
-        val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
-        var output = ByteArray(minOf(STREAM_READ_BUFFER_BYTES, MAX_FILE_SIZE_BYTES.toInt()))
-        var totalBytesRead = 0
-        var zeroReadCount = 0
-        var readLoopCount = 0L
-
-        while (true) {
-            coroutineContext.ensureActive()
-            val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
-                channel.readAvailable(buffer, 0, buffer.size)
-            } ?: throw IllegalStateException("Save aborted: timed out waiting for media stream data")
-
-            if (read == -1) break
-            if (read == 0) {
-                zeroReadCount += 1
-                if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                    throw IllegalStateException("Save aborted: media stream stalled")
-                }
-                delay(ZERO_READ_BACKOFF_MILLIS)
-                continue
-            }
-
-            zeroReadCount = 0
-            val requiredSize = totalBytesRead + read
-            if (requiredSize.toLong() > MAX_FILE_SIZE_BYTES) {
-                throw Exception("Actual file size exceeds limit: ${requiredSize / 1024}KB")
-            }
-            if (Clock.System.now().toEpochMilliseconds() - startedAtMillis > MAX_SAVE_DURATION_MS) {
-                throw IllegalStateException("Save aborted: exceeded time limit during download")
-            }
-
-            if (requiredSize > output.size) {
-                var newSize = output.size
-                while (newSize < requiredSize) {
-                    newSize = (newSize * 2).coerceAtMost(MAX_FILE_SIZE_BYTES.toInt())
-                    if (newSize == output.size) break
-                }
-                if (newSize < requiredSize) {
-                    throw IllegalStateException("Failed to expand media buffer safely")
-                }
-                output = output.copyOf(newSize)
-            }
-            buffer.copyInto(output, destinationOffset = totalBytesRead, startIndex = 0, endIndex = read)
-            totalBytesRead = requiredSize
-
-            readLoopCount += 1
-            if (readLoopCount % 32L == 0L) {
-                yield()
-            }
-        }
-
-        val payload = if (totalBytesRead == output.size) {
-            output
-        } else {
-            output.copyOf(totalBytesRead)
-        }
-        if (saveLocation != null && saveLocationPath != null) {
-            // SaveLocation path is overwritten in one write to avoid per-chunk stream re-open costs.
-            val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
-                fileSystem.writeBytes(saveLocation, saveLocationPath, payload).getOrThrow()
-                true
-            } ?: false
-            if (!completed) {
-                throw IllegalStateException("Save aborted: timed out while writing media file")
-            }
-        } else if (absolutePath != null) {
-            // Absolute path is overwritten atomically in one write where supported.
-            val completed = withTimeoutOrNull(WRITE_TIMEOUT_MILLIS) {
-                fileSystem.writeBytes(absolutePath, payload).getOrThrow()
-                true
-            } ?: false
-            if (!completed) {
-                throw IllegalStateException("Save aborted: timed out while writing media file")
-            }
-        } else {
-            throw IllegalStateException("No target path specified for media stream")
-        }
-
-        return totalBytesRead.toLong()
-    }
-
-    private suspend fun cleanupFailedSave(
-        baseSaveLocation: SaveLocation?,
-        baseDirectory: String,
-        storageId: String
-    ) {
-        if (baseSaveLocation != null) {
-            fileSystem.delete(baseSaveLocation, storageId).getOrNull()
-        } else {
-            fileSystem.deleteRecursively("$baseDirectory/$storageId").getOrNull()
-        }
-    }
-
-    /**
-     * HTML内のパスを相対パスに変換
-     */
-    private fun convertHtmlPaths(html: String, urlToPathMap: Map<String, String>): String {
-        var converted = html
-
-        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
-        // 画像URLを相対パスに変換
-        converted = IMAGE_SRC_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        // リンクURLを相対パスに変換
-        converted = LINK_HREF_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        // videoタグのsrcを相対パスに変換
-        converted = VIDEO_SRC_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        // sourceタグのsrcも相対パスに変換
-        converted = SOURCE_SRC_REGEX.replace(converted) { matchResult ->
-            val originalUrl = matchResult.groupValues[1]
-            val relativePath = urlToPathMap[originalUrl]
-            if (relativePath != null) {
-                matchResult.value.replace(originalUrl, relativePath)
-            } else {
-                matchResult.value
-            }
-        }
-
-        return converted
+            )
+        )
     }
 
     /**
@@ -860,264 +338,38 @@ class ThreadSaveService(
         urlToPathMap: Map<String, String>,
         stripExternalResources: Boolean
     ): String {
-        var updated = html
-        if (stripExternalResources) {
-            updated = stripExternalScriptsAndIframes(updated)
-        }
-        updated = replaceMediaPaths(updated, boardPath, urlToPathMap)
-        updated = forceUtf8Charset(updated)
-        return updated
-    }
-
-    private fun stripExternalScriptsAndIframes(html: String): String {
-        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
-        fun shouldStrip(url: String): Boolean {
-            val normalized = url.lowercase()
-            return normalized.contains("/bin/") || normalized.contains("dec.2chan.net")
-        }
-        var updated = SCRIPT_SRC_REGEX.replace(html) { matchResult ->
-            val src = matchResult.groupValues.getOrNull(1).orEmpty()
-            if (shouldStrip(src)) "" else matchResult.value
-        }
-        updated = IFRAME_SRC_REGEX.replace(updated) { matchResult ->
-            val src = matchResult.groupValues.getOrNull(1).orEmpty()
-            if (shouldStrip(src)) "" else matchResult.value
-        }
-        return updated
-    }
-
-    /**
-     * 書き出しはUTF-8固定なので charset をUTF-8に置き換える
-     */
-    private fun forceUtf8Charset(html: String): String {
-        // FIX: プリコンパイル済みのRegexを使用（パフォーマンス最適化）
-        var updated = CHARSET_REGEX.replace(html) { matchResult ->
-            matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
-        }
-        updated = CONTENT_TYPE_REGEX.replace(updated) { matchResult ->
-            matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
-        }
-        return updated
-    }
-
-    /**
-     * Futabaの src/thumb をローカルパスに差し替える
-     */
-    private fun replaceMediaPaths(
-        html: String,
-        boardPath: String,
-        urlToPathMap: Map<String, String>
-    ): String {
-        var updated = html
-        // まずはダウンロード時に記録したURLを優先して置き換え
-        urlToPathMap.forEach { (original, relative) ->
-            updated = updated.replace(original, relative)
-        }
-
-        val normalizedBoard = boardPath.trim('/').takeIf { it.isNotEmpty() } ?: return updated
-        val escapedBoard = Regex.escape(normalizedBoard)
-
-        val srcPatterns = listOf(
-            Regex("https?://[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("//[^\"'>]+/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("/$escapedBoard/src/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
-        )
-        val thumbPatterns = listOf(
-            Regex("https?://[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("//[^\"'>]+/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE),
-            Regex("/$escapedBoard/thumb/([A-Za-z0-9._-]+)", RegexOption.IGNORE_CASE)
-        )
-
-        srcPatterns.forEach { regex ->
-            updated = regex.replace(updated) { matchResult ->
-                "$normalizedBoard/src/${matchResult.groupValues[1]}"
-            }
-        }
-        thumbPatterns.forEach { regex ->
-            updated = regex.replace(updated) { matchResult ->
-                "$normalizedBoard/thumb/${matchResult.groupValues[1]}"
-            }
-        }
-        return updated
+        return rewriteSavedOriginalHtml(html, boardPath, urlToPathMap, stripExternalResources)
     }
 
     /**
      * 板URLから板パス部分を抽出（例: https://may.2chan.net/b -> b）
      */
     private fun extractBoardPath(boardUrl: String, boardIdFallback: String): String {
-        val fallback = boardIdFallback.trim('/').ifEmpty { "b" }
-        return runCatching {
-            val base = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
-            val afterHost = base.substringAfter("://", base)
-            val path = afterHost.substringAfter('/', "").trim('/')
-            path.ifEmpty { fallback }
-        }.getOrElse { fallback }
-    }
-
-    private fun buildMetadataPayloadWithStableSize(
-        metadata: SavedThreadMetadata,
-        baseTotalSize: Long
-    ): Pair<String, Long> {
-        var estimatedSize = 0L
-        var payload = json.encodeToString(metadata.copy(totalSize = baseTotalSize))
-        repeat(8) {
-            val size = utf8ByteLength(payload)
-            if (size == estimatedSize) {
-                return payload to size
-            }
-            estimatedSize = size
-            payload = json.encodeToString(metadata.copy(totalSize = baseTotalSize + size))
-        }
-        val finalSize = utf8ByteLength(payload)
-        return payload to finalSize
-    }
-
-    private fun utf8ByteLength(value: String): Long {
-        var total = 0L
-        var index = 0
-        while (index < value.length) {
-            val code = value[index].code
-            val nextCode = value.getOrNull(index + 1)?.code
-            val hasSurrogatePair =
-                code in 0xD800..0xDBFF &&
-                    nextCode != null &&
-                    nextCode in 0xDC00..0xDFFF
-            total += when {
-                code <= 0x7F -> 1L
-                code <= 0x7FF -> 2L
-                hasSurrogatePair -> {
-                    index += 1
-                    4L
-                }
-                else -> 3L
-            }
-            index += 1
-        }
-        return total
+        return extractThreadSaveBoardPath(boardUrl, boardIdFallback)
     }
 
     /**
      * スレッドHTMLを取得（Shift_JISを維持したまま文字列化）
      */
-    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> = withContext(AppDispatchers.io) {
-        try {
-            val html = withTimeoutOrNull(THREAD_HTML_FETCH_TIMEOUT_MILLIS) {
-                val threadUrl = BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
-                val response: HttpResponse = httpClient.get(threadUrl) {
-                    headers[HttpHeaders.Referrer] = BoardUrlResolver.resolveBoardBaseUrl(boardUrl)
-                }
-                try {
-                    if (!response.status.isSuccess()) {
-                        throw Exception("Fetch thread HTML failed: ${response.status}")
-                    }
-                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                    if (contentLength != null && contentLength > MAX_THREAD_HTML_BYTES) {
-                        throw IllegalStateException("Thread HTML is too large: ${contentLength / 1024}KB")
-                    }
-                    val bodyBytes = readResponseBytesWithLimit(
-                        response = response,
-                        maxBytes = MAX_THREAD_HTML_BYTES.toInt()
-                    )
-                    TextEncoding.decodeToString(bodyBytes, response.headers[HttpHeaders.ContentType])
-                } finally {
-                    runCatching { response.bodyAsChannel().cancel() }
-                }
-            } ?: throw IllegalStateException("Fetch thread HTML timed out after ${THREAD_HTML_FETCH_TIMEOUT_MILLIS}ms")
-            Result.success(html)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Result.failure(t)
-        }
-    }
-
-    private suspend fun readResponseBytesWithLimit(
-        response: HttpResponse,
-        maxBytes: Int
-    ): ByteArray {
-        val channel = response.bodyAsChannel()
-        val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
-        var output = ByteArray(minOf(STREAM_READ_BUFFER_BYTES, maxBytes.coerceAtLeast(1)))
-        var totalBytes = 0
-        var zeroReadCount = 0
-        var readLoopCount = 0L
-
-        try {
-            while (true) {
-                coroutineContext.ensureActive()
-                val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
-                    channel.readAvailable(buffer, 0, buffer.size)
-                } ?: throw IllegalStateException("Thread HTML read stalled")
-
-                if (read == -1) break
-                if (read == 0) {
-                    zeroReadCount += 1
-                    if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                        throw IllegalStateException("Thread HTML read stalled")
-                    }
-                    delay(ZERO_READ_BACKOFF_MILLIS)
-                    continue
-                }
-
-                zeroReadCount = 0
-                val requiredSize = totalBytes + read
-                if (requiredSize > maxBytes) {
-                    throw IllegalStateException("Thread HTML is too large")
-                }
-                if (requiredSize > output.size) {
-                    var newSize = output.size
-                    while (newSize < requiredSize) {
-                        newSize = (newSize * 2).coerceAtMost(maxBytes)
-                        if (newSize == output.size) break
-                    }
-                    if (newSize < requiredSize) {
-                        throw IllegalStateException("Failed to expand thread HTML buffer safely")
-                    }
-                    output = output.copyOf(newSize)
-                }
-                buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
-                totalBytes = requiredSize
-                readLoopCount += 1
-                if (readLoopCount % 32L == 0L) {
-                    yield()
-                }
-            }
-        } finally {
-            runCatching { channel.cancel() }
-        }
-
-        return if (totalBytes == output.size) {
-            output
-        } else {
-            output.copyOf(totalBytes)
-        }
+    private suspend fun fetchThreadHtml(boardUrl: String, threadId: String): Result<String> {
+        return fetchThreadSaveHtml(
+            httpClient = httpClient,
+            request = ThreadSaveHtmlFetchRequest(
+                boardUrl = boardUrl,
+                threadId = threadId,
+                threadHtmlFetchTimeoutMillis = THREAD_HTML_FETCH_TIMEOUT_MILLIS,
+                maxThreadHtmlBytes = MAX_THREAD_HTML_BYTES,
+                streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
+                maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
+                zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
+                readIdleTimeoutMillis = READ_IDLE_TIMEOUT_MILLIS
+            )
+        )
     }
 
     /**
      * URLから拡張子を取得
      */
-    private fun getExtensionFromUrl(url: String): String? {
-        val sanitized = url
-            .substringBefore('#')
-            .substringBefore('?')
-        return sanitized.substringAfterLast('.', "").takeIf { it.length in 3..4 }
-    }
-
-    /**
-     * ContentTypeから拡張子を取得
-     */
-    private fun getExtensionFromContentType(contentType: ContentType?): String {
-        return when (contentType?.contentSubtype) {
-            "jpeg", "jpg" -> "jpg"
-            "png" -> "png"
-            "gif" -> "gif"
-            "webp" -> "webp"
-            "mp4" -> "mp4"
-            "webm" -> "webm"
-            else -> "jpg"
-        }
-    }
-
     /**
      * 進捗を更新
      */
@@ -1125,80 +377,25 @@ class ThreadSaveService(
         _saveProgress.value = SaveProgress(phase, current, total, currentItem)
     }
 
-    /**
-     * メディアタイプ
-     */
-    private enum class MediaType {
-        THUMBNAIL,
-        FULL_IMAGE
-    }
-
-    private data class MediaPathLock(
-        val mutex: Mutex,
-        var holders: Int = 0
-    )
-
-    private fun mediaDownloadKey(url: String, type: MediaType): String {
-        return "${type.name}|${url.trim()}"
-    }
-
     private suspend fun <T> withMediaWriteLock(relativePath: String, block: suspend () -> T): T {
-        val lockEntry = mediaWriteLocksGuard.withLock {
-            val entry = mediaWriteLocks.getOrPut(relativePath) { MediaPathLock(Mutex()) }
-            entry.holders += 1
-            entry
-        }
-        return try {
-            lockEntry.mutex.withLock {
-                block()
-            }
-        } finally {
-            mediaWriteLocksGuard.withLock {
-                val current = mediaWriteLocks[relativePath]
-                if (current === lockEntry) {
-                    current.holders -= 1
-                    if (current.holders <= 0 && !current.mutex.isLocked) {
-                        mediaWriteLocks.remove(relativePath)
-                    }
-                }
-            }
-        }
+        return withThreadSaveMediaWriteLock(
+            relativePath = relativePath,
+            mediaWriteLocksGuard = mediaWriteLocksGuard,
+            mediaWriteLocks = mediaWriteLocks,
+            block = block
+        )
     }
-
-    private fun extractFileName(url: String, extension: String, postId: String): String {
-        val candidate = url
-            .substringBefore('#')
-            .substringBefore('?')
-            .substringAfterLast('/')
-            .takeIf { it.isNotBlank() }
-        return candidate ?: "${postId}_${Clock.System.now().toEpochMilliseconds()}.$extension"
-    }
-
-    private data class LocalFileInfo(
-        val relativePath: String,
-        val fileType: FileType,
-        val byteSize: Long
-    )
 
     /**
      * 保存処理の総容量/時間を監視し、上限を超えたら例外で中断する
      */
     private fun enforceBudget(totalSizeBytes: Long, startedAtMillis: Long) {
-        val elapsed = Clock.System.now().toEpochMilliseconds() - startedAtMillis
-        if (totalSizeBytes > MAX_TOTAL_SIZE_BYTES) {
-            throw IllegalStateException("Save aborted: total size exceeds limit (${totalSizeBytes / (1024 * 1024)}MB > ${MAX_TOTAL_SIZE_BYTES / (1024 * 1024)}MB)")
-        }
-        if (elapsed > MAX_SAVE_DURATION_MS) {
-            throw IllegalStateException("Save aborted: exceeded time limit (${elapsed / 1000}s > ${MAX_SAVE_DURATION_MS / 1000}s)")
-        }
+        enforceThreadSaveBudget(
+            totalSizeBytes = totalSizeBytes,
+            startedAtMillis = startedAtMillis,
+            nowMillis = Clock.System.now().toEpochMilliseconds(),
+            maxTotalSizeBytes = MAX_TOTAL_SIZE_BYTES,
+            maxSaveDurationMs = MAX_SAVE_DURATION_MS
+        )
     }
-
-    /**
-     * メディアアイテム
-     */
-    private data class MediaItem(
-        val url: String,
-        val type: MediaType,
-        val post: Post
-    )
 }

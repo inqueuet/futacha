@@ -28,16 +28,6 @@ class IosFileSystem : FileSystem {
 
     private val fileManager = NSFileManager.defaultManager
 
-    // FIX: 安全性チェックのための定数
-    companion object {
-        // FIX: ファイルサイズ上限（100MB） - OOM防止
-        private const val MAX_FILE_SIZE = 100 * 1024 * 1024L
-        // FIX: ファイル名の最大長（iOSの制限）
-        private const val MAX_FILENAME_LENGTH = 255
-        // FIX: パスの最大長（合理的な上限）
-        private const val MAX_PATH_LENGTH = 4096
-    }
-
     private inline fun <T> runFsCatching(block: () -> T): Result<T> {
         return try {
             Result.success(block())
@@ -53,49 +43,16 @@ class IosFileSystem : FileSystem {
      *
      * @throws IllegalArgumentException パスが不正な場合
      */
-    private fun validatePath(path: String, paramName: String = "path") {
-        // FIX: 空文字列チェック
-        if (path.isEmpty()) {
-            throw IllegalArgumentException("$paramName must not be empty")
-        }
-
-        // FIX: null文字チェック（セキュリティ脆弱性防止）
-        if (path.contains('\u0000')) {
-            throw IllegalArgumentException("$paramName contains null character")
-        }
-
-        // FIX: パス長制限
-        if (path.length > MAX_PATH_LENGTH) {
-            throw IllegalArgumentException("$paramName exceeds maximum length ($MAX_PATH_LENGTH): ${path.length}")
-        }
-
-        // FIX: パストラバーサル攻撃防止
-        val normalized = path.replace('\\', '/')
-        if (normalized.contains("../") || normalized.contains("/..") || normalized == "..") {
-            throw IllegalArgumentException("$paramName contains path traversal sequence: $path")
-        }
-
-        // FIX: ファイル名の長さチェック（最後のセグメントのみ）
-        val fileName = normalized.substringAfterLast('/', normalized)
-        if (fileName.length > MAX_FILENAME_LENGTH) {
-            throw IllegalArgumentException("File name exceeds maximum length ($MAX_FILENAME_LENGTH): $fileName")
-        }
-    }
+    private fun validatePath(path: String, paramName: String = "path") =
+        validateFileSystemPath(path, paramName)
 
     /**
      * FIX: ファイルサイズ検証 - OOM防止
      *
      * @throws IllegalArgumentException サイズが上限を超える場合
      */
-    private fun validateFileSize(size: Long, paramName: String = "file") {
-        if (size > MAX_FILE_SIZE) {
-            throw IllegalArgumentException("$paramName size ($size bytes) exceeds maximum allowed ($MAX_FILE_SIZE bytes)")
-        }
-        // FIX: 負のサイズチェック
-        if (size < 0) {
-            throw IllegalArgumentException("$paramName size cannot be negative: $size")
-        }
-    }
+    private fun validateFileSize(size: Long, paramName: String = "file") =
+        validateFileSystemSize(size, paramName)
 
     private fun isNoSuchFileError(error: NSError?): Boolean {
         // NSFileNoSuchFileError
@@ -108,6 +65,44 @@ class IosFileSystem : FileSystem {
             resolvedBase
         } else {
             "$resolvedBase/$relativePath"
+        }
+    }
+
+    private fun joinBaseAndRelativePath(basePath: String, relativePath: String): String {
+        return if (relativePath.isEmpty()) {
+            basePath
+        } else {
+            "$basePath/$relativePath"
+        }
+    }
+
+    private suspend fun <T> withBookmarkPath(
+        bookmarkData: String,
+        relativePath: String,
+        block: suspend (String) -> T
+    ): T {
+        val url = resolveBookmarkUrl(bookmarkData)
+        val startedAccess = url.startAccessingSecurityScopedResource()
+        try {
+            val basePath = resolveBookmarkPath(url)
+            return block(joinBaseAndRelativePath(basePath, relativePath))
+        } finally {
+            if (startedAccess) {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+    }
+
+    private suspend fun <T> withSaveLocationPath(
+        base: SaveLocation,
+        relativePath: String,
+        onTreeUri: () -> T,
+        block: suspend (String) -> T
+    ): T {
+        return when (base) {
+            is SaveLocation.Path -> block(resolveSaveLocationPath(base.path, relativePath))
+            is SaveLocation.Bookmark -> withBookmarkPath(base.bookmarkData, relativePath, block)
+            is SaveLocation.TreeUri -> onTreeUri()
         }
     }
 
@@ -326,21 +321,11 @@ class IosFileSystem : FileSystem {
     }
 
     override fun resolveAbsolutePath(relativePath: String): String {
-        return if (relativePath.startsWith("/")) {
-            relativePath
-        } else {
-            val baseDir = if (relativePath.startsWith(AUTO_SAVE_DIRECTORY) || relativePath.startsWith("private/")) {
-                getPrivateAppDataDirectory()
-            } else {
-                getAppDataDirectory()
-            }
-            val cleaned = if (relativePath.startsWith("private/")) {
-                relativePath.removePrefix("private/").ifBlank { "" }
-            } else {
-                relativePath
-            }
-            "$baseDir/$cleaned"
-        }
+        return resolveIosAbsolutePath(
+            relativePath = relativePath,
+            appDataDirectory = getAppDataDirectory(),
+            privateAppDataDirectory = getPrivateAppDataDirectory()
+        )
     }
 
     /**
@@ -435,33 +420,14 @@ class IosFileSystem : FileSystem {
                 return@withContext Result.failure(it)
             }
         }
-        when (base) {
-            is SaveLocation.Path -> {
-                val fullPath = resolveSaveLocationPath(base.path, relativePath)
-                createDirectory(fullPath)
-            }
-            is SaveLocation.Bookmark -> {
-                runFsCatching {
-                    val url = resolveBookmarkUrl(base.bookmarkData)
-                    val startedAccess = url.startAccessingSecurityScopedResource()
-                    try {
-                        val basePath = resolveBookmarkPath(url)
-                        val fullPath = if (relativePath.isEmpty()) {
-                            basePath
-                        } else {
-                            "$basePath/$relativePath"
-                        }
-                        createDirectory(fullPath).getOrThrow()
-                    } finally {
-                        if (startedAccess) {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                }
-            }
-            is SaveLocation.TreeUri -> {
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
                 Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
             }
+        ) { fullPath ->
+            createDirectory(fullPath)
         }
     }
 
@@ -473,29 +439,14 @@ class IosFileSystem : FileSystem {
         }.getOrElse {
             return@withContext Result.failure(it)
         }
-        when (base) {
-            is SaveLocation.Path -> {
-                val fullPath = resolveSaveLocationPath(base.path, relativePath)
-                writeBytes(fullPath, bytes)
-            }
-            is SaveLocation.Bookmark -> {
-                runFsCatching {
-                    val url = resolveBookmarkUrl(base.bookmarkData)
-                    val startedAccess = url.startAccessingSecurityScopedResource()
-                    try {
-                        val basePath = resolveBookmarkPath(url)
-                        val fullPath = "$basePath/$relativePath"
-                        writeBytes(fullPath, bytes).getOrThrow()
-                    } finally {
-                        if (startedAccess) {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                }
-            }
-            is SaveLocation.TreeUri -> {
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
                 Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
             }
+        ) { fullPath ->
+            writeBytes(fullPath, bytes)
         }
     }
 
@@ -507,29 +458,14 @@ class IosFileSystem : FileSystem {
         }.getOrElse {
             return@withContext Result.failure(it)
         }
-        when (base) {
-            is SaveLocation.Path -> {
-                val fullPath = resolveSaveLocationPath(base.path, relativePath)
-                appendBytes(fullPath, bytes)
-            }
-            is SaveLocation.Bookmark -> {
-                runFsCatching {
-                    val url = resolveBookmarkUrl(base.bookmarkData)
-                    val startedAccess = url.startAccessingSecurityScopedResource()
-                    try {
-                        val basePath = resolveBookmarkPath(url)
-                        val fullPath = "$basePath/$relativePath"
-                        appendBytes(fullPath, bytes).getOrThrow()
-                    } finally {
-                        if (startedAccess) {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                }
-            }
-            is SaveLocation.TreeUri -> {
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
                 Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
             }
+        ) { fullPath ->
+            appendBytes(fullPath, bytes)
         }
     }
 
@@ -543,65 +479,32 @@ class IosFileSystem : FileSystem {
         runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
             return@withContext Result.failure(it)
         }
-        when (base) {
-            is SaveLocation.Path -> {
-                val fullPath = resolveSaveLocationPath(base.path, relativePath)
-                readString(fullPath)
-            }
-            is SaveLocation.Bookmark -> {
-                runFsCatching {
-                    val url = resolveBookmarkUrl(base.bookmarkData)
-                    val startedAccess = url.startAccessingSecurityScopedResource()
-                    try {
-                        val basePath = resolveBookmarkPath(url)
-                        val fullPath = "$basePath/$relativePath"
-                        readString(fullPath).getOrThrow()
-                    } finally {
-                        if (startedAccess) {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                }
-            }
-            is SaveLocation.TreeUri -> {
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
                 Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
             }
+        ) { fullPath ->
+            readString(fullPath)
         }
     }
 
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(AppDispatchers.io) {
-        when (base) {
-            is SaveLocation.Path -> {
-                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+        try {
+            withSaveLocationPath(
+                base = base,
+                relativePath = relativePath,
+                onTreeUri = { false }
+            ) { fullPath ->
                 exists(fullPath)
             }
-            is SaveLocation.Bookmark -> {
-                try {
-                    val url = resolveBookmarkUrl(base.bookmarkData)
-                    val startedAccess = url.startAccessingSecurityScopedResource()
-                    try {
-                        val basePath = resolveBookmarkPath(url)
-                        val fullPath = if (relativePath.isEmpty()) {
-                            basePath
-                        } else {
-                            "$basePath/$relativePath"
-                        }
-                        exists(fullPath)
-                    } finally {
-                        if (startedAccess) {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Logger.e("IosFileSystem", "Error checking existence for Bookmark, path: $relativePath", e)
-                    false
-                }
-            }
-            is SaveLocation.TreeUri -> {
-                false
-            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
+            Logger.e("IosFileSystem", "Error checking existence for $tag, path: $relativePath", e)
+            false
         }
     }
 
@@ -612,40 +515,21 @@ class IosFileSystem : FileSystem {
                 return@withContext Result.failure(it)
             }
         }
-        when (base) {
-            is SaveLocation.Path -> {
-                val fullPath = resolveSaveLocationPath(base.path, relativePath)
-                deleteRecursively(fullPath)
-            }
-            is SaveLocation.Bookmark -> {
-                runFsCatching {
-                    if (relativePath.isEmpty()) {
-                        Logger.w(
-                            "IosFileSystem",
-                            "Refusing to delete bookmark base directory directly"
-                        )
-                        return@runFsCatching Unit
-                    }
-                    val url = resolveBookmarkUrl(base.bookmarkData)
-                    val startedAccess = url.startAccessingSecurityScopedResource()
-                    try {
-                        val basePath = resolveBookmarkPath(url)
-                        val fullPath = if (relativePath.isEmpty()) {
-                            basePath
-                        } else {
-                            "$basePath/$relativePath"
-                        }
-                        deleteRecursively(fullPath).getOrThrow()
-                    } finally {
-                        if (startedAccess) {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                }
-            }
-            is SaveLocation.TreeUri -> {
+        if (base is SaveLocation.Bookmark && relativePath.isEmpty()) {
+            Logger.w(
+                "IosFileSystem",
+                "Refusing to delete bookmark base directory directly"
+            )
+            return@withContext Result.success(Unit)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
                 Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
             }
+        ) { fullPath ->
+            deleteRecursively(fullPath)
         }
     }
 

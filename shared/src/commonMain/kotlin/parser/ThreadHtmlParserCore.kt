@@ -1,14 +1,12 @@
 package com.valoser.futacha.shared.parser
 
 import com.valoser.futacha.shared.model.Post
-import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlin.text.concatToString
-import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
 /**
@@ -199,132 +197,26 @@ internal object ThreadHtmlParserCore {
             var truncationReason: String? = null
 
             if (firstReplyIndex != -1) {
-                val repliesHtml = normalized
-                var searchStart = firstReplyIndex
-                var iterationCount = 0
-                // FIX: イテレーション制限を引き上げ
-                val maxIterations = 2000
-                // FIX: 投稿数制限を引き上げ
-                val maxPosts = 3000
-                var lastSearchStart = -1 // Track previous position to detect stalling
-
-                // FIX: パースタイムアウトでANRを防止
-                val parseStartTime = kotlin.time.Clock.System.now().toEpochMilliseconds()
-
-                while (searchStart < repliesHtml.length &&
-                       iterationCount < maxIterations &&
-                       posts.size < maxPosts) {
-                    iterationCount++
-
-                    // キャンセルとタイムアウトは毎イテレーションで判定して暴走を防ぐ
-                    ensureActive()
-                    val elapsed = kotlin.time.Clock.System.now().toEpochMilliseconds() - parseStartTime
-                    if (elapsed > MAX_PARSE_TIME_MS) {
-                        Logger.e(TAG, "Parse timeout exceeded ($elapsed ms), stopping parse")
-                        isTruncated = true
-                        truncationReason = "Parse timeout exceeded (${elapsed}ms > ${MAX_PARSE_TIME_MS}ms)"
-                        break
+                val replyResult = parseThreadReplyBlocks(
+                    repliesHtml = normalized,
+                    initialSearchStart = firstReplyIndex,
+                    config = ThreadReplyParsingConfig(
+                        tag = TAG,
+                        maxChunkSize = MAX_CHUNK_SIZE,
+                        maxParseTimeMs = MAX_PARSE_TIME_MS,
+                        maxSingleBlockSize = MAX_SINGLE_BLOCK_SIZE,
+                        maxIterations = 2000,
+                        maxPosts = 3000,
+                        tableRegex = tableRegex,
+                        tableEndRegex = tableEndRegex
+                    ),
+                    parsePostBlock = { block ->
+                        parsePostBlock(block, baseUrl, isOp = false)
                     }
-
-                    // Safety check: detect if searchStart hasn't moved
-                    if (searchStart == lastSearchStart) {
-                        Logger.e(TAG, "Search position stalled at $searchStart, stopping parse")
-                        isTruncated = true
-                        truncationReason = "Parse error: search position stalled"
-                        break
-                    }
-                    lastSearchStart = searchStart
-
-                    // Find table start with safety check for regex performance
-                    val tableStart = try {
-                        tableRegex.find(repliesHtml, searchStart)
-                    } catch (e: Exception) {
-                        Logger.e(TAG, "Regex exception during table start search", e)
-                        isTruncated = true
-                        truncationReason = "Parse error: regex exception"
-                        break
-                    } ?: break
-
-                    // Find table end with safety check
-                    val tableEnd = try {
-                        tableEndRegex.find(repliesHtml, tableStart.range.last)
-                    } catch (e: Exception) {
-                        Logger.e(TAG, "Regex exception during table end search", e)
-                        isTruncated = true
-                        truncationReason = "Parse error: regex exception"
-                        break
-                    } ?: break
-
-                    // Safety check to prevent infinite loop from invalid ranges
-                    if (tableEnd.range.last <= tableStart.range.last) {
-                        Logger.e(TAG, "Invalid table range detected, stopping parse")
-                        isTruncated = true
-                        truncationReason = "Parse error: invalid table range"
-                        break
-                    }
-
-                    // FIX: 整数オーバーフロー防止 - range.last + 1がオーバーフローしないかチェック
-                    // Int.MAX_VALUE - 1の場合も+1でInt.MAX_VALUEになり配列アクセスで問題が起きるため弾く
-                    if (tableEnd.range.last >= Int.MAX_VALUE - 1) {
-                        Logger.e(TAG, "Range end position near Int.MAX_VALUE, cannot continue")
-                        isTruncated = true
-                        truncationReason = "Parse error: range overflow"
-                        break
-                    }
-                    val blockEndExclusive = tableEnd.range.last + 1
-                    if (blockEndExclusive > repliesHtml.length || tableStart.range.first < 0 || tableStart.range.first >= blockEndExclusive) {
-                        Logger.e(TAG, "Invalid block bounds detected (start=${tableStart.range.first}, endExclusive=$blockEndExclusive, length=${repliesHtml.length})")
-                        isTruncated = true
-                        truncationReason = "Parse error: invalid block bounds"
-                        break
-                    }
-
-                    val block = repliesHtml.substring(tableStart.range.first, blockEndExclusive)
-
-                    // FIX: Stricter size limits to prevent ReDoS
-                    if (block.length > MAX_CHUNK_SIZE) {
-                        Logger.w(TAG, "Large table block ${block.length} bytes")
-                        // FIX: Reduce max single block size from 1MB to 500KB
-                        if (block.length > MAX_SINGLE_BLOCK_SIZE) {
-                            Logger.w(TAG, "Skipping block exceeding safe size limit (${block.length} > $MAX_SINGLE_BLOCK_SIZE)")
-                            isTruncated = true
-                            if (truncationReason == null) {
-                                truncationReason = "Skipped oversized post block (${block.length} bytes)"
-                            }
-                            searchStart = blockEndExclusive
-                            continue
-                        }
-                    }
-
-                    if (block.contains("class=\"cno\"", ignoreCase = true) ||
-                        block.contains("class=cno", ignoreCase = true)
-                    ) {
-                        parsePostBlock(block, baseUrl, isOp = false)?.let(posts::add)
-                    }
-
-                    val newSearchStart = blockEndExclusive
-
-                    // Safety check to prevent searchStart from going backwards
-                    if (newSearchStart <= searchStart) {
-                        Logger.e(TAG, "Search position not advancing properly (old=$searchStart, new=$newSearchStart), stopping parse")
-                        isTruncated = true
-                        truncationReason = "Parse error: search position not advancing"
-                        break
-                    }
-
-                    searchStart = newSearchStart
-                }
-
-                if (iterationCount >= maxIterations) {
-                    Logger.w(TAG, "Reached maximum iteration limit ($maxIterations), thread may be truncated")
-                    isTruncated = true
-                    truncationReason = "Exceeded maximum iteration limit ($maxIterations)"
-                }
-                if (posts.size >= maxPosts) {
-                    Logger.w(TAG, "Reached maximum post limit ($maxPosts), thread truncated")
-                    isTruncated = true
-                    truncationReason = "Thread has more than $maxPosts posts"
-                }
+                )
+                posts += replyResult.posts
+                isTruncated = replyResult.isTruncated
+                truncationReason = replyResult.truncationReason
             }
 
             // FIX: Build references and counts in a single pass to reduce CPU usage
@@ -526,19 +418,17 @@ internal object ThreadHtmlParserCore {
         return HtmlEntityDecoder.decode(value)
     }
 
-    // FIX: Combine reference counting and map building to avoid O(n²) complexity
-    private data class ReferenceData(
-        val counts: Map<String, Int>,
-        val references: Map<String, List<QuoteReference>>,
-        val timedOut: Boolean = false
-    )
-
     /**
      * オフライン復元など既存の Post リストから引用情報を付け直す用途向け。
      */
     fun rebuildReferences(posts: List<Post>): List<Post> {
         if (posts.isEmpty()) return posts
-        val referenceData = buildReferencesAndCounts(posts)
+        val referenceData = buildThreadReferenceData(
+            posts = posts,
+            config = buildThreadReferenceConfig(),
+            decodeHtmlEntities = ::decodeHtmlEntities,
+            stripTags = ::stripTags
+        )
         return posts.map { post ->
             post.copy(
                 referencedCount = referenceData.counts[post.id] ?: 0,
@@ -547,148 +437,13 @@ internal object ThreadHtmlParserCore {
         }
     }
 
-    private fun buildReferencesAndCounts(posts: List<Post>): ReferenceData {
-        if (posts.isEmpty()) return ReferenceData(emptyMap(), emptyMap())
-
-        val posterIdIndex = mutableMapOf<String, MutableSet<String>>()
-        val messageLineIndex = mutableMapOf<String, LineTargets>()
-        val mediaFileIndex = mutableMapOf<String, MutableSet<String>>()
-        val counts = mutableMapOf<String, Int>()
-        val references = mutableMapOf<String, MutableList<QuoteReference>>()
-        val startedAtMillis = Clock.System.now().toEpochMilliseconds()
-        var timedOut = false
-
-        // FIX: デコード/ストリップ処理をキャッシュして繰り返し処理を避ける
-        val decodedMessages = mutableMapOf<String, List<String>>()
-
-        // Single pass through posts in order; only以前の投稿を参照対象とする
-        for ((index, post) in posts.withIndex()) {
-            if (index % 32 == 0) {
-                val elapsed = Clock.System.now().toEpochMilliseconds() - startedAtMillis
-                if (elapsed > MAX_REFERENCE_BUILD_TIME_MS) {
-                    timedOut = true
-                    Logger.w(TAG, "Reference rebuild timed out at post=$index elapsed=${elapsed}ms")
-                    break
-                }
-            }
-            if (post.messageHtml.isBlank()) continue
-
-            // デコード済みメッセージをキャッシュから取得または生成
-            val lines = decodedMessages.getOrPut(post.id) {
-                decodeHtmlEntities(stripTags(post.messageHtml))
-                    .lines()
-                    .map { it.trimStart() }
-            }
-            if (lines.isEmpty()) continue
-
-            val postReferences = mutableListOf<QuoteReference>()
-            val referencedTargets = mutableSetOf<String>()
-            val pendingContentLines = mutableListOf<String>()
-            var pendingContentTargets: Set<String>? = null
-            var isContentBlockInvalid = false
-
-            fun flushPendingContentBlock() {
-                val targets = pendingContentTargets
-                if (pendingContentLines.isNotEmpty() &&
-                    !isContentBlockInvalid &&
-                    targets != null &&
-                    targets.isNotEmpty()
-                ) {
-                    postReferences.add(
-                        QuoteReference(
-                            text = pendingContentLines.joinToString("\n").trim(),
-                            targetPostIds = targets.toList()
-                        )
-                    )
-                    referencedTargets += targets
-                }
-                pendingContentLines.clear()
-                pendingContentTargets = null
-                isContentBlockInvalid = false
-            }
-
-            lines.forEach { rawLine ->
-                val trimmedLine = rawLine.trimStart()
-                if (trimmedLine.isBlank()) {
-                    return@forEach
-                }
-                if (!(trimmedLine.startsWith(">") || trimmedLine.startsWith("＞"))) {
-                    flushPendingContentBlock()
-                    return@forEach
-                }
-
-                val resolution = resolveQuoteTargets(
-                    quoteLine = trimmedLine,
-                    posterIdIndex = posterIdIndex,
-                    messageLineIndex = messageLineIndex,
-                    mediaFileIndex = mediaFileIndex
-                )
-                if (resolution.isExplicit) {
-                    flushPendingContentBlock()
-                    if (resolution.targets.isNotEmpty()) {
-                        postReferences.add(
-                            QuoteReference(
-                                text = trimmedLine.trim(),
-                                targetPostIds = resolution.targets.toList()
-                            )
-                        )
-                        referencedTargets += resolution.targets
-                    }
-                    return@forEach
-                }
-
-                if (resolution.targets.isEmpty()) {
-                    if (pendingContentLines.isNotEmpty()) {
-                        pendingContentLines.add(trimmedLine.trim())
-                        pendingContentTargets = emptySet()
-                        isContentBlockInvalid = true
-                    } else {
-                        flushPendingContentBlock()
-                    }
-                    return@forEach
-                }
-
-                val currentTargets = pendingContentTargets
-                val updatedTargets = when {
-                    currentTargets == null -> resolution.targets
-                    else -> currentTargets.intersect(resolution.targets)
-                }
-
-                if (updatedTargets.isEmpty()) {
-                    pendingContentLines.add(trimmedLine.trim())
-                    pendingContentTargets = emptySet()
-                    isContentBlockInvalid = true
-                } else {
-                    pendingContentLines.add(trimmedLine.trim())
-                    pendingContentTargets = updatedTargets
-                }
-            }
-
-            flushPendingContentBlock()
-
-            if (postReferences.isNotEmpty()) {
-                referencedTargets.forEach { targetId ->
-                    if (targetId == post.id) return@forEach
-                    counts[targetId] = counts[targetId]?.plus(1) ?: 1
-                }
-                references[post.id] = postReferences
-            }
-
-            // 現在の投稿を以降の引用解析の対象としてインデックスに追加
-            addPosterIdToIndex(posterIdIndex, post)
-            addMessageLinesToIndex(messageLineIndex, post)
-            addMediaToIndex(mediaFileIndex, post)
-        }
-
-        return ReferenceData(counts, references, timedOut = timedOut)
-    }
-
-    private fun computeReferencedCounts(posts: List<Post>): Map<String, Int> {
-        return buildReferencesAndCounts(posts).counts
-    }
-
-    private fun buildQuoteReferenceMap(posts: List<Post>): Map<String, List<QuoteReference>> {
-        return buildReferencesAndCounts(posts).references
+    private fun buildReferencesAndCounts(posts: List<Post>): ThreadReferenceData {
+        return buildThreadReferenceData(
+            posts = posts,
+            config = buildThreadReferenceConfig(),
+            decodeHtmlEntities = ::decodeHtmlEntities,
+            stripTags = ::stripTags
+        )
     }
 
     private fun resolveUrl(path: String, baseUrl: String): String {
@@ -733,135 +488,17 @@ internal object ThreadHtmlParserCore {
         return if (slashIndex == -1) url else url.substring(0, slashIndex)
     }
 
-    private fun addPosterIdToIndex(
-        index: MutableMap<String, MutableSet<String>>,
-        post: Post
-    ) {
-        val id = post.posterId?.takeIf { it.isNotBlank() } ?: return
-        val normalized = id.trim()
-        index.getOrPut(normalized) { mutableSetOf() }.add(post.id)
-    }
-
-    private fun addMessageLinesToIndex(
-        index: MutableMap<String, LineTargets>,
-        post: Post
-    ) {
-        if (post.messageHtml.isBlank()) return
-        decodeHtmlEntities(stripTags(post.messageHtml))
-            .lines()
-            .forEach { rawLine ->
-                val trimmed = rawLine.trim()
-                if (trimmed.isBlank()) return@forEach
-                val isQuoted = trimmed.startsWith(">") || trimmed.startsWith("＞")
-                val withoutMarkers = trimmed.trimStart { it == '>' || it == '＞' }.trim()
-                if (withoutMarkers.isBlank()) return@forEach
-                val normalized = normalizeQuoteText(withoutMarkers)
-                if (normalized.isBlank()) return@forEach
-                val bucket = index.getOrPut(normalized) { LineTargets() }
-                if (isQuoted) bucket.quoted.add(post.id) else bucket.plain.add(post.id)
-            }
-    }
-
-    private data class QuoteLineResolution(
-        val targets: Set<String>,
-        val isExplicit: Boolean
-    )
-
-    private fun resolveQuoteTargets(
-        quoteLine: String,
-        posterIdIndex: Map<String, Set<String>>,
-        messageLineIndex: Map<String, LineTargets>,
-        mediaFileIndex: Map<String, MutableSet<String>>
-    ): QuoteLineResolution {
-        val trimmed = quoteLine.trim()
-        if (trimmed.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
-        val content = trimmed.trimStart { it == '>' || it == '＞' }.trim()
-        if (content.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
-        val mediaTargets = resolveMediaTargets(content, mediaFileIndex)
-        if (mediaTargets.isNotEmpty()) {
-            return QuoteLineResolution(mediaTargets, isExplicit = true)
-        }
-        val explicitNumber = noReferenceRegex.find(content)?.groupValues?.getOrNull(1)
-            ?: leadingNumberRegex.find(content)?.groupValues?.getOrNull(1)
-        if (explicitNumber != null) {
-            return QuoteLineResolution(setOf(explicitNumber), isExplicit = true)
-        }
-        val idMatch = idReferenceRegex.find(content)?.value
-        if (idMatch != null) {
-            val targets = posterIdIndex[idMatch].orEmpty()
-            return QuoteLineResolution(targets, isExplicit = true)
-        }
-        val normalized = normalizeQuoteText(content)
-        if (normalized.isBlank()) return QuoteLineResolution(emptySet(), isExplicit = false)
-        val targets = messageLineIndex[normalized]?.resolve()
-        if (!targets.isNullOrEmpty()) {
-            return QuoteLineResolution(targets, isExplicit = false)
-        }
-        val partialTargets = findPartialLineTargets(normalized, messageLineIndex)
-        return QuoteLineResolution(partialTargets, isExplicit = false)
-    }
-
-    private fun resolveMediaTargets(
-        content: String,
-        mediaFileIndex: Map<String, MutableSet<String>>
-    ): Set<String> {
-        if (mediaFileIndex.isEmpty()) return emptySet()
-        val matches = mediaFilenameRegex.findAll(content)
-        if (!matches.iterator().hasNext()) return emptySet()
-        val targets = mutableSetOf<String>()
-        matches.forEach { match ->
-            val normalized = match.value.lowercase()
-            targets += mediaFileIndex[normalized].orEmpty()
-        }
-        return targets
-    }
-
-    private fun normalizeQuoteText(value: String): String {
-        return value.replace(whitespaceRegex, " ").trim()
-    }
-
-    private fun findPartialLineTargets(
-        normalizedQuote: String,
-        index: Map<String, LineTargets>
-    ): Set<String> {
-        if (normalizedQuote.length < MIN_PARTIAL_MATCH_LENGTH) return emptySet()
-        if (index.isEmpty()) return emptySet()
-        if (index.size > MAX_PARTIAL_MATCH_SCAN_LINES) return emptySet()
-        val targets = mutableSetOf<String>()
-        index.forEach { (line, ids) ->
-            if (line.length < MIN_PARTIAL_MATCH_LENGTH) return@forEach
-            if (line.contains(normalizedQuote) || normalizedQuote.contains(line)) {
-                targets += ids.resolve()
-            }
-        }
-        return targets
-    }
-
-    private data class LineTargets(
-        val plain: MutableSet<String> = mutableSetOf(),
-        val quoted: MutableSet<String> = mutableSetOf()
-    ) {
-        fun resolve(): Set<String> = if (plain.isNotEmpty()) plain else quoted
-    }
-
-    private fun addMediaToIndex(
-        index: MutableMap<String, MutableSet<String>>,
-        post: Post
-    ) {
-        extractFileName(post.imageUrl)?.let { file ->
-            index.getOrPut(file) { mutableSetOf() }.add(post.id)
-        }
-        extractFileName(post.thumbnailUrl)?.let { file ->
-            index.getOrPut(file) { mutableSetOf() }.add(post.id)
-        }
-    }
-
-    private fun extractFileName(url: String?): String? {
-        if (url.isNullOrBlank()) return null
-        val cleaned = url.substringBefore('?').substringAfterLast('/', "")
-        if (cleaned.isBlank()) return null
-        val lower = cleaned.lowercase()
-        val match = mediaFilenameRegex.matchEntire(lower) ?: return null
-        return match.value
+    private fun buildThreadReferenceConfig(): ThreadReferenceBuildConfig {
+        return ThreadReferenceBuildConfig(
+            tag = TAG,
+            maxReferenceBuildTimeMs = MAX_REFERENCE_BUILD_TIME_MS,
+            maxPartialMatchScanLines = MAX_PARTIAL_MATCH_SCAN_LINES,
+            minPartialMatchLength = MIN_PARTIAL_MATCH_LENGTH,
+            noReferenceRegex = noReferenceRegex,
+            leadingNumberRegex = leadingNumberRegex,
+            idReferenceRegex = idReferenceRegex,
+            whitespaceRegex = whitespaceRegex,
+            mediaFilenameRegex = mediaFilenameRegex
+        )
     }
 }

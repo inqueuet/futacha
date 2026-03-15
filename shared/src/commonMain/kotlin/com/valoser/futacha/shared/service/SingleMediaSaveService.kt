@@ -100,8 +100,12 @@ class SingleMediaSaveService(
                                 savedAt = savedAt
                             )
 
-                            val mediaBaseRelativePath = "$SAVED_MEDIA_DIRECTORY/$storageId/$targetSubDirectory"
-                            val relativePath = "$mediaBaseRelativePath/$fileName"
+                            val relativePath = buildSingleMediaRelativePath(
+                                storageId = storageId,
+                                targetSubDirectory = targetSubDirectory,
+                                fileName = fileName
+                            )
+                            val mediaBaseRelativePath = relativePath.substringBeforeLast('/')
 
                             if (baseSaveLocation != null) {
                                 fileSystem.createDirectory(baseSaveLocation, mediaBaseRelativePath).getOrThrow()
@@ -273,7 +277,6 @@ class SingleMediaSaveService(
     }
 
     companion object {
-        private const val SAVED_MEDIA_DIRECTORY = "saved_media"
         private const val IMAGE_SUB_DIRECTORY = "images"
         private const val VIDEO_SUB_DIRECTORY = "videos"
         private const val DEFAULT_EXTENSION = "bin"
