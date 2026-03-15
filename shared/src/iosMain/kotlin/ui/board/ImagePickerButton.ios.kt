@@ -34,7 +34,7 @@ actual fun rememberAttachmentPickerLauncher(
         scope.launch {
             val imageData = when (preference) {
                 AttachmentPickerPreference.MEDIA -> pickImage()
-                AttachmentPickerPreference.DOCUMENT -> pickImageFromDocuments()
+                AttachmentPickerPreference.DOCUMENT -> pickImageFromDocuments(preferredFileManagerPackage)
                 AttachmentPickerPreference.ALWAYS_ASK -> {
                     // For ALWAYS_ASK, we use PHPicker as the primary choice
                     // In a full implementation, could show an action sheet here
@@ -77,10 +77,9 @@ actual fun rememberDirectoryPickerLauncher(
     preferredFileManagerPackage: String?
 ): () -> Unit {
     val scope = rememberCoroutineScope()
-    // iOS does not support preferred file manager package
     return {
         scope.launch {
-            val picked = pickDirectorySaveLocation()
+            val picked = pickDirectorySaveLocation(preferredFileManagerPackage)
             picked?.let(onDirectorySelected)
         }
     }
