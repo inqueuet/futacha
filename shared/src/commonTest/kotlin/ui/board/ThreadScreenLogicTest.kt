@@ -13,6 +13,7 @@ import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.NetworkException
@@ -1463,7 +1464,7 @@ class ThreadScreenLogicTest {
             ),
             loadRunnerCallbacks = ThreadLoadRunnerCallbacks(
                 loadRemoteByUrl = { error("unexpected by-url load") },
-                loadRemoteByBoard = { _, _ -> page },
+                loadRemoteByBoard = { _, _ -> ThreadPageContent(page = page) },
                 loadArchiveFallback = { error("unexpected archive fallback") },
                 loadOfflineFallback = { error("unexpected offline fallback") }
             ),

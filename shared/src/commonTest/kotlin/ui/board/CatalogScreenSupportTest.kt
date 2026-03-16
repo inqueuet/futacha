@@ -12,6 +12,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
@@ -182,7 +183,7 @@ class CatalogScreenSupportTest {
             setIsRefreshing = { isRefreshing = it },
             setCatalogUiState = { uiState = it },
             setLastCatalogItems = { lastItemCount = it.size },
-            loadCatalogItems = { _, _ -> expectedItems }
+            loadCatalogItems = { _, _ -> CatalogPageContent(items = expectedItems) }
         )
 
         bindings.loadInitialCatalog()
@@ -191,7 +192,7 @@ class CatalogScreenSupportTest {
         assertEquals(1L, generation)
         assertEquals(null, runningJob)
         assertFalse(isRefreshing)
-        assertEquals(CatalogUiState.Success(expectedItems), uiState)
+        assertEquals(CatalogUiState.Success(CatalogPageContent(items = expectedItems)), uiState)
         assertEquals(0, lastItemCount)
     }
 
@@ -219,6 +220,7 @@ class CatalogScreenSupportTest {
         val bindings = buildCatalogCreateThreadBindings(
             coroutineScope = this,
             activeRepository = FakeBoardRepository(),
+            stateStore = null,
             currentBoard = { board },
             currentDraft = { draft },
             currentImage = { image },
@@ -249,6 +251,7 @@ class CatalogScreenSupportTest {
         val bindings = buildCatalogCreateThreadBindings(
             coroutineScope = this,
             activeRepository = FakeBoardRepository(),
+            stateStore = null,
             currentBoard = { null },
             currentDraft = {
                 CreateThreadDraft(
@@ -339,6 +342,7 @@ class CatalogScreenSupportTest {
         val runtimeBindings = buildCatalogScreenRuntimeBindingsBundle(
             coroutineScope = this,
             drawerState = drawerState,
+            stateStore = null,
             currentBoard = { board },
             currentCatalogMode = { CatalogMode.Many },
             currentCatalogLoadGeneration = { 0L },
@@ -349,7 +353,7 @@ class CatalogScreenSupportTest {
             setIsRefreshing = {},
             setCatalogUiState = {},
             setLastCatalogItems = {},
-            loadCatalogItems = { _, _ -> emptyList() },
+            loadCatalogItems = { _, _ -> CatalogPageContent(items = emptyList()) },
             activeRepository = FakeBoardRepository(),
             currentCreateThreadDraft = { emptyCreateThreadDraft() },
             currentCreateThreadImage = { null },
@@ -449,7 +453,7 @@ class CatalogScreenSupportTest {
                 )
             ),
             navigationCallbacks = runtimeBindings.navigationCallbacks,
-            uiState = CatalogUiState.Success(emptyList()),
+            uiState = CatalogUiState.Success(CatalogPageContent(items = emptyList())),
             watchWords = listOf("watch"),
             catalogNgWords = listOf("ng"),
             catalogNgFilteringEnabled = true,

@@ -1,12 +1,14 @@
 package com.valoser.futacha.shared.ui.image
 
-import coil3.decode.Decoder
+import coil3.ComponentRegistry
+import coil3.decode.SkiaImageDecoder
 import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
 
-actual fun getPlatformDecoders(): List<Decoder.Factory> {
-    return emptyList()
+actual fun ComponentRegistry.Builder.addPlatformImageComponents() {
+    add(SkiaImageDecoder.Factory())
+    add(IosVideoFrameFetcher.Factory())
 }
 
 actual fun getPlatformDiskCacheDirectory(platformContext: Any?): String? {

@@ -82,6 +82,7 @@ internal data class ThreadScreenHostRuntimeInputs(
     val onSaidaneFromActionSheet: (Post) -> Unit,
     val onDelRequestFromActionSheet: (Post) -> Unit,
     val onDeleteFromActionSheet: (Post) -> Unit,
+    val onReplySubmit: (() -> Unit)? = null,
     val onBackSwipe: () -> Unit,
     val actionInProgress: Boolean,
     val readAloudIndicatorSegment: ReadAloudSegment?,
@@ -363,7 +364,8 @@ internal fun buildThreadScreenHostBindingsBundle(
             onNgRegisterFromActionSheet = inputs.onNgRegisterFromActionSheet,
             onSaidaneFromActionSheet = inputs.onSaidaneFromActionSheet,
             onDelRequestFromActionSheet = inputs.onDelRequestFromActionSheet,
-            onDeleteFromActionSheet = inputs.onDeleteFromActionSheet
+            onDeleteFromActionSheet = inputs.onDeleteFromActionSheet,
+            onReplySubmit = inputs.onReplySubmit
         )
     )
 }

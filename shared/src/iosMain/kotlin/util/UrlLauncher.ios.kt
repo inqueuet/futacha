@@ -13,6 +13,10 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                 val request = resolveUrlLaunchRequest(url)
                 if (request == null) {
                     Logger.e("UrlLauncher", "Failed to open URL: $url", null)
+                    presentIosAlert(
+                        title = "リンクを開けません",
+                        message = "URL を確認してください。"
+                    )
                 } else {
                     val nsUrl = NSURL.URLWithString(request.normalizedUrl)
                     if (nsUrl != null && UIApplication.sharedApplication.canOpenURL(nsUrl)) {
@@ -23,10 +27,18 @@ actual fun rememberUrlLauncher(): (String) -> Unit {
                         )
                     } else {
                         Logger.e("UrlLauncher", "Failed to open URL: ${request.normalizedUrl}", null)
+                        presentIosAlert(
+                            title = "このリンクは開けません",
+                            message = "対応するアプリが見つかりません。"
+                        )
                     }
                 }
             } catch (e: Exception) {
                 Logger.e("UrlLauncher", "Failed to open URL: $url", e)
+                presentIosAlert(
+                    title = "リンクを開けません",
+                    message = "もう一度お試しください。"
+                )
             }
         }
     }

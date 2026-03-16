@@ -50,6 +50,22 @@ internal suspend fun setAppStateAdsEnabled(
     )
 }
 
+internal suspend fun setAppStateHasShownPostingNotice(
+    storage: PlatformStateStorage,
+    shown: Boolean,
+    tag: String,
+    rethrowIfCancellation: (Throwable) -> Unit
+) {
+    persistAppStatePreference(
+        value = shown,
+        update = storage::updateHasShownPostingNotice,
+        onFailure = { error ->
+            Logger.e(tag, "Failed to save posting notice state: $shown", error)
+        },
+        rethrowIfCancellation = rethrowIfCancellation
+    )
+}
+
 internal suspend fun setAppStateLastUsedDeleteKey(
     storage: PlatformStateStorage,
     deleteKey: String,

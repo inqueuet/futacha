@@ -16,6 +16,7 @@ private const val CATALOG_GRID_COLUMNS_KEY = "catalog_grid_columns"
 private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val ADS_ENABLED_KEY = "ads_enabled"
+private const val POSTING_NOTICE_KEY = "has_shown_posting_notice"
 private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
@@ -50,6 +51,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val adsEnabledState = MutableStateFlow(
         if (defaults.objectForKey(ADS_ENABLED_KEY) == null) false else defaults.boolForKey(ADS_ENABLED_KEY)
     )
+    private val postingNoticeState = MutableStateFlow(defaults.boolForKey(POSTING_NOTICE_KEY))
     private val lightweightModeState = MutableStateFlow(defaults.boolForKey(LIGHTWEIGHT_MODE_KEY))
     private val manualSaveDirectoryState = MutableStateFlow(
         sanitizeManualSaveDirectoryValue(defaults.stringForKey(MANUAL_SAVE_DIRECTORY_KEY))
@@ -75,6 +77,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
     override val adsEnabled: Flow<Boolean> = adsEnabledState
+    override val hasShownPostingNotice: Flow<Boolean> = postingNoticeState
     override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
@@ -200,6 +203,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         seedRequiredStringState(BOARDS_KEY, seedBundles.boards.boardsJson, boardsState)
         seedRequiredStringState(HISTORY_KEY, seedBundles.history.historyJson, historyState)
         seedRequiredBooleanState(ADS_ENABLED_KEY, false, adsEnabledState)
+        seedRequiredBooleanState(POSTING_NOTICE_KEY, false, postingNoticeState)
         seedRequiredStringState(
             MANUAL_SAVE_DIRECTORY_KEY,
             DEFAULT_MANUAL_SAVE_ROOT,
@@ -290,6 +294,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun updateAdsEnabled(enabled: Boolean) {
         updateBooleanState(ADS_ENABLED_KEY, enabled, adsEnabledState)
+    }
+
+    override suspend fun updateHasShownPostingNotice(shown: Boolean) {
+        updateBooleanState(POSTING_NOTICE_KEY, shown, postingNoticeState)
     }
 
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) {

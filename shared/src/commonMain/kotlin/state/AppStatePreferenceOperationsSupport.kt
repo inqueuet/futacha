@@ -125,6 +125,10 @@ internal class AppStatePreferenceOperations(
         mutateSimplePreference(enabled, ::setAppStateAdsEnabled)
     }
 
+    suspend fun setHasShownPostingNotice(shown: Boolean) {
+        mutateSimplePreference(shown, ::setAppStateHasShownPostingNotice)
+    }
+
     suspend fun setLastUsedDeleteKey(deleteKey: String) {
         mutateSimplePreference(deleteKey, ::setAppStateLastUsedDeleteKey)
     }

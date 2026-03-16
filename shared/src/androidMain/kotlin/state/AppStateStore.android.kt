@@ -36,6 +36,7 @@ private class AndroidPlatformStateStorage(
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val adsEnabledKey = booleanPreferencesKey("ads_enabled")
+    private val postingNoticeKey = booleanPreferencesKey("has_shown_posting_notice")
     private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val gridColumnsKey = stringPreferencesKey("catalog_grid_columns")
@@ -108,6 +109,8 @@ private class AndroidPlatformStateStorage(
 
     override val adsEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[adsEnabledKey] ?: false }
+    override val hasShownPostingNotice: Flow<Boolean> =
+        safeData.map { prefs -> prefs[postingNoticeKey] ?: false }
 
     override val lightweightModeEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
@@ -247,6 +250,7 @@ private class AndroidPlatformStateStorage(
         seedRequiredStringPreference(historyKey, seedBundles.history.historyJson)
         seedRequiredStringPreference(manualSaveDirectoryKey, DEFAULT_MANUAL_SAVE_ROOT)
         seedRequiredBooleanPreference(adsEnabledKey, false)
+        seedRequiredBooleanPreference(postingNoticeKey, false)
         seedOptionalStringPreference(ngHeadersKey, seedBundles.preferences.ngHeadersJson)
         seedOptionalStringPreference(ngWordsKey, seedBundles.preferences.ngWordsJson)
         seedOptionalStringPreference(catalogNgWordsKey, seedBundles.preferences.catalogNgWordsJson)
@@ -309,6 +313,15 @@ private class AndroidPlatformStateStorage(
             enabled,
             "ads enabled",
             "Failed to save ads enabled state"
+        )
+    }
+
+    override suspend fun updateHasShownPostingNotice(shown: Boolean) {
+        updateBooleanPreference(
+            postingNoticeKey,
+            shown,
+            "posting notice",
+            "Failed to save posting notice state"
         )
     }
 

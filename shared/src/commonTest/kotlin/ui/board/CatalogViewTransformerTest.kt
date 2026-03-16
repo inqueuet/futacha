@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -91,11 +92,11 @@ class CatalogViewTransformerTest {
             mode = CatalogMode.New
         ) { _, mode ->
             calls += mode
-            listOf(catalogItem(id = "100", title = mode.label))
+            CatalogPageContent(items = listOf(catalogItem(id = "100", title = mode.label)))
         }
 
         assertEquals(listOf(CatalogMode.New), calls)
-        assertEquals(listOf("100"), items.map { it.id })
+        assertEquals(listOf("100"), items.items.map { it.id })
     }
 
     @Test
@@ -108,15 +109,17 @@ class CatalogViewTransformerTest {
         ) { _, mode ->
             calls += mode
             when (mode) {
-                CatalogMode.Catalog -> listOf(catalogItem(id = "100", title = "A"))
+                CatalogMode.Catalog -> CatalogPageContent(items = listOf(catalogItem(id = "100", title = "A")))
                 CatalogMode.New -> error("fetch failed")
-                CatalogMode.Old -> listOf(catalogItem(id = "100", title = "A2"), catalogItem(id = "200", title = "B"))
-                else -> emptyList()
+                CatalogMode.Old -> CatalogPageContent(
+                    items = listOf(catalogItem(id = "100", title = "A2"), catalogItem(id = "200", title = "B"))
+                )
+                else -> CatalogPageContent(items = emptyList())
             }
         }
 
         assertEquals(CatalogMode.watchSourceModes, calls)
-        assertEquals(listOf("100", "200"), items.map { it.id })
+        assertEquals(listOf("100", "200"), items.items.map { it.id })
     }
 
     @Test

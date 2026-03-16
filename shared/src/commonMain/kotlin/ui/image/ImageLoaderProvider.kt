@@ -3,9 +3,9 @@ package com.valoser.futacha.shared.ui.image
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
+import coil3.ComponentRegistry
 import coil3.ImageLoader
 import coil3.compose.LocalPlatformContext
-import coil3.decode.Decoder
 import coil3.disk.DiskCache
 import coil3.intercept.Interceptor
 import coil3.memory.MemoryCache
@@ -41,7 +41,7 @@ val LocalFutachaImageLoader = staticCompositionLocalOf<ImageLoader> {
     error("FutachaImageLoader is not provided")
 }
 
-expect fun getPlatformDecoders(): List<Decoder.Factory>
+expect fun ComponentRegistry.Builder.addPlatformImageComponents()
 expect fun getPlatformDiskCacheDirectory(platformContext: Any?): String?
 
 @Composable
@@ -71,7 +71,7 @@ fun rememberFutachaImageLoader(
         ImageLoader.Builder(platformContext)
             .components {
                 add(FutabaExtensionFallbackInterceptor())
-                getPlatformDecoders().forEach { add(it) }
+                addPlatformImageComponents()
             }
             .fetcherCoroutineContext(fetcherDispatcher)
             .decoderCoroutineContext(fetcherDispatcher)

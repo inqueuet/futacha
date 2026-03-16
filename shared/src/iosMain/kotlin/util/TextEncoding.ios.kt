@@ -28,16 +28,12 @@ actual object TextEncoding {
     private val utf8CfEncoding: UInt = kCFStringEncodingUTF8
 
     actual fun encodeToShiftJis(text: String): ByteArray {
-        val nsString = NSString.create(string = text)
-        val data = nsString.dataUsingEncoding(shiftJisEncoding, allowLossyConversion = true)
-            ?: return ByteArray(0)
-        val length = data.length.toInt()
-        if (length == 0) return ByteArray(0)
-        val bytes = ByteArray(length)
-        bytes.usePinned { pinned ->
-            memcpy(pinned.addressOf(0), data.bytes, data.length)
+        return encodeShiftJisDeterministically(text) { chunk ->
+            val nsString = NSString.create(string = chunk)
+            val data = nsString.dataUsingEncoding(shiftJisEncoding, allowLossyConversion = false)
+                ?: return@encodeShiftJisDeterministically null
+            data.toByteArray()
         }
-        return bytes
     }
 
     actual fun decodeToString(bytes: ByteArray, contentType: String?): String {
@@ -81,6 +77,16 @@ actual object TextEncoding {
             }
         } finally {
             CFRelease(cfString)
+        }
+    }
+
+    private fun NSData.toByteArray(): ByteArray {
+        val length = this.length.toInt()
+        if (length == 0) return ByteArray(0)
+        return ByteArray(length).also { bytes ->
+            bytes.usePinned { pinned ->
+                memcpy(pinned.addressOf(0), this.bytes, this.length)
+            }
         }
     }
 }

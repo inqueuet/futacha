@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
-import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.repo.BoardRepository
 
 @Composable
@@ -50,6 +50,7 @@ internal fun CatalogError(message: String, modifier: Modifier = Modifier) {
 @Composable
 internal fun CatalogSuccessContent(
     items: List<CatalogItem>,
+    embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
     repository: BoardRepository,
     isSearching: Boolean,
@@ -71,6 +72,7 @@ internal fun CatalogSuccessContent(
         when (displayStyle) {
             CatalogDisplayStyle.Grid -> CatalogGrid(
                 items = items,
+                embeddedHtml = embeddedHtml,
                 board = board,
                 repository = repository,
                 onThreadSelected = onThreadSelected,
@@ -83,6 +85,7 @@ internal fun CatalogSuccessContent(
 
             CatalogDisplayStyle.List -> CatalogList(
                 items = items,
+                embeddedHtml = embeddedHtml,
                 board = board,
                 repository = repository,
                 onThreadSelected = onThreadSelected,

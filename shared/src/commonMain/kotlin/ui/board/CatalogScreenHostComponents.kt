@@ -88,7 +88,7 @@ internal fun CatalogScreenScaffold(
                 is CatalogUiState.Success -> {
                     val visibleItems by rememberCatalogVisibleItemsState(
                         buildCatalogVisibleItemsRequest(
-                            items = state.items,
+                            items = state.content.items,
                             mode = bindings.catalogMode,
                             watchWords = bindings.watchWords,
                             catalogNgWords = bindings.catalogNgWords,
@@ -98,6 +98,7 @@ internal fun CatalogScreenScaffold(
                     )
                     CatalogSuccessContent(
                         items = visibleItems,
+                        embeddedHtml = state.content.embeddedHtml,
                         board = bindings.board,
                         repository = bindings.activeRepository,
                         isSearching = bindings.searchQuery.isNotBlank(),

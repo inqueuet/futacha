@@ -1,19 +1,23 @@
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class)
+
 package com.valoser.futacha.shared.ui.util
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import platform.UIKit.UIApplication
+import com.valoser.futacha.shared.util.findIosTopViewController
+import kotlinx.cinterop.ExperimentalForeignApi
 import platform.UIKit.UIRectEdgeLeft
 import platform.UIKit.UIScreenEdgePanGestureRecognizer
 import platform.UIKit.UIGestureRecognizerStateEnded
 import platform.UIKit.UIView
-import platform.darwin.NSObject
 import platform.Foundation.NSSelectorFromString
+import platform.darwin.NSObject
 import kotlinx.cinterop.ObjCAction
 
+@OptIn(ExperimentalForeignApi::class)
 @Composable
 actual fun PlatformBackHandler(
     enabled: Boolean,
@@ -22,7 +26,7 @@ actual fun PlatformBackHandler(
     val currentOnBack by rememberUpdatedState(onBack)
     val handler = remember {
         BackGestureHandler().apply {
-            onBack = { currentOnBack() }
+            this.onBack = { currentOnBack() }
         }
     }
 
@@ -47,9 +51,7 @@ actual fun PlatformBackHandler(
 }
 
 private fun resolveRootView(): UIView? {
-    val windows = UIApplication.sharedApplication.windows
-    val keyWindow = windows.firstOrNull { it.isKeyWindow() }
-    return keyWindow?.rootViewController?.view
+    return findIosTopViewController()?.view
 }
 
 private class BackGestureHandler : NSObject() {

@@ -29,28 +29,16 @@ actual fun PlatformVideoPlayer(
     volume: Float,
     isMuted: Boolean
 ) {
-    val extension = remember(videoUrl) { extractVideoUrlExtension(videoUrl) }
     val currentCallback = rememberUpdatedState(onStateChanged).value
     val currentSizeCallback = rememberUpdatedState(onVideoSizeKnown).value
-    if (extension == "webm") {
-        WebVideoPlayer(
-            videoUrl = videoUrl,
-            modifier = modifier,
-            onStateChanged = { currentCallback(it) },
-            onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
-            volume = volume,
-            isMuted = isMuted
-        )
-    } else {
-        WebVideoPlayer(
-            videoUrl = videoUrl,
-            modifier = modifier,
-            onStateChanged = { currentCallback(it) },
-            onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
-            volume = volume,
-            isMuted = isMuted
-        )
-    }
+    WebVideoPlayer(
+        videoUrl = videoUrl,
+        modifier = modifier,
+        onStateChanged = { currentCallback(it) },
+        onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
+        volume = volume,
+        isMuted = isMuted
+    )
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -118,7 +106,19 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
 
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
-        onVideoSizeKnown?.invoke(0, 0)
+        webView.evaluateJavaScript(
+            "(function(){var v=document.querySelector('video'); if(!v){return '';} return String(v.videoWidth||0)+','+String(v.videoHeight||0);})()"
+        ) { result, error ->
+            if (error != null) return@evaluateJavaScript
+            val rawSize = result as? String ?: return@evaluateJavaScript
+            val parts = rawSize.split(',')
+            if (parts.size != 2) return@evaluateJavaScript
+            val width = parts[0].toIntOrNull() ?: return@evaluateJavaScript
+            val height = parts[1].toIntOrNull() ?: return@evaluateJavaScript
+            if (width > 0 && height > 0) {
+                onVideoSizeKnown?.invoke(width, height)
+            }
+        }
         onStateChanged?.invoke(VideoPlayerState.Ready)
     }
 

@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.EmbeddedHtmlContent
+import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -32,6 +34,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun ThreadContent(
     page: ThreadPage,
+    embeddedHtml: List<EmbeddedHtmlContent>,
     listState: LazyListState,
     saidaneOverrides: Map<String, String>,
     selfPostIdentifiers: Set<String> = emptySet(),
@@ -92,6 +95,15 @@ internal fun ThreadContent(
                     bottom = 24.dp
                 )
             ) {
+                if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
+                    item(key = "thread-embedded-html-header") {
+                        EmbeddedHtmlSection(
+                            snippets = embeddedHtml,
+                            placement = EmbeddedHtmlPlacement.Header,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
                 page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
                     item(key = "thread-notice") {
                         ThreadNoticeCard(message = notice)
@@ -154,6 +166,15 @@ internal fun ThreadContent(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 12.dp, horizontal = 16.dp)
+                        )
+                    }
+                }
+                if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {
+                    item(key = "thread-embedded-html-footer") {
+                        EmbeddedHtmlSection(
+                            snippets = embeddedHtml,
+                            placement = EmbeddedHtmlPlacement.Footer,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }

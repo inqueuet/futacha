@@ -83,10 +83,11 @@ private suspend fun fetchFileProviderOptions(): List<IosFileManagerOption> = sus
         }
         val resolved = domains
             ?.filterIsInstance<NSFileProviderDomain>()
-            ?.map { domain ->
+            ?.mapNotNull { domain ->
+                val packageName = domain.identifier ?: return@mapNotNull null
                 IosFileManagerOption(
-                    packageName = domain.identifier,
-                    label = domain.displayName ?: domain.identifier
+                    packageName = packageName,
+                    label = domain.displayName
                 )
             }
             ?.sortedBy { it.label.lowercase() }

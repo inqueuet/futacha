@@ -26,7 +26,6 @@ import platform.UIKit.UIWindow
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
 import platform.FileProvider.NSFileProviderDomain
-import platform.FileProvider.NSFileProviderItemIdentifierRootContainer
 import platform.FileProvider.NSFileProviderManager
 import platform.darwin.NSObject
 import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
@@ -421,9 +420,19 @@ private fun resolvePreferredProviderUrl(
             }
             return@getDomainsWithCompletionHandler
         }
-        manager.getUserVisibleURLForItemIdentifier(NSFileProviderItemIdentifierRootContainer) { url, _ ->
+        runCatching {
+            manager.getUserVisibleURLForItemIdentifier("NSFileProviderRootContainerItemIdentifier") { url, _ ->
+                dispatch_async(dispatch_get_main_queue()) {
+                    completion(url)
+                }
+            }
+        }.onFailure {
+            Logger.w(
+                "ImagePicker.ios",
+                "Failed to resolve preferred provider root for $providerIdentifier; falling back to default picker"
+            )
             dispatch_async(dispatch_get_main_queue()) {
-                completion(url)
+                completion(null)
             }
         }
     }

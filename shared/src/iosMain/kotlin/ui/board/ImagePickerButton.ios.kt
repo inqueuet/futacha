@@ -19,6 +19,7 @@ import com.valoser.futacha.shared.util.pickImageFromDocuments
 import com.valoser.futacha.shared.util.pickDirectoryPath
 import com.valoser.futacha.shared.util.pickDirectorySaveLocation
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.presentIosTwoOptionAlert
 import kotlinx.coroutines.launch
 
 @Composable
@@ -36,9 +37,27 @@ actual fun rememberAttachmentPickerLauncher(
                 AttachmentPickerPreference.MEDIA -> pickImage()
                 AttachmentPickerPreference.DOCUMENT -> pickImageFromDocuments(preferredFileManagerPackage)
                 AttachmentPickerPreference.ALWAYS_ASK -> {
-                    // For ALWAYS_ASK, we use PHPicker as the primary choice
-                    // In a full implementation, could show an action sheet here
-                    pickImage()
+                    val presented = presentIosTwoOptionAlert(
+                        title = "画像を選択",
+                        message = "選択元を選んでください。",
+                        primaryLabel = "フォトライブラリ",
+                        secondaryLabel = "ファイル",
+                        onPrimary = {
+                            scope.launch {
+                                pickImage()?.let(onImageSelected)
+                            }
+                        },
+                        onSecondary = {
+                            scope.launch {
+                                pickImageFromDocuments()?.let(onImageSelected)
+                            }
+                        }
+                    )
+                    if (!presented) {
+                        pickImage()
+                    } else {
+                        null
+                    }
                 }
             }
             imageData?.let(onImageSelected)

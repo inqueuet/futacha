@@ -151,6 +151,7 @@ internal fun ThreadScreenContentHost(
             }
             ThreadContent(
                 page = filteredPage,
+                embeddedHtml = state.embeddedHtml,
                 listState = bindings.lazyListState,
                 saidaneOverrides = bindings.saidaneOverrides,
                 selfPostIdentifiers = bindings.selfPostIdentifierSet,

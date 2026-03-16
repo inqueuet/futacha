@@ -52,18 +52,6 @@ private fun isRoundTripShiftJisSafe(value: String): Boolean {
     return decoded == value
 }
 
-private fun String.codeUnitLengthAt(index: Int): Int {
-    if (index !in indices) return 1
-    val first = this[index]
-    if (!first.isHighSurrogateCodeUnit()) return 1
-    if (index + 1 >= length) return 1
-    return if (this[index + 1].isLowSurrogateCodeUnit()) 2 else 1
-}
-
-private fun Char.isHighSurrogateCodeUnit(): Boolean = this in '\uD800'..'\uDBFF'
-
-private fun Char.isLowSurrogateCodeUnit(): Boolean = this in '\uDC00'..'\uDFFF'
-
 private fun String.toNumericCharacterReference(): String? {
     val codePoint = toCodePointOrNull() ?: return null
     return "&#$codePoint;"
