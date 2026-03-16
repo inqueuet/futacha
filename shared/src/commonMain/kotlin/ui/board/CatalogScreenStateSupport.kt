@@ -18,6 +18,22 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 private const val DEFAULT_CATALOG_SCREEN_GRID_COLUMNS = 5
+private const val DEFAULT_CATALOG_SCREEN_SAVEABLE_KEY = "__catalog_screen_default__"
+
+internal fun resolveCatalogScreenSaveableKey(
+    boardId: String?,
+    boardUrl: String?
+): String {
+    val normalizedBoardId = boardId?.trim().orEmpty()
+    if (normalizedBoardId.isNotEmpty()) {
+        return "board:$normalizedBoardId"
+    }
+    val normalizedBoardUrl = boardUrl?.trim().orEmpty()
+    if (normalizedBoardUrl.isNotEmpty()) {
+        return "url:$normalizedBoardUrl"
+    }
+    return DEFAULT_CATALOG_SCREEN_SAVEABLE_KEY
+}
 
 internal fun resolveInitialCatalogMode(
     boardId: String?,
@@ -43,16 +59,16 @@ internal data class CatalogScreenPersistentBindings(
 internal fun rememberCatalogScreenPersistentBindings(
     stateStore: AppStateStore?,
     coroutineScope: CoroutineScope,
-    boardId: String?
+    saveableKey: String
 ): CatalogScreenPersistentBindings {
     val catalogModeMapState = stateStore?.catalogModes?.collectAsState(initial = emptyMap())
     val persistedCatalogModes = catalogModeMapState?.value ?: emptyMap()
-    val fallbackCatalogNgWordsState = rememberSaveable(boardId) { mutableStateOf<List<String>>(emptyList()) }
+    val fallbackCatalogNgWordsState = rememberSaveable(saveableKey) { mutableStateOf<List<String>>(emptyList()) }
     val catalogNgWordsState = stateStore?.catalogNgWords?.collectAsState(initial = fallbackCatalogNgWordsState.value)
-    val fallbackWatchWordsState = rememberSaveable(boardId) { mutableStateOf<List<String>>(emptyList()) }
+    val fallbackWatchWordsState = rememberSaveable(saveableKey) { mutableStateOf<List<String>>(emptyList()) }
     val watchWordsState = stateStore?.watchWords?.collectAsState(initial = fallbackWatchWordsState.value)
     val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
-    var fallbackDeleteKey by rememberSaveable { mutableStateOf("") }
+    var fallbackDeleteKey by rememberSaveable(saveableKey) { mutableStateOf("") }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val persistentDisplayStyleState =
@@ -105,7 +121,7 @@ internal data class CatalogScreenMutableStateBundle(
 
 @Composable
 internal fun rememberCatalogScreenMutableStateBundle(
-    boardId: String?,
+    saveableKey: String,
     initialCatalogMode: CatalogMode,
     initialArchiveSearchScope: ArchiveSearchScope?,
     initialDisplayStyle: CatalogDisplayStyle,
@@ -113,27 +129,27 @@ internal fun rememberCatalogScreenMutableStateBundle(
 ): CatalogScreenMutableStateBundle {
     return CatalogScreenMutableStateBundle(
         uiState = remember { mutableStateOf(CatalogUiState.Loading) },
-        catalogMode = rememberSaveable(boardId) { mutableStateOf(initialCatalogMode) },
+        catalogMode = rememberSaveable(saveableKey) { mutableStateOf(initialCatalogMode) },
         isRefreshing = remember { mutableStateOf(false) },
         catalogLoadJob = remember { mutableStateOf(null as Job?) },
         catalogLoadGeneration = remember { mutableStateOf(0L) },
         isHistoryRefreshing = remember { mutableStateOf(false) },
-        isSearchActive = rememberSaveable(boardId) { mutableStateOf(false) },
-        searchQuery = rememberSaveable(boardId) { mutableStateOf("") },
-        debouncedSearchQuery = rememberSaveable(boardId) { mutableStateOf("") },
+        isSearchActive = rememberSaveable(saveableKey) { mutableStateOf(false) },
+        searchQuery = rememberSaveable(saveableKey) { mutableStateOf("") },
+        debouncedSearchQuery = rememberSaveable(saveableKey) { mutableStateOf("") },
         overlayState = remember { mutableStateOf(CatalogOverlayState()) },
         createThreadDraft = rememberSaveable(
-            boardId,
+            saveableKey,
             stateSaver = CreateThreadDraftSaver
         ) { mutableStateOf(emptyCreateThreadDraft()) },
-        createThreadImage = remember(boardId) { mutableStateOf(null as ImageData?) },
-        archiveSearchQuery = rememberSaveable(boardId) { mutableStateOf("") },
-        catalogNgFilteringEnabled = rememberSaveable(boardId) { mutableStateOf(true) },
+        createThreadImage = remember(saveableKey) { mutableStateOf(null as ImageData?) },
+        archiveSearchQuery = rememberSaveable(saveableKey) { mutableStateOf("") },
+        catalogNgFilteringEnabled = rememberSaveable(saveableKey) { mutableStateOf(true) },
         pastSearchRuntimeState = remember {
             mutableStateOf(resetCatalogPastSearchRuntimeState(initialArchiveSearchScope))
         },
         lastCatalogItems = remember { mutableStateOf(emptyList()) },
-        localCatalogDisplayStyle = rememberSaveable { mutableStateOf(initialDisplayStyle) },
-        localCatalogGridColumns = rememberSaveable { mutableStateOf(initialGridColumns) }
+        localCatalogDisplayStyle = rememberSaveable(saveableKey) { mutableStateOf(initialDisplayStyle) },
+        localCatalogGridColumns = rememberSaveable(saveableKey) { mutableStateOf(initialGridColumns) }
     )
 }

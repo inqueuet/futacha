@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -74,11 +75,12 @@ class HistoryRefresher(
     class RefreshAlreadyRunningException :
         IllegalStateException("History refresh is already running")
 
+    private val autoSaveJob = SupervisorJob()
     private val skipThreadIds = MutableStateFlow<Map<HistoryRefreshKey, Long>>(emptyMap())
     private val refreshMutex = Mutex()
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
     private val effectiveThreadFetchTimeoutMillis = threadFetchTimeoutMillis.coerceAtLeast(1_000L)
-    private val autoSaveScope = CoroutineScope(SupervisorJob() + dispatcher)
+    private val autoSaveScope = CoroutineScope(autoSaveJob + dispatcher)
     private var historyRefreshCursor = 0
 
     // FIX: エラー状態を公開
@@ -260,7 +262,7 @@ class HistoryRefresher(
                     totalThreads = history.size,
                     details = errorsSnapshot
                 )
-                _lastRefreshError.value = refreshError
+                _lastRefreshError.update { refreshError }
                 publishedDetailedError = true
 
                 // FIX: エラー率が高い場合は警告レベルを上げる
@@ -276,7 +278,7 @@ class HistoryRefresher(
                     )
                 }
             } else {
-                _lastRefreshError.value = null
+                _lastRefreshError.update { null }
                 publishedDetailedError = false
                 Logger.i(HISTORY_REFRESH_TAG, "History refresh completed successfully for ${history.size} threads")
             }
@@ -307,7 +309,8 @@ class HistoryRefresher(
                 tag = HISTORY_REFRESH_TAG
             )
             if (!publishedDetailedError) {
-                _lastRefreshError.value = buildHistoryRefreshError(
+                _lastRefreshError.update {
+                    buildHistoryRefreshError(
                     totalThreads = totalThreadsInRun,
                     details = listOf(
                         ErrorDetail(
@@ -317,6 +320,7 @@ class HistoryRefresher(
                         )
                     )
                 )
+                }
             }
             Logger.e(HISTORY_REFRESH_TAG, "History refresh aborted by fatal error", error)
             throw error
@@ -327,12 +331,16 @@ class HistoryRefresher(
         }
     }
 
+    fun close() {
+        autoSaveJob.cancel()
+    }
+
     fun clearSkippedThreads() {
-        skipThreadIds.value = emptyMap()
+        skipThreadIds.update { emptyMap() }
     }
 
     fun clearLastError() {
-        _lastRefreshError.value = null
+        _lastRefreshError.update { null }
     }
 
     private fun isThreadSkipped(key: HistoryRefreshKey, nowMillis: Long): Boolean =

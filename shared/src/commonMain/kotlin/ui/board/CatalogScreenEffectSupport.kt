@@ -30,3 +30,7 @@ internal fun resolveCatalogPastSearchResetState(
 internal fun resolveCatalogDebouncedSearchQuery(query: String): String {
     return query.trim()
 }
+
+internal fun resolveCatalogSearchDebounceMillis(query: String): Long {
+    return if (query.isEmpty()) 0L else 200L
+}

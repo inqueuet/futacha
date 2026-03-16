@@ -129,6 +129,12 @@ fun FutachaApp(
                     }
                 }
 
+                DisposableEffect(historyRefresher) {
+                    onDispose {
+                        historyRefresher.close()
+                    }
+                }
+
                 LaunchedEffect(stateStore, boardList, history) {
                     stateStore.seedIfEmpty(
                         AppStateSeedDefaults(

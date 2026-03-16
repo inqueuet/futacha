@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadMetadata
@@ -1609,6 +1610,7 @@ class ThreadScreenLogicTest {
                 indexSavedThread = { _, indexedThread, failureMessage ->
                     indexedThread?.let(indexedThreads::add)
                     assertEquals(buildThreadAutoSaveIndexFailureMessage("123"), failureMessage)
+                    Result.success(Unit)
                 }
             )
         )
@@ -1780,6 +1782,7 @@ class ThreadScreenLogicTest {
                 indexSavedThread = { _, indexedThread, failureMessage ->
                     indexedThread?.let(indexedThreads::add)
                     assertEquals(buildThreadManualSaveIndexFailureMessage("123"), failureMessage)
+                    Result.success(Unit)
                 }
             ),
             callbacks = ThreadScreenManualSaveCallbacks(
@@ -1797,6 +1800,101 @@ class ThreadScreenLogicTest {
         assertNull(appliedErrorState)
         assertEquals(listOf(savedThread), indexedThreads)
         assertEquals(listOf("スレッドを保存しました: /manual/storage"), shownMessages)
+    }
+
+    @Test
+    fun threadScreenExecutionBindingsSupport_warnsWhenManualSaveIndexingFails() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val savedThread = SavedThread(
+            threadId = "123",
+            boardId = "test",
+            boardName = "Test",
+            title = "title",
+            storageId = "storage",
+            thumbnailPath = null,
+            savedAt = 100L,
+            postCount = 1,
+            imageCount = 0,
+            videoCount = 0,
+            totalSize = 10L,
+            status = SaveStatus.COMPLETED
+        )
+        var manualSaveJob: Job? = null
+        var isManualSaveInProgress = false
+        val shownMessages = mutableListOf<String>()
+
+        val bindings = buildThreadScreenManualSaveBindings(
+            coroutineScope = this,
+            stateBindings = ThreadScreenManualSaveStateBindings(
+                currentManualSaveJob = { manualSaveJob },
+                setManualSaveJob = { manualSaveJob = it },
+                setIsManualSaveInProgress = { isManualSaveInProgress = it },
+                currentIsManualSaveInProgress = { isManualSaveInProgress },
+                currentIsSingleMediaSaveInProgress = { false },
+                setSaveProgress = { },
+                currentUiState = {
+                    ThreadUiState.Success(
+                        ThreadPage(
+                            threadId = "123",
+                            boardTitle = "board",
+                            expiresAtLabel = null,
+                            deletedNotice = null,
+                            posts = listOf(
+                                Post(
+                                    id = "1",
+                                    author = null,
+                                    subject = "subject",
+                                    timestamp = "now",
+                                    messageHtml = "body",
+                                    imageUrl = null,
+                                    thumbnailUrl = null
+                                )
+                            )
+                        )
+                    )
+                }
+            ),
+            dependencies = ThreadScreenManualSaveDependencies(
+                manualSaveRepository = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY),
+                httpClient = HttpClient(),
+                fileSystem = fileSystem,
+                threadId = "123",
+                threadTitle = "title",
+                board = BoardSummary(
+                    id = "test",
+                    name = "Test",
+                    category = "cat",
+                    url = "https://example.com/test",
+                    description = "desc"
+                ),
+                effectiveBoardUrl = "https://example.com/test",
+                manualSaveDirectory = "/manual",
+                manualSaveLocation = SaveLocation.Path("/manual"),
+                resolvedManualSaveDirectory = "/manual",
+                requiresManualLocationSelection = false,
+                buildSaveRuntime = { _, _ ->
+                    buildThreadSaveRuntime(ThreadSaveService(HttpClient(), fileSystem))
+                },
+                performManualSave = { _, _ ->
+                    ThreadManualSaveRunResult.Success(savedThread)
+                },
+                indexSavedThread = { _, _, _ ->
+                    Result.failure(IllegalStateException("index failed"))
+                }
+            ),
+            callbacks = ThreadScreenManualSaveCallbacks(
+                showMessage = { shownMessages += it },
+                applySaveErrorState = { error("should not apply save error state on index failure") }
+            )
+        )
+
+        bindings.handleThreadSaveRequest()
+        manualSaveJob?.join()
+
+        assertEquals(
+            listOf(buildThreadManualSaveIndexWarningMessage("/manual/storage")),
+            shownMessages
+        )
     }
 
     @Test
@@ -6719,6 +6817,24 @@ class ThreadScreenLogicTest {
         assertEquals(
             "スレッドを保存しました: /tmp/futacha/b__123",
             manualOutcome.successState.message
+        )
+        assertEquals(
+            "スレッドを保存しましたが、保存一覧に反映できませんでした: /tmp/futacha/b__123",
+            buildThreadManualSaveIndexWarningMessage("/tmp/futacha/b__123")
+        )
+        assertEquals(
+            "スレッドを保存しました: /tmp/futacha/b__123",
+            resolveThreadManualSaveCompletionMessage(
+                successState = manualOutcome.successState,
+                indexResult = Result.success(Unit)
+            )
+        )
+        assertEquals(
+            "スレッドを保存しましたが、保存一覧に反映できませんでした: /tmp/futacha/b__123",
+            resolveThreadManualSaveCompletionMessage(
+                successState = manualOutcome.successState,
+                indexResult = Result.failure(IllegalStateException("index failed"))
+            )
         )
 
         val singleOutcome = resolveThreadSingleMediaSaveUiOutcome(

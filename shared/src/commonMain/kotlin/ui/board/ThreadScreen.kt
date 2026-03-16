@@ -604,12 +604,7 @@ fun ThreadScreen(
         initialHistoryEntry,
         currentPage?.posts?.size
     )
-    LaunchedEffect(
-        threadId,
-        initialHistoryEntry?.lastReadItemIndex,
-        initialHistoryEntry?.lastReadItemOffset,
-        currentPage?.posts?.size
-    ) {
+    LaunchedEffect(threadId, initialScrollRestoreState) {
         if (!initialScrollRestoreState.shouldRestore) return@LaunchedEffect
         restoreThreadScrollPositionSafely(
             listState = lazyListState,

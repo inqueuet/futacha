@@ -88,15 +88,20 @@ internal class HistoryRefreshAutoSaveLauncher(
                     }
                 }
                 if (saved != null) {
-                    autoSavedThreadRepository.addThreadToIndex(saved)
-                        .onFailure { Logger.e(tag, "Failed to index auto-saved thread ${entry.threadId}", it) }
-                    runCatching {
-                        stateStore.upsertHistoryEntry(plan.updatedEntry.copy(hasAutoSave = true))
-                    }.onFailure {
-                        Logger.w(
-                            tag,
-                            "Failed to update history hasAutoSave flag for ${entry.threadId}: ${it.message}"
-                        )
+                    val indexResult = autoSavedThreadRepository.addThreadToIndex(saved)
+                    if (indexResult.isSuccess) {
+                        runCatching {
+                            stateStore.upsertHistoryEntry(plan.updatedEntry.copy(hasAutoSave = true))
+                        }.onFailure {
+                            Logger.w(
+                                tag,
+                                "Failed to update history hasAutoSave flag for ${entry.threadId}: ${it.message}"
+                            )
+                        }
+                    } else {
+                        indexResult.exceptionOrNull()?.let { error ->
+                            Logger.e(tag, "Failed to index auto-saved thread ${entry.threadId}", error)
+                        }
                     }
                 } else {
                     Logger.w(tag, "Auto-save timed out for ${entry.threadId}")

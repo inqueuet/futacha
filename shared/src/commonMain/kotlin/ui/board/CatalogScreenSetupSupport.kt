@@ -30,6 +30,7 @@ internal fun rememberCatalogScreenSetupBundle(
     val coreBindings = rememberCatalogScreenCoreBindingsBundle(
         stateStore = stateStore,
         boardId = board?.id,
+        boardUrl = board?.url,
         initialArchiveSearchScope = archiveSearchScope
     )
     val urlLauncher = rememberUrlLauncher()

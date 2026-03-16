@@ -15,7 +15,6 @@ import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -354,7 +353,6 @@ class DefaultBoardRepository(
                 opImageCacheMutex.withLock {
                     opImageCache.clear()
                 }
-                closeScope.cancel()
             }
         }
     }

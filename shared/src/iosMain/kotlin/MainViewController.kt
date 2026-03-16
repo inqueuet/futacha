@@ -20,6 +20,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.releaseSecurityScopedResource
 import com.valoser.futacha.shared.util.createFileSystem
+import platform.Foundation.NSLock
 import platform.Foundation.NSUserDefaults
 import platform.UIKit.UIViewController
 import com.valoser.futacha.shared.version.createVersionChecker
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.retryWhen
 import kotlin.coroutines.cancellation.CancellationException
 
 private object IosAppGraph {
+    private val resourceLock = NSLock()
     val stateStore by lazy { createAppStateStore() }
     val fileSystem by lazy { createFileSystem() }
     val autoSavedThreadRepository by lazy {
@@ -37,7 +39,42 @@ private object IosAppGraph {
     }
     val cookieStorage by lazy { PersistentCookieStorage(fileSystem) }
     val cookieRepository by lazy { CookieRepository(cookieStorage) }
-    val httpClient by lazy { createHttpClient(cookieStorage = cookieStorage) }
+    private var httpClient: io.ktor.client.HttpClient? = null
+    private var httpClientRefCount = 0
+
+    private inline fun <T> withResourceLock(block: () -> T): T {
+        resourceLock.lock()
+        return try {
+            block()
+        } finally {
+            resourceLock.unlock()
+        }
+    }
+
+    fun acquireHttpClient(): io.ktor.client.HttpClient {
+        return withResourceLock {
+            httpClientRefCount += 1
+            httpClient ?: createHttpClient(cookieStorage = cookieStorage).also {
+                httpClient = it
+            }
+        }
+    }
+
+    fun releaseHttpClient() {
+        val clientToClose = withResourceLock {
+            if (httpClientRefCount > 0) {
+                httpClientRefCount -= 1
+            }
+            if (httpClientRefCount == 0) {
+                httpClient.also {
+                    httpClient = null
+                }
+            } else {
+                null
+            }
+        }
+        clientToClose?.close()
+    }
 }
 
 private const val IOS_BG_MAX_THREADS_PER_RUN = 120
@@ -54,12 +91,17 @@ fun registerIosBackgroundRefreshTask() {
     val enabledAtLaunch = NSUserDefaults.standardUserDefaults().boolForKey(IOS_BACKGROUND_REFRESH_KEY)
     Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabledAtLaunch=$enabledAtLaunch)")
     BackgroundRefreshManager.configure(enabledAtLaunch) {
-        runIosBackgroundRefresh(
-            stateStore = IosAppGraph.stateStore,
-            httpClient = IosAppGraph.httpClient,
-            fileSystem = IosAppGraph.fileSystem,
-            autoSaveRepo = IosAppGraph.autoSavedThreadRepository
-        )
+        val httpClient = IosAppGraph.acquireHttpClient()
+        try {
+            runIosBackgroundRefresh(
+                stateStore = IosAppGraph.stateStore,
+                httpClient = httpClient,
+                fileSystem = IosAppGraph.fileSystem,
+                autoSaveRepo = IosAppGraph.autoSavedThreadRepository
+            )
+        } finally {
+            IosAppGraph.releaseHttpClient()
+        }
     }
 }
 
@@ -69,7 +111,7 @@ fun MainViewController(): UIViewController {
         val fileSystem = remember { IosAppGraph.fileSystem }
         val autoSavedThreadRepository = remember { IosAppGraph.autoSavedThreadRepository }
         val cookieRepository = remember { IosAppGraph.cookieRepository }
-        val httpClient = remember { IosAppGraph.httpClient }
+        val httpClient = remember { IosAppGraph.acquireHttpClient() }
         LaunchedEffect(fileSystem) {
             (fileSystem as? com.valoser.futacha.shared.util.IosFileSystem)
                 ?.cleanupTempFiles()
@@ -92,7 +134,6 @@ fun MainViewController(): UIViewController {
                         configureIosBackgroundRefresh(
                             enabled = enabled,
                             stateStore = stateStore,
-                            httpClient = httpClient,
                             fileSystem = fileSystem,
                             autoSaveRepo = autoSavedThreadRepository
                         )
@@ -134,6 +175,7 @@ fun MainViewController(): UIViewController {
         DisposableEffect(Unit) {
             onDispose {
                 releaseSecurityScopedResource()
+                IosAppGraph.releaseHttpClient()
             }
         }
 
@@ -151,7 +193,6 @@ fun MainViewController(): UIViewController {
 private fun configureIosBackgroundRefresh(
     enabled: Boolean,
     stateStore: com.valoser.futacha.shared.state.AppStateStore,
-    httpClient: io.ktor.client.HttpClient,
     fileSystem: com.valoser.futacha.shared.util.FileSystem?,
     autoSaveRepo: SavedThreadRepository?
 ) {
@@ -160,12 +201,17 @@ private fun configureIosBackgroundRefresh(
         "configureIosBackgroundRefresh(enabled=$enabled, hasFileSystem=${fileSystem != null}, hasAutoSaveRepo=${autoSaveRepo != null})"
     )
     BackgroundRefreshManager.configure(enabled) {
-        runIosBackgroundRefresh(
-            stateStore = stateStore,
-            httpClient = httpClient,
-            fileSystem = fileSystem,
-            autoSaveRepo = autoSaveRepo
-        )
+        val managedHttpClient = IosAppGraph.acquireHttpClient()
+        try {
+            runIosBackgroundRefresh(
+                stateStore = stateStore,
+                httpClient = managedHttpClient,
+                fileSystem = fileSystem,
+                autoSaveRepo = autoSaveRepo
+            )
+        } finally {
+            IosAppGraph.releaseHttpClient()
+        }
     }
 }
 
@@ -182,16 +228,16 @@ private suspend fun runIosBackgroundRefresh(
         api = nonClosingApi,
         parser = createHtmlParser()
     )
+    val refresher = HistoryRefresher(
+        stateStore = stateStore,
+        repository = repo,
+        dispatcher = AppDispatchers.io,
+        autoSavedThreadRepository = autoSaveRepo,
+        httpClient = httpClient,
+        fileSystem = fileSystem
+    )
     try {
         Logger.d("BackgroundRefresh", "Starting iOS background refresh run (maxThreadsPerRun=$IOS_BG_MAX_THREADS_PER_RUN)")
-        val refresher = HistoryRefresher(
-            stateStore = stateStore,
-            repository = repo,
-            dispatcher = AppDispatchers.io,
-            autoSavedThreadRepository = autoSaveRepo,
-            httpClient = httpClient,
-            fileSystem = fileSystem
-        )
         refresher.refresh(maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN)
         Logger.d("BackgroundRefresh", "Completed iOS background refresh run successfully")
     } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
@@ -200,6 +246,7 @@ private suspend fun runIosBackgroundRefresh(
         Logger.w("BackgroundRefresh", "iOS background refresh run cancelled")
         throw e
     } finally {
+        refresher.close()
         Logger.d("BackgroundRefresh", "Closing temporary iOS background repository")
         repo.closeAsync().join()
     }

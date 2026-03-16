@@ -1,6 +1,10 @@
 package com.valoser.futacha.shared.util
 
+import kotlinx.coroutines.CloseableCoroutineDispatcher
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.newFixedThreadPoolContext
 
-actual val platformIoDispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(8)
+private val iosIoDispatcher: CloseableCoroutineDispatcher =
+    newFixedThreadPoolContext(4, "futacha-ios-io")
+
+actual val platformIoDispatcher: CoroutineDispatcher = iosIoDispatcher
