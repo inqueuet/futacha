@@ -1,75 +1,170 @@
-# ふたちゃ - ふたばちゃんねるブラウザ
-> Kotlin Multiplatform × Compose Multiplatform で Android と iOS に共通 UI (`FutachaApp`) を配信する Futaba 専用ブラウザ。
+# ふたちゃ
 
-## Getting Started
+ふたばちゃんねる専用ブラウザです。Kotlin Multiplatform と Compose Multiplatform を使い、UI と主要ロジックは `shared/` に集約し、Android と iOS はホスト層だけを持つ構成になっています。
 
-### Prerequisites
-- Java 21（もしくは Kotlin 1.9 以降がサポートする JDK 17+/21）。  
-- Android Studio（API 33/34 以上の SDK）＋ Android SDK/NDK を `local.properties` で設定。  
-- macOS ＋ Xcode（iOS を触る場合）。CocoaPods は不要ですが、Kotlin/Native の toolchain を整備してください。  
-- `git` と `./gradlew` の実行権限。
+## 概要
 
-### Setup
-1. リポジトリをクローンし、`./gradlew` を一度実行して依存をダウンロード。  
-2. Android Studio で `app-android` をインポートし、`sdk.dir` を `local.properties` に設定。  
-3. iOS では `./gradlew :shared:linkDebugFrameworkIosArm64` で Compose フレームワークを生成し、Xcode プロジェクトから host target に組み込みます。  
+- 共通 UI エントリーポイントは `shared/src/commonMain/kotlin/ui/FutachaApp.kt`
+- Android ホストは `app-android/`
+- iOS ホストは `iosApp/`
+- 状態管理は `AppStateStore`
+- 通信は Ktor、HTML 解析は shared の parser 実装
+- 保存、履歴更新、Cookie 管理、動画再生、バージョン確認も共通層中心で実装
 
-### Running the App
-- **Android**  
-  - `./gradlew :app-android:installDebug` でデバッグ APK を生成・サイドロード。  
-  - Android Studio から `app-android` モジュールをビルド＆ランすると、MainActivity が Compose UI を表示します。  
-- **iOS**  
-  - `./gradlew :shared:linkDebugFrameworkIosArm64` → Xcode で framework をリンク → `MainViewController` をホストして Compose UI (`FutachaApp`) をレンダリング。  
-  - シミュレータでも実機でも同じコードベースが動きます（ただし現状 Thread 保存に必要な `FileSystem` の注入が TODO）。  
+## 現在の主な機能
 
-### User Manual
-1. **Board Management**  
-   - Board/Catalog/Thread を1ファイルで管理。左上のメニューから履歴ドロワーを開いたり、Board の追加・削除・並び替え・設定を行います。  
-   - `Add board` では URL スキーマのバリデーションと重複チェック後に slugify した ID を追加。  
-2. **Catalog**  
-   - `LazyVerticalGrid` で 5 列表示。Pull-to-refresh と下部のドラッグセンチネルで最新化。  
-   - Bottom navigation からスレ立て（CreateThread）、更新、表示モード、設定（監視ワード・NG管理・外部アプリ・表示切替・トップ移動・プライバシー）を切り替え。  
-   - 検索モードも搭載し、バック操作で検索解除 → ドロワー → 前画面の順に戻ります。  
-3. **Thread**  
-   - Save / Reply / Gallery / Refresh / Scroll に対応したアクションバー。自動保存は 60 秒ごとに `AUTO_SAVE_DIRECTORY` にレコードを残し、ネットワーク不通時はオフラインコピーを通知。バックグラウンド更新時も本文・メディアを自動保存します。  
-   - 引用プレビュー、ID ハイライト、検索（前/次）や長押しの操作シートなど、Compose で細かい動作を実装。  
-   - `GlobalSettingsScreen` や `ThreadSettingsSheet` から NG 管理、外部アプリ、プライバシーフィルタ、読み上げ（基本実装）が利用可能。  
-4. **History & Saved Threads**  
-   - History Drawer から閲覧履歴をスワイプ削除。履歴リストは `ThreadHistoryEntry` のスクロール位置も保持。  
-   - `SavedThreadsScreen` は存在するが遷移経路が未実装。手動保存はスレ保存ダイアログから `SavedThreadRepository` に記録されます。  
-5. **Global Settings & Version**
-   - Board/Catalog/Thread のどこからでも `GlobalSettingsScreen` を開け、Email/X/GitHub へのリンクと `VersionChecker` 由来の `appVersion` を確認。
-   - バックグラウンド更新トグル（Android は WorkManager の 15 分最小間隔定期実行、iOS は BGTask）に加えて、「スレ保存先」を Documents/Download の簡易指定や絶対パスで変更可能（手動保存用の `manualSaveDirectory` を更新）。
-   - **優先ファイラー設定**（Android のみ）: デバイスにインストールされているファイラーアプリから優先的に使用するアプリを選択可能。ディレクトリ選択時に選択したファイラーが直接起動され、Files by Google、Solid Explorer などのサードパーティ製ファイラーも利用できます。  
+### 閲覧
 
-詳しいアーキテクチャや機能の振る舞いについては `AGENTS.md` を参照してください（モック vs リモート、データストア、HTTP API、保存処理、画面遷移などを網羅しています）。
+- Board -> Catalog -> Thread の 3 段階 UI
+- 板の追加、削除、並び替え
+- 履歴ドロワー、閲覧位置の保存と復元
+- カタログ検索、並び順切り替え、監視ワード
+- スレッド内検索、引用プレビュー、NG ワード / NG ヘッダ
+- 画像プレビュー、動画プレビュー、ギャラリー表示
+- 読み上げ機能
 
-## Testing
-- `./gradlew :shared:check`（`CatalogHtmlParserCoreTest` / `ThreadHtmlParserCoreTest` / `BoardManagementScreenTest` + 共通 JVM テスト）。  
-- Compose プレビューや手動での動作確認は `FakeBoardRepository` + `example/` フィクスチャを利用。
+### 投稿・操作
 
-## Deployment & Release
-- Android: `./gradlew :app-android:assembleRelease` → Play Console へアップロード。`build.gradle.kts` の signingConfigs を適宜設定。  
-- iOS: Kotlin/Native フレームワークを Xcode プロジェクトに組み込み、Xcode 経由でアーカイブ・配布。  
-- GitHub Releases との連携で `VersionChecker` が `releases/latest` をチェックし、新バージョン通知ダイアログを表示します。
+- スレ立て
+- レス投稿
+- そうだね、削除依頼、本人削除
+- 外部アプリ / 外部 URL 起動
 
-## Development Process
-- UI/ロジックは `shared/` に集約（Compose + Ktor + StateFlow）。`AppStateStore` が Boards/History/Privacy/NG/Watch Words を管理。  
-- Platform 層で `HttpClient`, `FileSystem`, `VersionChecker`, `PermissionRequest`, `ImagePicker` などを expect/actual で注入。  
-- キャッシュ・保存・メディア再生（Coil + Media3/AVPlayer/WKWebView）も `shared` 側で Compose UI に集約しています。詳細は `AGENTS.md` の 0〜5 セクションを参照。  
+### 保存・オフライン
 
-## Recent Changes (5f977c478d5f 以降)
-- Android のバックグラウンド履歴更新を Foreground Service から WorkManager 定期実行 (15 分最小、ネット必須、即時ワンショット付き) に置き換え、FOREGROUND_SERVICE 系パーミッションを削除。  
-- 手動保存先を設定画面から変更可能にし、Documents/Download/絶対パスの入力に対応。`manualSaveDirectory` を DataStore/NSUserDefaults へ永続化。  
-- バックグラウンド更新でも本文・画像・動画を `AUTO_SAVE_DIRECTORY` に自動保存し、履歴のレス数とメタデータを最新化。  
-- カタログモードと表示スタイルの永続化・適用周りを整備（モードの保存・復元）。  
-- Thread 保存処理や FileSystem のバグを修正し、保存先解決とエラーハンドリングを改善。  
+- 手動保存
+- 自動保存
+- 保存済みスレッド一覧画面
+- オフライン時のローカル保存フォールバック表示
+- 画像と動画をローカル保存し、HTML 内の参照もローカルパスへ変換
 
-## Support & Issues
-- 問題点や改善案は GitHub Issues で共有してください（リポジトリの Issue テンプレートを活用）。  
-- 使い方で困った場合、`AGENTS.md` に記載された UI フロー・保存・設定の詳細を先に確認すると多くは解決します。  
-- バグ報告には再現手順、ログ、端末情報を添えてください。  
+### 設定
 
-## Additional Resources
-- `AGENTS.md`: エントリポイント、UI フロー、状態管理、ネットワーク、保存処理、プラットフォーム実装、VersionChecker など詳細なドキュメント。  
-- `app-android/` / `shared/` / `example/` を参照すると、設定ファイルやフィクスチャ、モックデータも確認できます。
+- バックグラウンド更新トグル
+- 広告表示トグル
+- 軽量モードトグル
+- 手動保存先の指定
+- 添付ピッカーの優先動作設定
+- Android の優先ファイラー設定
+- カタログ下部メニューの並び / 表示制御
+- スレッド下部メニューと設定シートの並び / 表示制御
+- Cookie 一覧と削除
+- 画像キャッシュ / 一時キャッシュ削除
+- アプリバージョン表示と GitHub Releases ベースの更新通知
+
+## プロジェクト構成
+
+```text
+.
+├── app-android/   Android ホストアプリ
+├── iosApp/        iOS ホストアプリ (SwiftUI)
+├── shared/        共通 UI / 状態 / 通信 / パーサ / 保存 / テスト
+└── AGENTS.md      実装メモと内部向け詳細ドキュメント
+```
+
+`shared/` の主な責務:
+
+- `ui/`: Compose UI と画面遷移
+- `state/`: `AppStateStore` と永続化
+- `network/`: Ktor ベースの通信、Cookie 永続化
+- `parser/`: カタログ / スレ HTML 解析
+- `repo/`: 板取得・投稿まわり
+- `repository/`: 保存済みスレッド、Cookie 管理
+- `service/`: スレ保存、履歴更新
+
+## 実行環境
+
+- JDK 17 以上を推奨
+- Android Studio 最新系
+- Android SDK
+- Xcode 15 以降
+- CocoaPods
+
+Android 側のビルド設定は `compileSdk 36 / minSdk 24`、iOS 側の deployment target は 15.0 です。
+
+## セットアップ
+
+### Android
+
+1. リポジトリを clone
+2. `local.properties` に Android SDK のパスを設定
+3. 必要なら Android Studio で Gradle Sync
+
+### iOS
+
+1. ルートで `./gradlew :shared:generateDummyFramework`
+2. `iosApp/` で `pod install`
+3. `iosApp/iosApp.xcworkspace` を Xcode で開く
+
+`shared/shared.podspec` はダミー framework が無い状態では `pod install` に失敗するため、最初に `:shared:generateDummyFramework` が必要です。
+
+## 起動方法
+
+### Android
+
+```bash
+./gradlew :app-android:installDebug
+```
+
+または Android Studio から `app-android` を実行します。
+
+### iOS
+
+Xcode で `iosApp` scheme を選び、Simulator か実機で起動します。Compose 側のエントリーポイントは `MainViewController()` です。
+
+## バックグラウンド更新
+
+- Android は WorkManager を使用
+- iOS は `BackgroundRefreshManager` を使用
+- 更新処理本体は共通の `HistoryRefresher`
+- 更新時に本文・画像・動画の自動保存も行います
+
+Android は定期 Work と即時 Work を併用します。iOS は OS のスケジューリングに従うため、実行タイミングは一定ではありません。
+
+## 保存先まわり
+
+- 自動保存: `AUTO_SAVE_DIRECTORY`
+- 手動保存: 設定画面の保存先設定に従う
+- Android はパス指定に加えてファイラー経由の選択に対応
+- iOS は bookmark / security-scoped resource を使った保存先保持に対応
+
+## テスト
+
+共通テスト:
+
+```bash
+./gradlew :shared:check
+```
+
+Android ユニットテスト:
+
+```bash
+./gradlew :app-android:testDebugUnitTest
+```
+
+Android Instrumentation Test:
+
+```bash
+./gradlew :app-android:connectedDebugAndroidTest
+```
+
+現在のテスト対象は主に以下です。
+
+- parser
+- network
+- state
+- repository
+- service
+- UI ロジック
+- Android 側の一部統合テスト
+
+## 既知の制約
+
+- 板の並び替えは上下移動ベースで、ドラッグアンドドロップは未対応
+- iOS のバックグラウンド更新頻度は OS 依存
+- 実際の投稿や削除の成功可否は板側の仕様や応答に影響される
+
+## 関連ドキュメント
+
+- `AGENTS.md`: 実装の詳細、主要エントリーポイント、画面仕様、保存や通信の補足
+
