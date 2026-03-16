@@ -171,13 +171,12 @@ object BackgroundRefreshManager {
                 nowEpochMillis = currentEpochMillis()
             )
         ) {
-            BackgroundRefreshScheduleAction.SkipDisabled,
-            BackgroundRefreshScheduleAction.SkipPending -> {
-                NSLog("BGTask schedule skipped: refresh request is already pending")
-                return
-            }
             BackgroundRefreshScheduleAction.SkipDisabled -> {
                 NSLog("BGTask schedule skipped: manager is disabled")
+                return
+            }
+            BackgroundRefreshScheduleAction.SkipPending -> {
+                NSLog("BGTask schedule skipped: refresh request is already pending")
                 return
             }
             is BackgroundRefreshScheduleAction.DelayRetry -> {

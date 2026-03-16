@@ -155,6 +155,7 @@ class AppStateStore internal constructor(
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
     val isAdsEnabled: Flow<Boolean> = storage.adsEnabled
+    val hasShownPostingNotice: Flow<Boolean> = storage.hasShownPostingNotice
     val isLightweightModeEnabled: Flow<Boolean> = storage.lightweightModeEnabled
 
     /**
@@ -216,6 +217,9 @@ class AppStateStore internal constructor(
 
     suspend fun setAdsEnabled(enabled: Boolean) =
         preferenceOperations.setAdsEnabled(enabled)
+
+    suspend fun setHasShownPostingNotice(shown: Boolean) =
+        preferenceOperations.setHasShownPostingNotice(shown)
 
     suspend fun setLastUsedDeleteKey(deleteKey: String) =
         preferenceOperations.setLastUsedDeleteKey(deleteKey)
@@ -385,6 +389,7 @@ internal interface PlatformStateStorage {
     val privacyFilterEnabled: Flow<Boolean>
     val backgroundRefreshEnabled: Flow<Boolean>
     val adsEnabled: Flow<Boolean>
+    val hasShownPostingNotice: Flow<Boolean>
     val lightweightModeEnabled: Flow<Boolean>
     val manualSaveDirectory: Flow<String>
     val attachmentPickerPreference: Flow<String?>
@@ -410,6 +415,7 @@ internal interface PlatformStateStorage {
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)
     suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
     suspend fun updateAdsEnabled(enabled: Boolean)
+    suspend fun updateHasShownPostingNotice(shown: Boolean)
     suspend fun updateLightweightModeEnabled(enabled: Boolean)
     suspend fun updateManualSaveDirectory(directory: String)
     suspend fun updateAttachmentPickerPreference(preference: String)

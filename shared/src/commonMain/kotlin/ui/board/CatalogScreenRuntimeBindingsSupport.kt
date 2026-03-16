@@ -4,9 +4,11 @@ import androidx.compose.material3.DrawerState
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.state.AppStateStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.serialization.json.Json
@@ -24,6 +26,7 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
     coroutineScope: CoroutineScope,
     drawerState: DrawerState,
     currentBoard: () -> BoardSummary?,
+    stateStore: AppStateStore?,
     currentCatalogMode: () -> CatalogMode,
     currentCatalogLoadGeneration: () -> Long,
     setCatalogLoadGeneration: (Long) -> Unit,
@@ -33,7 +36,7 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
     setIsRefreshing: (Boolean) -> Unit,
     setCatalogUiState: (CatalogUiState) -> Unit,
     setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> List<CatalogItem>,
+    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent,
     activeRepository: BoardRepository,
     currentCreateThreadDraft: () -> CreateThreadDraft,
     currentCreateThreadImage: () -> com.valoser.futacha.shared.util.ImageData?,
@@ -105,6 +108,7 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
             coroutineScope = coroutineScope,
             activeRepository = activeRepository,
             currentBoard = currentBoard,
+            stateStore = stateStore,
             currentDraft = currentCreateThreadDraft,
             currentImage = currentCreateThreadImage,
             setCreateThreadDraft = setCreateThreadDraft,

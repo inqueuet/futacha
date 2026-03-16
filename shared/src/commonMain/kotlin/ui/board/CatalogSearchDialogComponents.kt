@@ -263,9 +263,8 @@ private fun PastSearchResultRow(
             ) {
                 when (painterState) {
                     is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
-                        Icon(
-                            imageVector = Icons.Outlined.Image,
-                            contentDescription = null,
+                        MediaThumbnailFallbackIcon(
+                            url = item.thumbUrl,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

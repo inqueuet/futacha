@@ -169,11 +169,11 @@ fun CatalogScreen(
         debouncedSearchQuery = normalized
     }
     var lastCatalogItems by mutableStateBundle.lastCatalogItems
-    suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): List<CatalogItem> {
+    suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): CatalogPageContent {
         return loadCatalogItemsForMode(
             boardUrl = currentBoard.url,
             mode = mode,
-            fetchCatalog = activeRepository::getCatalog
+            fetchCatalog = activeRepository::getCatalogPage
         )
     }
     val isPrivacyFilterEnabled = persistentBindings.isPrivacyFilterEnabled
@@ -225,6 +225,7 @@ fun CatalogScreen(
             coroutineScope = coroutineScope,
             drawerState = drawerState,
             currentBoard = { board },
+            stateStore = stateStore,
             currentCatalogMode = { catalogMode },
             currentCatalogLoadGeneration = { catalogLoadGeneration },
             setCatalogLoadGeneration = { catalogLoadGeneration = it },

@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
@@ -32,8 +34,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -221,12 +224,18 @@ private fun HistoryEntryCard(
     onClick: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
+    val imageLoader = LocalFutachaImageLoader.current
     val titleImageRequest = remember(platformContext, entry.titleImageUrl) {
         ImageRequest.Builder(platformContext)
             .data(entry.titleImageUrl)
             .crossfade(true)
             .build()
     }
+    val titlePainter = rememberAsyncImagePainter(
+        model = titleImageRequest,
+        imageLoader = imageLoader
+    )
+    val titlePainterState by titlePainter.state.collectAsState()
     val formattedLastVisited = remember(entry.lastVisitedEpochMillis) {
         formatLastVisited(entry.lastVisitedEpochMillis)
     }
@@ -245,16 +254,31 @@ private fun HistoryEntryCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            AsyncImage(
-                model = titleImageRequest,
-                imageLoader = LocalFutachaImageLoader.current,
-                contentDescription = "${entry.title} のタイトル画像",
-                contentScale = ContentScale.Crop,
+            Box(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(MaterialTheme.shapes.small)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-            )
+            ) {
+                when (titlePainterState) {
+                    is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
+                        MediaThumbnailFallbackIcon(
+                            url = entry.titleImageUrl,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+
+                    else -> {
+                        Image(
+                            painter = titlePainter,
+                            contentDescription = "${entry.title} のタイトル画像",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp)

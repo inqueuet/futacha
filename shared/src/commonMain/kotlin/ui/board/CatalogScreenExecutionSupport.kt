@@ -3,12 +3,14 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.fetchArchiveSearchResults
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.confirmPostingNotice
 import com.valoser.futacha.shared.util.ImageData
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
@@ -17,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.coroutineContext
 
@@ -93,7 +96,7 @@ internal fun buildCatalogInitialLoadBindings(
     setIsRefreshing: (Boolean) -> Unit,
     setCatalogUiState: (CatalogUiState) -> Unit,
     setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> List<CatalogItem>
+    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent
 ): CatalogInitialLoadBindings {
     return CatalogInitialLoadBindings(
         loadInitialCatalog = load@{
@@ -120,7 +123,7 @@ internal fun buildCatalogInitialLoadBindings(
                             return@launch
                         }
                         setCatalogUiState(CatalogUiState.Success(catalog))
-                        setLastCatalogItems(catalog)
+                        setLastCatalogItems(catalog.items)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -142,6 +145,7 @@ internal fun buildCatalogCreateThreadBindings(
     coroutineScope: CoroutineScope,
     activeRepository: BoardRepository,
     currentBoard: () -> BoardSummary?,
+    stateStore: AppStateStore?,
     currentDraft: () -> CreateThreadDraft,
     currentImage: () -> ImageData?,
     setCreateThreadDraft: (CreateThreadDraft) -> Unit,
@@ -158,9 +162,9 @@ internal fun buildCatalogCreateThreadBindings(
     return CatalogCreateThreadBindings(
         resetCreateThreadDraft = resetDraft,
         submitCreateThread = submit@{
-            setShowCreateThreadDialog(false)
             val board = currentBoard()
             if (board == null) {
+                setShowCreateThreadDialog(false)
                 coroutineScope.launch {
                     showSnackbar(buildCreateThreadBoardMissingMessage())
                 }
@@ -174,6 +178,15 @@ internal fun buildCatalogCreateThreadBindings(
             val imageData = currentImage()
             coroutineScope.launch {
                 try {
+                    val needsPostingNotice = stateStore?.hasShownPostingNotice?.first() == false
+                    if (needsPostingNotice) {
+                        val accepted = confirmPostingNotice()
+                        if (!accepted) {
+                            return@launch
+                        }
+                        stateStore.setHasShownPostingNotice(true)
+                    }
+                    setShowCreateThreadDialog(false)
                     val threadId = activeRepository.createThread(
                         board = board.url,
                         name = draft.name,
@@ -214,7 +227,7 @@ internal fun buildCatalogExecutionBindings(
     setCatalogLoadJob: (Job?) -> Unit,
     setCatalogUiState: (CatalogUiState) -> Unit,
     setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> List<CatalogItem>,
+    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent,
     currentPastSearchRuntimeState: () -> CatalogPastSearchRuntimeState,
     setPastSearchRuntimeState: (CatalogPastSearchRuntimeState) -> Unit,
     httpClient: HttpClient?,
@@ -258,7 +271,7 @@ internal fun buildCatalogExecutionBindings(
                             return@launch
                         }
                         setCatalogUiState(CatalogUiState.Success(catalog))
-                        setLastCatalogItems(catalog)
+                        setLastCatalogItems(catalog.items)
                         showSnackbar(buildCatalogRefreshSuccessMessage())
                     } catch (e: CancellationException) {
                         throw e

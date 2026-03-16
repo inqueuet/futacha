@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.parser
 
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.parser.CatalogHtmlParserCore
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
@@ -13,4 +14,10 @@ class JsoupHtmlParser : HtmlParser {
 
     override fun extractOpImageUrl(html: String, baseUrl: String?): String? =
         ThreadHtmlParserCore.extractOpImageUrl(html, baseUrl)
+
+    override fun extractCatalogEmbeddedHtml(html: String, baseUrl: String?): List<EmbeddedHtmlContent> =
+        PageEmbeddedHtmlParserSupport.extractCatalogEmbeddedHtml(html, baseUrl)
+
+    override fun extractThreadEmbeddedHtml(html: String, baseUrl: String?): List<EmbeddedHtmlContent> =
+        PageEmbeddedHtmlParserSupport.extractThreadEmbeddedHtml(html, baseUrl)
 }

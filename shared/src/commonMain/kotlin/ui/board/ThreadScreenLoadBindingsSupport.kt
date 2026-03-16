@@ -63,6 +63,7 @@ internal fun buildThreadScreenLoadBindings(
                     uiCallbacks.onManualRefreshSuccess(
                         buildThreadManualRefreshUiOutcome(
                             page = loadResult.page,
+                            embeddedHtml = loadResult.embeddedHtml,
                             history = history,
                             threadId = threadId,
                             threadTitle = threadTitle,
@@ -113,6 +114,7 @@ internal fun buildThreadScreenLoadBindings(
                     uiCallbacks.onInitialLoadSuccess(
                         buildThreadInitialLoadUiOutcome(
                             page = loadResult.page,
+                            embeddedHtml = loadResult.embeddedHtml,
                             history = history,
                             threadId = threadId,
                             threadTitle = threadTitle,

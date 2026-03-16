@@ -1,7 +1,7 @@
 package com.valoser.futacha.shared.ui.image
 
-import coil3.decode.Decoder
+import coil3.ComponentRegistry
 
-actual fun getPlatformDecoders(): List<Decoder.Factory> = emptyList()
+actual fun ComponentRegistry.Builder.addPlatformImageComponents() = Unit
 
 actual fun getPlatformDiskCacheDirectory(platformContext: Any?): String? = null

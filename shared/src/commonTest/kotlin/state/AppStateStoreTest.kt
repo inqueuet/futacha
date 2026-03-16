@@ -159,6 +159,24 @@ class AppStateStoreTest {
     }
 
     @Test
+    fun preferenceSetters_preservePreviousValuesWhenPersistenceFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val store = AppStateStore(storage)
+
+        store.setBackgroundRefreshEnabled(true)
+        store.setHasShownPostingNotice(true)
+
+        storage.failBackgroundRefreshUpdate = true
+        storage.failPostingNoticeUpdate = true
+
+        store.setBackgroundRefreshEnabled(false)
+        store.setHasShownPostingNotice(false)
+
+        assertEquals(true, store.isBackgroundRefreshEnabled.first())
+        assertEquals(true, store.hasShownPostingNotice.first())
+    }
+
+    @Test
     fun setters_normalizeDeleteKeyDirectoryGridColumnsAndEnums() = runBlocking {
         val storage = FakePlatformStateStorage()
         val store = AppStateStore(storage)
@@ -257,6 +275,101 @@ class AppStateStoreTest {
         )
     }
 
+    fun preferenceFacade_forwardsPreferenceAndSelfPostOperations() = runBlocking {
+        val calls = mutableListOf<String>()
+        val facade = buildAppStatePreferenceFacade(
+            setBackgroundRefreshEnabledImpl = { calls += "background:$it" },
+            setHasShownPostingNoticeImpl = { calls += "postingNotice:$it" },
+            setLastUsedDeleteKeyImpl = { calls += "deleteKey:$it" },
+            setLightweightModeEnabledImpl = { calls += "lightweight:$it" },
+            setManualSaveDirectoryImpl = { calls += "directory:$it" },
+            setManualSaveLocationImpl = {
+                calls += when (it) {
+                    is com.valoser.futacha.shared.model.SaveLocation.Path -> "location:path:${it.path}"
+                    is com.valoser.futacha.shared.model.SaveLocation.TreeUri -> "location:tree:${it.uri}"
+                    is com.valoser.futacha.shared.model.SaveLocation.Bookmark -> "location:bookmark:${it.bookmarkData}"
+                }
+            },
+            setAttachmentPickerPreferenceImpl = { calls += "picker:${it.name}" },
+            setSaveDirectorySelectionImpl = { calls += "selection:${it.name}" },
+            setPreferredFileManagerImpl = { pkg, label -> calls += "fileManager:${pkg.orEmpty()}:${label.orEmpty()}" },
+            setPrivacyFilterEnabledImpl = { calls += "privacy:$it" },
+            setCatalogDisplayStyleImpl = { calls += "display:${it.name}" },
+            setCatalogGridColumnsImpl = { calls += "columns:$it" },
+            setCatalogModeImpl = { boardId, mode -> calls += "catalogMode:$boardId:${mode.name}" },
+            setNgHeadersImpl = { calls += "ngHeaders:${it.size}" },
+            setNgWordsImpl = { calls += "ngWords:${it.size}" },
+            setCatalogNgWordsImpl = { calls += "catalogNgWords:${it.size}" },
+            setWatchWordsImpl = { calls += "watchWords:${it.size}" },
+            setThreadMenuConfigImpl = { calls += "threadMenuConfig:${it.size}" },
+            setThreadSettingsMenuConfigImpl = { calls += "threadSettingsMenuConfig:${it.size}" },
+            setThreadMenuEntriesImpl = { calls += "threadMenuEntries:${it.size}" },
+            setCatalogNavEntriesImpl = { calls += "catalogNavEntries:${it.size}" },
+            addSelfPostIdentifierImpl = { threadId, identifier, boardId ->
+                calls += "addSelfPost:$threadId:$identifier:${boardId.orEmpty()}"
+            },
+            removeSelfPostIdentifiersForThreadImpl = { threadId, boardId ->
+                calls += "removeSelfPost:$threadId:${boardId.orEmpty()}"
+            },
+            clearSelfPostIdentifiersImpl = { calls += "clearSelfPost" }
+        )
+
+        facade.setBackgroundRefreshEnabled(true)
+        facade.setHasShownPostingNotice(true)
+        facade.setLastUsedDeleteKey("1234")
+        facade.setLightweightModeEnabled(true)
+        facade.setManualSaveDirectory("/tmp")
+        facade.setManualSaveLocation(com.valoser.futacha.shared.model.SaveLocation.Path("/tmp"))
+        facade.setAttachmentPickerPreference(AttachmentPickerPreference.ALWAYS_ASK)
+        facade.setSaveDirectorySelection(SaveDirectorySelection.PICKER)
+        facade.setPreferredFileManager("pkg", "Files")
+        facade.setPrivacyFilterEnabled(true)
+        facade.setCatalogDisplayStyle(com.valoser.futacha.shared.model.CatalogDisplayStyle.List)
+        facade.setCatalogGridColumns(4)
+        facade.setCatalogMode("b", CatalogMode.Old)
+        facade.setNgHeaders(listOf("a"))
+        facade.setNgWords(listOf("a", "b"))
+        facade.setCatalogNgWords(listOf("a"))
+        facade.setWatchWords(listOf("a"))
+        facade.setThreadMenuConfig(emptyList())
+        facade.setThreadSettingsMenuConfig(emptyList())
+        facade.setThreadMenuEntries(emptyList())
+        facade.setCatalogNavEntries(emptyList())
+        facade.addSelfPostIdentifier("123", "ID:abc", "b")
+        facade.removeSelfPostIdentifiersForThread("123", "b")
+        facade.clearSelfPostIdentifiers()
+
+        assertEquals(
+            listOf(
+                "background:true",
+                "postingNotice:true",
+                "deleteKey:1234",
+                "lightweight:true",
+                "directory:/tmp",
+                "location:path:/tmp",
+                "picker:ALWAYS_ASK",
+                "selection:PICKER",
+                "fileManager:pkg:Files",
+                "privacy:true",
+                "display:List",
+                "columns:4",
+                "catalogMode:b:Old",
+                "ngHeaders:1",
+                "ngWords:2",
+                "catalogNgWords:1",
+                "watchWords:1",
+                "threadMenuConfig:0",
+                "threadSettingsMenuConfig:0",
+                "threadMenuEntries:0",
+                "catalogNavEntries:0",
+                "addSelfPost:123:ID:abc:b",
+                "removeSelfPost:123:b",
+                "clearSelfPost"
+            ),
+            calls
+        )
+    }
+
     @Test
     fun boardsFlow_decodesPersistedBoards() = runBlocking {
         val storage = FakePlatformStateStorage().apply {
@@ -315,6 +428,8 @@ internal class FakePlatformStateStorage : BaseInMemoryPlatformStateStorage() {
 
     var failBoardsUpdate = false
     var failHistoryUpdate = false
+    var failBackgroundRefreshUpdate = false
+    var failPostingNoticeUpdate = false
     var failCatalogModeUpdate = false
     var failSelfPostIdentifiersUpdate = false
     var failPreferredFileManagerUpdate = false
@@ -327,6 +442,16 @@ internal class FakePlatformStateStorage : BaseInMemoryPlatformStateStorage() {
     override suspend fun updateHistoryJson(value: String) {
         if (failHistoryUpdate) error("history write failed")
         super.updateHistoryJson(value)
+    }
+
+    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
+        if (failBackgroundRefreshUpdate) error("background refresh write failed")
+        super.updateBackgroundRefreshEnabled(enabled)
+    }
+
+    override suspend fun updateHasShownPostingNotice(shown: Boolean) {
+        if (failPostingNoticeUpdate) error("posting notice write failed")
+        super.updateHasShownPostingNotice(shown)
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {

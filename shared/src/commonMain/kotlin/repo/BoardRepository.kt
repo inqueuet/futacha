@@ -2,7 +2,9 @@ package com.valoser.futacha.shared.repo
 
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.BoardUrlResolver
@@ -27,9 +29,21 @@ interface BoardRepository {
         board: String,
         mode: CatalogMode = CatalogMode.default
     ): List<CatalogItem>
+    suspend fun getCatalogPage(
+        board: String,
+        mode: CatalogMode = CatalogMode.default
+    ): CatalogPageContent = CatalogPageContent(
+        items = getCatalog(board, mode)
+    )
     suspend fun fetchOpImageUrl(board: String, threadId: String): String?
     suspend fun getThread(board: String, threadId: String): ThreadPage
+    suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent = ThreadPageContent(
+        page = getThread(board, threadId)
+    )
     suspend fun getThreadByUrl(threadUrl: String): ThreadPage
+    suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent = ThreadPageContent(
+        page = getThreadByUrl(threadUrl)
+    )
     suspend fun voteSaidane(board: String, threadId: String, postId: String)
     suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String)
     suspend fun deleteByUser(
@@ -166,13 +180,23 @@ class DefaultBoardRepository(
         board: String,
         mode: CatalogMode
     ): List<CatalogItem> {
+        return getCatalogPage(board, mode).items
+    }
+
+    override suspend fun getCatalogPage(
+        board: String,
+        mode: CatalogMode
+    ): CatalogPageContent {
         return withRetryOnAuthFailure(board) {
             val html = withContext(AppDispatchers.io) {
                 api.fetchCatalog(board, mode)
             }
             val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
             withContext(AppDispatchers.parsing) {
-                parser.parseCatalog(html, baseUrl)
+                CatalogPageContent(
+                    items = parser.parseCatalog(html, baseUrl),
+                    embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
+                )
             }
         }
     }
@@ -200,22 +224,39 @@ class DefaultBoardRepository(
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
+        return getThreadContent(board, threadId).page
+    }
+
+    override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {
         return withRetryOnAuthFailure(board) {
             val html = withContext(AppDispatchers.io) {
                 api.fetchThread(board, threadId)
             }
             withContext(AppDispatchers.parsing) {
-                parser.parseThread(html)
+                ThreadPageContent(
+                    page = parser.parseThread(html),
+                    embeddedHtml = parser.extractThreadEmbeddedHtml(
+                        html = html,
+                        baseUrl = BoardUrlResolver.resolveThreadUrl(board, threadId)
+                    )
+                )
             }
         }
     }
 
     override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
+        return getThreadContentByUrl(threadUrl).page
+    }
+
+    override suspend fun getThreadContentByUrl(threadUrl: String): ThreadPageContent {
         val html = withContext(AppDispatchers.io) {
             api.fetchThreadByUrl(threadUrl)
         }
         return withContext(AppDispatchers.parsing) {
-            parser.parseThread(html)
+            ThreadPageContent(
+                page = parser.parseThread(html),
+                embeddedHtml = parser.extractThreadEmbeddedHtml(html, threadUrl)
+            )
         }
     }
 

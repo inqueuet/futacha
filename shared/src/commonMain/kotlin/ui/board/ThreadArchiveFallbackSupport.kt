@@ -66,7 +66,7 @@ internal suspend fun performThreadArchiveFallback(
         val pageResult = try {
             Result.success(
                 withContext(AppDispatchers.io) {
-                    repository.getThreadByUrl(matchUrl)
+                    repository.getThreadContentByUrl(matchUrl)
                 }
             )
         } catch (e: CancellationException) {
@@ -74,10 +74,12 @@ internal suspend fun performThreadArchiveFallback(
         } catch (error: Throwable) {
             Result.failure(error)
         }
+        val content = pageResult.getOrNull()
         val attemptState = resolveArchiveFallbackAttemptState(
             threadId = threadId,
             threadUrl = matchUrl,
-            page = pageResult.getOrNull(),
+            page = content?.page,
+            embeddedHtml = content?.embeddedHtml.orEmpty(),
             error = pageResult.exceptionOrNull()
         )
         attemptState.successLogMessage?.let(onSuccessLog)

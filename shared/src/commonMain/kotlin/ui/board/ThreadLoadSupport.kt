@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.ArchiveSearchItem
@@ -11,7 +12,10 @@ import io.ktor.client.plugins.ResponseException
 internal sealed interface ThreadUiState {
     data object Loading : ThreadUiState
     data class Error(val message: String = "スレッドを読み込めませんでした") : ThreadUiState
-    data class Success(val page: ThreadPage) : ThreadUiState
+    data class Success(
+        val page: ThreadPage,
+        val embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
+    ) : ThreadUiState
 }
 
 internal fun buildThreadInitialLoadErrorMessage(error: Throwable, statusCode: Int?): String {
@@ -51,10 +55,14 @@ internal fun buildThreadLoadSuccessState(
     threadId: String,
     threadTitle: String?,
     board: BoardSummary,
-    overrideThreadUrl: String?
+    overrideThreadUrl: String?,
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
 ): ThreadLoadSuccessState {
     return ThreadLoadSuccessState(
-        uiState = ThreadUiState.Success(page),
+        uiState = ThreadUiState.Success(
+            page = page,
+            embeddedHtml = embeddedHtml
+        ),
         historyEntry = buildHistoryEntryFromPage(
             page = page,
             history = history,
@@ -73,10 +81,12 @@ internal fun buildThreadInitialLoadUiOutcome(
     threadTitle: String?,
     board: BoardSummary,
     overrideThreadUrl: String?,
-    usedOffline: Boolean
+    usedOffline: Boolean,
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
 ): ThreadLoadUiOutcome {
     val successState = buildThreadLoadSuccessState(
         page = page,
+        embeddedHtml = embeddedHtml,
         history = history,
         threadId = threadId,
         threadTitle = threadTitle,
@@ -124,10 +134,12 @@ internal fun buildThreadManualRefreshUiOutcome(
     threadTitle: String?,
     board: BoardSummary,
     overrideThreadUrl: String?,
-    usedOffline: Boolean
+    usedOffline: Boolean,
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
 ): ThreadLoadUiOutcome {
     val successState = buildThreadLoadSuccessState(
         page = page,
+        embeddedHtml = embeddedHtml,
         history = history,
         threadId = threadId,
         threadTitle = threadTitle,
@@ -198,7 +210,11 @@ internal fun resolveThreadRemoteFetchRequest(
 }
 
 internal sealed interface ArchiveFallbackOutcome {
-    data class Success(val page: ThreadPage, val threadUrl: String?) : ArchiveFallbackOutcome
+    data class Success(
+        val page: ThreadPage,
+        val threadUrl: String?,
+        val embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
+    ) : ArchiveFallbackOutcome
     data object NotFound : ArchiveFallbackOutcome
     data object NoMatch : ArchiveFallbackOutcome
 }
@@ -213,14 +229,18 @@ internal data class ThreadLoadFallbackState(
 internal sealed interface ThreadLoadPostArchiveDecision {
     data class UseArchive(
         val page: ThreadPage,
-        val threadUrl: String?
+        val threadUrl: String?,
+        val embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
     ) : ThreadLoadPostArchiveDecision
     data object TryOffline : ThreadLoadPostArchiveDecision
     data class Fail(val error: Throwable) : ThreadLoadPostArchiveDecision
 }
 
 internal sealed interface ThreadLoadPostOfflineDecision {
-    data class UseOffline(val page: ThreadPage) : ThreadLoadPostOfflineDecision
+    data class UseOffline(
+        val page: ThreadPage,
+        val embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
+    ) : ThreadLoadPostOfflineDecision
     data class Fail(val error: Throwable) : ThreadLoadPostOfflineDecision
 }
 
@@ -255,12 +275,14 @@ internal fun resolveArchiveFallbackAttemptState(
     threadId: String,
     threadUrl: String,
     page: ThreadPage?,
-    error: Throwable?
+    error: Throwable?,
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
 ): ArchiveFallbackAttemptState {
     val outcome = resolveArchiveThreadFetchOutcome(
         page = page,
         error = error,
-        threadUrl = threadUrl
+        threadUrl = threadUrl,
+        embeddedHtml = embeddedHtml
     )
     return ArchiveFallbackAttemptState(
         outcome = outcome,
@@ -276,7 +298,8 @@ internal fun resolveThreadLoadPostArchiveDecision(
     return when (archiveOutcome) {
         is ArchiveFallbackOutcome.Success -> ThreadLoadPostArchiveDecision.UseArchive(
             page = archiveOutcome.page,
-            threadUrl = archiveOutcome.threadUrl
+            threadUrl = archiveOutcome.threadUrl,
+            embeddedHtml = archiveOutcome.embeddedHtml
         )
         ArchiveFallbackOutcome.NotFound -> {
             if (fallbackState.shouldThrowWhenArchiveNotFound) {
@@ -346,10 +369,15 @@ internal fun buildArchiveFallbackQueryCandidates(
 internal fun resolveArchiveThreadFetchOutcome(
     page: ThreadPage?,
     error: Throwable?,
-    threadUrl: String?
+    threadUrl: String?,
+    embeddedHtml: List<EmbeddedHtmlContent> = emptyList()
 ): ArchiveFallbackOutcome {
     if (page != null) {
-        return ArchiveFallbackOutcome.Success(page, threadUrl)
+        return ArchiveFallbackOutcome.Success(
+            page = page,
+            threadUrl = threadUrl,
+            embeddedHtml = embeddedHtml
+        )
     }
     return when (error?.statusCodeOrNull()) {
         404, 410 -> ArchiveFallbackOutcome.NotFound

@@ -20,8 +20,8 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.releaseSecurityScopedResource
 import com.valoser.futacha.shared.util.createFileSystem
-import platform.UIKit.UIViewController
 import platform.Foundation.NSUserDefaults
+import platform.UIKit.UIViewController
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -44,27 +44,44 @@ private const val IOS_BG_MAX_THREADS_PER_RUN = 120
 private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 
+/**
+ * Lightweight registration that MUST be called in didFinishLaunchingWithOptions.
+ * Registers the BGTask identifier and restores the persisted enabled state
+ * without eagerly initializing the heavy iOS app graph.
+ */
 fun registerIosBackgroundRefreshTask() {
     BackgroundRefreshManager.registerAtLaunch()
-    val enabled = NSUserDefaults.standardUserDefaults().boolForKey(IOS_BACKGROUND_REFRESH_KEY)
-    Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabled=$enabled)")
-    configureIosBackgroundRefresh(
-        enabled = enabled,
-        stateStore = IosAppGraph.stateStore,
-        httpClient = IosAppGraph.httpClient,
-        fileSystem = IosAppGraph.fileSystem,
-        autoSaveRepo = IosAppGraph.autoSavedThreadRepository
-    )
+    val enabledAtLaunch = NSUserDefaults.standardUserDefaults().boolForKey(IOS_BACKGROUND_REFRESH_KEY)
+    Logger.d("MainViewController", "registerIosBackgroundRefreshTask(enabledAtLaunch=$enabledAtLaunch)")
+    BackgroundRefreshManager.configure(enabledAtLaunch) {
+        runIosBackgroundRefresh(
+            stateStore = IosAppGraph.stateStore,
+            httpClient = IosAppGraph.httpClient,
+            fileSystem = IosAppGraph.fileSystem,
+            autoSaveRepo = IosAppGraph.autoSavedThreadRepository
+        )
+    }
 }
 
 fun MainViewController(): UIViewController {
-    registerIosBackgroundRefreshTask()
     return ComposeUIViewController {
         val stateStore = remember { IosAppGraph.stateStore }
         val fileSystem = remember { IosAppGraph.fileSystem }
         val autoSavedThreadRepository = remember { IosAppGraph.autoSavedThreadRepository }
         val cookieRepository = remember { IosAppGraph.cookieRepository }
         val httpClient = remember { IosAppGraph.httpClient }
+        LaunchedEffect(fileSystem) {
+            (fileSystem as? com.valoser.futacha.shared.util.IosFileSystem)
+                ?.cleanupTempFiles()
+                ?.onSuccess { deletedCount ->
+                    if (deletedCount > 0) {
+                        Logger.i("MainViewController", "Cleaned up $deletedCount stale iOS temp files")
+                    }
+                }
+                ?.onFailure { error ->
+                    Logger.w("MainViewController", "Failed to clean up iOS temp files: ${error.message}")
+                }
+        }
         LaunchedEffect(stateStore, httpClient, fileSystem, autoSavedThreadRepository) {
             try {
                 Logger.d("MainViewController", "Starting background refresh enabled-state collector")

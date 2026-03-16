@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -15,12 +16,15 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.EmbeddedHtmlContent
+import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.repo.BoardRepository
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun CatalogGrid(
     items: List<CatalogItem>,
+    embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
     repository: BoardRepository,
     onThreadSelected: (CatalogItem) -> Unit,
@@ -56,6 +60,18 @@ internal fun CatalogGrid(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 8.dp)
     ) {
+        if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
+            item(
+                key = "catalog-embedded-html-header",
+                span = { GridItemSpan(maxLineSpan) }
+            ) {
+                EmbeddedHtmlSection(
+                    snippets = embeddedHtml,
+                    placement = EmbeddedHtmlPlacement.Header,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
         items(items = items, key = { it.id }) { catalogItem ->
             CatalogCard(
                 item = catalogItem,
@@ -64,6 +80,18 @@ internal fun CatalogGrid(
                 onClick = { onThreadSelected(catalogItem) }
             )
         }
+        if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {
+            item(
+                key = "catalog-embedded-html-footer",
+                span = { GridItemSpan(maxLineSpan) }
+            ) {
+                EmbeddedHtmlSection(
+                    snippets = embeddedHtml,
+                    placement = EmbeddedHtmlPlacement.Footer,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 }
 
@@ -71,6 +99,7 @@ internal fun CatalogGrid(
 @Composable
 internal fun CatalogList(
     items: List<CatalogItem>,
+    embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
     repository: BoardRepository,
     onThreadSelected: (CatalogItem) -> Unit,
@@ -102,6 +131,15 @@ internal fun CatalogList(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
     ) {
+        if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
+            item(key = "catalog-embedded-html-header") {
+                EmbeddedHtmlSection(
+                    snippets = embeddedHtml,
+                    placement = EmbeddedHtmlPlacement.Header,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
         items(items = items, key = { it.id }) { catalogItem ->
             CatalogListItem(
                 item = catalogItem,
@@ -109,6 +147,15 @@ internal fun CatalogList(
                 repository = repository,
                 onClick = { onThreadSelected(catalogItem) }
             )
+        }
+        if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {
+            item(key = "catalog-embedded-html-footer") {
+                EmbeddedHtmlSection(
+                    snippets = embeddedHtml,
+                    placement = EmbeddedHtmlPlacement.Footer,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }

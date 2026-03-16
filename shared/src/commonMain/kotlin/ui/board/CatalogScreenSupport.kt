@@ -20,6 +20,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
@@ -28,7 +29,7 @@ import kotlinx.coroutines.Job
 
 internal sealed interface CatalogUiState {
     data object Loading : CatalogUiState
-    data class Success(val items: List<CatalogItem>) : CatalogUiState
+    data class Success(val content: CatalogPageContent) : CatalogUiState
     data class Error(val message: String = "カタログを読み込めませんでした") : CatalogUiState
 }
 

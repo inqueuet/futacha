@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,8 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.Post
@@ -94,16 +97,19 @@ internal fun ThreadPostCard(
         )
         val thumbnailForDisplay = post.thumbnailUrl ?: post.imageUrl
         thumbnailForDisplay?.let { displayUrl ->
+            val imageLoader = LocalFutachaImageLoader.current
             val thumbnailRequest = remember(platformContext, displayUrl) {
                 ImageRequest.Builder(platformContext)
                     .data(displayUrl)
                     .crossfade(true)
                     .build()
             }
-            AsyncImage(
+            val thumbnailPainter = rememberAsyncImagePainter(
                 model = thumbnailRequest,
-                imageLoader = LocalFutachaImageLoader.current,
-                contentDescription = "添付画像",
+                imageLoader = imageLoader
+            )
+            val thumbnailPainterState by thumbnailPainter.state.collectAsState()
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 200.dp)
@@ -112,9 +118,27 @@ internal fun ThreadPostCard(
                     .clickable {
                         val targetUrl = post.imageUrl ?: displayUrl
                         onMediaClick?.invoke(targetUrl, determineMediaType(targetUrl))
-                    },
-                contentScale = ContentScale.Fit
-            )
+                    }
+            ) {
+                when (thumbnailPainterState) {
+                    is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
+                        MediaThumbnailFallbackIcon(
+                            url = displayUrl,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+
+                    else -> {
+                        Image(
+                            painter = thumbnailPainter,
+                            contentDescription = "添付画像",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
         }
         ThreadMessageText(
             messageHtml = post.messageHtml,

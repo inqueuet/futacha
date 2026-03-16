@@ -86,9 +86,11 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.confirmPostingNotice
 import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -854,7 +856,62 @@ fun ThreadScreen(
             readAloudIndicatorSegment = readAloudIndicatorSegment,
             isDrawerOpen = isDrawerOpen,
             backSwipeEdgePx = backSwipeEdgePx,
-            backSwipeTriggerPx = backSwipeTriggerPx
+            backSwipeTriggerPx = backSwipeTriggerPx,
+            onReplySubmit = {
+                val submitState = replyDialogBinding.currentState()
+                val submitOutcome = resolveThreadScreenReplySubmitOutcome(
+                    state = submitState,
+                    boardUrl = effectiveBoardUrl,
+                    threadId = threadId
+                )
+                if (submitOutcome.validationMessage != null) {
+                    showMessage(submitOutcome.validationMessage)
+                } else {
+                    val replyActionConfig = submitOutcome.actionConfig
+                    val dismissedState = submitOutcome.dismissedState
+                    if (replyActionConfig != null && dismissedState != null) {
+                        coroutineScope.launch {
+                            val needsPostingNotice = stateStore?.hasShownPostingNotice?.first() == false
+                            if (needsPostingNotice) {
+                                val accepted = confirmPostingNotice()
+                                if (!accepted) {
+                                    return@launch
+                                }
+                                stateStore.setHasShownPostingNotice(true)
+                            }
+                            replyDialogBinding.setState(dismissedState)
+                            submitOutcome.normalizedPassword?.let(updateLastUsedDeleteKey)
+                            actionBindings.launch(
+                                successMessage = "返信を送信しました",
+                                failurePrefix = "返信の送信に失敗しました",
+                                onSuccess = { thisNo ->
+                                    if (!thisNo.isNullOrBlank()) {
+                                        stateStore?.let { store ->
+                                            coroutineScope.launch {
+                                                store.addSelfPostIdentifier(
+                                                    threadId = threadId,
+                                                    identifier = thisNo,
+                                                    boardId = board.id.ifBlank { null }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    val completedState = submitOutcome.completedState
+                                    if (completedState != null) {
+                                        replyDialogBinding.setState(completedState)
+                                        refreshThread()
+                                    }
+                                }
+                            ) {
+                                performThreadReplyAction(
+                                    config = replyActionConfig,
+                                    callbacks = threadReplyActionCallbacks
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         )
     )
 

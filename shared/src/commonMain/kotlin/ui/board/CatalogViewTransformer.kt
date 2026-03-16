@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -71,8 +72,8 @@ internal fun matchesCatalogNgWords(
 internal suspend fun loadCatalogItemsForMode(
     boardUrl: String,
     mode: CatalogMode,
-    fetchCatalog: suspend (String, CatalogMode) -> List<CatalogItem>
-): List<CatalogItem> {
+    fetchCatalog: suspend (String, CatalogMode) -> CatalogPageContent
+): CatalogPageContent {
     if (mode != CatalogMode.WatchWords) {
         return fetchCatalog(boardUrl, mode)
     }
@@ -93,5 +94,10 @@ internal suspend fun loadCatalogItemsForMode(
         throw firstError ?: IllegalStateException("監視モード用のカタログ取得に失敗しました")
     }
 
-    return mergeWatchSourceCatalogItems(successfulCatalogs)
+    return CatalogPageContent(
+        items = mergeWatchSourceCatalogItems(successfulCatalogs.map { it.items }),
+        embeddedHtml = successfulCatalogs.firstNotNullOfOrNull { page ->
+            page.embeddedHtml.takeIf { it.isNotEmpty() }
+        }.orEmpty()
+    )
 }

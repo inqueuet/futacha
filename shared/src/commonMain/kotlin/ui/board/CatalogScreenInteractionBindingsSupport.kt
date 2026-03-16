@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.repo.BoardRepository
@@ -47,6 +48,7 @@ internal data class CatalogScreenRuntimeInputs(
     val coroutineScope: CoroutineScope,
     val drawerState: DrawerState,
     val currentBoard: () -> BoardSummary?,
+    val stateStore: AppStateStore?,
     val currentCatalogMode: () -> CatalogMode,
     val currentCatalogLoadGeneration: () -> Long,
     val setCatalogLoadGeneration: (Long) -> Unit,
@@ -56,7 +58,7 @@ internal data class CatalogScreenRuntimeInputs(
     val setIsRefreshing: (Boolean) -> Unit,
     val setCatalogUiState: (CatalogUiState) -> Unit,
     val setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    val loadCatalogItems: suspend (BoardSummary, CatalogMode) -> List<CatalogItem>,
+    val loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent,
     val activeRepository: BoardRepository,
     val currentCreateThreadDraft: () -> CreateThreadDraft,
     val currentCreateThreadImage: () -> ImageData?,
@@ -140,6 +142,7 @@ internal fun buildCatalogScreenInteractionBindingsBundle(
         coroutineScope = runtimeInputs.coroutineScope,
         drawerState = runtimeInputs.drawerState,
         currentBoard = runtimeInputs.currentBoard,
+        stateStore = runtimeInputs.stateStore,
         currentCatalogMode = runtimeInputs.currentCatalogMode,
         currentCatalogLoadGeneration = runtimeInputs.currentCatalogLoadGeneration,
         setCatalogLoadGeneration = runtimeInputs.setCatalogLoadGeneration,

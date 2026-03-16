@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
@@ -38,8 +39,8 @@ internal fun buildThreadLoadRunnerConfig(
 }
 
 internal data class ThreadLoadRunnerCallbacks(
-    val loadRemoteByUrl: suspend (String) -> ThreadPage,
-    val loadRemoteByBoard: suspend (String, String) -> ThreadPage,
+    val loadRemoteByUrl: suspend (String) -> ThreadPageContent,
+    val loadRemoteByBoard: suspend (String, String) -> ThreadPageContent,
     val loadArchiveFallback: suspend () -> ArchiveFallbackOutcome,
     val loadOfflineFallback: suspend () -> ThreadPage?,
     val onArchiveFallbackTimeout: (String) -> Unit = {},
@@ -48,6 +49,7 @@ internal data class ThreadLoadRunnerCallbacks(
 
 internal data class ThreadLoadExecutionResult(
     val page: ThreadPage,
+    val embeddedHtml: List<com.valoser.futacha.shared.model.EmbeddedHtmlContent> = emptyList(),
     val usedOffline: Boolean,
     val nextThreadUrlOverride: String?
 )
@@ -69,12 +71,12 @@ internal fun buildThreadLoadRunnerCallbacks(
     return ThreadLoadRunnerCallbacks(
         loadRemoteByUrl = { url ->
             withContext(AppDispatchers.io) {
-                repository.getThreadByUrl(url)
+                repository.getThreadContentByUrl(url)
             }
         },
         loadRemoteByBoard = { effectiveBoardUrl, targetThreadId ->
             withContext(AppDispatchers.io) {
-                repository.getThread(effectiveBoardUrl, targetThreadId)
+                repository.getThreadContent(effectiveBoardUrl, targetThreadId)
             }
         },
         loadArchiveFallback = {
@@ -127,7 +129,7 @@ internal suspend fun performThreadLoadWithOfflineFallback(
     callbacks: ThreadLoadRunnerCallbacks
 ): ThreadLoadExecutionResult {
     try {
-        val page = when (
+        val content = when (
             val fetchRequest = resolveThreadRemoteFetchRequest(
                 threadUrl = config.threadUrlOverride,
                 targetThreadId = config.threadId,
@@ -141,7 +143,8 @@ internal suspend fun performThreadLoadWithOfflineFallback(
             )
         }
         return ThreadLoadExecutionResult(
-            page = page,
+            page = content.page,
+            embeddedHtml = content.embeddedHtml,
             usedOffline = false,
             nextThreadUrlOverride = config.threadUrlOverride
         )
@@ -176,6 +179,7 @@ internal suspend fun performThreadLoadWithOfflineFallback(
         ) {
             is ThreadLoadPostArchiveDecision.UseArchive -> ThreadLoadExecutionResult(
                 page = archiveDecision.page,
+                embeddedHtml = archiveDecision.embeddedHtml,
                 usedOffline = false,
                 nextThreadUrlOverride = archiveDecision.threadUrl ?: config.threadUrlOverride
             )
@@ -195,6 +199,7 @@ internal suspend fun performThreadLoadWithOfflineFallback(
                 ) {
                     is ThreadLoadPostOfflineDecision.UseOffline -> ThreadLoadExecutionResult(
                         page = offlineDecision.page,
+                        embeddedHtml = offlineDecision.embeddedHtml,
                         usedOffline = true,
                         nextThreadUrlOverride = config.threadUrlOverride
                     )

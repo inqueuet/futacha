@@ -27,6 +27,7 @@ import kotlin.coroutines.cancellation.CancellationException
 class IosFileSystem : FileSystem {
 
     private val fileManager = NSFileManager.defaultManager
+    private val cleanupMaxAgeMillis = 60 * 60 * 1000L
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> {
         return try {
@@ -341,6 +342,33 @@ class IosFileSystem : FileSystem {
         contents?.filterIsInstance<String>() ?: emptyList()
     }
 
+    suspend fun cleanupTempFiles(): Result<Int> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            val nowMillis = (NSDate().timeIntervalSince1970 * 1000.0).toLong()
+            val searchDirectories = buildList {
+                NSTemporaryDirectory().takeIf { it.isNotBlank() }?.let(::add)
+                val caches = NSSearchPathForDirectoriesInDomains(
+                    NSCachesDirectory,
+                    NSUserDomainMask,
+                    true
+                ).firstOrNull() as? String
+                caches?.takeIf { it.isNotBlank() }?.let(::add)
+            }.distinct()
+
+            var deletedCount = 0
+            searchDirectories.forEach { directory ->
+                deletedCount += cleanupTempFilesRecursive(
+                    directory = directory,
+                    nowMillis = nowMillis,
+                    maxAgeMillis = cleanupMaxAgeMillis,
+                    currentDepth = 0,
+                    maxDepth = 3
+                )
+            }
+            deletedCount
+        }
+    }
+
     override fun getAppDataDirectory(): String {
         val paths = NSSearchPathForDirectoriesInDomains(
             NSDocumentDirectory,
@@ -454,7 +482,7 @@ class IosFileSystem : FileSystem {
             base = base,
             relativePath = relativePath,
             onTreeUri = {
-                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+                Result.failure(unsupportedTreeUriOnIos())
             }
         ) { fullPath ->
             createDirectory(fullPath)
@@ -473,7 +501,7 @@ class IosFileSystem : FileSystem {
             base = base,
             relativePath = relativePath,
             onTreeUri = {
-                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+                Result.failure(unsupportedTreeUriOnIos())
             }
         ) { fullPath ->
             writeBytes(fullPath, bytes)
@@ -492,7 +520,7 @@ class IosFileSystem : FileSystem {
             base = base,
             relativePath = relativePath,
             onTreeUri = {
-                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+                Result.failure(unsupportedTreeUriOnIos())
             }
         ) { fullPath ->
             appendBytes(fullPath, bytes)
@@ -513,7 +541,7 @@ class IosFileSystem : FileSystem {
             base = base,
             relativePath = relativePath,
             onTreeUri = {
-                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+                Result.failure(unsupportedTreeUriOnIos())
             }
         ) { fullPath ->
             readString(fullPath)
@@ -556,7 +584,7 @@ class IosFileSystem : FileSystem {
             base = base,
             relativePath = relativePath,
             onTreeUri = {
-                Result.failure(UnsupportedOperationException("TreeUri SaveLocation is not supported on iOS"))
+                Result.failure(unsupportedTreeUriOnIos())
             }
         ) { fullPath ->
             deleteRecursively(fullPath)
@@ -610,6 +638,13 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    private fun unsupportedTreeUriOnIos(): UnsupportedOperationException {
+        return UnsupportedOperationException(
+            "TreeUri SaveLocation is Android SAF-specific and intentionally unsupported on iOS. " +
+                "Use Path or Bookmark instead."
+        )
+    }
+
     @OptIn(ExperimentalEncodingApi::class)
     private fun String.decodeBase64ToNSData(): NSData {
         val normalized = trim()
@@ -632,6 +667,52 @@ class IosFileSystem : FileSystem {
         return bytes.usePinned { pinned ->
             NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
         }
+    }
+
+    private fun cleanupTempFilesRecursive(
+        directory: String,
+        nowMillis: Long,
+        maxAgeMillis: Long,
+        currentDepth: Int,
+        maxDepth: Int
+    ): Int {
+        val entries = fileManager.contentsOfDirectoryAtPath(directory, error = null)
+            ?.filterIsInstance<String>()
+            ?: return 0
+        var deletedCount = 0
+        entries.forEach { name ->
+            val path = "$directory/$name"
+            runCatching {
+                val attributes = fileManager.attributesOfItemAtPath(path, error = null) ?: return@runCatching
+                val fileType = attributes[NSFileType] as? String
+                if (fileType == NSFileTypeDirectory) {
+                    if (currentDepth < maxDepth) {
+                        deletedCount += cleanupTempFilesRecursive(
+                            directory = path,
+                            nowMillis = nowMillis,
+                            maxAgeMillis = maxAgeMillis,
+                            currentDepth = currentDepth + 1,
+                            maxDepth = maxDepth
+                        )
+                    }
+                    return@runCatching
+                }
+                if (!name.startsWith("tmp_") || !name.endsWith(".tmp")) {
+                    return@runCatching
+                }
+                val modifiedAt = attributes[NSFileModificationDate] as? NSDate ?: return@runCatching
+                val ageMillis = nowMillis - (modifiedAt.timeIntervalSince1970 * 1000.0).toLong()
+                if (ageMillis < maxAgeMillis) {
+                    return@runCatching
+                }
+                if (fileManager.removeItemAtPath(path, error = null)) {
+                    deletedCount++
+                }
+            }.onFailure { error ->
+                Logger.w("IosFileSystem", "Failed to process temp cleanup entry: $path - ${error.message}")
+            }
+        }
+        return deletedCount
     }
 }
 
