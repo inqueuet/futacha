@@ -7,5 +7,5 @@ import androidx.compose.ui.Modifier
 internal actual fun ThreadScreenBannerAd(
     modifier: Modifier
 ) {
-    // Ads are disabled on iOS until CocoaPods framework integration is stabilized.
+    // iOS版のAdMobバナーはホスト側のSwiftUIレイアウトで表示する。
 }

@@ -335,31 +335,53 @@ fun FutachaApp(
                 }
 
                 when (destination) {
-                    FutachaDestination.SavedThreads -> FutachaSavedThreadsDestination(
-                        props = activeSavedThreadsRepository?.let {
-                            buildFutachaSavedThreadsDestinationProps(
-                                repository = it,
-                                navigationCallbacks = assemblyContext.navigationCallbacks
-                            )
-                        },
-                        onUnavailable = assemblyContext.navigationCallbacks.onSavedThreadsDismissed
-                    )
-
-                    FutachaDestination.BoardManagement -> FutachaBoardManagementDestination(
-                        buildFutachaBoardManagementDestinationProps(
-                            boards = persistedBoards,
-                            context = assemblyContext
+                    FutachaDestination.SavedThreads -> {
+                        LaunchedEffect(Unit) {
+                            Logger.d(TAG, "syncAdBannerVisibility(false) for SavedThreads")
+                            syncAdBannerVisibility(false)
+                        }
+                        FutachaSavedThreadsDestination(
+                            props = activeSavedThreadsRepository?.let {
+                                buildFutachaSavedThreadsDestinationProps(
+                                    repository = it,
+                                    navigationCallbacks = assemblyContext.navigationCallbacks
+                                )
+                            },
+                            onUnavailable = assemblyContext.navigationCallbacks.onSavedThreadsDismissed
                         )
-                    )
+                    }
 
-                    is FutachaDestination.MissingBoard -> FutachaMissingBoardDestination(
-                        missingBoardId = destination.missingBoardId,
-                        navigationState = navigationState,
-                        boards = persistedBoards,
-                        onRecovered = { navigationState = it }
-                    )
+                    FutachaDestination.BoardManagement -> {
+                        LaunchedEffect(Unit) {
+                            Logger.d(TAG, "syncAdBannerVisibility(false) for BoardManagement")
+                            syncAdBannerVisibility(false)
+                        }
+                        FutachaBoardManagementDestination(
+                            buildFutachaBoardManagementDestinationProps(
+                                boards = persistedBoards,
+                                context = assemblyContext
+                            )
+                        )
+                    }
+
+                    is FutachaDestination.MissingBoard -> {
+                        LaunchedEffect(destination.missingBoardId) {
+                            Logger.d(TAG, "syncAdBannerVisibility(false) for MissingBoard")
+                            syncAdBannerVisibility(false)
+                        }
+                        FutachaMissingBoardDestination(
+                            missingBoardId = destination.missingBoardId,
+                            navigationState = navigationState,
+                            boards = persistedBoards,
+                            onRecovered = { navigationState = it }
+                        )
+                    }
 
                     is FutachaDestination.Catalog -> {
+                        LaunchedEffect(destination.board.id) {
+                            Logger.d(TAG, "syncAdBannerVisibility(false) for Catalog(${destination.board.id})")
+                            syncAdBannerVisibility(false)
+                        }
                         FutachaCatalogDestination(
                             props = buildFutachaCatalogDestinationProps(
                                 board = destination.board,
@@ -370,6 +392,13 @@ fun FutachaApp(
                     }
 
                     is FutachaDestination.Thread -> {
+                        LaunchedEffect(destination.board.id, destination.threadId) {
+                            Logger.d(
+                                TAG,
+                                "syncAdBannerVisibility(true) for Thread(board=${destination.board.id}, thread=${destination.threadId})"
+                            )
+                            syncAdBannerVisibility(true)
+                        }
                         val currentBoard = destination.board
                         val activeThreadId = destination.threadId
                         val historyContext = remember(currentBoard, navigationState) {
