@@ -73,9 +73,7 @@ internal fun rememberCatalogScreenLifecycleBindings(
         isDrawerOpen,
         isSearchActive,
         onBack,
-        onInitialLoad,
-        currentCatalogLoadJob(),
-        currentPastSearchRuntimeState()
+        onInitialLoad
     ) {
         buildCatalogScreenLifecycleBindings(
             coroutineScope = coroutineScope,

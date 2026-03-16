@@ -38,7 +38,7 @@ internal data class ThreadScreenAutoSaveDependencies(
     val currentTimeMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
     val buildSaveRuntime: (HttpClient, FileSystem) -> ThreadSaveRuntime = ::buildThreadSaveRuntime,
     val performAutoSave: suspend (ThreadAutoSaveRunnerConfig, ThreadAutoSaveRunnerCallbacks) -> ThreadAutoSaveRunResult = ::performThreadAutoSave,
-    val indexSavedThread: suspend (SavedThreadRepository?, SavedThread?, String?) -> Unit = { repository, savedThread, failureMessage ->
+    val indexSavedThread: suspend (SavedThreadRepository?, SavedThread?, String?) -> Result<Unit>? = { repository, savedThread, failureMessage ->
         indexSavedThreadOrLog(repository, savedThread, THREAD_AUTO_SAVE_TAG, failureMessage)
     },
     val onFailureLog: (String, Throwable) -> Unit = { message, failure ->
@@ -83,7 +83,7 @@ internal data class ThreadScreenManualSaveDependencies(
         launchThreadSaveProgressCollector(saveService, onProgress)
     },
     val performManualSave: suspend (ThreadManualSaveRunnerConfig, ThreadManualSaveRunnerCallbacks) -> ThreadManualSaveRunResult = ::performThreadManualSave,
-    val indexSavedThread: suspend (SavedThreadRepository?, SavedThread?, String?) -> Unit = { repository, savedThread, failureMessage ->
+    val indexSavedThread: suspend (SavedThreadRepository?, SavedThread?, String?) -> Result<Unit>? = { repository, savedThread, failureMessage ->
         indexSavedThreadOrLog(repository, savedThread, THREAD_AUTO_SAVE_TAG, failureMessage)
     }
 )
@@ -186,13 +186,18 @@ internal fun buildThreadScreenManualSaveBindings(
                             )
                         ) {
                             is ThreadManualSaveUiOutcome.Success -> {
-                                dependencies.indexSavedThread(
+                                val indexResult = dependencies.indexSavedThread(
                                     dependencies.manualSaveRepository,
                                     outcome.savedThread,
                                     outcome.indexFailureMessage
                                 )
                                 stateBindings.setSaveProgress(null)
-                                callbacks.showMessage(outcome.successState.message)
+                                callbacks.showMessage(
+                                    resolveThreadManualSaveCompletionMessage(
+                                        successState = outcome.successState,
+                                        indexResult = indexResult
+                                    )
+                                )
                             }
                             is ThreadManualSaveUiOutcome.Failure -> {
                                 stateBindings.setSaveProgress(null)

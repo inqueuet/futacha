@@ -57,10 +57,14 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlin.math.abs
 import kotlin.time.ExperimentalTime
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
 @Composable
 fun CatalogScreen(
     board: BoardSummary?,
@@ -83,7 +87,7 @@ fun CatalogScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
 @Composable
 fun CatalogScreen(
     board: BoardSummary?,
@@ -159,14 +163,14 @@ fun CatalogScreen(
         pastSearchRuntimeState = resetState.runtimeState
         overlayState = resetState.overlayState
     }
-    LaunchedEffect(searchQuery) {
-        val normalized = resolveCatalogDebouncedSearchQuery(searchQuery)
-        if (normalized.isEmpty()) {
-            debouncedSearchQuery = ""
-            return@LaunchedEffect
-        }
-        delay(200L)
-        debouncedSearchQuery = normalized
+    LaunchedEffect(mutableStateBundle.searchQuery) {
+        snapshotFlow { mutableStateBundle.searchQuery.value }
+            .map(::resolveCatalogDebouncedSearchQuery)
+            .distinctUntilChanged()
+            .debounce(::resolveCatalogSearchDebounceMillis)
+            .collect { normalized ->
+                debouncedSearchQuery = normalized
+            }
     }
     var lastCatalogItems by mutableStateBundle.lastCatalogItems
     suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): CatalogPageContent {

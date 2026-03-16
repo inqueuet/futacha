@@ -1,10 +1,13 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 
 internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
+    private val seedMutex = Mutex()
     val boardsState = MutableStateFlow<String?>(null)
     val historyState = MutableStateFlow<String?>(null)
     val privacyFilterState = MutableStateFlow(false)
@@ -96,35 +99,37 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override suspend fun updateCatalogNavEntriesConfigJson(value: String) { catalogNavEntriesConfigState.value = value }
 
     override suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles) {
-        if (boardsState.value == null) boardsState.value = seedBundles.boards.boardsJson
-        if (historyState.value == null) historyState.value = seedBundles.history.historyJson
-        if (manualSaveDirectoryState.value.isBlank()) manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
-        if (ngHeadersState.value == null) ngHeadersState.value = seedBundles.preferences.ngHeadersJson
-        if (ngWordsState.value == null) ngWordsState.value = seedBundles.preferences.ngWordsJson
-        if (catalogNgWordsState.value == null) catalogNgWordsState.value = seedBundles.preferences.catalogNgWordsJson
-        if (watchWordsState.value == null) watchWordsState.value = seedBundles.preferences.watchWordsJson
-        if (selfPostIdentifiersState.value == null) selfPostIdentifiersState.value = seedBundles.preferences.selfPostIdentifiersJson
-        if (catalogModeMapState.value == null) catalogModeMapState.value = seedBundles.preferences.catalogModeMapJson
-        if (attachmentPickerPreferenceState.value == null) {
-            attachmentPickerPreferenceState.value = seedBundles.preferences.attachmentPickerPreference
-        }
-        if (saveDirectorySelectionState.value == null) {
-            saveDirectorySelectionState.value = seedBundles.preferences.saveDirectorySelection
-        }
-        if (lastUsedDeleteKeyState.value == null) {
-            lastUsedDeleteKeyState.value = seedBundles.preferences.lastUsedDeleteKey
-        }
-        if (threadMenuConfigState.value == null) {
-            threadMenuConfigState.value = seedBundles.preferences.threadMenuConfigJson
-        }
-        if (threadSettingsMenuConfigState.value == null) {
-            threadSettingsMenuConfigState.value = seedBundles.preferences.threadSettingsMenuConfigJson
-        }
-        if (threadMenuEntriesConfigState.value == null) {
-            threadMenuEntriesConfigState.value = seedBundles.preferences.threadMenuEntriesConfigJson
-        }
-        if (catalogNavEntriesConfigState.value == null) {
-            catalogNavEntriesConfigState.value = seedBundles.preferences.catalogNavEntriesJson
+        seedMutex.withLock {
+            if (boardsState.value == null) boardsState.value = seedBundles.boards.boardsJson
+            if (historyState.value == null) historyState.value = seedBundles.history.historyJson
+            if (manualSaveDirectoryState.value.isBlank()) manualSaveDirectoryState.value = DEFAULT_MANUAL_SAVE_ROOT
+            if (ngHeadersState.value == null) ngHeadersState.value = seedBundles.preferences.ngHeadersJson
+            if (ngWordsState.value == null) ngWordsState.value = seedBundles.preferences.ngWordsJson
+            if (catalogNgWordsState.value == null) catalogNgWordsState.value = seedBundles.preferences.catalogNgWordsJson
+            if (watchWordsState.value == null) watchWordsState.value = seedBundles.preferences.watchWordsJson
+            if (selfPostIdentifiersState.value == null) selfPostIdentifiersState.value = seedBundles.preferences.selfPostIdentifiersJson
+            if (catalogModeMapState.value == null) catalogModeMapState.value = seedBundles.preferences.catalogModeMapJson
+            if (attachmentPickerPreferenceState.value == null) {
+                attachmentPickerPreferenceState.value = seedBundles.preferences.attachmentPickerPreference
+            }
+            if (saveDirectorySelectionState.value == null) {
+                saveDirectorySelectionState.value = seedBundles.preferences.saveDirectorySelection
+            }
+            if (lastUsedDeleteKeyState.value == null) {
+                lastUsedDeleteKeyState.value = seedBundles.preferences.lastUsedDeleteKey
+            }
+            if (threadMenuConfigState.value == null) {
+                threadMenuConfigState.value = seedBundles.preferences.threadMenuConfigJson
+            }
+            if (threadSettingsMenuConfigState.value == null) {
+                threadSettingsMenuConfigState.value = seedBundles.preferences.threadSettingsMenuConfigJson
+            }
+            if (threadMenuEntriesConfigState.value == null) {
+                threadMenuEntriesConfigState.value = seedBundles.preferences.threadMenuEntriesConfigJson
+            }
+            if (catalogNavEntriesConfigState.value == null) {
+                catalogNavEntriesConfigState.value = seedBundles.preferences.catalogNavEntriesJson
+            }
         }
     }
 }

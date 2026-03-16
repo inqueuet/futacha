@@ -69,46 +69,61 @@ class PersistentCookieStorage(
     private var lastPurgeTimeMillis = 0L
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
 
+    private suspend inline fun <T> withMutationSerialization(
+        crossinline block: suspend () -> T
+    ): T {
+        val inheritedTransactionId = coroutineContext[CookieTransactionContext]?.id
+        return if (inheritedTransactionId != null) {
+            block()
+        } else {
+            transactionMutex.withLock {
+                block()
+            }
+        }
+    }
+
     override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
         var savePayload: String? = null
-        mutex.withLock {
-            ensureLoadedLocked()
-            val now = currentTimeMillis()
-            val domain = resolvePersistentCookieDomain(cookie.domain, requestUrl.host)
-            if (domain == null) {
-                Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' with invalid domain: ${cookie.domain} for host: ${requestUrl.host}")
-                return
-            }
-            if (!isPersistentCookieNameAllowed(cookie.name) || !isPersistentCookieValueAllowed(cookie.value)) {
-                Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' due to invalid size/format")
-                return
-            }
-            val path = normalizePersistentCookiePath(cookie.path)
-            if (shouldDeletePersistentCookie(cookie, now)) {
-                if (removeCookieLocked(domain, path, cookie.name)) {
+        withMutationSerialization {
+            mutex.withLock {
+                ensureLoadedLocked()
+                val now = currentTimeMillis()
+                val domain = resolvePersistentCookieDomain(cookie.domain, requestUrl.host)
+                if (domain == null) {
+                    Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' with invalid domain: ${cookie.domain} for host: ${requestUrl.host}")
+                    return@withLock
+                }
+                if (!isPersistentCookieNameAllowed(cookie.name) || !isPersistentCookieValueAllowed(cookie.value)) {
+                    Logger.w("PersistentCookieStorage", "Rejected cookie '${cookie.name}' due to invalid size/format")
+                    return@withLock
+                }
+                val path = normalizePersistentCookiePath(cookie.path)
+                if (shouldDeletePersistentCookie(cookie, now)) {
+                    if (removeCookieLocked(domain, path, cookie.name)) {
+                        savePayload = encodeSnapshotLocked()
+                    }
+                    return@withLock
+                }
+                val expiresAt = resolvePersistentCookieExpiresAt(cookie, now)
+                val key = CookieKey(domain, path, cookie.name)
+                val stored = StoredCookie(
+                    name = cookie.name,
+                    value = cookie.value,
+                    domain = domain,
+                    path = path,
+                    expiresAtMillis = expiresAt,
+                    secure = cookie.secure,
+                    httpOnly = cookie.httpOnly,
+                    extensions = cookie.extensions.mapNotNull { (key, value) ->
+                        value?.let { key to it }
+                    }.toMap(),
+                    createdAtMillis = now
+                )
+                cookies[key] = stored
+                enforceCookieCapacityLocked(now)
+                if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
                     savePayload = encodeSnapshotLocked()
                 }
-                return@withLock
-            }
-            val expiresAt = resolvePersistentCookieExpiresAt(cookie, now)
-            val key = CookieKey(domain, path, cookie.name)
-            val stored = StoredCookie(
-                name = cookie.name,
-                value = cookie.value,
-                domain = domain,
-                path = path,
-                expiresAtMillis = expiresAt,
-                secure = cookie.secure,
-                httpOnly = cookie.httpOnly,
-                extensions = cookie.extensions.mapNotNull { (key, value) ->
-                    value?.let { key to it }
-                }.toMap(),
-                createdAtMillis = now
-            )
-            cookies[key] = stored
-            enforceCookieCapacityLocked(now)
-            if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
-                savePayload = encodeSnapshotLocked()
             }
         }
         savePayload?.let { persistSnapshot(it) }
@@ -199,11 +214,13 @@ class PersistentCookieStorage(
 
     suspend fun removeCookie(domain: String, path: String, name: String) {
         var savePayload: String? = null
-        mutex.withLock {
-            ensureLoadedLocked()
-            cookies.remove(CookieKey(domain.lowercase(), normalizePersistentCookiePath(path), name))
-            if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
-                savePayload = encodeSnapshotLocked()
+        withMutationSerialization {
+            mutex.withLock {
+                ensureLoadedLocked()
+                cookies.remove(CookieKey(domain.lowercase(), normalizePersistentCookiePath(path), name))
+                if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
+                    savePayload = encodeSnapshotLocked()
+                }
             }
         }
         savePayload?.let { persistSnapshot(it) }
@@ -211,11 +228,13 @@ class PersistentCookieStorage(
 
     suspend fun clearAll() {
         var savePayload: String? = null
-        mutex.withLock {
-            ensureLoadedLocked()
-            cookies.clear()
-            if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
-                savePayload = encodeSnapshotLocked()
+        withMutationSerialization {
+            mutex.withLock {
+                ensureLoadedLocked()
+                cookies.clear()
+                if (transactionCoordinator.shouldPersistImmediately(coroutineContext[CookieTransactionContext]?.id)) {
+                    savePayload = encodeSnapshotLocked()
+                }
             }
         }
         savePayload?.let { persistSnapshot(it) }

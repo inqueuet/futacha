@@ -14,6 +14,8 @@ import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.state.FakePlatformStateStorage
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.util.FileSystem
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class HistoryRefresherTest {
@@ -176,6 +179,50 @@ class HistoryRefresherTest {
         assertEquals("777", saved.threadId)
         assertTrue(updated.hasAutoSave)
         assertEquals("auto saved title", updated.title)
+    }
+
+    @Test
+    fun refresh_doesNotMarkHistoryEntryAutoSavedWhenIndexWriteFails() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "777")
+        val fileSystem = IndexWriteFailingFileSystem()
+        val autoSavedRepository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = AUTO_SAVE_DIRECTORY
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "777"] = threadPage(
+                threadId = "777",
+                boardTitle = "board-auto",
+                titleLine = "auto saved title",
+                thumbnailUrl = "thumb-auto",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            autoSavedThreadRepository = autoSavedRepository,
+            httpClient = createThreadHtmlClient("<html><body>thread html</body></html>"),
+            fileSystem = fileSystem,
+            maxConcurrency = 1,
+            autoSaveMaxConcurrency = 1,
+            maxAutoSavesPerRefresh = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        waitUntil("auto-save write attempt to complete") {
+            fileSystem.exists(
+                "${AUTO_SAVE_DIRECTORY}/${buildThreadStorageId(board.id, "777")}/metadata.json"
+            )
+        }
+
+        assertTrue(autoSavedRepository.getAllThreads().isEmpty())
+        assertFalse(store.history.first().single().hasAutoSave)
     }
 
     @Test
@@ -550,4 +597,28 @@ private suspend fun waitUntil(
         }
     }
     error("Timed out waiting for $message")
+}
+
+private class IndexWriteFailingFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return if (path.endsWith("/index.json") || path.endsWith("/index.json.tmp") || path.endsWith("/index.json.backup")) {
+            Result.failure(IllegalStateException("index write failed for $path"))
+        } else {
+            delegate.writeString(path, content)
+        }
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        return if (
+            relativePath == "index.json" ||
+            relativePath == "index.json.tmp" ||
+            relativePath == "index.json.backup"
+        ) {
+            Result.failure(IllegalStateException("index write failed for $relativePath"))
+        } else {
+            delegate.writeString(base, relativePath, content)
+        }
+    }
 }

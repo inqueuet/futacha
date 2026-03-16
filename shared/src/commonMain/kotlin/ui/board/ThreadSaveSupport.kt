@@ -160,6 +160,21 @@ internal fun buildThreadManualSaveIndexFailureMessage(threadId: String): String 
     return "Failed to index manually saved thread $threadId"
 }
 
+internal fun buildThreadManualSaveIndexWarningMessage(displayedSavePath: String): String {
+    return "スレッドを保存しましたが、保存一覧に反映できませんでした: $displayedSavePath"
+}
+
+internal fun resolveThreadManualSaveCompletionMessage(
+    successState: ThreadManualSaveSuccessState,
+    indexResult: Result<Unit>?
+): String {
+    return if (indexResult?.isFailure == true) {
+        buildThreadManualSaveIndexWarningMessage(successState.displayedSavePath)
+    } else {
+        successState.message
+    }
+}
+
 internal data class ThreadManualSaveErrorState(
     val message: String,
     val shouldResetManualSaveDirectory: Boolean = false,

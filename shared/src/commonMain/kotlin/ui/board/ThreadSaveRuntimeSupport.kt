@@ -58,11 +58,11 @@ internal suspend fun indexSavedThreadOrLog(
     savedThread: SavedThread?,
     logTag: String,
     failureMessage: String?
-) {
+) : Result<Unit>? {
     if (repository == null || savedThread == null || failureMessage == null) {
-        return
+        return null
     }
-    repository.addThreadToIndex(savedThread)
+    return repository.addThreadToIndex(savedThread)
         .onFailure { Logger.e(logTag, failureMessage, it) }
 }
 

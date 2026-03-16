@@ -609,6 +609,8 @@ class CatalogScreenSupportTest {
 
         assertEquals("query", resolveCatalogDebouncedSearchQuery("  query  "))
         assertEquals("", resolveCatalogDebouncedSearchQuery("   "))
+        assertEquals(200L, resolveCatalogSearchDebounceMillis("query"))
+        assertEquals(0L, resolveCatalogSearchDebounceMillis(""))
     }
 
     @Test

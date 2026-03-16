@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.state.AppStateStore
 
@@ -61,13 +62,17 @@ internal fun resolveCatalogScreenDisplaySettings(
 internal fun rememberCatalogScreenCoreBindingsBundle(
     stateStore: AppStateStore?,
     boardId: String?,
+    boardUrl: String?,
     initialArchiveSearchScope: ArchiveSearchScope?
 ): CatalogScreenCoreBindingsBundle {
     val runtimeObjects = rememberCatalogScreenRuntimeObjectsBundle()
+    val saveableKey = remember(boardId, boardUrl) {
+        resolveCatalogScreenSaveableKey(boardId, boardUrl)
+    }
     val persistentBindings = rememberCatalogScreenPersistentBindings(
         stateStore = stateStore,
         coroutineScope = runtimeObjects.coroutineScope,
-        boardId = boardId
+        saveableKey = saveableKey
     )
     val initialStateInputs = resolveCatalogScreenInitialMutableStateInputs(
         boardId = boardId,
@@ -77,7 +82,7 @@ internal fun rememberCatalogScreenCoreBindingsBundle(
         gridColumns = persistentBindings.persistentGridColumns
     )
     val mutableStateBundle = rememberCatalogScreenMutableStateBundle(
-        boardId = boardId,
+        saveableKey = saveableKey,
         initialCatalogMode = initialStateInputs.catalogMode,
         initialArchiveSearchScope = initialStateInputs.archiveSearchScope,
         initialDisplayStyle = initialStateInputs.displayStyle,
