@@ -121,13 +121,13 @@ class IosFileSystem : FileSystem {
             return trimmed
         }
         val url = NSURL(string = trimmed)
-        if (url?.scheme == "file") {
+        if (url.scheme == "file") {
             return url.path
         }
         if (trimmed.startsWith("content://")) {
             val treeSegment = trimmed.substringAfter("/tree/", "")
             if (treeSegment.isNotEmpty()) {
-                val decoded = (treeSegment as NSString).stringByRemovingPercentEncoding ?: treeSegment
+                val decoded = NSString.create(string = treeSegment).stringByRemovingPercentEncoding ?: treeSegment
                 val normalized = decoded.substringAfter("primary:", decoded)
                 if (normalized.isNotBlank()) {
                     return resolveSaveLocationPath(normalized)
