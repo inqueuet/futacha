@@ -166,7 +166,7 @@ fun FutachaApp(
                 val threadMenuEntries by stateStore.threadMenuEntries.collectAsState(initial = defaultThreadMenuEntries())
                 val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
                 val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
-                val isAdsEnabled by stateStore.isAdsEnabled.collectAsState(initial = false)
+                val isAdsEnabled by stateStore.isAdsEnabled.collectAsState(initial = true)
                 val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
                 val manualSaveLocation = remember(manualSaveDirectory) {
                     com.valoser.futacha.shared.model.SaveLocation.fromString(manualSaveDirectory)

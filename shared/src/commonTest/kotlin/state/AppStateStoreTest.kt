@@ -181,6 +181,8 @@ class AppStateStoreTest {
         val storage = FakePlatformStateStorage()
         val store = AppStateStore(storage)
 
+        assertEquals(true, store.isAdsEnabled.first())
+
         store.setLastUsedDeleteKey(" 1234567890 ")
         store.setAdsEnabled(false)
         store.setManualSaveDirectory("./saved_threads")

@@ -61,7 +61,7 @@ internal data class FutachaBoardScreenCallbacks(
 internal data class FutachaScreenPreferencesStateInputs(
     val appVersion: String,
     val isBackgroundRefreshEnabled: Boolean,
-    val isAdsEnabled: Boolean = false,
+    val isAdsEnabled: Boolean = true,
     val isLightweightModeEnabled: Boolean,
     val manualSaveDirectory: String,
     val manualSaveLocation: SaveLocation,

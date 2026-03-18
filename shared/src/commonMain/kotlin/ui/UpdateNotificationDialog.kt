@@ -13,7 +13,7 @@ private fun buildUpdateNotificationMessage(updateInfo: UpdateInfo): String {
     return buildString {
         append(updateInfo.message)
         append("\n\n")
-        append("今後のアップデートで広告を有効化する予定です。")
+        append("広告はデフォルトで表示されます。")
         append("\n")
         append("広告表示は設定からいつでもOFFにできます。")
         append("\n")

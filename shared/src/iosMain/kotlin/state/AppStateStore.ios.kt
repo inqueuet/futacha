@@ -53,7 +53,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val privacyFilterState = MutableStateFlow(readBooleanState(PRIVACY_FILTER_KEY))
     private val backgroundRefreshState = MutableStateFlow(readBooleanState(BACKGROUND_REFRESH_KEY))
     private val adsEnabledState = MutableStateFlow(
-        readBooleanState(ADS_ENABLED_KEY)
+        readBooleanState(ADS_ENABLED_KEY, defaultValue = true)
     )
     private val postingNoticeState = MutableStateFlow(readBooleanState(POSTING_NOTICE_KEY))
     private val lightweightModeState = MutableStateFlow(readBooleanState(LIGHTWEIGHT_MODE_KEY))
@@ -273,7 +273,6 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private fun seedFrom(seedBundles: AppStateSeedBundles) {
         seedRequiredStringState(BOARDS_KEY, seedBundles.boards.boardsJson, boardsState)
         seedRequiredStringState(HISTORY_KEY, seedBundles.history.historyJson, historyState)
-        seedRequiredBooleanState(ADS_ENABLED_KEY, false, adsEnabledState)
         seedRequiredBooleanState(POSTING_NOTICE_KEY, false, postingNoticeState)
         seedRequiredStringState(
             MANUAL_SAVE_DIRECTORY_KEY,
@@ -364,7 +363,15 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun updateAdsEnabled(enabled: Boolean) {
-        updateBooleanState(ADS_ENABLED_KEY, enabled, adsEnabledState)
+        update {
+            if (enabled) {
+                defaults.removeObjectForKey(ADS_ENABLED_KEY)
+            } else {
+                defaults.setBool(false, forKey = ADS_ENABLED_KEY)
+            }
+            adsEnabledState.value = enabled
+            booleanReadCache[ADS_ENABLED_KEY] = enabled
+        }
     }
 
     override suspend fun updateHasShownPostingNotice(shown: Boolean) {

@@ -108,7 +108,7 @@ private class AndroidPlatformStateStorage(
         safeData.map { prefs -> prefs[backgroundRefreshKey] ?: false }
 
     override val adsEnabled: Flow<Boolean> =
-        safeData.map { prefs -> prefs[adsEnabledKey] ?: false }
+        safeData.map { prefs -> prefs[adsEnabledKey] ?: true }
     override val hasShownPostingNotice: Flow<Boolean> =
         safeData.map { prefs -> prefs[postingNoticeKey] ?: false }
 
@@ -249,7 +249,6 @@ private class AndroidPlatformStateStorage(
         seedRequiredStringPreference(boardsKey, seedBundles.boards.boardsJson)
         seedRequiredStringPreference(historyKey, seedBundles.history.historyJson)
         seedRequiredStringPreference(manualSaveDirectoryKey, DEFAULT_MANUAL_SAVE_ROOT)
-        seedRequiredBooleanPreference(adsEnabledKey, false)
         seedRequiredBooleanPreference(postingNoticeKey, false)
         seedOptionalStringPreference(ngHeadersKey, seedBundles.preferences.ngHeadersJson)
         seedOptionalStringPreference(ngWordsKey, seedBundles.preferences.ngWordsJson)
@@ -308,12 +307,19 @@ private class AndroidPlatformStateStorage(
     }
 
     override suspend fun updateAdsEnabled(enabled: Boolean) {
-        updateBooleanPreference(
-            adsEnabledKey,
-            enabled,
-            "ads enabled",
-            "Failed to save ads enabled state"
-        )
+        try {
+            context.dataStore.edit { prefs ->
+                if (enabled) {
+                    prefs.remove(adsEnabledKey)
+                } else {
+                    prefs[adsEnabledKey] = false
+                }
+            }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update ads enabled: ${e.message}")
+            throw StorageException("Failed to save ads enabled state", e)
+        }
     }
 
     override suspend fun updateHasShownPostingNotice(shown: Boolean) {
