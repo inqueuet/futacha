@@ -3,4 +3,6 @@ platform :ios, '15.0'
 target 'iosApp' do
   pod 'shared', :path => '../shared'
   pod 'Google-Mobile-Ads-SDK'
+  pod 'FirebaseAnalytics'
+  pod 'FirebaseCrashlytics'
 end
