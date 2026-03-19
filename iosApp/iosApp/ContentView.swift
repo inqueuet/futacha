@@ -35,7 +35,7 @@ private func resolveComposeViewController() -> UIViewController {
 }
 
 struct ContentView: View {
-    @State private var adsEnabled = UserDefaults.standard.bool(forKey: "ads_enabled")
+    @State private var adsEnabled = UserDefaults.standard.object(forKey: "ads_enabled") == nil ? true : UserDefaults.standard.bool(forKey: "ads_enabled")
     @State private var threadScreenAdVisible = UserDefaults.standard.bool(forKey: "thread_screen_ad_visible")
     @State private var isBannerLoaded = false
     @State private var shouldShowBannerContainer = false
@@ -90,7 +90,7 @@ struct ContentView: View {
     }
 
     private func reloadAdFlags() {
-        adsEnabled = UserDefaults.standard.bool(forKey: "ads_enabled")
+        adsEnabled = UserDefaults.standard.object(forKey: "ads_enabled") == nil ? true : UserDefaults.standard.bool(forKey: "ads_enabled")
         threadScreenAdVisible = UserDefaults.standard.bool(forKey: "thread_screen_ad_visible")
     }
 }

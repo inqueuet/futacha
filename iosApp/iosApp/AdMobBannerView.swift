@@ -7,7 +7,7 @@ struct AdMobBannerView: UIViewRepresentable {
     let onAdLoadStateChanged: (Bool) -> Void
 
     init(
-        adUnitID: String = "ca-app-pub-6403856201304924/8151063815",
+        adUnitID: String = "ca-app-pub-6403856201304924/8764822238",
         onAdLoadStateChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.adUnitID = adUnitID
