@@ -98,6 +98,18 @@ Android 側のビルド設定は `compileSdk 36 / minSdk 24`、iOS 側の deploy
 
 `shared/shared.podspec` はダミー framework が無い状態では `pod install` に失敗するため、最初に `:shared:generateDummyFramework` が必要です。
 
+### Firebase 設定ファイル
+
+Firebase の設定ファイルはリポジトリに含まれていません。Firebase Console からダウンロードし、以下の場所に配置してください。
+
+| プラットフォーム | ファイル | 設置場所 |
+|---|---|---|
+| Android | `google-services.json` | `app-android/google-services.json` |
+| iOS | `GoogleService-Info.plist` | `iosApp/iosApp/GoogleService-Info.plist` |
+
+- iOS の `GoogleService-Info.plist` は Xcode 上で `iosApp` ターゲットに追加する必要があります。
+- どちらのファイルも `.gitignore` で除外されています。ファイルが存在しない場合でもビルド・起動は可能です。
+
 ## 起動方法
 
 ### Android
