@@ -13,9 +13,7 @@ import io.ktor.client.HttpClient
 import com.valoser.futacha.shared.network.NetworkException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +27,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 import kotlin.time.ExperimentalTime
 import kotlin.time.Clock
 
@@ -75,12 +74,10 @@ class HistoryRefresher(
     class RefreshAlreadyRunningException :
         IllegalStateException("History refresh is already running")
 
-    private val autoSaveJob = SupervisorJob()
     private val skipThreadIds = MutableStateFlow<Map<HistoryRefreshKey, Long>>(emptyMap())
     private val refreshMutex = Mutex()
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
     private val effectiveThreadFetchTimeoutMillis = threadFetchTimeoutMillis.coerceAtLeast(1_000L)
-    private val autoSaveScope = CoroutineScope(autoSaveJob + dispatcher)
     private var historyRefreshCursor = 0
 
     // FIX: エラー状態を公開
@@ -148,6 +145,7 @@ class HistoryRefresher(
             val effectiveMaxConcurrency = maxConcurrency.coerceAtLeast(1)
             val semaphore = Semaphore(effectiveMaxConcurrency)
             val autoSaveSemaphore = Semaphore(autoSaveMaxConcurrency.coerceAtLeast(1))
+            val autoSaveScope = CoroutineScope(coroutineContext)
             val autoSaveService = if (
                 httpClient != null &&
                 fileSystem != null &&
@@ -332,7 +330,7 @@ class HistoryRefresher(
     }
 
     fun close() {
-        autoSaveJob.cancel()
+        // Auto-save jobs are scoped to refresh() and cancel with the caller.
     }
 
     fun clearSkippedThreads() {

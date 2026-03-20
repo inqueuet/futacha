@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
 
 internal data class FutachaThreadSelection(
     val boardId: String,
+    val boardName: String? = null,
     val threadId: String,
     val threadTitle: String?,
     val threadReplies: Int?,
@@ -17,6 +18,7 @@ internal data class FutachaThreadSelection(
 
 internal data class FutachaNavigationState(
     val selectedBoardId: String? = null,
+    val selectedBoardName: String? = null,
     val selectedThreadId: String? = null,
     val selectedThreadTitle: String? = null,
     val selectedThreadReplies: Int? = null,
@@ -34,7 +36,8 @@ internal data class FutachaNavigationState(
                     state.selectedThreadReplies,
                     state.selectedThreadThumbnailUrl,
                     state.selectedThreadUrl,
-                    state.isSavedThreadsVisible
+                    state.isSavedThreadsVisible,
+                    state.selectedBoardName
                 )
             },
             restore = { restored ->
@@ -45,7 +48,8 @@ internal data class FutachaNavigationState(
                     selectedThreadReplies = restored.getOrNull(3) as Int?,
                     selectedThreadThumbnailUrl = restored.getOrNull(4) as String?,
                     selectedThreadUrl = restored.getOrNull(5) as String?,
-                    isSavedThreadsVisible = restored.getOrNull(6) as? Boolean ?: false
+                    isSavedThreadsVisible = restored.getOrNull(6) as? Boolean ?: false,
+                    selectedBoardName = restored.getOrNull(7) as String?
                 )
             }
         )
@@ -66,6 +70,7 @@ internal fun clearFutachaThreadSelection(
 ): FutachaNavigationState {
     return state.copy(
         selectedBoardId = if (clearBoardSelection) null else state.selectedBoardId,
+        selectedBoardName = if (clearBoardSelection) null else state.selectedBoardName,
         selectedThreadId = null,
         selectedThreadTitle = null,
         selectedThreadReplies = null,
@@ -81,6 +86,7 @@ internal fun selectFutachaBoard(
     return clearFutachaThreadSelection(
         state = state.copy(
             selectedBoardId = boardId,
+            selectedBoardName = null,
             isSavedThreadsVisible = false
         ),
         clearBoardSelection = false
@@ -93,6 +99,7 @@ internal fun applyFutachaThreadSelection(
 ): FutachaNavigationState {
     return state.copy(
         selectedBoardId = selection.boardId,
+        selectedBoardName = selection.boardName,
         selectedThreadId = selection.threadId,
         selectedThreadTitle = selection.threadTitle,
         selectedThreadReplies = selection.threadReplies,
@@ -112,6 +119,16 @@ internal fun selectCatalogThread(
     )
 }
 
+internal fun selectSavedThread(
+    state: FutachaNavigationState,
+    selection: FutachaThreadSelection
+): FutachaNavigationState {
+    return applyFutachaThreadSelection(
+        state = state.copy(isSavedThreadsVisible = true),
+        selection = selection.copy(isSavedThreadsVisible = true)
+    )
+}
+
 internal fun selectCatalogThread(
     state: FutachaNavigationState,
     threadId: String,
@@ -121,6 +138,7 @@ internal fun selectCatalogThread(
     threadUrl: String?
 ): FutachaNavigationState {
     return state.copy(
+        selectedBoardName = state.selectedBoardName,
         selectedThreadId = threadId,
         selectedThreadTitle = title,
         selectedThreadReplies = replies,
@@ -136,6 +154,7 @@ internal fun applyRegisteredThreadNavigation(
 ): FutachaNavigationState {
     return state.copy(
         selectedBoardId = target.board.id,
+        selectedBoardName = target.board.name,
         selectedThreadId = target.threadId,
         selectedThreadTitle = null,
         selectedThreadReplies = null,
@@ -147,6 +166,28 @@ internal fun applyRegisteredThreadNavigation(
 
 internal fun dismissSavedThreads(state: FutachaNavigationState): FutachaNavigationState {
     return state.copy(isSavedThreadsVisible = false)
+}
+
+private val savedThreadFallbackBoardSegmentRegex = Regex("[^a-zA-Z0-9._-]+")
+
+internal fun buildSavedThreadFallbackBoard(
+    boardId: String,
+    boardName: String?
+): BoardSummary {
+    val normalizedId = boardId.trim().ifBlank { "saved-thread" }
+    val normalizedName = boardName?.trim().takeUnless { it.isNullOrBlank() } ?: normalizedId
+    val urlSegment = savedThreadFallbackBoardSegmentRegex
+        .replace(normalizedId.lowercase(), "_")
+        .trim('_')
+        .ifBlank { "saved-thread" }
+    return BoardSummary(
+        id = normalizedId,
+        name = normalizedName,
+        category = "",
+        url = "https://saved.invalid/$urlSegment",
+        description = "Temporary board context for saved thread playback",
+        pinned = false
+    )
 }
 
 internal fun resolveFutachaDestination(
@@ -162,6 +203,18 @@ internal fun resolveFutachaDestination(
     }
     val selectedBoard = boards.firstOrNull { it.id == navigationState.selectedBoardId }
     if (selectedBoard == null) {
+        if (
+            navigationState.selectedThreadId != null &&
+            navigationState.isSavedThreadsVisible
+        ) {
+            return FutachaDestination.Thread(
+                board = buildSavedThreadFallbackBoard(
+                    boardId = navigationState.selectedBoardId,
+                    boardName = navigationState.selectedBoardName
+                ),
+                threadId = navigationState.selectedThreadId
+            )
+        }
         return FutachaDestination.MissingBoard(navigationState.selectedBoardId)
     }
     return if (navigationState.selectedThreadId == null) {

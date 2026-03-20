@@ -48,11 +48,11 @@ fun SavedThreadsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var threads by remember { mutableStateOf<List<SavedThread>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var totalSize by remember { mutableStateOf(0L) }
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var deleteConfirmTarget by remember { mutableStateOf<SavedThread?>(null) }
+    var threads by remember(repository) { mutableStateOf<List<SavedThread>>(emptyList()) }
+    var isLoading by remember(repository) { mutableStateOf(true) }
+    var totalSize by remember(repository) { mutableStateOf(0L) }
+    var loadError by remember(repository) { mutableStateOf<String?>(null) }
+    var deleteConfirmTarget by remember(repository) { mutableStateOf<SavedThread?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -87,7 +87,7 @@ fun SavedThreadsScreen(
     }
 
     // FIX: データ読み込みにタイムアウトとエラーハンドリングを追加
-    LaunchedEffect(Unit) {
+    LaunchedEffect(repository) {
         reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
     }
 

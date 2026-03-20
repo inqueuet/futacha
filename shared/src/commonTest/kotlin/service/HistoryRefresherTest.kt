@@ -169,11 +169,6 @@ class HistoryRefresherTest {
 
         refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
 
-        waitUntil("auto-save to complete") {
-            autoSavedRepository.getAllThreads().isNotEmpty() &&
-                store.history.first().single().hasAutoSave
-        }
-
         val saved = autoSavedRepository.getAllThreads().single()
         val updated = store.history.first().single()
         assertEquals("777", saved.threadId)
@@ -214,12 +209,6 @@ class HistoryRefresherTest {
         )
 
         refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
-
-        waitUntil("auto-save write attempt to complete") {
-            fileSystem.exists(
-                "${AUTO_SAVE_DIRECTORY}/${buildThreadStorageId(board.id, "777")}/metadata.json"
-            )
-        }
 
         assertTrue(autoSavedRepository.getAllThreads().isEmpty())
         assertFalse(store.history.first().single().hasAutoSave)

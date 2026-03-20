@@ -23,6 +23,7 @@ internal fun resolveHistoryEntrySelection(
     return targetBoard?.let { board ->
         FutachaThreadSelection(
             boardId = board.id,
+            boardName = board.name,
             threadId = entry.threadId,
             threadTitle = entry.title,
             threadReplies = entry.replyCount,
@@ -40,18 +41,24 @@ internal fun resolveSavedThreadSelection(
 ): FutachaThreadSelection? {
     val targetBoard = boards.firstOrNull { it.id == thread.boardId }
         ?: boards.firstOrNull { it.name == thread.boardName }
-
-    return targetBoard?.let { board ->
-        FutachaThreadSelection(
-            boardId = board.id,
-            threadId = thread.threadId,
-            threadTitle = thread.title,
-            threadReplies = thread.postCount,
-            threadThumbnailUrl = null,
-            threadUrl = null,
-            isSavedThreadsVisible = false
-        )
+    val fallbackBoardId = targetBoard?.id
+        ?: thread.boardId.trim().ifBlank { thread.boardName.trim() }
+    if (fallbackBoardId.isBlank()) {
+        return null
     }
+    val fallbackBoardName = targetBoard?.name
+        ?: thread.boardName.trim().ifBlank { fallbackBoardId }
+
+    return FutachaThreadSelection(
+        boardId = fallbackBoardId,
+        boardName = fallbackBoardName,
+        threadId = thread.threadId,
+        threadTitle = thread.title,
+        threadReplies = thread.postCount,
+        threadThumbnailUrl = null,
+        threadUrl = null,
+        isSavedThreadsVisible = true
+    )
 }
 
 internal fun shouldApplyRegisteredThreadNavigation(

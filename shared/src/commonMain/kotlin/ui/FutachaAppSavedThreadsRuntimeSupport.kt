@@ -79,17 +79,7 @@ internal fun selectPreferredSavedThreadsRepository(
     currentCount: Int,
     legacyCount: Int
 ): SavedThreadRepository? {
-    if (currentRepository == null) {
-        return legacyRepository
-    }
-    if (legacyRepository == null) {
-        return currentRepository
-    }
-    return when {
-        currentCount <= 0 && legacyCount > 0 -> legacyRepository
-        legacyCount > currentCount -> legacyRepository
-        else -> currentRepository
-    }
+    return currentRepository ?: legacyRepository
 }
 
 internal suspend fun resolveActiveSavedThreadsRepository(

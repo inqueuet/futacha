@@ -37,7 +37,7 @@ internal fun buildFutachaNavigationCallbacks(
         onSavedThreadSelected = { thread ->
             resolveSavedThreadSelection(thread, currentBoards())?.let { selection ->
                 setNavigationState(
-                    selectCatalogThread(currentNavigationState(), selection)
+                    selectSavedThread(currentNavigationState(), selection)
                 )
             }
         },
@@ -65,7 +65,13 @@ internal fun buildFutachaNavigationCallbacks(
             )
         },
         onThreadDismissed = {
-            setNavigationState(clearFutachaThreadSelection(currentNavigationState()))
+            val state = currentNavigationState()
+            setNavigationState(
+                clearFutachaThreadSelection(
+                    state = state,
+                    clearBoardSelection = state.isSavedThreadsVisible
+                )
+            )
         },
         onRegisteredThreadUrlClick = { url ->
             val target = resolveRegisteredThreadNavigation(url, currentBoards())

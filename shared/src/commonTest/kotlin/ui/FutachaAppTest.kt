@@ -803,6 +803,7 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "dat",
+                selectedBoardName = "dat",
                 selectedThreadId = "123",
                 selectedThreadTitle = "title-123",
                 selectedThreadReplies = 10,
@@ -814,7 +815,7 @@ class FutachaAppTest {
 
         callbacks.onThreadDismissed()
         assertEquals(
-            FutachaNavigationState(selectedBoardId = "dat"),
+            FutachaNavigationState(selectedBoardId = "dat", selectedBoardName = "dat"),
             navigationState
         )
 
@@ -828,6 +829,7 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "dat",
+                selectedBoardName = "dat",
                 selectedThreadId = "999",
                 selectedThreadTitle = "catalog-title",
                 selectedThreadReplies = 7,
@@ -850,10 +852,18 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "img",
+                selectedBoardName = "img",
                 selectedThreadId = "456",
                 selectedThreadTitle = "saved-title-456",
-                selectedThreadReplies = 10
+                selectedThreadReplies = 10,
+                isSavedThreadsVisible = true
             ),
+            navigationState
+        )
+
+        callbacks.onThreadDismissed()
+        assertEquals(
+            FutachaNavigationState(isSavedThreadsVisible = true),
             navigationState
         )
     }
@@ -889,6 +899,7 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "dat",
+                selectedBoardName = "dat",
                 selectedThreadId = "456",
                 selectedThreadUrl = "https://may.2chan.net/dat/res/456.htm"
             ),
@@ -913,7 +924,7 @@ class FutachaAppTest {
         legacyRepository.addThreadToIndex(savedThread(threadId = "legacy", boardId = "img")).getOrThrow()
 
         assertSame(
-            legacyRepository,
+            currentRepository,
             selectPreferredSavedThreadsRepository(
                 currentRepository = currentRepository,
                 legacyRepository = legacyRepository,
@@ -922,7 +933,7 @@ class FutachaAppTest {
             )
         )
         assertSame(
-            legacyRepository,
+            currentRepository,
             resolveActiveSavedThreadsRepository(
                 FutachaActiveSavedThreadsRepositoryInputs(
                     currentRepository = currentRepository,
@@ -1156,6 +1167,7 @@ class FutachaAppTest {
 
         val selection = FutachaThreadSelection(
             boardId = "jun",
+            boardName = "jun-board",
             threadId = "456",
             threadTitle = "next",
             threadReplies = 12,
@@ -1166,6 +1178,7 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "jun",
+                selectedBoardName = "jun-board",
                 selectedThreadId = "456",
                 selectedThreadTitle = "next",
                 selectedThreadReplies = 12,
@@ -1197,6 +1210,7 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "jun",
+                selectedBoardName = "jun-board",
                 selectedThreadId = "456",
                 selectedThreadTitle = "next",
                 selectedThreadReplies = 12,
@@ -1258,6 +1272,24 @@ class FutachaAppTest {
                 listOf(board)
             )
         )
+        assertEquals(
+            FutachaDestination.Thread(
+                buildSavedThreadFallbackBoard(
+                    boardId = "missing",
+                    boardName = "saved-board"
+                ),
+                "123"
+            ),
+            resolveFutachaDestination(
+                FutachaNavigationState(
+                    selectedBoardId = "missing",
+                    selectedBoardName = "saved-board",
+                    selectedThreadId = "123",
+                    isSavedThreadsVisible = true
+                ),
+                listOf(board)
+            )
+        )
     }
 
     @Test
@@ -1280,6 +1312,7 @@ class FutachaAppTest {
         assertEquals(
             FutachaNavigationState(
                 selectedBoardId = "new",
+                selectedBoardName = "img",
                 selectedThreadId = "456",
                 selectedThreadUrl = "https://new/res/456.htm",
                 isSavedThreadsVisible = false
@@ -1451,12 +1484,13 @@ class FutachaAppTest {
 
         requireNotNull(selection)
         assertEquals("img-b", selection.boardId)
+        assertEquals("img", selection.boardName)
         assertEquals(savedThread.threadId, selection.threadId)
         assertEquals(savedThread.title, selection.threadTitle)
         assertEquals(savedThread.postCount, selection.threadReplies)
         assertNull(selection.threadThumbnailUrl)
         assertNull(selection.threadUrl)
-        assertFalse(selection.isSavedThreadsVisible)
+        assertTrue(selection.isSavedThreadsVisible)
     }
 
     @Test
@@ -1470,6 +1504,22 @@ class FutachaAppTest {
 
         requireNotNull(selection)
         assertEquals("img-b", selection.boardId)
+        assertEquals("img", selection.boardName)
+    }
+
+    @Test
+    fun resolveSavedThreadSelection_returnsFallbackSelectionWhenBoardIsMissing() {
+        val savedThread = savedThread(boardId = "missing", boardName = "saved-board")
+
+        val selection = resolveSavedThreadSelection(
+            thread = savedThread,
+            boards = emptyList()
+        )
+
+        requireNotNull(selection)
+        assertEquals("missing", selection.boardId)
+        assertEquals("saved-board", selection.boardName)
+        assertTrue(selection.isSavedThreadsVisible)
     }
 
     @Test
