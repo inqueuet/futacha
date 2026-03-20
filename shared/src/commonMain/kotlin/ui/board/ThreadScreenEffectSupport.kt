@@ -203,7 +203,9 @@ internal fun ThreadReplyDialogAutofillEffect(
             isReplyDialogVisible = isReplyDialogVisible,
             currentState = replyDialogBinding.currentState(),
             lastUsedDeleteKey = lastUsedDeleteKey
-        )?.let(replyDialogBinding::setState)
+        )?.let { updatedState ->
+            replyDialogBinding.setState(updatedState)
+        }
     }
 }
 

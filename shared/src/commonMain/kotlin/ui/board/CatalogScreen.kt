@@ -72,16 +72,15 @@ fun CatalogScreen(
     dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
     modifier: Modifier = Modifier
 ) {
-    CatalogScreen(
-        board = board,
-        history = screenContract.history,
-        onBack = onBack,
-        onThreadSelected = onThreadSelected,
-        historyCallbacks = screenContract.historyCallbacks,
-        dependencies = dependencies,
-        preferencesState = screenContract.preferencesState,
-        preferencesCallbacks = screenContract.preferencesCallbacks,
-        modifier = modifier
+    CatalogScreenContent(
+        args = buildCatalogScreenContentArgsFromContract(
+            board = board,
+            screenContract = screenContract,
+            onBack = onBack,
+            onThreadSelected = onThreadSelected,
+            dependencies = dependencies,
+            modifier = modifier
+        )
     )
 }
 
@@ -109,6 +108,58 @@ fun CatalogScreen(
     modifier: Modifier = Modifier,
     httpClient: HttpClient? = dependencies.httpClient
 ) {
+    CatalogScreenContent(
+        args = buildCatalogScreenContentArgs(
+            board = board,
+            history = history,
+            onBack = onBack,
+            onThreadSelected = onThreadSelected,
+            historyCallbacks = historyCallbacks,
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryEntryUpdated = onHistoryEntryUpdated,
+            onHistoryRefresh = onHistoryRefresh,
+            onHistoryCleared = onHistoryCleared,
+            dependencies = dependencies,
+            repository = repository,
+            stateStore = stateStore,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            fileSystem = fileSystem,
+            modifier = modifier,
+            httpClient = httpClient
+        )
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
+@Composable
+private fun CatalogScreenContent(
+    args: CatalogScreenContentArgs
+) {
+    val board = args.board
+    val history = args.history
+    val onBack = args.onBack
+    val onThreadSelected = args.onThreadSelected
+    val historyCallbacks = args.historyCallbacks
+    val dependencies = args.dependencies
+    val preferencesState = args.preferencesState
+    val preferencesCallbacks = args.preferencesCallbacks
+    val modifier = args.modifier
+    val onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected
+    val onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed
+    val onHistoryEntryUpdated = historyCallbacks.onHistoryEntryUpdated
+    val onHistoryRefresh = historyCallbacks.onHistoryRefresh
+    val onHistoryCleared = historyCallbacks.onHistoryCleared
+    val repository = dependencies.repository
+    val stateStore = dependencies.services.stateStore
+    val autoSavedThreadRepository = dependencies.services.autoSavedThreadRepository
+    val cookieRepository = dependencies.services.cookieRepository
+    val fileSystem = dependencies.services.fileSystem
+    val httpClient = dependencies.services.httpClient
+
     val setupBundle = rememberCatalogScreenSetupBundle(
         board = board,
         repository = repository,

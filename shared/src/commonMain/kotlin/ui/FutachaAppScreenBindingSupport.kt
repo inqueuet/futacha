@@ -5,58 +5,13 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
-import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.ScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
-import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.launch
-
-internal data class FutachaPreferenceMutationInputs(
-    val setBackgroundRefreshEnabled: suspend (Boolean) -> Unit,
-    val setAdsEnabled: suspend (Boolean) -> Unit = {},
-    val setLightweightModeEnabled: suspend (Boolean) -> Unit,
-    val setManualSaveDirectory: suspend (String) -> Unit,
-    val setAttachmentPickerPreference: suspend (AttachmentPickerPreference) -> Unit,
-    val setSaveDirectorySelection: suspend (SaveDirectorySelection) -> Unit,
-    val setManualSaveLocation: suspend (SaveLocation) -> Unit,
-    val setPreferredFileManager: suspend (String?, String?) -> Unit,
-    val setThreadMenuEntries: suspend (List<ThreadMenuEntryConfig>) -> Unit,
-    val setCatalogNavEntries: suspend (List<CatalogNavEntryConfig>) -> Unit
-)
-
-internal data class FutachaPreferenceMutationCallbacks(
-    val onBackgroundRefreshChanged: (Boolean) -> Unit,
-    val onAdsEnabledChanged: (Boolean) -> Unit,
-    val onLightweightModeChanged: (Boolean) -> Unit,
-    val onManualSaveDirectoryChanged: (String) -> Unit,
-    val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit,
-    val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    val onManualSaveLocationChanged: (SaveLocation) -> Unit,
-    val onFileManagerSelected: (packageName: String, label: String) -> Unit,
-    val onClearPreferredFileManager: () -> Unit,
-    val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
-    val onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit
-)
-
-internal data class FutachaBoardScreenCallbackInputs(
-    val currentNavigationState: () -> FutachaNavigationState,
-    val setNavigationState: (FutachaNavigationState) -> Unit,
-    val updateBoards: suspend ((List<BoardSummary>) -> List<BoardSummary>) -> Unit
-)
-
-internal data class FutachaBoardScreenCallbacks(
-    val onBoardSelected: (BoardSummary) -> Unit,
-    val onAddBoard: (String, String) -> Unit,
-    val onMenuAction: (BoardManagementMenuAction) -> Unit,
-    val onBoardDeleted: (BoardSummary) -> Unit,
-    val onBoardsReordered: (List<BoardSummary>) -> Unit
-)
 
 internal data class FutachaScreenPreferencesStateInputs(
     val appVersion: String,
@@ -107,122 +62,17 @@ internal data class FutachaScreenBindingsBundle(
     val screenContract: ScreenContract
 )
 
-private fun launchFutachaCallbackMutation(
-    coroutineScope: CoroutineScope,
-    start: CoroutineStart = CoroutineStart.DEFAULT,
-    block: suspend () -> Unit
-) {
-    coroutineScope.launch(start = start) { block() }
-}
-
-internal fun buildFutachaPreferenceMutationCallbacks(
-    coroutineScope: CoroutineScope,
-    inputs: FutachaPreferenceMutationInputs
-): FutachaPreferenceMutationCallbacks {
-    return FutachaPreferenceMutationCallbacks(
-        onBackgroundRefreshChanged = { enabled ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setBackgroundRefreshEnabled(enabled)
-            }
-        },
-        onAdsEnabledChanged = { enabled ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setAdsEnabled(enabled)
-            }
-        },
-        onLightweightModeChanged = { enabled ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setLightweightModeEnabled(enabled)
-            }
-        },
-        onManualSaveDirectoryChanged = { directory ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setManualSaveDirectory(directory)
-            }
-        },
-        onAttachmentPickerPreferenceChanged = { preference ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setAttachmentPickerPreference(preference)
-            }
-        },
-        onSaveDirectorySelectionChanged = { selection ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setSaveDirectorySelection(selection)
-            }
-        },
-        onManualSaveLocationChanged = { location ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setManualSaveLocation(location)
-            }
-        },
-        onFileManagerSelected = { packageName, label ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setPreferredFileManager(packageName, label)
-            }
-        },
-        onClearPreferredFileManager = {
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setPreferredFileManager(null, null)
-            }
-        },
-        onThreadMenuEntriesChanged = { entries ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setThreadMenuEntries(entries)
-            }
-        },
-        onCatalogNavEntriesChanged = { entries ->
-            launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setCatalogNavEntries(entries)
-            }
-        }
-    )
-}
-
-internal fun buildFutachaBoardScreenCallbacks(
-    coroutineScope: CoroutineScope,
-    inputs: FutachaBoardScreenCallbackInputs
-): FutachaBoardScreenCallbacks {
-    return FutachaBoardScreenCallbacks(
-        onBoardSelected = { board ->
-            inputs.setNavigationState(selectFutachaBoard(inputs.currentNavigationState(), board.id))
-        },
-        onAddBoard = { name, url ->
-            launchFutachaCallbackMutation(coroutineScope, start = CoroutineStart.UNDISPATCHED) {
-                val normalizedUrl = normalizeBoardUrl(url)
-                inputs.updateBoards { boards ->
-                    if (boards.any { it.url.equals(normalizedUrl, ignoreCase = true) }) {
-                        boards
-                    } else {
-                        boards + createCustomBoardSummary(
-                            name = name,
-                            url = normalizedUrl,
-                            existingBoards = boards
-                        )
-                    }
-                }
-            }
-        },
-        onMenuAction = { action ->
-            if (action == BoardManagementMenuAction.SAVED_THREADS) {
-                inputs.setNavigationState(
-                    inputs.currentNavigationState().copy(isSavedThreadsVisible = true)
-                )
-            }
-        },
-        onBoardDeleted = { board ->
-            launchFutachaCallbackMutation(coroutineScope, start = CoroutineStart.UNDISPATCHED) {
-                inputs.updateBoards { boards ->
-                    boards.filter { it.id != board.id }
-                }
-            }
-        },
-        onBoardsReordered = { reorderedBoards ->
-            launchFutachaCallbackMutation(coroutineScope, start = CoroutineStart.UNDISPATCHED) {
-                inputs.updateBoards {
-                    reorderedBoards
-                }
-            }
-        }
+internal fun buildFutachaScreenContractContext(
+    history: List<ThreadHistoryEntry>,
+    historyCallbacks: ScreenHistoryCallbacks,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks
+): ScreenContract {
+    return ScreenContract(
+        history = history,
+        historyCallbacks = historyCallbacks,
+        preferencesState = preferencesState,
+        preferencesCallbacks = preferencesCallbacks
     )
 }
 

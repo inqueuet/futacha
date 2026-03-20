@@ -9,38 +9,27 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
-import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
-import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
-import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.state.AppStateSeedDefaults
 import com.valoser.futacha.shared.state.AppStateStore
-import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
-import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
-import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
-import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import com.valoser.futacha.shared.version.UpdateInfo
 import com.valoser.futacha.shared.version.VersionChecker
-import kotlinx.coroutines.flow.first
 import kotlin.time.ExperimentalTime
 
 private const val TAG = "FutachaApp"
@@ -61,6 +50,13 @@ fun FutachaApp(
         val devicePerformanceProfile = remember {
             detectDevicePerformanceProfile(null)
         }
+        val observedRuntimeState = rememberFutachaObservedRuntimeState(
+            stateStore = stateStore,
+            boardList = boardList,
+            history = history,
+            versionChecker = versionChecker,
+            fileSystem = fileSystem
+        )
         val isLightweightModeEnabled by stateStore.isLightweightModeEnabled.collectAsState(
             initial = devicePerformanceProfile.isLowSpec
         )
@@ -84,56 +80,23 @@ fun FutachaApp(
                     stateStore.setScrollDebounceScope(coroutineScope)
                 }
 
-                val repositoryHolder = remember(httpClient, cookieRepository) {
-                    buildFutachaRepositoryHolder(
-                        FutachaRepositoryHolderInputs(
-                            httpClient = httpClient,
-                            cookieRepository = cookieRepository
-                        )
-                    )
-                }
-
-                val effectiveAutoSavedThreadRepository = remember(fileSystem, autoSavedThreadRepository) {
-                    buildFutachaAutoSavedThreadRepository(
-                        FutachaAutoSavedThreadRepositoryInputs(
-                            fileSystem = fileSystem,
-                            existingRepository = autoSavedThreadRepository
-                        )
-                    )
-                }
-
-                val historyRefresher = remember(
-                    repositoryHolder.repository,
-                    effectiveAutoSavedThreadRepository,
-                    httpClient,
-                    fileSystem,
-                    shouldUseLightweightMode
-                ) {
-                    buildFutachaHistoryRefresher(
-                        FutachaHistoryRefresherInputs(
-                            stateStore = stateStore,
-                            repository = repositoryHolder.repository,
-                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            httpClient = httpClient,
-                            fileSystem = fileSystem,
-                            shouldUseLightweightMode = shouldUseLightweightMode
-                        )
-                    )
-                }
-
-                DisposableEffect(repositoryHolder) {
-                    onDispose {
-                        closeOwnedFutachaRepository(repositoryHolder) { error ->
-                            Logger.e(TAG, "Failed to close repository", error)
-                        }
+                val coreRuntimeState = rememberFutachaCoreRuntimeState(
+                    stateStore = stateStore,
+                    httpClient = httpClient,
+                    fileSystem = fileSystem,
+                    cookieRepository = cookieRepository,
+                    autoSavedThreadRepository = autoSavedThreadRepository,
+                    shouldUseLightweightMode = shouldUseLightweightMode,
+                    onRepositoryCloseFailure = { error ->
+                        Logger.e(TAG, "Failed to close repository", error)
+                    },
+                    onHistoryRefresherCloseFailure = { error ->
+                        Logger.e(TAG, "Failed to close history refresher", error)
                     }
-                }
-
-                DisposableEffect(historyRefresher) {
-                    onDispose {
-                        historyRefresher.close()
-                    }
-                }
+                )
+                val repositoryHolder = coreRuntimeState.repositoryHolder
+                val effectiveAutoSavedThreadRepository = coreRuntimeState.effectiveAutoSavedThreadRepository
+                val historyRefresher = coreRuntimeState.historyRefresher
 
                 LaunchedEffect(stateStore, boardList, history) {
                     stateStore.seedIfEmpty(
@@ -161,59 +124,8 @@ fun FutachaApp(
                     )
                 }
 
-                val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
-                val persistedHistory by stateStore.history.collectAsState(initial = history)
-                val threadMenuEntries by stateStore.threadMenuEntries.collectAsState(initial = defaultThreadMenuEntries())
-                val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
-                val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
-                val isAdsEnabled by stateStore.isAdsEnabled.collectAsState(initial = true)
-                val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
-                val manualSaveLocation = remember(manualSaveDirectory) {
-                    com.valoser.futacha.shared.model.SaveLocation.fromString(manualSaveDirectory)
-                }
-                LaunchedEffect(manualSaveLocation, fileSystem) {
-                    if (shouldResetInaccessibleManualSaveBookmark(fileSystem, manualSaveLocation)) {
-                        Logger.w(TAG, "Manual save bookmark is not accessible. Falling back to default path.")
-                        stateStore.setManualSaveDirectory(DEFAULT_MANUAL_SAVE_ROOT)
-                        stateStore.setSaveDirectorySelection(SaveDirectorySelection.MANUAL_INPUT)
-                    }
-                }
-                val savedThreadsRepositories = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
-                    buildFutachaSavedThreadsRepositories(
-                        FutachaSavedThreadsRepositoryInputs(
-                            fileSystem = fileSystem,
-                            manualSaveDirectory = manualSaveDirectory,
-                            manualSaveLocation = manualSaveLocation
-                        )
-                    )
-                }
-                val activeSavedThreadsRepository by produceState<SavedThreadRepository?>(
-                    initialValue = savedThreadsRepositories.currentRepository ?: savedThreadsRepositories.legacyRepository,
-                    key1 = savedThreadsRepositories.currentRepository,
-                    key2 = savedThreadsRepositories.legacyRepository
-                ) {
-                    value = resolveActiveSavedThreadsRepository(
-                        FutachaActiveSavedThreadsRepositoryInputs(
-                            currentRepository = savedThreadsRepositories.currentRepository,
-                            legacyRepository = savedThreadsRepositories.legacyRepository
-                        )
-                    )
-                }
-                val attachmentPickerPreference by stateStore.attachmentPickerPreference.collectAsState(initial = AttachmentPickerPreference.MEDIA)
-                val saveDirectorySelection by stateStore.saveDirectorySelection.collectAsState(initial = SaveDirectorySelection.MANUAL_INPUT)
-                val preferredFileManagerFlow = remember(stateStore) { stateStore.getPreferredFileManager() }
-                val preferredFileManager by preferredFileManagerFlow.collectAsState(initial = null)
-                val appVersion = remember(versionChecker) {
-                    versionChecker?.getCurrentVersion() ?: "1.0"
-                }
-                val resolvedManualSaveDirectory = remember(fileSystem, manualSaveDirectory, manualSaveLocation) {
-                    resolveFutachaManualSaveDirectoryDisplay(
-                        fileSystem = fileSystem,
-                        manualSaveDirectory = manualSaveDirectory,
-                        manualSaveLocation = manualSaveLocation
-                    )
-                }
-
+                val persistedBoards = observedRuntimeState.persistedBoards
+                val persistedHistory = observedRuntimeState.persistedHistory
                 var navigationState by rememberSaveable(stateSaver = FutachaNavigationState.Saver) {
                     mutableStateOf(FutachaNavigationState())
                 }
@@ -225,203 +137,81 @@ fun FutachaApp(
                         )
                     }
                 }
-
+                val updateNavigationState: (FutachaNavigationState) -> Unit = { navigationState = it }
                 val destination = remember(navigationState, persistedBoards) {
                     resolveFutachaDestination(navigationState, persistedBoards)
                 }
-                val refreshHistoryEntries: suspend () -> Unit = {
-                    historyRefresher.refresh(
-                        boardsSnapshot = persistedBoards,
-                        historySnapshot = persistedHistory
-                    )
-                }
-                var openSaveDirectoryPicker: () -> Unit = {}
-                val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
+                val bindingsRuntimeState = rememberFutachaBindingsRuntimeState(
                     coroutineScope = coroutineScope,
-                    inputs = FutachaPreferenceMutationInputs(
-                        setBackgroundRefreshEnabled = stateStore::setBackgroundRefreshEnabled,
-                        setAdsEnabled = stateStore::setAdsEnabled,
-                        setLightweightModeEnabled = stateStore::setLightweightModeEnabled,
-                        setManualSaveDirectory = stateStore::setManualSaveDirectory,
-                        setAttachmentPickerPreference = stateStore::setAttachmentPickerPreference,
-                        setSaveDirectorySelection = stateStore::setSaveDirectorySelection,
-                        setManualSaveLocation = stateStore::setManualSaveLocation,
-                        setPreferredFileManager = stateStore::setPreferredFileManager,
-                        setThreadMenuEntries = stateStore::setThreadMenuEntries,
-                        setCatalogNavEntries = stateStore::setCatalogNavEntries
-                    )
+                    stateStore = stateStore,
+                    persistedBoards = persistedBoards,
+                    persistedHistory = persistedHistory,
+                    observedRuntimeState = observedRuntimeState,
+                    shouldUseLightweightMode = shouldUseLightweightMode,
+                    historyRefresher = historyRefresher,
+                    effectiveAutoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                    navigationState = navigationState,
+                    updateNavigationState = updateNavigationState
                 )
-                val directoryPickerLauncher = rememberDirectoryPickerLauncher(
-                    onDirectorySelected = { pickedLocation ->
-                        preferenceMutations.onManualSaveLocationChanged(pickedLocation)
-                        preferenceMutations.onSaveDirectorySelectionChanged(SaveDirectorySelection.PICKER)
-                    },
-                    preferredFileManagerPackage = preferredFileManager?.packageName
+                val screenBindings = bindingsRuntimeState.screenBindings
+                val navigationRuntimeState = rememberFutachaNavigationRuntimeState(
+                    navigationState = navigationState,
+                    updateNavigationState = updateNavigationState,
+                    destination = destination,
+                    persistedBoards = persistedBoards,
+                    activeSavedThreadsRepository = observedRuntimeState.activeSavedThreadsRepository,
+                    screenBindings = screenBindings,
+                    stateStore = stateStore,
+                    sharedRepository = repositoryHolder.repository,
+                    httpClient = httpClient,
+                    fileSystem = fileSystem,
+                    cookieRepository = cookieRepository,
+                    autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                    coroutineScope = coroutineScope
                 )
-                openSaveDirectoryPicker = directoryPickerLauncher
-                val historyMutations = buildFutachaHistoryMutationCallbacks(
-                    coroutineScope = coroutineScope,
-                    dismissHistoryEntry = { entry ->
-                        dismissHistoryEntry(
-                            stateStore = stateStore,
-                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            entry = entry,
-                            onAutoSavedThreadDeleteFailure = {
-                                Logger.e(TAG, "Failed to delete auto-saved thread ${entry.threadId}", it)
-                            }
-                        )
-                    },
-                    updateHistoryEntry = stateStore::upsertHistoryEntry,
-                    clearHistory = {
-                        clearHistory(
-                            stateStore = stateStore,
-                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                            onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
-                            onAutoSavedThreadDeleteFailure = {
-                                Logger.e(TAG, "Failed to clear auto saved threads", it)
-                            }
-                        )
-                    }
-                )
-                val screenBindings = buildFutachaScreenBindingsBundle(
-                    coroutineScope = coroutineScope,
-                    inputs = FutachaScreenBindingsInputs(
-                        history = persistedHistory,
-                        currentBoards = { persistedBoards },
-                        currentNavigationState = { navigationState },
-                        setNavigationState = { navigationState = it },
-                        updateBoards = stateStore::updateBoards,
-                        preferenceMutations = preferenceMutations,
-                        historyMutations = historyMutations,
-                        preferencesStateInputs = FutachaScreenPreferencesStateInputs(
-                            appVersion = appVersion,
-                            isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
-                            isAdsEnabled = isAdsEnabled,
-                            isLightweightModeEnabled = shouldUseLightweightMode,
-                            manualSaveDirectory = manualSaveDirectory,
-                            manualSaveLocation = manualSaveLocation,
-                            resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-                            attachmentPickerPreference = attachmentPickerPreference,
-                            saveDirectorySelection = saveDirectorySelection,
-                            preferredFileManagerPackage = preferredFileManager?.packageName,
-                            preferredFileManagerLabel = preferredFileManager?.label,
-                            threadMenuEntries = threadMenuEntries,
-                            catalogNavEntries = catalogNavEntries
-                        ),
-                        onOpenSaveDirectoryPicker = { openSaveDirectoryPicker() },
-                        onHistoryRefresh = refreshHistoryEntries
-                    )
-                )
-                val assemblyContext = remember(
-                    screenBindings,
-                    stateStore,
-                    repositoryHolder.repository,
-                    httpClient,
-                    fileSystem,
-                    cookieRepository,
-                    effectiveAutoSavedThreadRepository,
-                    navigationState
+                val resolvedDestinationContent = navigationRuntimeState.resolvedDestinationContent
+                LaunchedEffect(
+                    resolvedDestinationContent.adSyncLabel,
+                    resolvedDestinationContent.isAdBannerVisible
                 ) {
-                    buildFutachaDestinationAssemblyContext(
-                        screenBindings = screenBindings,
-                        stateStore = stateStore,
-                        sharedRepository = repositoryHolder.repository,
-                        httpClient = httpClient,
-                        fileSystem = fileSystem,
-                        cookieRepository = cookieRepository,
-                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                        navigationState = navigationState
+                    Logger.d(
+                        TAG,
+                        "syncAdBannerVisibility(${resolvedDestinationContent.isAdBannerVisible}) for ${resolvedDestinationContent.adSyncLabel}"
                     )
+                    syncAdBannerVisibility(resolvedDestinationContent.isAdBannerVisible)
                 }
 
-                when (destination) {
-                    FutachaDestination.SavedThreads -> {
-                        LaunchedEffect(Unit) {
-                            Logger.d(TAG, "syncAdBannerVisibility(false) for SavedThreads")
-                            syncAdBannerVisibility(false)
-                        }
+                when (val content = resolvedDestinationContent) {
+                    is FutachaResolvedDestinationContent.SavedThreads -> {
                         FutachaSavedThreadsDestination(
-                            props = activeSavedThreadsRepository?.let {
-                                buildFutachaSavedThreadsDestinationProps(
-                                    repository = it,
-                                    navigationCallbacks = assemblyContext.navigationCallbacks
-                                )
-                            },
-                            onUnavailable = assemblyContext.navigationCallbacks.onSavedThreadsDismissed
+                            props = content.props,
+                            onUnavailable = content.onUnavailable
                         )
                     }
 
-                    FutachaDestination.BoardManagement -> {
-                        LaunchedEffect(Unit) {
-                            Logger.d(TAG, "syncAdBannerVisibility(false) for BoardManagement")
-                            syncAdBannerVisibility(false)
-                        }
-                        FutachaBoardManagementDestination(
-                            buildFutachaBoardManagementDestinationProps(
-                                boards = persistedBoards,
-                                context = assemblyContext
-                            )
-                        )
+                    is FutachaResolvedDestinationContent.BoardManagement -> {
+                        FutachaBoardManagementDestination(content.props)
                     }
 
-                    is FutachaDestination.MissingBoard -> {
-                        LaunchedEffect(destination.missingBoardId) {
-                            Logger.d(TAG, "syncAdBannerVisibility(false) for MissingBoard")
-                            syncAdBannerVisibility(false)
-                        }
+                    is FutachaResolvedDestinationContent.MissingBoard -> {
                         FutachaMissingBoardDestination(
-                            missingBoardId = destination.missingBoardId,
-                            navigationState = navigationState,
-                            boards = persistedBoards,
-                            onRecovered = { navigationState = it }
+                            missingBoardId = content.missingBoardId,
+                            navigationState = content.navigationState,
+                            boards = content.boards,
+                            onRecovered = content.onRecovered
                         )
                     }
 
-                    is FutachaDestination.Catalog -> {
-                        LaunchedEffect(destination.board.id) {
-                            Logger.d(TAG, "syncAdBannerVisibility(false) for Catalog(${destination.board.id})")
-                            syncAdBannerVisibility(false)
-                        }
+                    is FutachaResolvedDestinationContent.Catalog -> {
                         FutachaCatalogDestination(
-                            props = buildFutachaCatalogDestinationProps(
-                                board = destination.board,
-                                context = assemblyContext
-                            ),
+                            props = content.props,
                             saveableStateHolder = saveableStateHolder
                         )
                     }
 
-                    is FutachaDestination.Thread -> {
-                        LaunchedEffect(destination.board.id, destination.threadId) {
-                            Logger.d(
-                                TAG,
-                                "syncAdBannerVisibility(true) for Thread(board=${destination.board.id}, thread=${destination.threadId})"
-                            )
-                            syncAdBannerVisibility(true)
-                        }
-                        val currentBoard = destination.board
-                        val activeThreadId = destination.threadId
-                        val historyContext = remember(currentBoard, navigationState) {
-                            buildFutachaThreadHistoryContext(
-                                board = currentBoard,
-                                navigationState = navigationState
-                            )
-                        }
-                        val threadMutations = buildFutachaThreadMutationCallbacks(
-                            coroutineScope = coroutineScope,
-                            stateStore = stateStore,
-                            board = currentBoard,
-                            historyContext = historyContext
-                        )
+                    is FutachaResolvedDestinationContent.Thread -> {
                         FutachaThreadDestination(
-                            props = buildFutachaThreadDestinationProps(
-                                board = currentBoard,
-                                threadId = activeThreadId,
-                                historyContext = historyContext,
-                                onScrollPositionPersist = threadMutations.onScrollPositionPersist,
-                                onScrollPositionPersistImmediately = threadMutations.onScrollPositionPersistImmediately,
-                                context = assemblyContext
-                            )
+                            props = content.props
                         )
                     }
                 }

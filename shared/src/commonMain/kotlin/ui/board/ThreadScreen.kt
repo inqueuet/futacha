@@ -110,22 +110,21 @@ fun ThreadScreen(
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
-    ThreadScreen(
-        board = board,
-        history = screenContract.history,
-        threadId = threadId,
-        threadTitle = threadTitle,
-        initialReplyCount = initialReplyCount,
-        threadUrlOverride = threadUrlOverride,
-        onBack = onBack,
-        historyCallbacks = screenContract.historyCallbacks,
-        onScrollPositionPersist = onScrollPositionPersist,
-        onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-        dependencies = dependencies,
-        preferencesState = screenContract.preferencesState,
-        preferencesCallbacks = screenContract.preferencesCallbacks,
-        onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
-        modifier = modifier
+    ThreadScreenContent(
+        args = buildThreadScreenContentArgsFromContract(
+            board = board,
+            screenContract = screenContract,
+            threadId = threadId,
+            threadTitle = threadTitle,
+            initialReplyCount = initialReplyCount,
+            onBack = onBack,
+            onScrollPositionPersist = onScrollPositionPersist,
+            onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
+            threadUrlOverride = threadUrlOverride,
+            dependencies = dependencies,
+            onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+            modifier = modifier
+        )
     )
 }
 
@@ -159,6 +158,70 @@ fun ThreadScreen(
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
+    ThreadScreenContent(
+        args = buildThreadScreenContentArgs(
+            board = board,
+            history = history,
+            threadId = threadId,
+            threadTitle = threadTitle,
+            initialReplyCount = initialReplyCount,
+            threadUrlOverride = threadUrlOverride,
+            onBack = onBack,
+            historyCallbacks = historyCallbacks,
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryCleared = onHistoryCleared,
+            onHistoryEntryUpdated = onHistoryEntryUpdated,
+            onHistoryRefresh = onHistoryRefresh,
+            onScrollPositionPersist = onScrollPositionPersist,
+            onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
+            dependencies = dependencies,
+            repository = repository,
+            httpClient = httpClient,
+            fileSystem = fileSystem,
+            cookieRepository = cookieRepository,
+            stateStore = stateStore,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+            modifier = modifier
+        )
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@Composable
+private fun ThreadScreenContent(
+    args: ThreadScreenContentArgs
+) {
+    val board = args.board
+    val history = args.history
+    val threadId = args.threadId
+    val threadTitle = args.threadTitle
+    val initialReplyCount = args.initialReplyCount
+    val threadUrlOverride = args.threadUrlOverride
+    val onBack = args.onBack
+    val onScrollPositionPersist = args.onScrollPositionPersist
+    val onScrollPositionPersistImmediately = args.onScrollPositionPersistImmediately
+    val historyCallbacks = args.historyCallbacks
+    val dependencies = args.dependencies
+    val preferencesState = args.preferencesState
+    val preferencesCallbacks = args.preferencesCallbacks
+    val onRegisteredThreadUrlClick = args.onRegisteredThreadUrlClick
+    val modifier = args.modifier
+    val onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected
+    val onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed
+    val onHistoryCleared = historyCallbacks.onHistoryCleared
+    val onHistoryEntryUpdated = historyCallbacks.onHistoryEntryUpdated
+    val onHistoryRefresh = historyCallbacks.onHistoryRefresh
+    val repository = dependencies.repository
+    val httpClient = dependencies.services.httpClient
+    val fileSystem = dependencies.services.fileSystem
+    val cookieRepository = dependencies.services.cookieRepository
+    val stateStore = dependencies.services.stateStore
+    val autoSavedThreadRepository = dependencies.services.autoSavedThreadRepository
+
     val mutableStateBundle = rememberThreadScreenMutableStateBundle(
         boardId = board.id,
         threadId = threadId,

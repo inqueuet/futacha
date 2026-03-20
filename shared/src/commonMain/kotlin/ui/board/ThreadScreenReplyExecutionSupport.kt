@@ -61,13 +61,25 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
     }
 }
 
-private suspend fun checkPostingNoticeIfNeeded(stateStore: AppStateStore?): Boolean {
-    val needsPostingNotice = stateStore?.hasShownPostingNotice?.first() == false
-    if (needsPostingNotice) {
-        val accepted = confirmPostingNotice()
-        if (!accepted) return false
-        (stateStore ?: return false).setHasShownPostingNotice(true)
+internal suspend fun shouldConfirmThreadPostingNotice(
+    stateStore: AppStateStore?
+): Boolean {
+    val store = stateStore ?: return false
+    return !store.hasShownPostingNotice.first()
+}
+
+internal suspend fun checkPostingNoticeIfNeeded(
+    stateStore: AppStateStore?,
+    confirmNotice: suspend () -> Boolean = ::confirmPostingNotice
+): Boolean {
+    val store = stateStore ?: return true
+    if (!shouldConfirmThreadPostingNotice(store)) {
+        return true
     }
+    if (!confirmNotice()) {
+        return false
+    }
+    store.setHasShownPostingNotice(true)
     return true
 }
 

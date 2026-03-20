@@ -28,19 +28,18 @@ fun BoardManagementScreen(
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
     dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies()
 ) {
-    BoardManagementScreen(
-        boards = boards,
-        history = screenContract.history,
-        onBoardSelected = onBoardSelected,
-        onAddBoard = onAddBoard,
-        onMenuAction = onMenuAction,
-        historyCallbacks = screenContract.historyCallbacks,
-        modifier = modifier,
-        onBoardDeleted = onBoardDeleted,
-        onBoardsReordered = onBoardsReordered,
-        dependencies = dependencies,
-        preferencesState = screenContract.preferencesState,
-        preferencesCallbacks = screenContract.preferencesCallbacks
+    BoardManagementScreenContent(
+        args = buildBoardManagementScreenContentArgsFromContract(
+            boards = boards,
+            screenContract = screenContract,
+            onBoardSelected = onBoardSelected,
+            onAddBoard = onAddBoard,
+            onMenuAction = onMenuAction,
+            modifier = modifier,
+            onBoardDeleted = onBoardDeleted,
+            onBoardsReordered = onBoardsReordered,
+            dependencies = dependencies
+        )
     )
 }
 
@@ -67,6 +66,56 @@ fun BoardManagementScreen(
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
     autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
 ) {
+    BoardManagementScreenContent(
+        args = buildBoardManagementScreenContentArgs(
+            boards = boards,
+            history = history,
+            onBoardSelected = onBoardSelected,
+            onAddBoard = onAddBoard,
+            onMenuAction = onMenuAction,
+            historyCallbacks = historyCallbacks,
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onHistoryRefresh = onHistoryRefresh,
+            modifier = modifier,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryCleared = onHistoryCleared,
+            onBoardDeleted = onBoardDeleted,
+            onBoardsReordered = onBoardsReordered,
+            dependencies = dependencies,
+            cookieRepository = cookieRepository,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            fileSystem = fileSystem,
+            autoSavedThreadRepository = autoSavedThreadRepository
+        )
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@Composable
+private fun BoardManagementScreenContent(
+    args: BoardManagementScreenContentArgs
+) {
+    val boards = args.boards
+    val history = args.history
+    val onBoardSelected = args.onBoardSelected
+    val onAddBoard = args.onAddBoard
+    val onMenuAction = args.onMenuAction
+    val onBoardDeleted = args.onBoardDeleted
+    val onBoardsReordered = args.onBoardsReordered
+    val historyCallbacks = args.historyCallbacks
+    val dependencies = args.dependencies
+    val preferencesState = args.preferencesState
+    val preferencesCallbacks = args.preferencesCallbacks
+    val modifier = args.modifier
+    val onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected
+    val onHistoryRefresh = historyCallbacks.onHistoryRefresh
+    val onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed
+    val onHistoryCleared = historyCallbacks.onHistoryCleared
+    val cookieRepository = dependencies.cookieRepository
+    val fileSystem = dependencies.fileSystem
+    val autoSavedThreadRepository = dependencies.autoSavedThreadRepository
+
     val runtimeObjects = rememberBoardManagementRuntimeObjectsBundle()
     val mutableStateBundle = rememberBoardManagementMutableStateBundle()
     val snackbarHostState = runtimeObjects.snackbarHostState

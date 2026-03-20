@@ -29,7 +29,9 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.version.UpdateInfo
 import com.valoser.futacha.shared.version.VersionChecker
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -37,6 +39,7 @@ import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -480,6 +483,7 @@ class FutachaAppTest {
     fun futachaDestinationProps_directComposition_mapsScreenContractsAndRepositories() {
         val manualRepository = SavedThreadRepository(InMemoryFileSystem())
         val sharedRepository = TestBoardRepository()
+        val destinationCoroutineScope = CoroutineScope(Job())
         val board = board(id = "img", name = "img", url = "https://may.2chan.net/img/futaba.php")
         val mockBoard = board(id = "mock", name = "mock", url = "https://example.com/mock/futaba.php")
         val history = listOf(historyEntry(boardId = "img", boardName = "img"))
@@ -546,6 +550,7 @@ class FutachaAppTest {
         )
         val assemblyContext = buildFutachaDestinationAssemblyContext(
             screenBindings = screenBindings,
+            updateNavigationState = {},
             stateStore = stateStore,
             sharedRepository = sharedRepository,
             httpClient = null,
@@ -639,6 +644,42 @@ class FutachaAppTest {
         assertEquals("https://may.2chan.net/img/res/999.htm", registeredUrl)
         threadProps.onBack()
         assertTrue(threadDismissed)
+
+        val savedContent = buildFutachaResolvedDestinationContent(
+            destination = FutachaDestination.SavedThreads,
+            boards = listOf(board),
+            activeSavedThreadsRepository = manualRepository,
+            assemblyContext = assemblyContext,
+            coroutineScope = destinationCoroutineScope
+        )
+        assertIs<FutachaResolvedDestinationContent.SavedThreads>(savedContent)
+        assertFalse(savedContent.isAdBannerVisible)
+        assertEquals("SavedThreads", savedContent.adSyncLabel)
+        assertSame(manualRepository, savedContent.props?.repository)
+
+        val catalogContent = buildFutachaResolvedDestinationContent(
+            destination = FutachaDestination.Catalog(board),
+            boards = listOf(board),
+            activeSavedThreadsRepository = manualRepository,
+            assemblyContext = assemblyContext,
+            coroutineScope = destinationCoroutineScope
+        )
+        assertIs<FutachaResolvedDestinationContent.Catalog>(catalogContent)
+        assertFalse(catalogContent.isAdBannerVisible)
+        assertEquals("Catalog(img)", catalogContent.adSyncLabel)
+        assertEquals("catalog-img", catalogContent.props.saveableStateKey)
+
+        val threadContent = buildFutachaResolvedDestinationContent(
+            destination = FutachaDestination.Thread(board, "321"),
+            boards = listOf(board),
+            activeSavedThreadsRepository = manualRepository,
+            assemblyContext = assemblyContext,
+            coroutineScope = destinationCoroutineScope
+        )
+        assertIs<FutachaResolvedDestinationContent.Thread>(threadContent)
+        assertTrue(threadContent.isAdBannerVisible)
+        assertEquals("Thread(board=img, thread=321)", threadContent.adSyncLabel)
+        assertEquals("thread title", threadContent.props.historyContext.title)
     }
 
     @Test
