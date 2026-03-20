@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>futacha ヘルプ - Android版</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
+  line-height: 1.7;
+  color: #1a1a1a;
+  background: #fafafa;
+  padding: 0 0 60px;
+}
+header {
+  background: linear-gradient(135deg, #3f51b5, #5c6bc0);
+  color: #fff;
+  padding: 32px 20px 24px;
+  text-align: center;
+}
+header h1 { font-size: 22px; font-weight: 700; }
+header p { font-size: 13px; opacity: 0.85; margin-top: 4px; }
+nav.toc {
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 16px 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+nav.toc h2 { font-size: 14px; color: #666; margin-bottom: 8px; }
+nav.toc ul { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+nav.toc a {
+  display: inline-block;
+  background: #e8eaf6;
+  color: #3f51b5;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  text-decoration: none;
+}
+.section {
+  background: #fff;
+  margin: 16px 12px;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+.section h2 {
+  background: #f5f5f5;
+  padding: 14px 20px;
+  font-size: 16px;
+  border-bottom: 1px solid #eee;
+}
+.section h3 {
+  padding: 12px 20px 4px;
+  font-size: 14px;
+  color: #3f51b5;
+}
+.section p, .section ul, .section ol {
+  padding: 4px 20px 12px;
+  font-size: 14px;
+}
+.section ul, .section ol { padding-left: 40px; }
+.section li { margin-bottom: 4px; }
+dl.faq { padding: 0 20px 12px; }
+dl.faq dt {
+  font-weight: 700;
+  font-size: 14px;
+  padding: 10px 0 2px;
+  color: #333;
+}
+dl.faq dt::before { content: "Q. "; color: #3f51b5; }
+dl.faq dd {
+  font-size: 14px;
+  padding: 0 0 10px 20px;
+  border-bottom: 1px solid #f0f0f0;
+}
+dl.faq dd::before { content: "A. "; color: #e91e63; font-weight: 700; }
+.tip {
+  background: #e8f5e9;
+  border-left: 4px solid #4caf50;
+  margin: 8px 20px 12px;
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+}
+.warn {
+  background: #fff3e0;
+  border-left: 4px solid #ff9800;
+  margin: 8px 20px 12px;
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+}
+.op {
+  background: #f3e8fd;
+  border-left: 4px solid #9c27b0;
+  margin: 8px 20px 12px;
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+}
+.op strong { color: #6a1b9a; }
+table {
+  width: calc(100% - 40px);
+  margin: 8px 20px 12px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th, td {
+  border: 1px solid #e0e0e0;
+  padding: 8px 10px;
+  text-align: left;
+}
+th { background: #f5f5f5; font-weight: 600; }
+footer {
+  text-align: center;
+  padding: 24px 20px;
+  font-size: 12px;
+  color: #999;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>futacha ヘルプ</h1>
+  <p>Android版 v2.7</p>
+</header>
+
+<nav class="toc">
+  <h2>目次</h2>
+  <ul>
+    <li><a href="#start">はじめに</a></li>
+    <li><a href="#board">板の管理</a></li>
+    <li><a href="#catalog">スレッド一覧</a></li>
+    <li><a href="#thread">スレッドを読む</a></li>
+    <li><a href="#reply">書き込み</a></li>
+    <li><a href="#save">保存する</a></li>
+    <li><a href="#history">閲覧履歴</a></li>
+    <li><a href="#ng">見たくない投稿を隠す</a></li>
+    <li><a href="#settings">設定</a></li>
+    <li><a href="#faq">よくある質問</a></li>
+  </ul>
+</nav>
+
+<!-- ===== はじめに ===== -->
+<div class="section" id="start">
+  <h2>はじめに</h2>
+  <p>futacha は、ふたば☆ちゃんねるを快適に閲覧・書き込みするためのアプリです。</p>
+  <p>アプリの基本的な流れは次のとおりです。</p>
+  <ol>
+    <li>見たい<strong>板</strong>を登録する</li>
+    <li>板を開くと<strong>スレッド一覧（カタログ）</strong>が表示される</li>
+    <li>気になるスレッドをタップして<strong>投稿を読む</strong></li>
+    <li>必要に応じて<strong>書き込み</strong>や<strong>保存</strong>をする</li>
+  </ol>
+</div>
+
+<!-- ===== 板の管理 ===== -->
+<div class="section" id="board">
+  <h2>板の管理</h2>
+  <p>アプリを起動すると最初に表示される画面です。よく見る板を登録しておくと、すぐにアクセスできます。</p>
+
+  <h3>画面の構成</h3>
+  <ul>
+    <li><strong>画面上部の左</strong> - 三本線のアイコン（&#9776;）をタップすると、閲覧履歴が左からスライドして表示されます</li>
+    <li><strong>画面上部の中央</strong> - 「板一覧」などの画面タイトル</li>
+    <li><strong>画面上部の右</strong> - 縦3点アイコン（&#8942;）をタップするとメニューが開きます</li>
+    <li><strong>画面の中央</strong> - 登録した板がカード形式で並んでいます。タップすると板を開きます</li>
+  </ul>
+
+  <h3>板を追加する</h3>
+  <div class="op"><strong>操作：</strong>画面右上の &#8942; をタップ →「新規追加」を選ぶ → 板の名前とアドレスを入力 →「追加」をタップ</div>
+  <div class="tip">板のアドレスは <code>https://○○.2chan.net/○○/futaba.php</code> という形式です。ブラウザで板を開いたときのアドレスをコピーして貼り付けると簡単です。</div>
+
+  <h3>板の順番を変える</h3>
+  <div class="op"><strong>操作：</strong>画面右上の &#8942; をタップ →「並び替え」を選ぶ → 各板のカードに表示される上下矢印ボタンで順番を変える</div>
+
+  <h3>板を削除する</h3>
+  <div class="op"><strong>操作：</strong>画面右上の &#8942; をタップ →「削除」を選ぶ → 削除したい板のカードをタップ → 確認ダイアログで「削除」をタップ</div>
+
+  <h3>その他のメニュー</h3>
+  <ul>
+    <li><strong>保存済み</strong> - 保存したスレッドの一覧を開く（ネットに繋がなくても読めます）</li>
+    <li><strong>設定</strong> - アプリ全体の設定画面を開く</li>
+  </ul>
+</div>
+
+<!-- ===== スレッド一覧 ===== -->
+<div class="section" id="catalog">
+  <h2>スレッド一覧（カタログ）</h2>
+  <p>板をタップすると、その板にあるスレッドが画像つきの一覧で表示されます。</p>
+
+  <h3>画面の構成</h3>
+  <ul>
+    <li><strong>画面上部の左</strong> - 三本線のアイコン（&#9776;）をタップすると閲覧履歴が開きます</li>
+    <li><strong>画面上部の中央</strong> - 板の名前と、現在の並び順（「多い順」など）</li>
+    <li><strong>画面上部の右</strong> - 虫眼鏡アイコン（検索）と &#8942;（メニュー）</li>
+    <li><strong>画面の中央</strong> - スレッドがタイル状またはリスト形式で並んでいます</li>
+    <li><strong>画面の下部</strong> - 操作ボタンが横一列に並んでいます</li>
+  </ul>
+
+  <h3>スレッドを開く</h3>
+  <div class="op"><strong>操作：</strong>見たいスレッドのサムネイル画像やタイトルをタップ</div>
+
+  <h3>スレッドを探す（検索）</h3>
+  <div class="op"><strong>操作：</strong>画面右上の虫眼鏡アイコンをタップ → 上部にキーワード入力欄が表示される → キーワードを入力すると一覧がリアルタイムで絞り込まれる → もう一度 ✕ をタップすると検索を終了</div>
+
+  <h3>一覧を更新する</h3>
+  <div class="op"><strong>操作：</strong>画面下の「更新」ボタンをタップ。または、一覧を下に引っ張って離すと更新されます</div>
+
+  <h3>並び順を変える</h3>
+  <div class="op"><strong>操作：</strong>画面下の「モード」ボタンをタップ → 表示されるリストから並び順を選ぶ</div>
+  <table>
+    <tr><th>モード</th><th>どんな順番？</th></tr>
+    <tr><td>カタログ</td><td>ふたば標準の表示順</td></tr>
+    <tr><td>新順</td><td>新しく立ったスレッドから</td></tr>
+    <tr><td>古順</td><td>古いスレッドから</td></tr>
+    <tr><td>多い順</td><td>書き込みが多いスレッドから</td></tr>
+    <tr><td>少ない順</td><td>書き込みが少ないスレッドから</td></tr>
+    <tr><td>勢い順</td><td>盛り上がっているスレッドから</td></tr>
+    <tr><td>そ順</td><td>ふたば独自の並び順</td></tr>
+    <tr><td>監視</td><td>登録した監視ワードに一致するスレッドだけ表示</td></tr>
+  </table>
+
+  <h3>表示をタイルとリストで切り替える</h3>
+  <div class="op"><strong>操作：</strong>画面右上の &#8942; をタップ →「表示の切り替え」を選ぶ</div>
+  <p>タイル表示の列数は 2〜8 で調整できます（初期設定は 5列）。</p>
+
+  <h3>画面下のボタン一覧</h3>
+  <p>以下のボタンが横一列に並んでいます（設定で表示・非表示や順番を変更できます）。</p>
+  <ul>
+    <li><strong>スレ立て</strong> - 新しいスレッドを作る</li>
+    <li><strong>先頭へ</strong> - 一覧の一番上に戻る</li>
+    <li><strong>更新</strong> - 一覧を最新の状態に更新する</li>
+    <li><strong>モード</strong> - 並び順を変える</li>
+    <li><strong>設定</strong> - カタログの設定メニューを開く</li>
+  </ul>
+
+  <h3>設定メニュー（画面右上 &#8942; から開く）</h3>
+  <ul>
+    <li><strong>監視ワード</strong> - 気になるキーワードを登録しておくと、「監視」モードでそのキーワードを含むスレッドだけを表示</li>
+    <li><strong>NG管理</strong> - 特定のワードを含むスレッドをカタログから非表示に</li>
+    <li><strong>外部アプリ</strong> - 今見ている板をブラウザで開く</li>
+    <li><strong>表示の切り替え</strong> - タイル⇔リスト、列数の調整</li>
+    <li><strong>先頭へ</strong> - 一覧の一番上に戻る</li>
+    <li><strong>プライバシー</strong> - 画像にぼかしをかける（電車の中などで便利）</li>
+  </ul>
+</div>
+
+<!-- ===== スレッドを読む ===== -->
+<div class="section" id="thread">
+  <h2>スレッドを読む</h2>
+  <p>一覧からスレッドをタップすると、そのスレッドの投稿を読めます。</p>
+
+  <h3>画面の構成</h3>
+  <ul>
+    <li><strong>画面上部の左</strong> - ← ボタンでスレッド一覧に戻ります</li>
+    <li><strong>画面上部の中央</strong> - スレッドのタイトル、板名、レス数</li>
+    <li><strong>画面上部の右</strong> - 虫眼鏡アイコン（スレッド内検索）と &#8942;（メニュー）</li>
+    <li><strong>画面の中央</strong> - 投稿が上から順に表示されます。上下にスクロールして読みます</li>
+    <li><strong>画面の下部</strong> - 操作ボタンが横一列に並んでいます</li>
+  </ul>
+
+  <h3>画面下のボタン一覧</h3>
+  <p>以下のボタンが横一列に並んでいます（設定で変更できます）。</p>
+  <table>
+    <tr><th>ボタン</th><th>できること</th></tr>
+    <tr><td>返信</td><td>書き込み画面を開く</td></tr>
+    <tr><td>先頭へ</td><td>最初の投稿に戻る</td></tr>
+    <tr><td>末尾へ</td><td>最新の投稿に移動する</td></tr>
+    <tr><td>更新</td><td>新しい書き込みがないか確認する</td></tr>
+    <tr><td>ギャラリー</td><td>画像・動画の一覧を開く</td></tr>
+    <tr><td>保存</td><td>スレッドを端末に保存する</td></tr>
+    <tr><td>フィルター</td><td>投稿をしぼり込む</td></tr>
+    <tr><td>設定</td><td>追加メニューを開く</td></tr>
+  </table>
+
+  <h3>「設定」ボタンから開くメニュー</h3>
+  <p>画面下の「設定」ボタンをタップすると、画面の下からメニューがスライドして表示されます。</p>
+  <ul>
+    <li><strong>NG管理</strong> - 見たくない投稿を非表示にする設定（<a href="#ng">詳しくはこちら</a>）</li>
+    <li><strong>外部アプリ</strong> - このスレッドをブラウザで開く</li>
+    <li><strong>読み上げ</strong> - 投稿を音声で読み上げる</li>
+    <li><strong>プライバシー</strong> - 画像にぼかしをかける</li>
+  </ul>
+
+  <h3>投稿をタップしたとき</h3>
+  <div class="op"><strong>操作：</strong>投稿の本文をタップ → その投稿を引用した返信画面が開きます</div>
+
+  <h3>投稿を長押ししたとき</h3>
+  <div class="op"><strong>操作：</strong>投稿の本文を長押し → 画面の下からアクションメニューがスライドして表示されます</div>
+  <ul>
+    <li><strong>そうだね</strong> - その投稿に「そうだね」を送る</li>
+    <li><strong>削除</strong> - 自分の投稿を削除する（パスワードが必要）</li>
+    <li><strong>NG登録</strong> - その投稿者を非表示リストに追加する</li>
+    <li><strong>引用選択</strong> - 文章の一部を選んで引用する</li>
+    <li><strong>リンクコピー</strong> - その投稿のアドレスをコピーする</li>
+  </ul>
+
+  <h3>画像をタップしたとき</h3>
+  <div class="op"><strong>操作：</strong>投稿の画像をタップ → 画像が拡大表示されます。2本指で拡大・縮小、1本指でスクロールできます。画面外をタップすると閉じます</div>
+
+  <h3>投稿をしぼり込む（フィルター）</h3>
+  <div class="op"><strong>操作：</strong>画面下の「フィルター」ボタンをタップ → 画面の下からしぼり込みメニューが表示されます → 条件を選んでタップ</div>
+  <ul>
+    <li><strong>自分の投稿</strong> - 自分が書いた投稿だけ表示</li>
+    <li><strong>そうだね多い</strong> - 「そうだね」がたくさんついた投稿</li>
+    <li><strong>返信多い</strong> - たくさん引用されている投稿</li>
+    <li><strong>削除済み</strong> - 削除された投稿</li>
+    <li><strong>URL付き</strong> - リンクを含む投稿</li>
+    <li><strong>画像付き</strong> - 画像や動画がある投稿</li>
+    <li><strong>キーワード</strong> - 入力したキーワードを含む投稿</li>
+  </ul>
+
+  <h3>スレッド内をキーワードで検索する</h3>
+  <div class="op"><strong>操作：</strong>画面右上の虫眼鏡アイコンをタップ → 上部に検索欄が表示される → キーワードを入力 → 見つかった件数が表示され、投稿内の該当箇所がハイライトされます。&#9650; &#9660; ボタンで前後の結果に移動できます。✕ ボタンで検索を終了します</div>
+
+  <h3>音声読み上げ</h3>
+  <div class="op"><strong>操作：</strong>画面下の「設定」→「読み上げ」をタップ → 再生ボタンで読み上げ開始。一時停止・停止・前後の投稿に移動する操作ができます</div>
+
+  <h3>ギャラリー（画像・動画の一覧）</h3>
+  <div class="op"><strong>操作：</strong>画面下の「ギャラリー」ボタンをタップ → 画面下からスレッド内のすべての画像・動画がサムネイルで表示されます → 画像をタップで拡大表示 → 拡大画面では左右スワイプで前後に移動、2本指で拡大・縮小 → 保存ボタンで個別に端末へ保存</div>
+
+  <h3>動画の再生</h3>
+  <p>動画のサムネイルをタップすると再生が始まります。MP4、WebM、M4V、MOV 形式に対応しています。</p>
+</div>
+
+<!-- ===== 書き込み ===== -->
+<div class="section" id="reply">
+  <h2>書き込み（返信・スレッド作成）</h2>
+
+  <h3>返信する</h3>
+  <div class="op"><strong>操作：</strong>スレッド画面の下にある「返信」ボタンをタップ → 画面下から書き込みフォームがスライドして表示されます</div>
+  <p>入力欄はすべて任意です。必要なものだけ入力してください。</p>
+  <ul>
+    <li><strong>名前</strong> - 表示される投稿者名</li>
+    <li><strong>メール</strong> - メールアドレス（sage などにも使われます）</li>
+    <li><strong>題名</strong> - 投稿の題名</li>
+    <li><strong>本文</strong> - 書き込む内容</li>
+    <li><strong>画像・動画</strong> - 1つまで添付できます</li>
+    <li><strong>削除キー</strong> - 投稿を後から削除するためのパスワード（最大8文字）</li>
+  </ul>
+  <div class="tip">削除キーは前回使ったものが自動で入力されます。投稿を後で削除する可能性がある場合は、必ず入力しておきましょう。</div>
+
+  <h3>特定の投稿を引用して返信する</h3>
+  <div class="op"><strong>操作：</strong>引用したい投稿の本文をタップ → 返信フォームが開き、その投稿番号が自動で引用欄に入ります</div>
+
+  <h3>画像・動画を添付する</h3>
+  <div class="op"><strong>操作：</strong>返信フォーム内のクリップアイコン（添付ボタン）をタップ → 端末のギャラリーまたはファイルマネージャーが開く → 画像や動画を選ぶ</div>
+  <p>添付するファイルの選び方は3種類あり、設定で変更できます。</p>
+  <ul>
+    <li><strong>メディア</strong> - 端末のギャラリー（写真アプリ）から選ぶ（初期設定）</li>
+    <li><strong>ドキュメント</strong> - ファイルマネージャーから選ぶ</li>
+    <li><strong>毎回確認</strong> - 添付するたびにどちらを使うか選ぶ</li>
+  </ul>
+
+  <h3>新しいスレッドを立てる</h3>
+  <div class="op"><strong>操作：</strong>スレッド一覧画面の下にある「スレ立て」ボタンをタップ → ダイアログが表示される → タイトルと本文を入力して投稿</div>
+
+  <h3>自分の投稿を削除する</h3>
+  <div class="op"><strong>操作：</strong>削除したい自分の投稿を長押し →「削除」を選ぶ → 削除キー（パスワード）を入力して確認</div>
+  <div class="warn">削除キーを忘れてしまった場合、投稿を削除することはできません。</div>
+</div>
+
+<!-- ===== 保存する ===== -->
+<div class="section" id="save">
+  <h2>スレッドや画像を保存する</h2>
+
+  <h3>スレッド全体を保存する</h3>
+  <div class="op"><strong>操作：</strong>スレッド画面の下にある「保存」ボタンをタップ → 保存が始まり、進み具合がダイアログで表示されます。途中で「キャンセル」ボタンを押すと中止できます</div>
+  <p>保存したスレッドは、インターネットに繋がっていなくても読めます。</p>
+
+  <h3>画像・動画を1つずつ保存する</h3>
+  <div class="op"><strong>操作：</strong>画像をタップして拡大表示 → 画面上の保存ボタンをタップ。またはギャラリー表示中に保存ボタンをタップ</div>
+
+  <h3>自動保存</h3>
+  <p>設定で「バックグラウンド更新」を有効にすると、最近見たスレッドが自動的に保存されます。スレッドが消えてしまう前に取っておきたいときに便利です。</p>
+
+  <h3>保存先を変える</h3>
+  <div class="op"><strong>操作：</strong>板管理画面の右上 &#8942; →「設定」→ 保存先の設定で変更</div>
+  <ul>
+    <li><strong>手動入力</strong> - 保存先のフォルダを文字で直接入力する</li>
+    <li><strong>フォルダ選択</strong> - フォルダ選択画面で保存先を選ぶ。SDカードやUSBメモリにも保存できます</li>
+  </ul>
+  <div class="tip">よく使うファイラーアプリがある場合、設定から「優先ファイラー」として登録しておくと、毎回そのアプリでフォルダを選べるようになります。</div>
+
+  <h3>保存したスレッドを見る</h3>
+  <div class="op"><strong>操作：</strong>板管理画面の右上 &#8942; →「保存済み」をタップ → 保存済みスレッドの一覧が表示されます → スレッドをタップで閲覧</div>
+  <p>それぞれのスレッドには保存状態（完了・保存中・失敗・一部のみ）、投稿数、画像数、動画数、使用容量が表示されます。不要なスレッドは削除アイコンをタップして削除できます。</p>
+</div>
+
+<!-- ===== 閲覧履歴 ===== -->
+<div class="section" id="history">
+  <h2>閲覧履歴</h2>
+
+  <h3>履歴を開く</h3>
+  <div class="op"><strong>操作：</strong>板管理画面・スレッド一覧画面では、画面左上の三本線アイコン（&#9776;）をタップ。または画面の左端から右にスワイプすると、左から履歴パネルがスライドして表示されます</div>
+  <p>スレッド画面では、画面右上の &#8942; →「履歴」から開けます。</p>
+
+  <h3>履歴パネルの構成</h3>
+  <ul>
+    <li><strong>上部</strong> - 最近見たスレッドがサムネイル付きカードで一覧表示されます</li>
+    <li><strong>下部</strong> - 「板」「更新」「一括削除」「設定」の4つのアイコンが並んでいます</li>
+  </ul>
+
+  <h3>履歴パネルの操作</h3>
+  <ul>
+    <li><strong>スレッドカードをタップ</strong> → そのスレッドをもう一度開く</li>
+    <li><strong>スレッドカードを右にスワイプ</strong> → その履歴を削除</li>
+    <li><strong>下部の「更新」アイコンをタップ</strong> → 履歴のスレッドに新着がないか確認</li>
+    <li><strong>下部の「一括削除」アイコンをタップ</strong> → すべての履歴をまとめて消す</li>
+  </ul>
+
+  <h3>履歴パネルを閉じる</h3>
+  <div class="op"><strong>操作：</strong>履歴パネルの右側（暗くなっている部分）をタップ。または画面の左方向にスワイプ</div>
+
+  <h3>バックグラウンド更新（自動更新）</h3>
+  <p>設定で有効にすると、アプリを開いていないときでも、約15分おきに履歴にあるスレッドの新着を自動でチェックします。ネットに繋がっていないときやバッテリーが少ないときは自動でスキップされます。</p>
+  <div class="tip">1回の自動更新で最大120件のスレッドを確認できます。</div>
+</div>
+
+<!-- ===== 見たくない投稿を隠す ===== -->
+<div class="section" id="ng">
+  <h2>見たくない投稿を隠す（NG機能）</h2>
+  <p>「NG」とは、指定した条件に当てはまる投稿を自動的に非表示にする機能です。</p>
+
+  <h3>NGワード</h3>
+  <p>特定の言葉を含む投稿を隠します。たとえば「ネタバレ」をNGワードに登録すると、「ネタバレ」を含む投稿が見えなくなります。</p>
+
+  <h3>NGヘッダー</h3>
+  <p>特定の名前やIDの投稿者を隠します。迷惑な投稿者がいるとき、その名前やIDを登録すると、その人の投稿が見えなくなります。</p>
+
+  <h3>NGの登録方法</h3>
+  <ul>
+    <li><strong>投稿から直接</strong> - 投稿を長押し →「NG登録」をタップ（いちばん簡単な方法）</li>
+    <li><strong>スレッド画面のNG管理</strong> - 画面下の「設定」→「NG管理」→ 下からスライドするシートでワードや名前を追加・削除</li>
+    <li><strong>カタログのNG管理</strong> - 画面右上 &#8942; →「NG管理」→ 下からスライドするシートでワードを追加・削除</li>
+  </ul>
+</div>
+
+<!-- ===== 設定 ===== -->
+<div class="section" id="settings">
+  <h2>設定</h2>
+  <div class="op"><strong>開き方：</strong>板管理画面の右上 &#8942; →「設定」をタップ</div>
+
+  <h3>動作の設定</h3>
+  <table>
+    <tr><th>項目</th><th>説明</th><th>初期設定</th></tr>
+    <tr><td>バックグラウンド更新</td><td>アプリを閉じている間も、履歴のスレッドを自動で更新する</td><td>オフ</td></tr>
+    <tr><td>広告表示</td><td>広告の表示・非表示を切り替える</td><td>オン</td></tr>
+    <tr><td>軽量モード</td><td>画面の表示を簡略化して動作を軽くする</td><td>オフ</td></tr>
+  </table>
+
+  <h3>ボタンの配置を変える</h3>
+  <p>画面をスクロールすると「カタログメニュー」「スレッドメニュー」の項目があります。ここでボタンの表示・非表示や並び順を変えられます。</p>
+
+  <h3>保存先の設定</h3>
+  <ul>
+    <li><strong>保存先の選び方</strong> - 手動入力 / フォルダ選択 から選べます</li>
+    <li><strong>保存先のフォルダ</strong> - スレッドや画像を保存するフォルダを指定します</li>
+    <li><strong>優先ファイラー</strong> - フォルダ選択時に使うファイラーアプリを指定できます</li>
+  </ul>
+
+  <h3>一時データの管理</h3>
+  <ul>
+    <li><strong>画像の一時データを削除</strong> - 閲覧時にたまった画像の一時データを消して空き容量を増やす</li>
+    <li><strong>一時ファイルを削除</strong> - その他の一時ファイルを削除する</li>
+  </ul>
+
+  <h3>その他</h3>
+  <ul>
+    <li><strong>Cookie管理</strong> - サーバーとの通信に使われる情報の確認・削除</li>
+    <li><strong>作者</strong> - 開発者の X（旧Twitter）で最新情報を確認</li>
+    <li><strong>お問い合わせ</strong> - メールで意見や不具合を報告（admin@valoser.com）</li>
+    <li><strong>開発元</strong> - ソースコードの公開ページ</li>
+    <li><strong>プライバシーポリシー</strong> - 個人情報の取り扱いについて</li>
+  </ul>
+</div>
+
+<!-- ===== よくある質問 ===== -->
+<div class="section" id="faq">
+  <h2>よくある質問</h2>
+  <dl class="faq">
+    <dt>板のアドレスがわかりません</dt>
+    <dd>ブラウザでふたば☆ちゃんねるの板を開き、アドレスバーの内容をコピーしてください。<code>https://○○.2chan.net/○○/futaba.php</code> のような形です。</dd>
+
+    <dt>スレッドを保存するには？</dt>
+    <dd>スレッド画面の下にある「保存」ボタンをタップしてください。全投稿と画像がまとめて保存されます。</dd>
+
+    <dt>保存したスレッドはどこから見る？</dt>
+    <dd>板管理画面の右上 &#8942; →「保存済み」で一覧が表示されます。ネットなしでも読めます。</dd>
+
+    <dt>迷惑な投稿者を非表示にしたい</dt>
+    <dd>その投稿を長押し →「NG登録」をタップしてください。それ以降、同じ名前やIDの投稿が自動で隠れます。</dd>
+
+    <dt>バックグラウンド更新が動いていない</dt>
+    <dd>(1) futacha の設定で「バックグラウンド更新」がオンか確認。(2) 端末の「設定」→「アプリ」→「futacha」→「バッテリー」で「制限なし」になっているか確認。バッテリー節約モード中は動かないことがあります。</dd>
+
+    <dt>画像が表示されない</dt>
+    <dd>ネット接続を確認してください。解決しない場合は、設定 →「画像の一時データを削除」を試してください。</dd>
+
+    <dt>自分の投稿を削除できない</dt>
+    <dd>書き込み時の削除キー（パスワード）が必要です。忘れた場合は削除できません。次回以降は自動入力されます。</dd>
+
+    <dt>SDカードに保存したい</dt>
+    <dd>設定 → 保存先の選び方を「フォルダ選択」に変更 → フォルダ選択画面でSDカードを選んでください。</dd>
+
+    <dt>不具合の報告やお問い合わせ</dt>
+    <dd>設定 →「お問い合わせ」からメールを送れます。送信先: admin@valoser.com</dd>
+  </dl>
+</div>
+
+<footer>
+  <p>futacha v2.7 - Android版</p>
+  <p>ふたば☆ちゃんねる専用ブラウザ</p>
+</footer>
+
+</body>
+</html>
