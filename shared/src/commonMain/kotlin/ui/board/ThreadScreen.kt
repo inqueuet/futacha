@@ -195,61 +195,51 @@ fun ThreadScreen(
 private fun ThreadScreenContent(
     args: ThreadScreenContentArgs
 ) {
-    val board = args.board
-    val history = args.history
-    val threadId = args.threadId
-    val threadTitle = args.threadTitle
-    val initialReplyCount = args.initialReplyCount
-    val threadUrlOverride = args.threadUrlOverride
-    val onBack = args.onBack
-    val onScrollPositionPersist = args.onScrollPositionPersist
-    val onScrollPositionPersistImmediately = args.onScrollPositionPersistImmediately
-    val historyCallbacks = args.historyCallbacks
-    val dependencies = args.dependencies
-    val preferencesState = args.preferencesState
-    val preferencesCallbacks = args.preferencesCallbacks
-    val onRegisteredThreadUrlClick = args.onRegisteredThreadUrlClick
-    val modifier = args.modifier
-    val onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected
-    val onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed
-    val onHistoryCleared = historyCallbacks.onHistoryCleared
-    val onHistoryEntryUpdated = historyCallbacks.onHistoryEntryUpdated
-    val onHistoryRefresh = historyCallbacks.onHistoryRefresh
-    val repository = dependencies.repository
-    val httpClient = dependencies.services.httpClient
-    val fileSystem = dependencies.services.fileSystem
-    val cookieRepository = dependencies.services.cookieRepository
-    val stateStore = dependencies.services.stateStore
-    val autoSavedThreadRepository = dependencies.services.autoSavedThreadRepository
-
-    val mutableStateBundle = rememberThreadScreenMutableStateBundle(
-        boardId = board.id,
-        threadId = threadId,
-        threadUrlOverride = threadUrlOverride
-    )
-    var resolvedThreadUrlOverride by mutableStateBundle.resolvedThreadUrlOverride
+    val preparedSetup = rememberThreadScreenPreparedSetupBundle(args)
+    val context = preparedSetup.context
+    val board = context.board
+    val history = context.history
+    val threadId = context.threadId
+    val threadTitle = context.threadTitle
+    val initialReplyCount = context.initialReplyCount
+    val threadUrlOverride = context.threadUrlOverride
+    val onBack = context.onBack
+    val onScrollPositionPersist = context.onScrollPositionPersist
+    val onScrollPositionPersistImmediately = context.onScrollPositionPersistImmediately
+    val onHistoryEntrySelected = context.onHistoryEntrySelected
+    val onHistoryEntryDismissed = context.onHistoryEntryDismissed
+    val onHistoryCleared = context.onHistoryCleared
+    val onHistoryEntryUpdated = context.onHistoryEntryUpdated
+    val onHistoryRefresh = context.onHistoryRefresh
+    val repository = context.repository
+    val httpClient = context.httpClient
+    val fileSystem = context.fileSystem
+    val cookieRepository = context.cookieRepository
+    val stateStore = context.stateStore
+    val autoSavedThreadRepository = context.autoSavedThreadRepository
+    val preferencesState = context.preferencesState
+    val preferencesCallbacks = context.preferencesCallbacks
+    val onRegisteredThreadUrlClick = context.onRegisteredThreadUrlClick
+    val modifier = context.modifier
+    val mutableStateRefs = preparedSetup.mutableStateRefs
+    val runtimeStateRefs = mutableStateRefs.runtime
+    val readAloudStateRefs = mutableStateRefs.readAloud
+    val saveJobStateRefs = mutableStateRefs.saveJobs
+    val interactionStateRefs = mutableStateRefs.interaction
+    val formStateRefs = mutableStateRefs.form
+    val refreshStateRefs = mutableStateRefs.refresh
+    val searchStateRefs = mutableStateRefs.search
+    var resolvedThreadUrlOverride by runtimeStateRefs.resolvedThreadUrlOverride
     ThreadUrlOverrideSyncEffect(
         threadUrlOverride = threadUrlOverride,
         resolvedThreadUrlOverride = resolvedThreadUrlOverride,
         onResolvedThreadUrlOverrideChanged = { resolvedThreadUrlOverride = it }
     )
-    val coreSetupBundle = rememberThreadScreenCoreSetupBundle(
-        board = board,
-        history = history,
-        threadId = threadId,
-        repository = repository,
-        fileSystem = fileSystem,
-        stateStore = stateStore,
-        autoSavedThreadRepository = autoSavedThreadRepository,
-        manualSaveDirectory = preferencesState.manualSaveDirectory,
-        manualSaveLocation = preferencesState.manualSaveLocation,
-        resolvedThreadUrlOverride = resolvedThreadUrlOverride,
-        onRegisteredThreadUrlClick = onRegisteredThreadUrlClick
-    )
+    val coreSetupBundle = preparedSetup.coreSetupBundle
     val environmentBundle = coreSetupBundle.environmentBundle
     val activeRepository = environmentBundle.activeRepository
     val effectiveBoardUrl = environmentBundle.effectiveBoardUrl
-    val uiState = mutableStateBundle.uiState
+    val uiState = runtimeStateRefs.uiState
     val runtimeObjectBundle = coreSetupBundle.runtimeObjectBundle
     val snackbarHostState = runtimeObjectBundle.snackbarHostState
     val coroutineScope = runtimeObjectBundle.coroutineScope
@@ -261,47 +251,47 @@ private fun ThreadScreenContent(
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
     val textSpeaker = platformRuntimeBindings.textSpeaker
-    var readAloudJob by mutableStateBundle.readAloudJob
-    var readAloudStatus by mutableStateBundle.readAloudStatus
-    var sheetOverlayState by mutableStateBundle.sheetOverlayState
-    var currentReadAloudIndex by mutableStateBundle.currentReadAloudIndex
-    var readAloudCancelRequestedByUser by mutableStateBundle.readAloudCancelRequestedByUser
+    var readAloudJob by readAloudStateRefs.job
+    var readAloudStatus by readAloudStateRefs.status
+    var sheetOverlayState by readAloudStateRefs.sheetOverlayState
+    var currentReadAloudIndex by readAloudStateRefs.currentIndex
+    var readAloudCancelRequestedByUser by readAloudStateRefs.cancelRequestedByUser
     val isAndroidPlatform = remember { isAndroid() }
     val autoSaveRepository = environmentBundle.autoSaveRepository
     val manualSaveRepository = environmentBundle.manualSaveRepository
     val legacyManualSaveRepository = environmentBundle.legacyManualSaveRepository
-    var autoSaveJob by mutableStateBundle.autoSaveJob
-    var manualSaveJob by mutableStateBundle.manualSaveJob
-    var singleMediaSaveJob by mutableStateBundle.singleMediaSaveJob
-    var refreshThreadJob by mutableStateBundle.refreshThreadJob
-    var isManualSaveInProgress by mutableStateBundle.isManualSaveInProgress
-    var isSingleMediaSaveInProgress by mutableStateBundle.isSingleMediaSaveInProgress
-    val lastAutoSaveTimestamp = mutableStateBundle.lastAutoSaveTimestamp
-    var isShowingOfflineCopy by mutableStateBundle.isShowingOfflineCopy
+    var autoSaveJob by saveJobStateRefs.autoSaveJob
+    var manualSaveJob by saveJobStateRefs.manualSaveJob
+    var singleMediaSaveJob by saveJobStateRefs.singleMediaSaveJob
+    var refreshThreadJob by saveJobStateRefs.refreshThreadJob
+    var isManualSaveInProgress by saveJobStateRefs.isManualSaveInProgress
+    var isSingleMediaSaveInProgress by saveJobStateRefs.isSingleMediaSaveInProgress
+    val lastAutoSaveTimestamp = saveJobStateRefs.lastAutoSaveTimestamp
+    var isShowingOfflineCopy by saveJobStateRefs.isShowingOfflineCopy
     val drawerState = runtimeObjectBundle.drawerState
     val isDrawerOpen by runtimeObjectBundle.isDrawerOpen
-    var actionInProgress by mutableStateBundle.actionInProgress
-    var lastBusyActionNoticeAtMillis by mutableStateBundle.lastBusyActionNoticeAtMillis
-    val saidaneOverrides = mutableStateBundle.saidaneOverrides
-    var postOverlayState by mutableStateBundle.postOverlayState
-    var isReplyDialogVisible by mutableStateBundle.isReplyDialogVisible
-    var selectedThreadFilterOptions by mutableStateBundle.selectedThreadFilterOptions
-    var selectedThreadSortOption by mutableStateBundle.selectedThreadSortOption
-    var threadFilterKeyword by mutableStateBundle.threadFilterKeyword
-    val threadFilterCache = mutableStateBundle.threadFilterCache
+    var actionInProgress by interactionStateRefs.actionInProgress
+    var lastBusyActionNoticeAtMillis by interactionStateRefs.lastBusyActionNoticeAtMillis
+    val saidaneOverrides = interactionStateRefs.saidaneOverrides
+    var postOverlayState by interactionStateRefs.postOverlayState
+    var isReplyDialogVisible by interactionStateRefs.isReplyDialogVisible
+    var selectedThreadFilterOptions by formStateRefs.selectedThreadFilterOptions
+    var selectedThreadSortOption by formStateRefs.selectedThreadSortOption
+    var threadFilterKeyword by formStateRefs.threadFilterKeyword
+    val threadFilterCache = formStateRefs.threadFilterCache
     val persistedSelfPostIdentifiers = persistentBindings.persistedSelfPostIdentifiers
     val selfPostIdentifierSet = persistentBindings.selfPostIdentifierSet
     val isSelfPost = persistentBindings.isSelfPost
-    var modalOverlayState by mutableStateBundle.modalOverlayState
-    var ngFilteringEnabled by mutableStateBundle.ngFilteringEnabled
+    var modalOverlayState by interactionStateRefs.modalOverlayState
+    var ngFilteringEnabled by interactionStateRefs.ngFilteringEnabled
     val ngHeaders = persistentBindings.ngHeaders
     val ngWords = persistentBindings.ngWords
-    var replyName by mutableStateBundle.replyName
-    var replyEmail by mutableStateBundle.replyEmail
-    var replySubject by mutableStateBundle.replySubject
-    var replyComment by mutableStateBundle.replyComment
-    var replyPassword by mutableStateBundle.replyPassword
-    var replyImageData by mutableStateBundle.replyImageData
+    var replyName by formStateRefs.replyName
+    var replyEmail by formStateRefs.replyEmail
+    var replySubject by formStateRefs.replySubject
+    var replyComment by formStateRefs.replyComment
+    var replyPassword by formStateRefs.replyPassword
+    var replyImageData by formStateRefs.replyImageData
     val readAloudStateBindings = buildThreadScreenReadAloudStateBindings(
         ThreadScreenReadAloudStateInputs(
             currentJob = { readAloudJob },
@@ -383,10 +373,10 @@ private fun ThreadScreenContent(
         lastUsedDeleteKey = lastUsedDeleteKey,
         replyDialogBinding = replyDialogBinding
     )
-    var isRefreshing by mutableStateBundle.isRefreshing
-    var manualRefreshGeneration by mutableStateBundle.manualRefreshGeneration
-    var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
-    var saveProgress by mutableStateBundle.saveProgress
+    var isRefreshing by refreshStateRefs.isRefreshing
+    var manualRefreshGeneration by refreshStateRefs.manualRefreshGeneration
+    var isHistoryRefreshing by refreshStateRefs.isHistoryRefreshing
+    var saveProgress by saveJobStateRefs.saveProgress
     val isPrivacyFilterEnabled = coreSetupBundle.isPrivacyFilterEnabled
     val currentState = uiState.value
     val initialHistoryEntry = environmentBundle.initialHistoryEntry
@@ -417,7 +407,7 @@ private fun ThreadScreenContent(
         speakText = textSpeaker::speak,
         cancelActiveReadAloud = cancelActiveReadAloud
     )
-    var hasRestoredInitialScroll by mutableStateBundle.hasRestoredInitialScroll
+    var hasRestoredInitialScroll by refreshStateRefs.hasRestoredInitialScroll
     val offlineLookupContext = environmentBundle.offlineLookupContext
     val offlineSources = environmentBundle.offlineSources
     val asyncRuntimeBindingsBundle = buildThreadScreenAsyncRuntimeBindingsBundle(
@@ -544,9 +534,9 @@ private fun ThreadScreenContent(
         runtimeLifecycleBindings.onInitialRefresh()
     }
 
-    var isSearchActive by mutableStateBundle.isSearchActive
-    var searchQuery by mutableStateBundle.searchQuery
-    var currentSearchResultIndex by mutableStateBundle.currentSearchResultIndex
+    var isSearchActive by searchStateRefs.isSearchActive
+    var searchQuery by searchStateRefs.searchQuery
+    var currentSearchResultIndex by searchStateRefs.currentSearchResultIndex
     val derivedRuntimeState = rememberThreadScreenDerivedRuntimeState(
         currentState,
         initialReplyCount,
@@ -560,7 +550,7 @@ private fun ThreadScreenContent(
     val derivedUiState = derivedRuntimeState.derivedUiState
     val currentSuccessState = derivedUiState.successState
     val mediaPreviewEntries = derivedRuntimeState.mediaPreviewEntries
-    var mediaPreviewState by mutableStateBundle.mediaPreviewState
+    var mediaPreviewState by searchStateRefs.mediaPreviewState
 
     val currentPageForAutoSave = derivedUiState.currentPage
     val autoSaveEffectState = rememberThreadAutoSaveEffectState(

@@ -6,18 +6,20 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 
 internal data class BoardManagementScreenContentArgs(
     val boards: List<BoardSummary>,
-    val history: List<ThreadHistoryEntry>,
     val onBoardSelected: (BoardSummary) -> Unit,
     val onAddBoard: (String, String) -> Unit,
     val onMenuAction: (BoardManagementMenuAction) -> Unit,
     val onBoardDeleted: (BoardSummary) -> Unit,
     val onBoardsReordered: (List<BoardSummary>) -> Unit,
-    val historyCallbacks: ResolvedScreenHistoryCallbacks,
+    val screenContext: ResolvedScreenContext,
     val dependencies: ResolvedScreenServiceDependencies,
-    val preferencesState: ScreenPreferencesState,
-    val preferencesCallbacks: ScreenPreferencesCallbacks,
     val modifier: Modifier
-)
+) {
+    val history: List<ThreadHistoryEntry> get() = screenContext.history
+    val historyCallbacks: ResolvedScreenHistoryCallbacks get() = screenContext.historyCallbacks
+    val preferencesState: ScreenPreferencesState get() = screenContext.preferencesState
+    val preferencesCallbacks: ScreenPreferencesCallbacks get() = screenContext.preferencesCallbacks
+}
 
 internal fun resolveBoardManagementScreenDependencies(
     dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies(),
@@ -35,30 +37,24 @@ internal fun resolveBoardManagementScreenDependencies(
 
 internal fun assembleBoardManagementScreenContentArgs(
     boards: List<BoardSummary>,
-    history: List<ThreadHistoryEntry>,
     onBoardSelected: (BoardSummary) -> Unit,
     onAddBoard: (String, String) -> Unit,
     onMenuAction: (BoardManagementMenuAction) -> Unit,
     onBoardDeleted: (BoardSummary) -> Unit,
     onBoardsReordered: (List<BoardSummary>) -> Unit,
-    historyCallbacks: ResolvedScreenHistoryCallbacks,
+    screenContext: ResolvedScreenContext,
     dependencies: ResolvedScreenServiceDependencies,
-    preferencesState: ScreenPreferencesState,
-    preferencesCallbacks: ScreenPreferencesCallbacks,
     modifier: Modifier = Modifier
 ): BoardManagementScreenContentArgs {
     return BoardManagementScreenContentArgs(
         boards = boards,
-        history = history,
         onBoardSelected = onBoardSelected,
         onAddBoard = onAddBoard,
         onMenuAction = onMenuAction,
         onBoardDeleted = onBoardDeleted,
         onBoardsReordered = onBoardsReordered,
-        historyCallbacks = historyCallbacks,
+        screenContext = screenContext,
         dependencies = dependencies,
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
         modifier = modifier
     )
 }
@@ -76,20 +72,15 @@ internal fun buildBoardManagementScreenContentArgsFromContract(
 ): BoardManagementScreenContentArgs {
     return assembleBoardManagementScreenContentArgs(
         boards = boards,
-        history = screenContract.history,
         onBoardSelected = onBoardSelected,
         onAddBoard = onAddBoard,
         onMenuAction = onMenuAction,
         onBoardDeleted = onBoardDeleted,
         onBoardsReordered = onBoardsReordered,
-        historyCallbacks = resolveScreenHistoryCallbacks(
-            historyCallbacks = screenContract.historyCallbacks
-        ),
+        screenContext = resolveScreenContext(screenContract),
         dependencies = resolveBoardManagementScreenDependencies(
             dependencies = dependencies
         ),
-        preferencesState = screenContract.preferencesState,
-        preferencesCallbacks = screenContract.preferencesCallbacks,
         modifier = modifier
     )
 }
@@ -117,18 +108,20 @@ internal fun buildBoardManagementScreenContentArgs(
 ): BoardManagementScreenContentArgs {
     return assembleBoardManagementScreenContentArgs(
         boards = boards,
-        history = history,
         onBoardSelected = onBoardSelected,
         onAddBoard = onAddBoard,
         onMenuAction = onMenuAction,
         onBoardDeleted = onBoardDeleted,
         onBoardsReordered = onBoardsReordered,
-        historyCallbacks = resolveScreenHistoryCallbacks(
+        screenContext = resolveScreenContext(
+            history = history,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
-            onHistoryRefresh = onHistoryRefresh
+            onHistoryRefresh = onHistoryRefresh,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
         ),
         dependencies = resolveBoardManagementScreenDependencies(
             dependencies = dependencies,
@@ -136,8 +129,6 @@ internal fun buildBoardManagementScreenContentArgs(
             cookieRepository = cookieRepository,
             fileSystem = fileSystem
         ),
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
         modifier = modifier
     )
 }

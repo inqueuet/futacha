@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.mutableStateOf
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
@@ -31,6 +32,7 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class CatalogScreenSupportTest {
@@ -105,6 +107,57 @@ class CatalogScreenSupportTest {
                 localGridColumns = 6
             )
         )
+    }
+
+    @Test
+    fun catalogStateSupport_resolvesMutableStateRefsByResponsibility() {
+        val uiState = mutableStateOf<CatalogUiState>(CatalogUiState.Loading)
+        val catalogMode = mutableStateOf(CatalogMode.default)
+        val isRefreshing = mutableStateOf(false)
+        val catalogLoadJob = mutableStateOf<Job?>(null)
+        val catalogLoadGeneration = mutableStateOf(0L)
+        val isHistoryRefreshing = mutableStateOf(false)
+        val isSearchActive = mutableStateOf(false)
+        val searchQuery = mutableStateOf("")
+        val debouncedSearchQuery = mutableStateOf("")
+        val overlayState = mutableStateOf(CatalogOverlayState())
+        val createThreadDraft = mutableStateOf(emptyCreateThreadDraft())
+        val createThreadImage = mutableStateOf<ImageData?>(null)
+        val archiveSearchQuery = mutableStateOf("")
+        val catalogNgFilteringEnabled = mutableStateOf(true)
+        val pastSearchRuntimeState = mutableStateOf(resetCatalogPastSearchRuntimeState(null))
+        val lastCatalogItems = mutableStateOf(emptyList<CatalogItem>())
+        val localCatalogDisplayStyle = mutableStateOf(CatalogDisplayStyle.Grid)
+        val localCatalogGridColumns = mutableStateOf(5)
+        val bundle = CatalogScreenMutableStateBundle(
+            uiState = uiState,
+            catalogMode = catalogMode,
+            isRefreshing = isRefreshing,
+            catalogLoadJob = catalogLoadJob,
+            catalogLoadGeneration = catalogLoadGeneration,
+            isHistoryRefreshing = isHistoryRefreshing,
+            isSearchActive = isSearchActive,
+            searchQuery = searchQuery,
+            debouncedSearchQuery = debouncedSearchQuery,
+            overlayState = overlayState,
+            createThreadDraft = createThreadDraft,
+            createThreadImage = createThreadImage,
+            archiveSearchQuery = archiveSearchQuery,
+            catalogNgFilteringEnabled = catalogNgFilteringEnabled,
+            pastSearchRuntimeState = pastSearchRuntimeState,
+            lastCatalogItems = lastCatalogItems,
+            localCatalogDisplayStyle = localCatalogDisplayStyle,
+            localCatalogGridColumns = localCatalogGridColumns
+        )
+
+        val refs = resolveCatalogScreenMutableStateRefs(bundle)
+
+        assertSame(uiState, refs.uiRuntime.uiState)
+        assertSame(catalogMode, refs.uiRuntime.catalogMode)
+        assertSame(searchQuery, refs.searchOverlay.searchQuery)
+        assertSame(overlayState, refs.searchOverlay.overlayState)
+        assertSame(createThreadDraft, refs.draftDisplay.createThreadDraft)
+        assertSame(localCatalogGridColumns, refs.draftDisplay.localCatalogGridColumns)
     }
 
     @Test

@@ -96,37 +96,39 @@ fun BoardManagementScreen(
 private fun BoardManagementScreenContent(
     args: BoardManagementScreenContentArgs
 ) {
-    val boards = args.boards
-    val history = args.history
-    val onBoardSelected = args.onBoardSelected
-    val onAddBoard = args.onAddBoard
-    val onMenuAction = args.onMenuAction
-    val onBoardDeleted = args.onBoardDeleted
-    val onBoardsReordered = args.onBoardsReordered
-    val historyCallbacks = args.historyCallbacks
-    val dependencies = args.dependencies
-    val preferencesState = args.preferencesState
-    val preferencesCallbacks = args.preferencesCallbacks
-    val modifier = args.modifier
-    val onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected
-    val onHistoryRefresh = historyCallbacks.onHistoryRefresh
-    val onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed
-    val onHistoryCleared = historyCallbacks.onHistoryCleared
-    val cookieRepository = dependencies.cookieRepository
-    val fileSystem = dependencies.fileSystem
-    val autoSavedThreadRepository = dependencies.autoSavedThreadRepository
+    val preparedSetup = rememberBoardManagementPreparedSetupBundle(args)
+    val context = preparedSetup.context
+    val boards = context.boards
+    val history = context.history
+    val onBoardSelected = context.onBoardSelected
+    val onAddBoard = context.onAddBoard
+    val onMenuAction = context.onMenuAction
+    val onBoardDeleted = context.onBoardDeleted
+    val onBoardsReordered = context.onBoardsReordered
+    val onHistoryEntrySelected = context.onHistoryEntrySelected
+    val onHistoryRefresh = context.onHistoryRefresh
+    val onHistoryEntryDismissed = context.onHistoryEntryDismissed
+    val onHistoryCleared = context.onHistoryCleared
+    val preferencesState = context.preferencesState
+    val preferencesCallbacks = context.preferencesCallbacks
+    val cookieRepository = context.cookieRepository
+    val fileSystem = context.fileSystem
+    val autoSavedThreadRepository = context.autoSavedThreadRepository
+    val modifier = context.modifier
 
-    val runtimeObjects = rememberBoardManagementRuntimeObjectsBundle()
-    val mutableStateBundle = rememberBoardManagementMutableStateBundle()
+    val runtimeObjects = preparedSetup.runtimeObjects
+    val mutableStateRefs = preparedSetup.mutableStateRefs
+    val modeStateRefs = mutableStateRefs.modes
+    val overlayStateRefs = mutableStateRefs.overlay
     val snackbarHostState = runtimeObjects.snackbarHostState
     val scope = runtimeObjects.coroutineScope
     val drawerState = runtimeObjects.drawerState
     val isDrawerOpen = runtimeObjects.isDrawerOpen
-    var isMenuExpanded by mutableStateBundle.isMenuExpanded
-    var isDeleteMode by mutableStateBundle.isDeleteMode
-    var isReorderMode by mutableStateBundle.isReorderMode
-    var overlayState by mutableStateBundle.overlayState
-    var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
+    var isMenuExpanded by modeStateRefs.isMenuExpanded
+    var isDeleteMode by modeStateRefs.isDeleteMode
+    var isReorderMode by modeStateRefs.isReorderMode
+    var overlayState by overlayStateRefs.overlayState
+    var isHistoryRefreshing by modeStateRefs.isHistoryRefreshing
     val chromeState = resolveBoardManagementChromeState(
         isDeleteMode = isDeleteMode,
         isReorderMode = isReorderMode

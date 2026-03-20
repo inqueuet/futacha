@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.mutableStateOf
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.runBlocking
@@ -10,6 +11,7 @@ import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class BoardManagementScreenTest {
@@ -151,6 +153,30 @@ class BoardManagementScreenTest {
                 isReorderMode = true
             )
         )
+    }
+
+    @Test
+    fun boardManagementRuntimeSupport_resolvesMutableStateRefsByResponsibility() {
+        val isMenuExpanded = mutableStateOf(false)
+        val isDeleteMode = mutableStateOf(false)
+        val isReorderMode = mutableStateOf(false)
+        val overlayState = mutableStateOf(BoardManagementOverlayState())
+        val isHistoryRefreshing = mutableStateOf(false)
+        val bundle = BoardManagementMutableStateBundle(
+            isMenuExpanded = isMenuExpanded,
+            isDeleteMode = isDeleteMode,
+            isReorderMode = isReorderMode,
+            overlayState = overlayState,
+            isHistoryRefreshing = isHistoryRefreshing
+        )
+
+        val refs = resolveBoardManagementMutableStateRefs(bundle)
+
+        assertSame(isMenuExpanded, refs.modes.isMenuExpanded)
+        assertSame(isDeleteMode, refs.modes.isDeleteMode)
+        assertSame(isReorderMode, refs.modes.isReorderMode)
+        assertSame(isHistoryRefreshing, refs.modes.isHistoryRefreshing)
+        assertSame(overlayState, refs.overlay.overlayState)
     }
 
     @Test

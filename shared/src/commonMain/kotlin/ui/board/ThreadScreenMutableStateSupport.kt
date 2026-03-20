@@ -104,6 +104,140 @@ internal data class ThreadScreenMutableStateBundle(
     val mediaPreviewState: MutableState<ThreadMediaPreviewState>
 )
 
+internal data class ThreadScreenRuntimeMutableStateRefs(
+    val resolvedThreadUrlOverride: MutableState<String?>,
+    val uiState: MutableState<ThreadUiState>
+)
+
+internal data class ThreadScreenReadAloudMutableStateRefs(
+    val job: MutableState<Job?>,
+    val status: MutableState<ReadAloudStatus>,
+    val sheetOverlayState: MutableState<ThreadSheetOverlayState>,
+    val currentIndex: MutableState<Int>,
+    val cancelRequestedByUser: MutableState<Boolean>
+)
+
+internal data class ThreadScreenSaveJobMutableStateRefs(
+    val autoSaveJob: MutableState<Job?>,
+    val manualSaveJob: MutableState<Job?>,
+    val singleMediaSaveJob: MutableState<Job?>,
+    val refreshThreadJob: MutableState<Job?>,
+    val isManualSaveInProgress: MutableState<Boolean>,
+    val isSingleMediaSaveInProgress: MutableState<Boolean>,
+    val lastAutoSaveTimestamp: MutableState<Long>,
+    val isShowingOfflineCopy: MutableState<Boolean>,
+    val saveProgress: MutableState<SaveProgress?>
+)
+
+internal data class ThreadScreenInteractionMutableStateRefs(
+    val actionInProgress: MutableState<Boolean>,
+    val lastBusyActionNoticeAtMillis: MutableState<Long>,
+    val saidaneOverrides: MutableMap<String, String>,
+    val postOverlayState: MutableState<ThreadPostOverlayState>,
+    val isReplyDialogVisible: MutableState<Boolean>,
+    val modalOverlayState: MutableState<ThreadModalOverlayState>,
+    val ngFilteringEnabled: MutableState<Boolean>
+)
+
+internal data class ThreadScreenFormMutableStateRefs(
+    val selectedThreadFilterOptions: MutableState<Set<ThreadFilterOption>>,
+    val selectedThreadSortOption: MutableState<ThreadFilterSortOption?>,
+    val threadFilterKeyword: MutableState<String>,
+    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val replyName: MutableState<String>,
+    val replyEmail: MutableState<String>,
+    val replySubject: MutableState<String>,
+    val replyComment: MutableState<String>,
+    val replyPassword: MutableState<String>,
+    val replyImageData: MutableState<ImageData?>
+)
+
+internal data class ThreadScreenRefreshMutableStateRefs(
+    val isRefreshing: MutableState<Boolean>,
+    val manualRefreshGeneration: MutableState<Long>,
+    val isHistoryRefreshing: MutableState<Boolean>,
+    val hasRestoredInitialScroll: MutableState<Boolean>
+)
+
+internal data class ThreadScreenSearchMutableStateRefs(
+    val isSearchActive: MutableState<Boolean>,
+    val searchQuery: MutableState<String>,
+    val currentSearchResultIndex: MutableState<Int>,
+    val mediaPreviewState: MutableState<ThreadMediaPreviewState>
+)
+
+internal data class ThreadScreenMutableStateRefs(
+    val runtime: ThreadScreenRuntimeMutableStateRefs,
+    val readAloud: ThreadScreenReadAloudMutableStateRefs,
+    val saveJobs: ThreadScreenSaveJobMutableStateRefs,
+    val interaction: ThreadScreenInteractionMutableStateRefs,
+    val form: ThreadScreenFormMutableStateRefs,
+    val refresh: ThreadScreenRefreshMutableStateRefs,
+    val search: ThreadScreenSearchMutableStateRefs
+)
+
+internal fun resolveThreadScreenMutableStateRefs(
+    bundle: ThreadScreenMutableStateBundle
+): ThreadScreenMutableStateRefs {
+    return ThreadScreenMutableStateRefs(
+        runtime = ThreadScreenRuntimeMutableStateRefs(
+            resolvedThreadUrlOverride = bundle.resolvedThreadUrlOverride,
+            uiState = bundle.uiState
+        ),
+        readAloud = ThreadScreenReadAloudMutableStateRefs(
+            job = bundle.readAloudJob,
+            status = bundle.readAloudStatus,
+            sheetOverlayState = bundle.sheetOverlayState,
+            currentIndex = bundle.currentReadAloudIndex,
+            cancelRequestedByUser = bundle.readAloudCancelRequestedByUser
+        ),
+        saveJobs = ThreadScreenSaveJobMutableStateRefs(
+            autoSaveJob = bundle.autoSaveJob,
+            manualSaveJob = bundle.manualSaveJob,
+            singleMediaSaveJob = bundle.singleMediaSaveJob,
+            refreshThreadJob = bundle.refreshThreadJob,
+            isManualSaveInProgress = bundle.isManualSaveInProgress,
+            isSingleMediaSaveInProgress = bundle.isSingleMediaSaveInProgress,
+            lastAutoSaveTimestamp = bundle.lastAutoSaveTimestamp,
+            isShowingOfflineCopy = bundle.isShowingOfflineCopy,
+            saveProgress = bundle.saveProgress
+        ),
+        interaction = ThreadScreenInteractionMutableStateRefs(
+            actionInProgress = bundle.actionInProgress,
+            lastBusyActionNoticeAtMillis = bundle.lastBusyActionNoticeAtMillis,
+            saidaneOverrides = bundle.saidaneOverrides,
+            postOverlayState = bundle.postOverlayState,
+            isReplyDialogVisible = bundle.isReplyDialogVisible,
+            modalOverlayState = bundle.modalOverlayState,
+            ngFilteringEnabled = bundle.ngFilteringEnabled
+        ),
+        form = ThreadScreenFormMutableStateRefs(
+            selectedThreadFilterOptions = bundle.selectedThreadFilterOptions,
+            selectedThreadSortOption = bundle.selectedThreadSortOption,
+            threadFilterKeyword = bundle.threadFilterKeyword,
+            threadFilterCache = bundle.threadFilterCache,
+            replyName = bundle.replyName,
+            replyEmail = bundle.replyEmail,
+            replySubject = bundle.replySubject,
+            replyComment = bundle.replyComment,
+            replyPassword = bundle.replyPassword,
+            replyImageData = bundle.replyImageData
+        ),
+        refresh = ThreadScreenRefreshMutableStateRefs(
+            isRefreshing = bundle.isRefreshing,
+            manualRefreshGeneration = bundle.manualRefreshGeneration,
+            isHistoryRefreshing = bundle.isHistoryRefreshing,
+            hasRestoredInitialScroll = bundle.hasRestoredInitialScroll
+        ),
+        search = ThreadScreenSearchMutableStateRefs(
+            isSearchActive = bundle.isSearchActive,
+            searchQuery = bundle.searchQuery,
+            currentSearchResultIndex = bundle.currentSearchResultIndex,
+            mediaPreviewState = bundle.mediaPreviewState
+        )
+    )
+}
+
 @Composable
 internal fun rememberThreadScreenMutableStateBundle(
     boardId: String,

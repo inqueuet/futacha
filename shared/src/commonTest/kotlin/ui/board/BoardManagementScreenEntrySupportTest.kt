@@ -84,6 +84,42 @@ class BoardManagementScreenEntrySupportTest {
         assertSame(savedThreadRepository, args.dependencies.autoSavedThreadRepository)
     }
 
+    @Test
+    fun resolveContentContext_exposesResolvedCallbacksPreferencesAndDependencies() {
+        val historyEntrySelected: (ThreadHistoryEntry) -> Unit = {}
+        val historyRefresh: suspend () -> Unit = {}
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = {}
+        )
+        val fileSystem = InMemoryFileSystem()
+        val savedThreadRepository = SavedThreadRepository(fileSystem)
+        val args = buildBoardManagementScreenContentArgs(
+            boards = listOf(boardSummary()),
+            history = listOf(historyEntry()),
+            onBoardSelected = {},
+            onAddBoard = { _, _ -> },
+            onMenuAction = {},
+            onHistoryEntrySelected = historyEntrySelected,
+            onHistoryRefresh = historyRefresh,
+            preferencesState = ScreenPreferencesState(appVersion = "1.0"),
+            preferencesCallbacks = preferencesCallbacks,
+            fileSystem = fileSystem,
+            autoSavedThreadRepository = savedThreadRepository,
+            modifier = Modifier
+        )
+
+        val context = args.resolveContentContext()
+
+        assertEquals(args.boards, context.boards)
+        assertEquals(args.history, context.history)
+        assertSame(historyEntrySelected, context.onHistoryEntrySelected)
+        assertSame(historyRefresh, context.onHistoryRefresh)
+        assertSame(args.preferencesState, context.preferencesState)
+        assertSame(preferencesCallbacks, context.preferencesCallbacks)
+        assertSame(fileSystem, context.fileSystem)
+        assertSame(savedThreadRepository, context.autoSavedThreadRepository)
+    }
+
     private fun boardSummary(): BoardSummary {
         return BoardSummary(
             id = "img",

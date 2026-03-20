@@ -113,6 +113,44 @@ class ThreadScreenEntrySupportTest {
         httpClient.close()
     }
 
+    @Test
+    fun resolveContentContext_exposesResolvedCallbacksPreferencesAndDependencies() {
+        val explicitSelected: (ThreadHistoryEntry) -> Unit = {}
+        val explicitRefresh: suspend () -> Unit = {}
+        val fileSystem = InMemoryFileSystem()
+        val stateStore = AppStateStore(FakePlatformStateStorage())
+        val savedThreadRepository = SavedThreadRepository(fileSystem)
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = {}
+        )
+        val args = buildThreadScreenContentArgs(
+            board = boardSummary(),
+            history = listOf(historyEntry()),
+            threadId = "123",
+            threadTitle = "thread",
+            initialReplyCount = 10,
+            onBack = {},
+            onHistoryEntrySelected = explicitSelected,
+            onHistoryRefresh = explicitRefresh,
+            fileSystem = fileSystem,
+            stateStore = stateStore,
+            autoSavedThreadRepository = savedThreadRepository,
+            preferencesState = ScreenPreferencesState(appVersion = "1.0"),
+            preferencesCallbacks = preferencesCallbacks,
+            modifier = Modifier
+        )
+
+        val context = args.resolveContentContext()
+
+        assertSame(explicitSelected, context.onHistoryEntrySelected)
+        assertSame(explicitRefresh, context.onHistoryRefresh)
+        assertSame(fileSystem, context.fileSystem)
+        assertSame(stateStore, context.stateStore)
+        assertSame(savedThreadRepository, context.autoSavedThreadRepository)
+        assertSame(args.preferencesState, context.preferencesState)
+        assertSame(preferencesCallbacks, context.preferencesCallbacks)
+    }
+
     private fun boardSummary(): BoardSummary {
         return BoardSummary(
             id = "img",

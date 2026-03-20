@@ -6,14 +6,10 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import io.ktor.client.HttpClient
 
-internal data class ThreadScreenResolvedDependencies(
-    val repository: BoardRepository?,
-    val services: ResolvedScreenServiceDependencies
-)
+internal typealias ThreadScreenResolvedDependencies = ResolvedBoardRepositoryScreenDependencies
 
 internal data class ThreadScreenContentArgs(
     val board: BoardSummary,
-    val history: List<ThreadHistoryEntry>,
     val threadId: String,
     val threadTitle: String?,
     val initialReplyCount: Int?,
@@ -21,13 +17,16 @@ internal data class ThreadScreenContentArgs(
     val onBack: () -> Unit,
     val onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit,
     val onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit,
-    val historyCallbacks: ResolvedScreenHistoryCallbacks,
+    val screenContext: ResolvedScreenContext,
     val dependencies: ThreadScreenResolvedDependencies,
-    val preferencesState: ScreenPreferencesState,
-    val preferencesCallbacks: ScreenPreferencesCallbacks,
     val onRegisteredThreadUrlClick: (String) -> Boolean,
     val modifier: Modifier
-)
+) {
+    val history: List<ThreadHistoryEntry> get() = screenContext.history
+    val historyCallbacks: ResolvedScreenHistoryCallbacks get() = screenContext.historyCallbacks
+    val preferencesState: ScreenPreferencesState get() = screenContext.preferencesState
+    val preferencesCallbacks: ScreenPreferencesCallbacks get() = screenContext.preferencesCallbacks
+}
 
 internal fun resolveThreadScreenDependencies(
     dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
@@ -38,22 +37,19 @@ internal fun resolveThreadScreenDependencies(
     stateStore: com.valoser.futacha.shared.state.AppStateStore? = dependencies.stateStore,
     autoSavedThreadRepository: com.valoser.futacha.shared.repository.SavedThreadRepository? = dependencies.autoSavedThreadRepository
 ): ThreadScreenResolvedDependencies {
-    return ThreadScreenResolvedDependencies(
+    return resolveBoardRepositoryScreenDependencies(
         repository = repository,
-        services = resolveScreenServiceDependencies(
-            dependencies = dependencies.services,
-            stateStore = stateStore,
-            autoSavedThreadRepository = autoSavedThreadRepository,
-            cookieRepository = cookieRepository,
-            fileSystem = fileSystem,
-            httpClient = httpClient
-        )
+        dependencies = dependencies.services,
+        stateStore = stateStore,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        cookieRepository = cookieRepository,
+        fileSystem = fileSystem,
+        httpClient = httpClient
     )
 }
 
 internal fun assembleThreadScreenContentArgs(
     board: BoardSummary,
-    history: List<ThreadHistoryEntry>,
     threadId: String,
     threadTitle: String?,
     initialReplyCount: Int?,
@@ -61,16 +57,13 @@ internal fun assembleThreadScreenContentArgs(
     onBack: () -> Unit,
     onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit,
     onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit,
-    historyCallbacks: ResolvedScreenHistoryCallbacks,
+    screenContext: ResolvedScreenContext,
     dependencies: ThreadScreenResolvedDependencies,
-    preferencesState: ScreenPreferencesState,
-    preferencesCallbacks: ScreenPreferencesCallbacks,
     onRegisteredThreadUrlClick: (String) -> Boolean,
     modifier: Modifier = Modifier
 ): ThreadScreenContentArgs {
     return ThreadScreenContentArgs(
         board = board,
-        history = history,
         threadId = threadId,
         threadTitle = threadTitle,
         initialReplyCount = initialReplyCount,
@@ -78,10 +71,8 @@ internal fun assembleThreadScreenContentArgs(
         onBack = onBack,
         onScrollPositionPersist = onScrollPositionPersist,
         onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-        historyCallbacks = historyCallbacks,
+        screenContext = screenContext,
         dependencies = dependencies,
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
         modifier = modifier
     )
@@ -103,7 +94,6 @@ internal fun buildThreadScreenContentArgsFromContract(
 ): ThreadScreenContentArgs {
     return assembleThreadScreenContentArgs(
         board = board,
-        history = screenContract.history,
         threadId = threadId,
         threadTitle = threadTitle,
         initialReplyCount = initialReplyCount,
@@ -111,14 +101,10 @@ internal fun buildThreadScreenContentArgsFromContract(
         onBack = onBack,
         onScrollPositionPersist = onScrollPositionPersist,
         onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-        historyCallbacks = resolveScreenHistoryCallbacks(
-            historyCallbacks = screenContract.historyCallbacks
-        ),
+        screenContext = resolveScreenContext(screenContract),
         dependencies = resolveThreadScreenDependencies(
             dependencies = dependencies
         ),
-        preferencesState = screenContract.preferencesState,
-        preferencesCallbacks = screenContract.preferencesCallbacks,
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
         modifier = modifier
     )
@@ -154,7 +140,6 @@ internal fun buildThreadScreenContentArgs(
 ): ThreadScreenContentArgs {
     return assembleThreadScreenContentArgs(
         board = board,
-        history = history,
         threadId = threadId,
         threadTitle = threadTitle,
         initialReplyCount = initialReplyCount,
@@ -162,13 +147,16 @@ internal fun buildThreadScreenContentArgs(
         onBack = onBack,
         onScrollPositionPersist = onScrollPositionPersist,
         onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-        historyCallbacks = resolveScreenHistoryCallbacks(
+        screenContext = resolveScreenContext(
+            history = history,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryEntryUpdated = onHistoryEntryUpdated,
-            onHistoryRefresh = onHistoryRefresh
+            onHistoryRefresh = onHistoryRefresh,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
         ),
         dependencies = resolveThreadScreenDependencies(
             dependencies = dependencies,
@@ -179,8 +167,6 @@ internal fun buildThreadScreenContentArgs(
             stateStore = stateStore,
             autoSavedThreadRepository = autoSavedThreadRepository
         ),
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
         modifier = modifier
     )

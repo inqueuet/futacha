@@ -7,22 +7,21 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import io.ktor.client.HttpClient
 
-internal data class CatalogScreenResolvedDependencies(
-    val repository: BoardRepository?,
-    val services: ResolvedScreenServiceDependencies
-)
+internal typealias CatalogScreenResolvedDependencies = ResolvedBoardRepositoryScreenDependencies
 
 internal data class CatalogScreenContentArgs(
     val board: BoardSummary?,
-    val history: List<ThreadHistoryEntry>,
     val onBack: () -> Unit,
     val onThreadSelected: (CatalogItem) -> Unit,
-    val historyCallbacks: ResolvedScreenHistoryCallbacks,
+    val screenContext: ResolvedScreenContext,
     val dependencies: CatalogScreenResolvedDependencies,
-    val preferencesState: ScreenPreferencesState,
-    val preferencesCallbacks: ScreenPreferencesCallbacks,
     val modifier: Modifier
-)
+) {
+    val history: List<ThreadHistoryEntry> get() = screenContext.history
+    val historyCallbacks: ResolvedScreenHistoryCallbacks get() = screenContext.historyCallbacks
+    val preferencesState: ScreenPreferencesState get() = screenContext.preferencesState
+    val preferencesCallbacks: ScreenPreferencesCallbacks get() = screenContext.preferencesCallbacks
+}
 
 internal fun resolveCatalogScreenDependencies(
     dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
@@ -33,39 +32,31 @@ internal fun resolveCatalogScreenDependencies(
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
     httpClient: HttpClient? = dependencies.httpClient
 ): CatalogScreenResolvedDependencies {
-    return CatalogScreenResolvedDependencies(
+    return resolveBoardRepositoryScreenDependencies(
         repository = repository,
-        services = resolveScreenServiceDependencies(
-            dependencies = dependencies.services,
-            stateStore = stateStore,
-            autoSavedThreadRepository = autoSavedThreadRepository,
-            cookieRepository = cookieRepository,
-            fileSystem = fileSystem,
-            httpClient = httpClient
-        )
+        dependencies = dependencies.services,
+        stateStore = stateStore,
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        cookieRepository = cookieRepository,
+        fileSystem = fileSystem,
+        httpClient = httpClient
     )
 }
 
 internal fun assembleCatalogScreenContentArgs(
     board: BoardSummary?,
-    history: List<ThreadHistoryEntry>,
     onBack: () -> Unit,
     onThreadSelected: (CatalogItem) -> Unit,
-    historyCallbacks: ResolvedScreenHistoryCallbacks,
+    screenContext: ResolvedScreenContext,
     dependencies: CatalogScreenResolvedDependencies,
-    preferencesState: ScreenPreferencesState,
-    preferencesCallbacks: ScreenPreferencesCallbacks,
     modifier: Modifier = Modifier
 ): CatalogScreenContentArgs {
     return CatalogScreenContentArgs(
         board = board,
-        history = history,
         onBack = onBack,
         onThreadSelected = onThreadSelected,
-        historyCallbacks = historyCallbacks,
+        screenContext = screenContext,
         dependencies = dependencies,
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
         modifier = modifier
     )
 }
@@ -80,17 +71,12 @@ internal fun buildCatalogScreenContentArgsFromContract(
 ): CatalogScreenContentArgs {
     return assembleCatalogScreenContentArgs(
         board = board,
-        history = screenContract.history,
         onBack = onBack,
         onThreadSelected = onThreadSelected,
-        historyCallbacks = resolveScreenHistoryCallbacks(
-            historyCallbacks = screenContract.historyCallbacks
-        ),
+        screenContext = resolveScreenContext(screenContract),
         dependencies = resolveCatalogScreenDependencies(
             dependencies = dependencies
         ),
-        preferencesState = screenContract.preferencesState,
-        preferencesCallbacks = screenContract.preferencesCallbacks,
         modifier = modifier
     )
 }
@@ -119,16 +105,18 @@ internal fun buildCatalogScreenContentArgs(
 ): CatalogScreenContentArgs {
     return assembleCatalogScreenContentArgs(
         board = board,
-        history = history,
         onBack = onBack,
         onThreadSelected = onThreadSelected,
-        historyCallbacks = resolveScreenHistoryCallbacks(
+        screenContext = resolveScreenContext(
+            history = history,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryEntryUpdated = onHistoryEntryUpdated,
-            onHistoryRefresh = onHistoryRefresh
+            onHistoryRefresh = onHistoryRefresh,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
         ),
         dependencies = resolveCatalogScreenDependencies(
             dependencies = dependencies,
@@ -139,8 +127,6 @@ internal fun buildCatalogScreenContentArgs(
             fileSystem = fileSystem,
             httpClient = httpClient
         ),
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
         modifier = modifier
     )
 }

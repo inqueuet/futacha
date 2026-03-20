@@ -119,6 +119,70 @@ internal data class CatalogScreenMutableStateBundle(
     val localCatalogGridColumns: MutableState<Int>
 )
 
+internal data class CatalogScreenUiRuntimeMutableStateRefs(
+    val uiState: MutableState<CatalogUiState>,
+    val catalogMode: MutableState<CatalogMode>,
+    val isRefreshing: MutableState<Boolean>,
+    val catalogLoadJob: MutableState<Job?>,
+    val catalogLoadGeneration: MutableState<Long>,
+    val isHistoryRefreshing: MutableState<Boolean>,
+    val lastCatalogItems: MutableState<List<com.valoser.futacha.shared.model.CatalogItem>>
+)
+
+internal data class CatalogScreenSearchOverlayMutableStateRefs(
+    val isSearchActive: MutableState<Boolean>,
+    val searchQuery: MutableState<String>,
+    val debouncedSearchQuery: MutableState<String>,
+    val overlayState: MutableState<CatalogOverlayState>,
+    val archiveSearchQuery: MutableState<String>,
+    val catalogNgFilteringEnabled: MutableState<Boolean>,
+    val pastSearchRuntimeState: MutableState<CatalogPastSearchRuntimeState>
+)
+
+internal data class CatalogScreenDraftDisplayMutableStateRefs(
+    val createThreadDraft: MutableState<CreateThreadDraft>,
+    val createThreadImage: MutableState<ImageData?>,
+    val localCatalogDisplayStyle: MutableState<CatalogDisplayStyle>,
+    val localCatalogGridColumns: MutableState<Int>
+)
+
+internal data class CatalogScreenMutableStateRefs(
+    val uiRuntime: CatalogScreenUiRuntimeMutableStateRefs,
+    val searchOverlay: CatalogScreenSearchOverlayMutableStateRefs,
+    val draftDisplay: CatalogScreenDraftDisplayMutableStateRefs
+)
+
+internal fun resolveCatalogScreenMutableStateRefs(
+    bundle: CatalogScreenMutableStateBundle
+): CatalogScreenMutableStateRefs {
+    return CatalogScreenMutableStateRefs(
+        uiRuntime = CatalogScreenUiRuntimeMutableStateRefs(
+            uiState = bundle.uiState,
+            catalogMode = bundle.catalogMode,
+            isRefreshing = bundle.isRefreshing,
+            catalogLoadJob = bundle.catalogLoadJob,
+            catalogLoadGeneration = bundle.catalogLoadGeneration,
+            isHistoryRefreshing = bundle.isHistoryRefreshing,
+            lastCatalogItems = bundle.lastCatalogItems
+        ),
+        searchOverlay = CatalogScreenSearchOverlayMutableStateRefs(
+            isSearchActive = bundle.isSearchActive,
+            searchQuery = bundle.searchQuery,
+            debouncedSearchQuery = bundle.debouncedSearchQuery,
+            overlayState = bundle.overlayState,
+            archiveSearchQuery = bundle.archiveSearchQuery,
+            catalogNgFilteringEnabled = bundle.catalogNgFilteringEnabled,
+            pastSearchRuntimeState = bundle.pastSearchRuntimeState
+        ),
+        draftDisplay = CatalogScreenDraftDisplayMutableStateRefs(
+            createThreadDraft = bundle.createThreadDraft,
+            createThreadImage = bundle.createThreadImage,
+            localCatalogDisplayStyle = bundle.localCatalogDisplayStyle,
+            localCatalogGridColumns = bundle.localCatalogGridColumns
+        )
+    )
+}
+
 @Composable
 internal fun rememberCatalogScreenMutableStateBundle(
     saveableKey: String,

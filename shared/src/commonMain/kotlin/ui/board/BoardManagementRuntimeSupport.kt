@@ -49,6 +49,38 @@ internal data class BoardManagementMutableStateBundle(
     val isHistoryRefreshing: MutableState<Boolean>
 )
 
+internal data class BoardManagementModeMutableStateRefs(
+    val isMenuExpanded: MutableState<Boolean>,
+    val isDeleteMode: MutableState<Boolean>,
+    val isReorderMode: MutableState<Boolean>,
+    val isHistoryRefreshing: MutableState<Boolean>
+)
+
+internal data class BoardManagementOverlayMutableStateRefs(
+    val overlayState: MutableState<BoardManagementOverlayState>
+)
+
+internal data class BoardManagementMutableStateRefs(
+    val modes: BoardManagementModeMutableStateRefs,
+    val overlay: BoardManagementOverlayMutableStateRefs
+)
+
+internal fun resolveBoardManagementMutableStateRefs(
+    bundle: BoardManagementMutableStateBundle
+): BoardManagementMutableStateRefs {
+    return BoardManagementMutableStateRefs(
+        modes = BoardManagementModeMutableStateRefs(
+            isMenuExpanded = bundle.isMenuExpanded,
+            isDeleteMode = bundle.isDeleteMode,
+            isReorderMode = bundle.isReorderMode,
+            isHistoryRefreshing = bundle.isHistoryRefreshing
+        ),
+        overlay = BoardManagementOverlayMutableStateRefs(
+            overlayState = bundle.overlayState
+        )
+    )
+}
+
 @Composable
 internal fun rememberBoardManagementMutableStateBundle(): BoardManagementMutableStateBundle {
     return BoardManagementMutableStateBundle(

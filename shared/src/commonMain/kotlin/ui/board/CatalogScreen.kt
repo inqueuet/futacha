@@ -139,62 +139,58 @@ fun CatalogScreen(
 private fun CatalogScreenContent(
     args: CatalogScreenContentArgs
 ) {
-    val board = args.board
-    val history = args.history
-    val onBack = args.onBack
-    val onThreadSelected = args.onThreadSelected
-    val historyCallbacks = args.historyCallbacks
-    val dependencies = args.dependencies
-    val preferencesState = args.preferencesState
-    val preferencesCallbacks = args.preferencesCallbacks
-    val modifier = args.modifier
-    val onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected
-    val onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed
-    val onHistoryEntryUpdated = historyCallbacks.onHistoryEntryUpdated
-    val onHistoryRefresh = historyCallbacks.onHistoryRefresh
-    val onHistoryCleared = historyCallbacks.onHistoryCleared
-    val repository = dependencies.repository
-    val stateStore = dependencies.services.stateStore
-    val autoSavedThreadRepository = dependencies.services.autoSavedThreadRepository
-    val cookieRepository = dependencies.services.cookieRepository
-    val fileSystem = dependencies.services.fileSystem
-    val httpClient = dependencies.services.httpClient
-
-    val setupBundle = rememberCatalogScreenSetupBundle(
-        board = board,
-        repository = repository,
-        stateStore = stateStore
-    )
-    val activeRepository = setupBundle.activeRepository
-    val archiveSearchScope = setupBundle.archiveSearchScope
-    val coreBindings = setupBundle.coreBindings
-    val runtimeObjects = coreBindings.runtimeObjects
+    val preparedSetup = rememberCatalogScreenPreparedSetupBundle(args)
+    val context = preparedSetup.context
+    val board = context.board
+    val history = context.history
+    val onBack = context.onBack
+    val onThreadSelected = context.onThreadSelected
+    val onHistoryEntrySelected = context.onHistoryEntrySelected
+    val onHistoryEntryDismissed = context.onHistoryEntryDismissed
+    val onHistoryEntryUpdated = context.onHistoryEntryUpdated
+    val onHistoryRefresh = context.onHistoryRefresh
+    val onHistoryCleared = context.onHistoryCleared
+    val repository = context.repository
+    val stateStore = context.stateStore
+    val autoSavedThreadRepository = context.autoSavedThreadRepository
+    val cookieRepository = context.cookieRepository
+    val fileSystem = context.fileSystem
+    val preferencesState = context.preferencesState
+    val preferencesCallbacks = context.preferencesCallbacks
+    val httpClient = context.httpClient
+    val modifier = context.modifier
+    val activeRepository = preparedSetup.activeRepository
+    val archiveSearchScope = preparedSetup.archiveSearchScope
+    val runtimeObjects = preparedSetup.runtimeObjects
     val snackbarHostState = runtimeObjects.snackbarHostState
     val coroutineScope = runtimeObjects.coroutineScope
     val drawerState = runtimeObjects.drawerState
     val isDrawerOpen = runtimeObjects.isDrawerOpen
-    val persistentBindings = coreBindings.persistentBindings
-    val mutableStateBundle = coreBindings.mutableStateBundle
-    val uiState = mutableStateBundle.uiState
-    var catalogMode by mutableStateBundle.catalogMode
-    var isRefreshing by mutableStateBundle.isRefreshing
-    var catalogLoadJob by mutableStateBundle.catalogLoadJob
-    var catalogLoadGeneration by mutableStateBundle.catalogLoadGeneration
-    var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
-    var isSearchActive by mutableStateBundle.isSearchActive
-    var searchQuery by mutableStateBundle.searchQuery
-    var debouncedSearchQuery by mutableStateBundle.debouncedSearchQuery
-    var overlayState by mutableStateBundle.overlayState
-    var createThreadDraft by mutableStateBundle.createThreadDraft
-    var createThreadImage by mutableStateBundle.createThreadImage
-    var archiveSearchQuery by mutableStateBundle.archiveSearchQuery
-    var catalogNgFilteringEnabled by mutableStateBundle.catalogNgFilteringEnabled
+    val persistentBindings = preparedSetup.persistentBindings
+    val mutableStateRefs = preparedSetup.mutableStateRefs
+    val uiRuntimeStateRefs = mutableStateRefs.uiRuntime
+    val searchOverlayStateRefs = mutableStateRefs.searchOverlay
+    val draftDisplayStateRefs = mutableStateRefs.draftDisplay
+    val uiState = uiRuntimeStateRefs.uiState
+    var catalogMode by uiRuntimeStateRefs.catalogMode
+    var isRefreshing by uiRuntimeStateRefs.isRefreshing
+    var catalogLoadJob by uiRuntimeStateRefs.catalogLoadJob
+    var catalogLoadGeneration by uiRuntimeStateRefs.catalogLoadGeneration
+    var isHistoryRefreshing by uiRuntimeStateRefs.isHistoryRefreshing
+    var isSearchActive by searchOverlayStateRefs.isSearchActive
+    var searchQuery by searchOverlayStateRefs.searchQuery
+    var debouncedSearchQuery by searchOverlayStateRefs.debouncedSearchQuery
+    var overlayState by searchOverlayStateRefs.overlayState
+    var createThreadDraft by draftDisplayStateRefs.createThreadDraft
+    var createThreadImage by draftDisplayStateRefs.createThreadImage
+    var archiveSearchQuery by searchOverlayStateRefs.archiveSearchQuery
+    var catalogNgFilteringEnabled by searchOverlayStateRefs.catalogNgFilteringEnabled
     val catalogNgWords = persistentBindings.catalogNgWords
     val watchWords = persistentBindings.watchWords
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
     val archiveSearchJson = runtimeObjects.archiveSearchJson
-    var pastSearchRuntimeState by mutableStateBundle.pastSearchRuntimeState
+    var pastSearchRuntimeState by searchOverlayStateRefs.pastSearchRuntimeState
     val catalogGridState = runtimeObjects.catalogGridState
     val catalogListState = runtimeObjects.catalogListState
     LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes) {
@@ -212,8 +208,8 @@ private fun CatalogScreenContent(
         pastSearchRuntimeState = resetState.runtimeState
         overlayState = resetState.overlayState
     }
-    LaunchedEffect(mutableStateBundle.searchQuery) {
-        snapshotFlow { mutableStateBundle.searchQuery.value }
+    LaunchedEffect(searchOverlayStateRefs.searchQuery) {
+        snapshotFlow { searchOverlayStateRefs.searchQuery.value }
             .map(::resolveCatalogDebouncedSearchQuery)
             .distinctUntilChanged()
             .debounce(::resolveCatalogSearchDebounceMillis)
@@ -221,7 +217,7 @@ private fun CatalogScreenContent(
                 debouncedSearchQuery = normalized
             }
     }
-    var lastCatalogItems by mutableStateBundle.lastCatalogItems
+    var lastCatalogItems by uiRuntimeStateRefs.lastCatalogItems
     suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): CatalogPageContent {
         return loadCatalogItemsForMode(
             boardUrl = currentBoard.url,
@@ -230,8 +226,8 @@ private fun CatalogScreenContent(
         )
     }
     val isPrivacyFilterEnabled = persistentBindings.isPrivacyFilterEnabled
-    var localCatalogDisplayStyle by mutableStateBundle.localCatalogDisplayStyle
-    var localCatalogGridColumns by mutableStateBundle.localCatalogGridColumns
+    var localCatalogDisplayStyle by draftDisplayStateRefs.localCatalogDisplayStyle
+    var localCatalogGridColumns by draftDisplayStateRefs.localCatalogGridColumns
     val displaySettings = remember(
         stateStore,
         persistentBindings.persistentDisplayStyle,
@@ -369,7 +365,7 @@ private fun CatalogScreenContent(
             currentArchiveSearchQuery = { archiveSearchQuery },
             currentLastArchiveSearchScope = { pastSearchRuntimeState.lastArchiveSearchScope },
             onThreadSelected = onThreadSelected,
-            urlLauncher = setupBundle.urlLauncher,
+            urlLauncher = preparedSetup.urlLauncher,
             stateStore = stateStore,
             isPrivacyFilterEnabled = { isPrivacyFilterEnabled },
             coroutineScope = coroutineScope,
