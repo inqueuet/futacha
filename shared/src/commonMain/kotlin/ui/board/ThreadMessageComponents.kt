@@ -31,7 +31,6 @@ private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val URL_LINK_TEXT_REGEX = Regex("""URL(?:ﾘﾝｸ|リンク)\(([^)]+)\)""", RegexOption.IGNORE_CASE)
 
-private val FutabaQuoteGreen = Color(0xFF789922)
 internal val FutabaLinkColor = Color(0xFF800000)
 
 private val urlSpanStyle = SpanStyle(

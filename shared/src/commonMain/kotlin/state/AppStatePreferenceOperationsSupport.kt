@@ -4,10 +4,16 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
+import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
+import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.flow.Flow
@@ -35,146 +41,100 @@ internal class AppStatePreferenceOperations(
         transform: (Map<String, List<String>>) -> Map<String, List<String>>
     ) -> Unit
 ) {
-    private suspend fun <T> mutateSimplePreference(
+    private suspend fun <T> setSimple(
         value: T,
-        mutation: suspend (
-            storage: PlatformStateStorage,
-            value: T,
-            tag: String,
-            rethrowIfCancellation: (Throwable) -> Unit
-        ) -> Unit
+        update: suspend (T) -> Unit,
+        label: String,
+        rethrowOnFailure: Boolean = false
     ) {
-        mutation(storage, value, tag, rethrowIfCancellation)
+        setAppStateSimplePreference(
+            value = value,
+            update = update,
+            label = label,
+            tag = tag,
+            rethrowIfCancellation = rethrowIfCancellation,
+            rethrowOnFailure = rethrowOnFailure
+        )
     }
 
-    private suspend fun mutateStringListPreference(
-        values: List<String>,
-        mutation: suspend (
-            storage: PlatformStateStorage,
-            values: List<String>,
-            serializer: KSerializer<List<String>>,
-            json: Json,
-            tag: String,
-            rethrowIfCancellation: (Throwable) -> Unit
-        ) -> Unit
+    private suspend fun <T> setList(
+        values: List<T>,
+        serializer: KSerializer<List<T>>,
+        update: suspend (String) -> Unit,
+        label: String
     ) {
-        mutation(storage, values, stringListSerializer, json, tag, rethrowIfCancellation)
-    }
-
-    private suspend fun mutateThreadMenuConfigPreference(
-        config: List<ThreadMenuItemConfig>,
-        mutation: suspend (
-            storage: PlatformStateStorage,
-            config: List<ThreadMenuItemConfig>,
-            serializer: KSerializer<List<ThreadMenuItemConfig>>,
-            json: Json,
-            tag: String,
-            rethrowIfCancellation: (Throwable) -> Unit
-        ) -> Unit
-    ) {
-        mutation(storage, config, threadMenuConfigSerializer, json, tag, rethrowIfCancellation)
-    }
-
-    private suspend fun mutateThreadSettingsMenuConfigPreference(
-        config: List<ThreadSettingsMenuItemConfig>,
-        mutation: suspend (
-            storage: PlatformStateStorage,
-            config: List<ThreadSettingsMenuItemConfig>,
-            serializer: KSerializer<List<ThreadSettingsMenuItemConfig>>,
-            json: Json,
-            tag: String,
-            rethrowIfCancellation: (Throwable) -> Unit
-        ) -> Unit
-    ) {
-        mutation(storage, config, threadSettingsMenuConfigSerializer, json, tag, rethrowIfCancellation)
-    }
-
-    private suspend fun mutateThreadMenuEntriesPreference(
-        config: List<ThreadMenuEntryConfig>,
-        mutation: suspend (
-            storage: PlatformStateStorage,
-            config: List<ThreadMenuEntryConfig>,
-            serializer: KSerializer<List<ThreadMenuEntryConfig>>,
-            json: Json,
-            tag: String,
-            rethrowIfCancellation: (Throwable) -> Unit
-        ) -> Unit
-    ) {
-        mutation(storage, config, threadMenuEntriesSerializer, json, tag, rethrowIfCancellation)
-    }
-
-    private suspend fun mutateCatalogNavEntriesPreference(
-        config: List<CatalogNavEntryConfig>,
-        mutation: suspend (
-            storage: PlatformStateStorage,
-            config: List<CatalogNavEntryConfig>,
-            serializer: KSerializer<List<CatalogNavEntryConfig>>,
-            json: Json,
-            tag: String,
-            rethrowIfCancellation: (Throwable) -> Unit
-        ) -> Unit
-    ) {
-        mutation(storage, config, catalogNavEntriesSerializer, json, tag, rethrowIfCancellation)
-    }
-
-    suspend fun setBackgroundRefreshEnabled(enabled: Boolean) {
-        mutateSimplePreference(enabled, ::setAppStateBackgroundRefreshEnabled)
-    }
-
-    suspend fun setAdsEnabled(enabled: Boolean) {
-        mutateSimplePreference(enabled, ::setAppStateAdsEnabled)
-    }
-
-    suspend fun setHasShownPostingNotice(shown: Boolean) {
-        mutateSimplePreference(shown, ::setAppStateHasShownPostingNotice)
-    }
-
-    suspend fun setLastUsedDeleteKey(deleteKey: String) {
-        mutateSimplePreference(deleteKey, ::setAppStateLastUsedDeleteKey)
-    }
-
-    suspend fun setLightweightModeEnabled(enabled: Boolean) {
-        mutateSimplePreference(enabled, ::setAppStateLightweightModeEnabled)
-    }
-
-    suspend fun setManualSaveDirectory(directory: String) {
-        mutateSimplePreference(directory, ::setAppStateManualSaveDirectory)
-    }
-
-    suspend fun setManualSaveLocation(location: SaveLocation) {
-        mutateSimplePreference(location, ::setAppStateManualSaveLocation)
-    }
-
-    suspend fun setAttachmentPickerPreference(preference: AttachmentPickerPreference) {
-        mutateSimplePreference(preference, ::setAppStateAttachmentPickerPreference)
-    }
-
-    suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) {
-        mutateSimplePreference(selection, ::setAppStateSaveDirectorySelection)
-    }
-
-    suspend fun setPreferredFileManager(packageName: String?, label: String?) {
-        setAppStatePreferredFileManager(
-            storage = storage,
-            packageName = packageName,
+        setAppStateListPreference(
+            values = values,
+            serializer = serializer,
+            json = json,
+            update = update,
             label = label,
             tag = tag,
             rethrowIfCancellation = rethrowIfCancellation
         )
     }
 
+    suspend fun setBackgroundRefreshEnabled(enabled: Boolean) {
+        setSimple(enabled, storage::updateBackgroundRefreshEnabled, "background refresh state")
+    }
+
+    suspend fun setAdsEnabled(enabled: Boolean) {
+        setSimple(enabled, storage::updateAdsEnabled, "ads enabled state")
+    }
+
+    suspend fun setHasShownPostingNotice(shown: Boolean) {
+        setSimple(shown, storage::updateHasShownPostingNotice, "posting notice state")
+    }
+
+    suspend fun setLastUsedDeleteKey(deleteKey: String) {
+        val sanitized = deleteKey.trim().take(8)
+        setSimple(sanitized, storage::updateLastUsedDeleteKey, "last used delete key")
+    }
+
+    suspend fun setLightweightModeEnabled(enabled: Boolean) {
+        setSimple(enabled, storage::updateLightweightModeEnabled, "lightweight mode state")
+    }
+
+    suspend fun setManualSaveDirectory(directory: String) {
+        val sanitized = sanitizeManualSaveDirectoryValue(directory)
+        setSimple(sanitized, storage::updateManualSaveDirectory, "manual save directory")
+    }
+
+    suspend fun setManualSaveLocation(location: SaveLocation) {
+        val rawString = location.toRawString()
+        setSimple(rawString, storage::updateManualSaveDirectory, "manual save location")
+    }
+
+    suspend fun setAttachmentPickerPreference(preference: AttachmentPickerPreference) {
+        setSimple(preference.name, storage::updateAttachmentPickerPreference, "attachment picker preference")
+    }
+
+    suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) {
+        setSimple(selection.name, storage::updateSaveDirectorySelection, "save directory selection")
+    }
+
+    suspend fun setPreferredFileManager(packageName: String?, label: String?) {
+        setSimple(
+            value = packageName.orEmpty() to label.orEmpty(),
+            update = { (pkg, currentLabel) -> storage.updatePreferredFileManager(pkg, currentLabel) },
+            label = "preferred file manager",
+            rethrowOnFailure = true
+        )
+    }
+
     fun getPreferredFileManager(): Flow<PreferredFileManager?> = preferredFileManagerFlow
 
     suspend fun setPrivacyFilterEnabled(enabled: Boolean) {
-        mutateSimplePreference(enabled, ::setAppStatePrivacyFilterEnabled)
+        setSimple(enabled, storage::updatePrivacyFilterEnabled, "privacy filter state")
     }
 
     suspend fun setCatalogDisplayStyle(style: CatalogDisplayStyle) {
-        mutateSimplePreference(style, ::setAppStateCatalogDisplayStyle)
+        setSimple(style.name, storage::updateCatalogDisplayStyle, "catalog display style")
     }
 
     suspend fun setCatalogGridColumns(columns: Int) {
-        mutateSimplePreference(columns, ::setAppStateCatalogGridColumns)
+        val clamped = columns.coerceIn(MIN_CATALOG_GRID_COLUMNS_VALUE, MAX_CATALOG_GRID_COLUMNS_VALUE)
+        setSimple(clamped.toString(), storage::updateCatalogGridColumns, "catalog grid columns")
     }
 
     suspend fun setCatalogMode(boardId: String, mode: CatalogMode) {
@@ -187,35 +147,39 @@ internal class AppStatePreferenceOperations(
     }
 
     suspend fun setNgHeaders(headers: List<String>) {
-        mutateStringListPreference(headers, ::setAppStateNgHeaders)
+        setList(headers, stringListSerializer, storage::updateNgHeadersJson, "NG headers")
     }
 
     suspend fun setNgWords(words: List<String>) {
-        mutateStringListPreference(words, ::setAppStateNgWords)
+        setList(words, stringListSerializer, storage::updateNgWordsJson, "NG words")
     }
 
     suspend fun setCatalogNgWords(words: List<String>) {
-        mutateStringListPreference(words, ::setAppStateCatalogNgWords)
+        setList(words, stringListSerializer, storage::updateCatalogNgWordsJson, "catalog NG words")
     }
 
     suspend fun setWatchWords(words: List<String>) {
-        mutateStringListPreference(words, ::setAppStateWatchWords)
+        setList(words, stringListSerializer, storage::updateWatchWordsJson, "watch words")
     }
 
     suspend fun setThreadMenuConfig(config: List<ThreadMenuItemConfig>) {
-        mutateThreadMenuConfigPreference(config, ::setAppStateThreadMenuConfig)
+        val normalized = normalizeThreadMenuConfig(config)
+        setList(normalized, threadMenuConfigSerializer, storage::updateThreadMenuConfigJson, "thread menu config")
     }
 
     suspend fun setThreadSettingsMenuConfig(config: List<ThreadSettingsMenuItemConfig>) {
-        mutateThreadSettingsMenuConfigPreference(config, ::setAppStateThreadSettingsMenuConfig)
+        val normalized = normalizeThreadSettingsMenuConfig(config)
+        setList(normalized, threadSettingsMenuConfigSerializer, storage::updateThreadSettingsMenuConfigJson, "thread settings menu config")
     }
 
     suspend fun setThreadMenuEntries(config: List<ThreadMenuEntryConfig>) {
-        mutateThreadMenuEntriesPreference(config, ::setAppStateThreadMenuEntries)
+        val normalized = normalizeThreadMenuEntries(config)
+        setList(normalized, threadMenuEntriesSerializer, storage::updateThreadMenuEntriesConfigJson, "thread menu entries")
     }
 
     suspend fun setCatalogNavEntries(config: List<CatalogNavEntryConfig>) {
-        mutateCatalogNavEntriesPreference(config, ::setAppStateCatalogNavEntries)
+        val normalized = normalizeCatalogNavEntries(config)
+        setList(normalized, catalogNavEntriesSerializer, storage::updateCatalogNavEntriesConfigJson, "catalog nav entries")
     }
 
     suspend fun addSelfPostIdentifier(threadId: String, identifier: String, boardId: String? = null) {

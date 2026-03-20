@@ -23,11 +23,6 @@ internal data class ThreadScreenMessageNgInputs(
     val setFilteringEnabled: (Boolean) -> Unit
 )
 
-internal data class ThreadScreenMessageFormBindingsBundle(
-    val messageNgBindings: ThreadScreenMessageNgBindings,
-    val formBindings: ThreadScreenFormBindings
-)
-
 internal fun buildThreadScreenMessageNgBindings(
     inputs: ThreadScreenMessageNgInputs
 ): ThreadScreenMessageNgBindings {
@@ -58,94 +53,68 @@ internal fun buildThreadScreenMessageNgBindings(
     )
 }
 
+internal data class ThreadScreenFormInputs(
+    val currentFilterOptions: () -> Set<ThreadFilterOption>,
+    val currentFilterSortOption: () -> ThreadFilterSortOption?,
+    val currentFilterKeyword: () -> String,
+    val setFilterOptions: (Set<ThreadFilterOption>) -> Unit,
+    val setFilterSortOption: (ThreadFilterSortOption?) -> Unit,
+    val setFilterKeyword: (String) -> Unit,
+    val currentReplyName: () -> String,
+    val currentReplyEmail: () -> String,
+    val currentReplySubject: () -> String,
+    val currentReplyComment: () -> String,
+    val currentReplyPassword: () -> String,
+    val currentReplyImageData: () -> ImageData?,
+    val setReplyName: (String) -> Unit,
+    val setReplyEmail: (String) -> Unit,
+    val setReplySubject: (String) -> Unit,
+    val setReplyComment: (String) -> Unit,
+    val setReplyPassword: (String) -> Unit,
+    val setReplyImageData: (ImageData?) -> Unit,
+    val isReplyDialogVisible: () -> Boolean,
+    val setReplyDialogVisible: (Boolean) -> Unit
+)
+
 internal data class ThreadScreenFormBindings(
     val threadFilterBinding: ThreadFilterUiStateBinding,
     val replyDraftBinding: ThreadReplyDraftBinding,
     val replyDialogBinding: ThreadReplyDialogStateBinding
 )
 
-internal data class ThreadScreenFilterBindingInputs(
-    val currentOptions: () -> Set<ThreadFilterOption>,
-    val currentSortOption: () -> ThreadFilterSortOption?,
-    val currentKeyword: () -> String,
-    val setOptions: (Set<ThreadFilterOption>) -> Unit,
-    val setSortOption: (ThreadFilterSortOption?) -> Unit,
-    val setKeyword: (String) -> Unit
-)
-
-internal data class ThreadScreenReplyDraftInputs(
-    val currentName: () -> String,
-    val currentEmail: () -> String,
-    val currentSubject: () -> String,
-    val currentComment: () -> String,
-    val currentPassword: () -> String,
-    val currentImageData: () -> ImageData?,
-    val setName: (String) -> Unit,
-    val setEmail: (String) -> Unit,
-    val setSubject: (String) -> Unit,
-    val setComment: (String) -> Unit,
-    val setPassword: (String) -> Unit,
-    val setImageData: (ImageData?) -> Unit
-)
-
-internal data class ThreadScreenReplyDialogInputs(
-    val isVisible: () -> Boolean,
-    val setVisible: (Boolean) -> Unit
-)
-
-internal data class ThreadScreenFormInputs(
-    val filterInputs: ThreadScreenFilterBindingInputs,
-    val replyDraftInputs: ThreadScreenReplyDraftInputs,
-    val replyDialogInputs: ThreadScreenReplyDialogInputs
-)
-
 internal fun buildThreadScreenFormBindings(
     inputs: ThreadScreenFormInputs
 ): ThreadScreenFormBindings {
     val threadFilterBinding = buildThreadFilterUiStateBinding(
-        currentOptions = inputs.filterInputs.currentOptions,
-        currentSortOption = inputs.filterInputs.currentSortOption,
-        currentKeyword = inputs.filterInputs.currentKeyword,
-        setOptions = inputs.filterInputs.setOptions,
-        setSortOption = inputs.filterInputs.setSortOption,
-        setKeyword = inputs.filterInputs.setKeyword
+        currentOptions = inputs.currentFilterOptions,
+        currentSortOption = inputs.currentFilterSortOption,
+        currentKeyword = inputs.currentFilterKeyword,
+        setOptions = inputs.setFilterOptions,
+        setSortOption = inputs.setFilterSortOption,
+        setKeyword = inputs.setFilterKeyword
     )
     val replyDraftBinding = buildThreadReplyDraftBinding(
-        currentName = inputs.replyDraftInputs.currentName,
-        currentEmail = inputs.replyDraftInputs.currentEmail,
-        currentSubject = inputs.replyDraftInputs.currentSubject,
-        currentComment = inputs.replyDraftInputs.currentComment,
-        currentPassword = inputs.replyDraftInputs.currentPassword,
-        currentImageData = inputs.replyDraftInputs.currentImageData,
-        setName = inputs.replyDraftInputs.setName,
-        setEmail = inputs.replyDraftInputs.setEmail,
-        setSubject = inputs.replyDraftInputs.setSubject,
-        setComment = inputs.replyDraftInputs.setComment,
-        setPassword = inputs.replyDraftInputs.setPassword,
-        setImageData = inputs.replyDraftInputs.setImageData
+        currentName = inputs.currentReplyName,
+        currentEmail = inputs.currentReplyEmail,
+        currentSubject = inputs.currentReplySubject,
+        currentComment = inputs.currentReplyComment,
+        currentPassword = inputs.currentReplyPassword,
+        currentImageData = inputs.currentReplyImageData,
+        setName = inputs.setReplyName,
+        setEmail = inputs.setReplyEmail,
+        setSubject = inputs.setReplySubject,
+        setComment = inputs.setReplyComment,
+        setPassword = inputs.setReplyPassword,
+        setImageData = inputs.setReplyImageData
     )
     return ThreadScreenFormBindings(
         threadFilterBinding = threadFilterBinding,
         replyDraftBinding = replyDraftBinding,
         replyDialogBinding = buildThreadReplyDialogStateBinding(
-            isVisible = inputs.replyDialogInputs.isVisible,
-            setVisible = inputs.replyDialogInputs.setVisible,
+            isVisible = inputs.isReplyDialogVisible,
+            setVisible = inputs.setReplyDialogVisible,
             draftBinding = replyDraftBinding
         )
-    )
-}
-
-internal data class ThreadScreenMessageFormInputs(
-    val messageNgInputs: ThreadScreenMessageNgInputs,
-    val formInputs: ThreadScreenFormInputs
-)
-
-internal fun buildThreadScreenMessageFormBindingsBundle(
-    inputs: ThreadScreenMessageFormInputs
-): ThreadScreenMessageFormBindingsBundle {
-    return ThreadScreenMessageFormBindingsBundle(
-        messageNgBindings = buildThreadScreenMessageNgBindings(inputs.messageNgInputs),
-        formBindings = buildThreadScreenFormBindings(inputs.formInputs)
     )
 }
 

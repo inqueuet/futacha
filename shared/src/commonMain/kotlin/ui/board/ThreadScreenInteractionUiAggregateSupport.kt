@@ -2,10 +2,14 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.DrawerState
+import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.repository.CookieRepository
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 internal data class ThreadScreenInteractionUiAggregateBundle(
@@ -236,8 +240,8 @@ internal data class ThreadScreenUiRuntimeInputs(
     val onStopReadAloud: () -> Unit,
     val onShowMessage: (String) -> Unit,
     val ngMutationCallbacks: ThreadNgMutationCallbacks,
-    val currentManualSaveJob: () -> kotlinx.coroutines.Job?,
-    val setSaveProgress: (com.valoser.futacha.shared.model.SaveProgress?) -> Unit,
+    val currentManualSaveJob: () -> Job?,
+    val setSaveProgress: (SaveProgress?) -> Unit,
     val screenPreferencesCallbacks: ScreenPreferencesCallbacks,
     val onOpenCookieManager: (() -> Unit)?,
     val onDismissCookieManagement: () -> Unit,
@@ -409,5 +413,166 @@ internal fun buildThreadScreenInteractionUiAggregateBundle(
             inputs.controllerInteractionRuntimeInputs
         ),
         uiInputs = buildThreadScreenAggregateUiInputs(inputs.uiRuntimeInputs)
+    )
+}
+
+internal data class ThreadScreenOverlayStateBindings(
+    val currentModalOverlayState: () -> ThreadModalOverlayState,
+    val setModalOverlayState: (ThreadModalOverlayState) -> Unit,
+    val currentSheetOverlayState: () -> ThreadSheetOverlayState,
+    val setSheetOverlayState: (ThreadSheetOverlayState) -> Unit,
+    val currentPostOverlayState: () -> ThreadPostOverlayState,
+    val setPostOverlayState: (ThreadPostOverlayState) -> Unit
+)
+
+internal data class ThreadScreenInteractionUiWiringInputs(
+    val coroutineScope: CoroutineScope,
+    val lazyListState: LazyListState,
+    val drawerState: DrawerState,
+    val snackbarHostState: SnackbarHostState,
+    val overlayStateBindings: ThreadScreenOverlayStateBindings,
+    val mediaPreviewState: () -> ThreadMediaPreviewState,
+    val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
+    val mediaPreviewEntries: () -> List<MediaPreviewEntry>,
+    val actionStateBindings: ThreadScreenActionStateBindings,
+    val actionDependencies: ThreadScreenActionDependencies,
+    val historyRefreshStateBindings: ThreadScreenHistoryRefreshStateBindings,
+    val onHistoryRefresh: suspend () -> Unit,
+    val readAloudStateBindings: ThreadScreenReadAloudStateBindings,
+    val readAloudCallbacks: ThreadScreenReadAloudCallbacks,
+    val readAloudDependencies: ThreadScreenReadAloudDependencies,
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val currentIsRefreshing: () -> Boolean,
+    val currentUiState: () -> ThreadUiState,
+    val currentSearchIndex: () -> Int,
+    val setCurrentSearchIndex: (Int) -> Unit,
+    val currentSearchMatches: () -> List<ThreadSearchMatch>,
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
+    val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
+    val onHistoryCleared: () -> Unit,
+    val onBack: () -> Unit,
+    val lastUsedDeleteKey: String,
+    val currentSaidaneLabel: (Post) -> String?,
+    val isSelfPost: (Post) -> Boolean,
+    val onSaidaneLabelUpdated: (Post, String) -> Unit,
+    val repository: BoardRepository,
+    val effectiveBoardUrl: String,
+    val threadId: String,
+    val onStartRefresh: (Int, Int) -> Unit,
+    val onHandleThreadSaveRequest: () -> Unit,
+    val onShowMessage: (String) -> Unit,
+    val onOpenExternalApp: () -> Unit,
+    val onTogglePrivacy: () -> Unit,
+    val setSearchQuery: (String) -> Unit,
+    val setSearchActive: (Boolean) -> Unit,
+    val singleMediaSaveBindings: ThreadScreenSingleMediaSaveBindings,
+    val currentSuccessState: ThreadUiState.Success?,
+    val threadFilterBinding: ThreadFilterUiStateBinding,
+    val firstVisibleSegmentIndex: () -> Int,
+    val pauseReadAloud: () -> Unit,
+    val stopReadAloud: () -> Unit,
+    val threadNgMutationCallbacks: ThreadNgMutationCallbacks,
+    val currentManualSaveJob: () -> Job?,
+    val setSaveProgress: (SaveProgress?) -> Unit,
+    val preferencesCallbacks: ScreenPreferencesCallbacks,
+    val cookieRepository: CookieRepository?
+)
+
+internal fun buildThreadScreenInteractionUiWiring(
+    inputs: ThreadScreenInteractionUiWiringInputs
+): ThreadScreenInteractionUiAggregateBundle {
+    val overlayBindings = inputs.overlayStateBindings
+    return buildThreadScreenInteractionUiAggregateBundle(
+        ThreadScreenInteractionUiAggregateRuntimeInputs(
+            mediaInputs = ThreadScreenAggregateMediaInputs(
+                currentPreviewState = inputs.mediaPreviewState,
+                setPreviewState = inputs.setMediaPreviewState,
+                currentMediaEntries = inputs.mediaPreviewEntries
+            ),
+            controllerActionInputs = ThreadScreenControllerActionInputs(
+                coroutineScope = inputs.coroutineScope,
+                actionStateBindings = inputs.actionStateBindings,
+                actionDependencies = inputs.actionDependencies,
+                historyRefreshStateBindings = inputs.historyRefreshStateBindings,
+                onHistoryRefresh = inputs.onHistoryRefresh,
+                showHistoryRefreshMessage = inputs.snackbarHostState::showSnackbar,
+                readAloudStateBindings = inputs.readAloudStateBindings,
+                readAloudCallbacks = inputs.readAloudCallbacks,
+                readAloudDependencies = inputs.readAloudDependencies
+            ),
+            controllerInteractionRuntimeInputs = ThreadScreenControllerInteractionRuntimeInputs(
+                coroutineScope = inputs.coroutineScope,
+                lazyListState = inputs.lazyListState,
+                drawerState = inputs.drawerState,
+                replyDialogBinding = inputs.replyDialogBinding,
+                currentIsRefreshing = inputs.currentIsRefreshing,
+                currentUiState = inputs.currentUiState,
+                currentModalOverlayState = overlayBindings.currentModalOverlayState,
+                setModalOverlayState = overlayBindings.setModalOverlayState,
+                currentSheetOverlayState = overlayBindings.currentSheetOverlayState,
+                setSheetOverlayState = overlayBindings.setSheetOverlayState,
+                currentPostOverlayState = overlayBindings.currentPostOverlayState,
+                setPostOverlayState = overlayBindings.setPostOverlayState,
+                currentSearchIndex = inputs.currentSearchIndex,
+                setCurrentSearchIndex = inputs.setCurrentSearchIndex,
+                currentSearchMatches = inputs.currentSearchMatches,
+                onHistoryEntrySelected = inputs.onHistoryEntrySelected,
+                onHistoryEntryDismissed = inputs.onHistoryEntryDismissed,
+                onHistoryCleared = inputs.onHistoryCleared,
+                onBack = inputs.onBack,
+                lastUsedDeleteKey = inputs.lastUsedDeleteKey,
+                currentSaidaneLabel = inputs.currentSaidaneLabel,
+                isSelfPost = inputs.isSelfPost,
+                onSaidaneLabelUpdated = inputs.onSaidaneLabelUpdated,
+                repository = inputs.repository,
+                effectiveBoardUrl = inputs.effectiveBoardUrl,
+                threadId = inputs.threadId,
+                onStartRefresh = inputs.onStartRefresh,
+                onHandleThreadSaveRequest = inputs.onHandleThreadSaveRequest,
+                onShowMessage = inputs.onShowMessage,
+                showSnackbar = inputs.snackbarHostState::showSnackbar,
+                onOpenExternalApp = inputs.onOpenExternalApp,
+                onTogglePrivacy = inputs.onTogglePrivacy
+            ),
+            uiRuntimeInputs = ThreadScreenUiRuntimeInputs(
+                coroutineScope = inputs.coroutineScope,
+                lazyListState = inputs.lazyListState,
+                drawerState = inputs.drawerState,
+                currentModalOverlayState = overlayBindings.currentModalOverlayState,
+                setModalOverlayState = overlayBindings.setModalOverlayState,
+                currentSheetOverlayState = overlayBindings.currentSheetOverlayState,
+                setSheetOverlayState = overlayBindings.setSheetOverlayState,
+                currentPostOverlayState = overlayBindings.currentPostOverlayState,
+                setPostOverlayState = overlayBindings.setPostOverlayState,
+                setSearchQuery = inputs.setSearchQuery,
+                setSearchActive = inputs.setSearchActive,
+                replyDialogBinding = inputs.replyDialogBinding,
+                mediaPreviewEntryCount = inputs.mediaPreviewEntries().size,
+                onSavePreviewMedia = inputs.singleMediaSaveBindings.savePreviewMedia,
+                galleryPosts = inputs.currentSuccessState?.page?.posts,
+                threadFilterBinding = inputs.threadFilterBinding,
+                firstVisibleSegmentIndex = inputs.firstVisibleSegmentIndex,
+                onPauseReadAloud = inputs.pauseReadAloud,
+                onStopReadAloud = inputs.stopReadAloud,
+                onShowMessage = inputs.onShowMessage,
+                ngMutationCallbacks = inputs.threadNgMutationCallbacks,
+                currentManualSaveJob = inputs.currentManualSaveJob,
+                setSaveProgress = inputs.setSaveProgress,
+                screenPreferencesCallbacks = inputs.preferencesCallbacks,
+                onOpenCookieManager = inputs.cookieRepository?.let {
+                    {
+                        overlayBindings.setModalOverlayState(
+                            openThreadCookieManagementOverlay(overlayBindings.currentModalOverlayState())
+                        )
+                    }
+                },
+                onDismissCookieManagement = {
+                    overlayBindings.setModalOverlayState(
+                        dismissThreadCookieManagementOverlay(overlayBindings.currentModalOverlayState())
+                    )
+                },
+                onBack = inputs.onBack
+            )
+        )
     )
 }

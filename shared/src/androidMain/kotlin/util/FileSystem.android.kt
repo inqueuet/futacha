@@ -39,31 +39,11 @@ class AndroidFileSystem(
         private const val SAF_READ_IDLE_TIMEOUT_MILLIS = 15_000L
     }
 
-    private inline fun <T> runFsCatching(block: () -> T): Result<T> {
-        return try {
-            Result.success(block())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Result.failure(t)
-        }
-    }
+    private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
 
-    /**
-     * FIX: 入力検証 - セキュリティとデータ整合性のための検証
-     *
-     * @throws IllegalArgumentException パスが不正な場合
-     */
-    private fun validatePath(path: String, paramName: String = "path") =
-        validateFileSystemPath(path, paramName)
+    private fun validatePath(path: String, paramName: String = "path") = validateFileSystemPath(path, paramName)
 
-    /**
-     * FIX: ファイルサイズ検証 - OOM防止
-     *
-     * @throws IllegalArgumentException サイズが上限を超える場合
-     */
-    private fun validateFileSize(size: Long, paramName: String = "file") =
-        validateFileSystemSize(size, paramName)
+    private fun validateFileSize(size: Long, paramName: String = "file") = validateFileSystemSize(size, paramName)
 
     private suspend fun backoffAfterZeroRead() {
         coroutineContext.ensureActive()
@@ -630,15 +610,8 @@ class AndroidFileSystem(
     // Helper methods for DocumentFile navigation
     // ========================================
 
-    private fun splitParentAndFileName(relativePath: String): Pair<String, String> {
-        val normalized = relativePath.trim().trim('/')
-        val lastSlash = normalized.lastIndexOf('/')
-        return if (lastSlash < 0) {
-            "" to normalized
-        } else {
-            normalized.substring(0, lastSlash) to normalized.substring(lastSlash + 1)
-        }
-    }
+    private fun splitParentAndFileName(relativePath: String): Pair<String, String> =
+        com.valoser.futacha.shared.util.splitParentAndFileName(relativePath)
 
     // FIX: DocumentFileナビゲーションのエラーハンドリングを強化
     private fun navigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile? {

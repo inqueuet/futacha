@@ -23,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
@@ -52,7 +51,6 @@ import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
-import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
@@ -366,134 +364,55 @@ fun CatalogScreen(
         lifecycleBindings.onInitialLoad()
     }
     val overlayBindings = interactionBindings.overlayBindings
-    val scaffoldBindings = CatalogScreenScaffoldBindings(
-        history = history,
-        onHistoryEntryDismissed = onHistoryEntryDismissed,
-        historyDrawerCallbacks = historyDrawerCallbacks,
-        drawerState = drawerState,
-        isDrawerOpen = isDrawerOpen,
-        coroutineScope = coroutineScope,
-        snackbarHostState = snackbarHostState,
-        board = board,
-        catalogMode = catalogMode,
-        searchQuery = searchQuery,
-        isSearchActive = isSearchActive,
-        topBarCallbacks = runtimeBindings.topBarCallbacks,
-        catalogNavEntries = preferencesState.catalogNavEntries,
-        navigationCallbacks = runtimeBindings.navigationCallbacks,
-        uiState = uiState.value,
-        watchWords = watchWords,
-        catalogNgWords = catalogNgWords,
-        catalogNgFilteringEnabled = catalogNgFilteringEnabled,
-        debouncedSearchQuery = debouncedSearchQuery,
-        activeRepository = activeRepository,
-        onThreadSelected = onThreadSelected,
-        performRefresh = performRefresh,
-        isRefreshing = isRefreshing,
-        catalogDisplayStyle = catalogDisplayStyle,
-        catalogGridColumns = catalogGridColumns,
-        catalogGridState = catalogGridState,
-        catalogListState = catalogListState
-    )
-    val overlayHostBindings = CatalogScreenOverlayHostBindings(
-        overlayState = overlayState,
-        overlayBindings = overlayBindings,
-        createThreadDraft = createThreadDraft,
-        setCreateThreadDraft = { createThreadDraft = it },
-        createThreadImage = createThreadImage,
-        setCreateThreadImage = { createThreadImage = it },
-        setCreateThreadDialogVisible = { isVisible ->
-            overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
-        },
-        board = board,
-        archiveSearchQuery = archiveSearchQuery,
-        searchQuery = searchQuery,
-        catalogMode = catalogMode,
-        catalogDisplayStyle = catalogDisplayStyle,
-        catalogGridColumns = catalogGridColumns,
-        pastSearchRuntimeState = pastSearchRuntimeState,
-        watchWords = watchWords,
-        catalogNgWords = catalogNgWords,
-        catalogNgFilteringEnabled = catalogNgFilteringEnabled,
-        isPrivacyFilterEnabled = isPrivacyFilterEnabled,
-        createThreadBindings = createThreadBindings,
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
-        history = history,
-        fileSystem = fileSystem,
-        autoSavedThreadRepository = autoSavedThreadRepository,
-        cookieRepository = cookieRepository
+    val (scaffoldBindings, overlayHostBindings) = buildCatalogScreenHostBindings(
+        CatalogScreenHostBindingsInputs(
+            history = history,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            historyDrawerCallbacks = historyDrawerCallbacks,
+            drawerState = drawerState,
+            isDrawerOpen = isDrawerOpen,
+            coroutineScope = coroutineScope,
+            snackbarHostState = snackbarHostState,
+            board = board,
+            catalogMode = catalogMode,
+            searchQuery = searchQuery,
+            isSearchActive = isSearchActive,
+            runtimeBindings = runtimeBindings,
+            preferencesState = preferencesState,
+            uiState = uiState.value,
+            watchWords = watchWords,
+            catalogNgWords = catalogNgWords,
+            catalogNgFilteringEnabled = catalogNgFilteringEnabled,
+            debouncedSearchQuery = debouncedSearchQuery,
+            activeRepository = activeRepository,
+            onThreadSelected = onThreadSelected,
+            performRefresh = performRefresh,
+            isRefreshing = isRefreshing,
+            catalogDisplayStyle = catalogDisplayStyle,
+            catalogGridColumns = catalogGridColumns,
+            catalogGridState = catalogGridState,
+            catalogListState = catalogListState,
+            overlayState = overlayState,
+            overlayBindings = overlayBindings,
+            createThreadDraft = createThreadDraft,
+            setCreateThreadDraft = { createThreadDraft = it },
+            createThreadImage = createThreadImage,
+            setCreateThreadImage = { createThreadImage = it },
+            setCreateThreadDialogVisible = { isVisible ->
+                overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
+            },
+            archiveSearchQuery = archiveSearchQuery,
+            pastSearchRuntimeState = pastSearchRuntimeState,
+            isPrivacyFilterEnabled = isPrivacyFilterEnabled,
+            createThreadBindings = createThreadBindings,
+            preferencesCallbacks = preferencesCallbacks,
+            fileSystem = fileSystem,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            cookieRepository = cookieRepository
+        )
     )
 
     CatalogScreenScaffold(bindings = scaffoldBindings, modifier = modifier)
 
     CatalogScreenOverlayHost(bindings = overlayHostBindings)
-}
-
-
-/**
- * Platform-specific image picker button
- */
-@Composable
-expect fun ImagePickerButton(
-    onImageSelected: (com.valoser.futacha.shared.util.ImageData) -> Unit,
-    preference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
-    preferredFileManagerPackage: String? = null
-)
-
-/**
- * Platform-specific directory picker launcher
- */
-@Composable
-expect fun rememberDirectoryPickerLauncher(
-    onDirectorySelected: (com.valoser.futacha.shared.model.SaveLocation) -> Unit,
-    preferredFileManagerPackage: String? = null
-): () -> Unit
-
-// Futaba color scheme (for ThreadScreen)
-
-private val FutabaBackground = Color(0xFFFFFFEE)
-private val FutabaSurface = Color(0xFFF0E0D6)
-private val FutabaSurfaceVariant = Color(0xFFE9CCCC)
-private val FutabaLabelSurface = Color(0xFFEEAA88)
-private val FutabaText = Color(0xFF800000)
-private val FutabaTextDim = Color(0xCC800000)
-private val FutabaAccentRed = Color(0xFFCC1105)
-private val FutabaNameGreen = Color(0xFF117743)
-private val FutabaQuoteGreen = Color(0xFF789922)
-
-@Composable
-internal fun rememberFutabaThreadColorScheme(
-    base: ColorScheme = MaterialTheme.colorScheme
-): ColorScheme {
-    return remember(base) {
-        base.copy(
-            primary = FutabaSurface,
-            onPrimary = FutabaText,
-            primaryContainer = FutabaLabelSurface,
-            onPrimaryContainer = FutabaText,
-            inversePrimary = FutabaAccentRed,
-            secondary = FutabaNameGreen,
-            onSecondary = FutabaBackground,
-            secondaryContainer = FutabaSurface,
-            onSecondaryContainer = FutabaNameGreen,
-            tertiary = FutabaAccentRed,
-            onTertiary = FutabaBackground,
-            tertiaryContainer = FutabaSurfaceVariant,
-            onTertiaryContainer = FutabaText,
-            background = FutabaBackground,
-            onBackground = FutabaText,
-            surface = FutabaSurface,
-            onSurface = FutabaText,
-            surfaceVariant = FutabaSurfaceVariant,
-            onSurfaceVariant = FutabaTextDim,
-            surfaceTint = FutabaSurface,
-            error = FutabaAccentRed,
-            onError = FutabaBackground,
-            errorContainer = FutabaSurfaceVariant,
-            onErrorContainer = FutabaText,
-            outline = FutabaText,
-            outlineVariant = FutabaTextDim
-        )
-    }
 }

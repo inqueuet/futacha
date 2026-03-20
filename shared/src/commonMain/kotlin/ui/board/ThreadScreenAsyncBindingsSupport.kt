@@ -1,11 +1,14 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
@@ -381,4 +384,83 @@ internal fun buildThreadScreenAsyncBindingsBundle(
             uiCallbacks = loadUiCallbacks
         )
     )
+}
+
+@Composable
+internal fun rememberThreadScreenAsyncBindingsBundle(
+    coroutineScope: CoroutineScope,
+    activeRepository: BoardRepository,
+    history: List<ThreadHistoryEntry>,
+    threadId: String,
+    threadTitle: String?,
+    board: BoardSummary,
+    effectiveBoardUrl: String,
+    resolvedThreadUrlOverride: String?,
+    archiveSearchJson: Json,
+    offlineLookupContext: OfflineThreadLookupContext,
+    offlineSources: List<OfflineThreadSource>,
+    httpClient: HttpClient?,
+    fileSystem: FileSystem?,
+    autoSaveRepository: SavedThreadRepository?,
+    manualSaveRepository: SavedThreadRepository?,
+    asyncRuntimeBindingsBundle: ThreadScreenAsyncRuntimeBindingsBundle,
+    preferencesState: ScreenPreferencesState,
+    isAndroidPlatform: Boolean
+): ThreadScreenAsyncBindingsBundle {
+    return remember(
+        activeRepository,
+        board,
+        httpClient,
+        fileSystem,
+        autoSaveRepository,
+        threadId,
+        threadTitle,
+        board.url,
+        effectiveBoardUrl,
+        resolvedThreadUrlOverride,
+        archiveSearchJson,
+        offlineLookupContext,
+        offlineSources,
+        history,
+        preferencesState.manualSaveDirectory,
+        preferencesState.manualSaveLocation,
+        preferencesState.resolvedManualSaveDirectory
+    ) {
+        buildThreadScreenAsyncBindingsBundle(
+            ThreadScreenAsyncBindingsInputs(
+                coroutineScope = coroutineScope,
+                repository = activeRepository,
+                history = history,
+                threadId = threadId,
+                threadTitle = threadTitle,
+                board = board,
+                boardUrl = board.url,
+                effectiveBoardUrl = effectiveBoardUrl,
+                threadUrlOverride = resolvedThreadUrlOverride,
+                archiveSearchJson = archiveSearchJson,
+                offlineLookupContext = offlineLookupContext,
+                offlineSources = offlineSources,
+                currentThreadUrlOverride = { resolvedThreadUrlOverride },
+                httpClient = httpClient,
+                fileSystem = fileSystem,
+                autoSaveRepository = autoSaveRepository,
+                manualSaveRepository = manualSaveRepository,
+                minAutoSaveIntervalMillis = AUTO_SAVE_INTERVAL_MS,
+                runtimeBindings = asyncRuntimeBindingsBundle,
+                manualSaveDirectory = preferencesState.manualSaveDirectory,
+                manualSaveLocation = preferencesState.manualSaveLocation,
+                resolvedManualSaveDirectory = preferencesState.resolvedManualSaveDirectory,
+                requiresManualLocationSelection = requiresThreadManualSaveLocationSelection(
+                    isAndroidPlatform,
+                    preferencesState.manualSaveLocation
+                ),
+                onWarning = { message ->
+                    Logger.w(THREAD_SCREEN_TAG, message)
+                },
+                onInfo = { message ->
+                    Logger.i(THREAD_SCREEN_TAG, message)
+                }
+            )
+        )
+    }
 }

@@ -86,11 +86,9 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.confirmPostingNotice
 import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -167,12 +165,11 @@ fun ThreadScreen(
         threadUrlOverride = threadUrlOverride
     )
     var resolvedThreadUrlOverride by mutableStateBundle.resolvedThreadUrlOverride
-    LaunchedEffect(threadUrlOverride) {
-        resolveThreadUrlOverrideSyncState(
-            currentResolvedThreadUrlOverride = resolvedThreadUrlOverride,
-            incomingThreadUrlOverride = threadUrlOverride
-        )?.let { resolvedThreadUrlOverride = it }
-    }
+    ThreadUrlOverrideSyncEffect(
+        threadUrlOverride = threadUrlOverride,
+        resolvedThreadUrlOverride = resolvedThreadUrlOverride,
+        onResolvedThreadUrlOverrideChanged = { resolvedThreadUrlOverride = it }
+    )
     val coreSetupBundle = rememberThreadScreenCoreSetupBundle(
         board = board,
         history = history,
@@ -255,64 +252,56 @@ fun ThreadScreen(
         )
     )
     val stateRuntimeBindingsBundle = buildThreadScreenStateRuntimeBindingsBundle(
-        inputs = ThreadScreenStateRuntimeAggregateInputs(
-            runtimeJobInputs = ThreadScreenRuntimeJobInputs(
-                readAloudStateBindings = readAloudStateBindings,
-                onStopPlayback = textSpeaker::stop,
-                currentAutoSaveJob = { autoSaveJob },
-                setAutoSaveJob = { autoSaveJob = it },
-                currentManualSaveJob = { manualSaveJob },
-                setManualSaveJob = { manualSaveJob = it },
-                currentSingleMediaSaveJob = { singleMediaSaveJob },
-                setSingleMediaSaveJob = { singleMediaSaveJob = it },
-                currentRefreshThreadJob = { refreshThreadJob },
-                setRefreshThreadJob = { refreshThreadJob = it },
-                setIsManualSaveInProgress = { isManualSaveInProgress = it },
-                setIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress = it },
-                onDismissReadAloudOverlay = {
-                    sheetOverlayState = dismissThreadReadAloudOverlay(sheetOverlayState)
-                }
-            ),
-            messageNgInputs = ThreadScreenMessageNgInputs(
-                coroutineScope = coroutineScope,
-                showSnackbar = snackbarHostState::showSnackbar,
-                screenPreferencesCallbacks = preferencesCallbacks,
-                stateStore = stateStore,
-                onFallbackHeadersChanged = persistentBindings.onFallbackHeadersChanged,
-                onFallbackWordsChanged = persistentBindings.onFallbackWordsChanged,
-                currentHeaders = { ngHeaders },
-                currentWords = { ngWords },
-                isFilteringEnabled = { ngFilteringEnabled },
-                setFilteringEnabled = { ngFilteringEnabled = it }
-            ),
-            formInputs = ThreadScreenFormInputs(
-                filterInputs = ThreadScreenFilterBindingInputs(
-                    currentOptions = { selectedThreadFilterOptions },
-                    currentSortOption = { selectedThreadSortOption },
-                    currentKeyword = { threadFilterKeyword },
-                    setOptions = { selectedThreadFilterOptions = it },
-                    setSortOption = { selectedThreadSortOption = it },
-                    setKeyword = { threadFilterKeyword = it }
-                ),
-                replyDraftInputs = ThreadScreenReplyDraftInputs(
-                    currentName = { replyName },
-                    currentEmail = { replyEmail },
-                    currentSubject = { replySubject },
-                    currentComment = { replyComment },
-                    currentPassword = { replyPassword },
-                    currentImageData = { replyImageData },
-                    setName = { replyName = it },
-                    setEmail = { replyEmail = it },
-                    setSubject = { replySubject = it },
-                    setComment = { replyComment = it },
-                    setPassword = { replyPassword = it },
-                    setImageData = { replyImageData = it }
-                ),
-                replyDialogInputs = ThreadScreenReplyDialogInputs(
-                    isVisible = { isReplyDialogVisible },
-                    setVisible = { isReplyDialogVisible = it }
-                )
-            )
+        runtimeJobInputs = ThreadScreenRuntimeJobInputs(
+            readAloudStateBindings = readAloudStateBindings,
+            onStopPlayback = textSpeaker::stop,
+            currentAutoSaveJob = { autoSaveJob },
+            setAutoSaveJob = { autoSaveJob = it },
+            currentManualSaveJob = { manualSaveJob },
+            setManualSaveJob = { manualSaveJob = it },
+            currentSingleMediaSaveJob = { singleMediaSaveJob },
+            setSingleMediaSaveJob = { singleMediaSaveJob = it },
+            currentRefreshThreadJob = { refreshThreadJob },
+            setRefreshThreadJob = { refreshThreadJob = it },
+            setIsManualSaveInProgress = { isManualSaveInProgress = it },
+            setIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress = it },
+            onDismissReadAloudOverlay = {
+                sheetOverlayState = dismissThreadReadAloudOverlay(sheetOverlayState)
+            }
+        ),
+        messageNgInputs = ThreadScreenMessageNgInputs(
+            coroutineScope = coroutineScope,
+            showSnackbar = snackbarHostState::showSnackbar,
+            screenPreferencesCallbacks = preferencesCallbacks,
+            stateStore = stateStore,
+            onFallbackHeadersChanged = persistentBindings.onFallbackHeadersChanged,
+            onFallbackWordsChanged = persistentBindings.onFallbackWordsChanged,
+            currentHeaders = { ngHeaders },
+            currentWords = { ngWords },
+            isFilteringEnabled = { ngFilteringEnabled },
+            setFilteringEnabled = { ngFilteringEnabled = it }
+        ),
+        formInputs = ThreadScreenFormInputs(
+            currentFilterOptions = { selectedThreadFilterOptions },
+            currentFilterSortOption = { selectedThreadSortOption },
+            currentFilterKeyword = { threadFilterKeyword },
+            setFilterOptions = { selectedThreadFilterOptions = it },
+            setFilterSortOption = { selectedThreadSortOption = it },
+            setFilterKeyword = { threadFilterKeyword = it },
+            currentReplyName = { replyName },
+            currentReplyEmail = { replyEmail },
+            currentReplySubject = { replySubject },
+            currentReplyComment = { replyComment },
+            currentReplyPassword = { replyPassword },
+            currentReplyImageData = { replyImageData },
+            setReplyName = { replyName = it },
+            setReplyEmail = { replyEmail = it },
+            setReplySubject = { replySubject = it },
+            setReplyComment = { replyComment = it },
+            setReplyPassword = { replyPassword = it },
+            setReplyImageData = { replyImageData = it },
+            isReplyDialogVisible = { isReplyDialogVisible },
+            setReplyDialogVisible = { isReplyDialogVisible = it }
         )
     )
     val readAloudRuntimeBindings = stateRuntimeBindingsBundle.readAloudRuntimeBindings
@@ -326,13 +315,11 @@ fun ThreadScreen(
     val threadNgMutationCallbacks = stateRuntimeBindingsBundle.threadNgMutationCallbacks
     val threadFilterBinding = stateRuntimeBindingsBundle.threadFilterBinding
     val replyDialogBinding = stateRuntimeBindingsBundle.replyDialogBinding
-    LaunchedEffect(isReplyDialogVisible, lastUsedDeleteKey) {
-        resolveThreadReplyDialogAutofillState(
-            isReplyDialogVisible = isReplyDialogVisible,
-            currentState = replyDialogBinding.currentState(),
-            lastUsedDeleteKey = lastUsedDeleteKey
-        )?.let { replyDialogBinding.setState(it) }
-    }
+    ThreadReplyDialogAutofillEffect(
+        isReplyDialogVisible = isReplyDialogVisible,
+        lastUsedDeleteKey = lastUsedDeleteKey,
+        replyDialogBinding = replyDialogBinding
+    )
     var isRefreshing by mutableStateBundle.isRefreshing
     var manualRefreshGeneration by mutableStateBundle.manualRefreshGeneration
     var isHistoryRefreshing by mutableStateBundle.isHistoryRefreshing
@@ -413,62 +400,26 @@ fun ThreadScreen(
             }
         )
     )
-    val asyncBindingsBundle = remember(
-        activeRepository,
-        board,
-        httpClient,
-        fileSystem,
-        autoSaveRepository,
-        threadId,
-        threadTitle,
-        board.url,
-        effectiveBoardUrl,
-        resolvedThreadUrlOverride,
-        archiveSearchJson,
-        offlineLookupContext,
-        offlineSources,
-        history,
-        preferencesState.manualSaveDirectory,
-        preferencesState.manualSaveLocation,
-        preferencesState.resolvedManualSaveDirectory
-    ) {
-        buildThreadScreenAsyncBindingsBundle(
-            ThreadScreenAsyncBindingsInputs(
-                coroutineScope = coroutineScope,
-                repository = activeRepository,
-                history = history,
-                threadId = threadId,
-                threadTitle = threadTitle,
-                board = board,
-                boardUrl = board.url,
-                effectiveBoardUrl = effectiveBoardUrl,
-                threadUrlOverride = resolvedThreadUrlOverride,
-                archiveSearchJson = archiveSearchJson,
-                offlineLookupContext = offlineLookupContext,
-                offlineSources = offlineSources,
-                currentThreadUrlOverride = { resolvedThreadUrlOverride },
-                httpClient = httpClient,
-                fileSystem = fileSystem,
-                autoSaveRepository = autoSaveRepository,
-                manualSaveRepository = manualSaveRepository,
-                minAutoSaveIntervalMillis = AUTO_SAVE_INTERVAL_MS,
-                runtimeBindings = asyncRuntimeBindingsBundle,
-                manualSaveDirectory = preferencesState.manualSaveDirectory,
-                manualSaveLocation = preferencesState.manualSaveLocation,
-                resolvedManualSaveDirectory = preferencesState.resolvedManualSaveDirectory,
-                requiresManualLocationSelection = requiresThreadManualSaveLocationSelection(
-                    isAndroidPlatform,
-                    preferencesState.manualSaveLocation
-                ),
-                onWarning = { message ->
-                    Logger.w(THREAD_SCREEN_TAG, message)
-                },
-                onInfo = { message ->
-                    Logger.i(THREAD_SCREEN_TAG, message)
-                }
-            )
-        )
-    }
+    val asyncBindingsBundle = rememberThreadScreenAsyncBindingsBundle(
+        coroutineScope = coroutineScope,
+        activeRepository = activeRepository,
+        history = history,
+        threadId = threadId,
+        threadTitle = threadTitle,
+        board = board,
+        effectiveBoardUrl = effectiveBoardUrl,
+        resolvedThreadUrlOverride = resolvedThreadUrlOverride,
+        archiveSearchJson = archiveSearchJson,
+        offlineLookupContext = offlineLookupContext,
+        offlineSources = offlineSources,
+        httpClient = httpClient,
+        fileSystem = fileSystem,
+        autoSaveRepository = autoSaveRepository,
+        manualSaveRepository = manualSaveRepository,
+        asyncRuntimeBindingsBundle = asyncRuntimeBindingsBundle,
+        preferencesState = preferencesState,
+        isAndroidPlatform = isAndroidPlatform
+    )
     val runnerBindings = asyncBindingsBundle.runnerBindings
     val threadDeleteByUserActionCallbacks = runnerBindings.deleteByUserActionCallbacks
     val threadReplyActionCallbacks = runnerBindings.replyActionCallbacks
@@ -549,32 +500,25 @@ fun ThreadScreen(
     var mediaPreviewState by mutableStateBundle.mediaPreviewState
 
     val currentPageForAutoSave = derivedUiState.currentPage
-    val autoSaveEffectState = remember(
-        currentPageForAutoSave,
-        threadId,
-        isShowingOfflineCopy,
-        autoSaveRepository,
-        httpClient,
-        fileSystem,
-        autoSaveJob,
-        lastAutoSaveTimestamp.value
-    ) {
-        resolveThreadAutoSaveEffectState(
-            page = currentPageForAutoSave,
-            expectedThreadId = threadId,
-            isShowingOfflineCopy = isShowingOfflineCopy,
-            hasAutoSaveRepository = autoSaveRepository != null,
-            hasHttpClient = httpClient != null,
-            hasFileSystem = fileSystem != null,
-            isAutoSaveInProgress = autoSaveJob?.isActive == true,
-            lastAutoSaveTimestampMillis = lastAutoSaveTimestamp.value,
-            nowMillis = Clock.System.now().toEpochMilliseconds(),
-            minIntervalMillis = AUTO_SAVE_INTERVAL_MS
-        )
-    }
-    LaunchedEffect(threadId, currentPageForAutoSave, isShowingOfflineCopy, httpClient, fileSystem) {
-        autoSaveEffectState.page?.let(autoSaveBindings.startAutoSave)
-    }
+    val autoSaveEffectState = rememberThreadAutoSaveEffectState(
+        currentPageForAutoSave = currentPageForAutoSave,
+        threadId = threadId,
+        isShowingOfflineCopy = isShowingOfflineCopy,
+        autoSaveRepository = autoSaveRepository,
+        httpClient = httpClient,
+        fileSystem = fileSystem,
+        autoSaveJob = autoSaveJob,
+        lastAutoSaveTimestampMillis = lastAutoSaveTimestamp.value
+    )
+    ThreadAutoSaveLaunchEffect(
+        threadId = threadId,
+        currentPageForAutoSave = currentPageForAutoSave,
+        isShowingOfflineCopy = isShowingOfflineCopy,
+        httpClient = httpClient,
+        fileSystem = fileSystem,
+        autoSaveEffectState = autoSaveEffectState,
+        onStartAutoSave = autoSaveBindings.startAutoSave
+    )
 
     val resolvedReplyCount = derivedUiState.resolvedReplyCount
     val resolvedThreadTitle = derivedUiState.resolvedThreadTitle
@@ -583,12 +527,11 @@ fun ThreadScreen(
     val readAloudDependencies = ThreadScreenReadAloudDependencies(
         currentSegments = { readAloudSegments }
     )
-    LaunchedEffect(readAloudSegments.size) {
-        resolveThreadReadAloudIndexUpdate(
-            currentIndex = currentReadAloudIndex,
-            segmentCount = readAloudSegments.size
-        )?.let { currentReadAloudIndex = it }
-    }
+    ThreadReadAloudIndexEffect(
+        segmentCount = readAloudSegments.size,
+        currentReadAloudIndex = currentReadAloudIndex,
+        onCurrentReadAloudIndexChanged = { currentReadAloudIndex = it }
+    )
 
     val density = LocalDensity.current
     val backSwipeMetrics = rememberThreadBackSwipeMetrics(density)
@@ -604,137 +547,98 @@ fun ThreadScreen(
         initialHistoryEntry,
         currentPage?.posts?.size
     )
-    LaunchedEffect(threadId, initialScrollRestoreState) {
-        if (!initialScrollRestoreState.shouldRestore) return@LaunchedEffect
-        restoreThreadScrollPositionSafely(
-            listState = lazyListState,
-            savedIndex = initialScrollRestoreState.savedIndex,
-            savedOffset = initialScrollRestoreState.savedOffset,
-            totalItems = initialScrollRestoreState.totalItems,
-            onFailure = { message, _ ->
-                Logger.w(THREAD_SCREEN_TAG, message)
-            }
-        )
-        hasRestoredInitialScroll = true
-    }
+    ThreadInitialScrollRestoreEffect(
+        threadId = threadId,
+        restoreState = initialScrollRestoreState,
+        lazyListState = lazyListState,
+        onRestoreCompleted = { hasRestoredInitialScroll = true },
+        onRestoreFailed = { message, _ ->
+            Logger.w(THREAD_SCREEN_TAG, message)
+        }
+    )
+    ThreadSearchIndexEffects(
+        searchQuery = searchQuery,
+        threadId = threadId,
+        searchMatches = searchMatches,
+        currentSearchResultIndex = currentSearchResultIndex,
+        onCurrentSearchResultIndexChanged = { currentSearchResultIndex = it }
+    )
+    ThreadScrollPersistenceEffect(
+        threadId = threadId,
+        lazyListState = lazyListState,
+        onScrollPositionPersist = onScrollPositionPersist
+    )
 
-    LaunchedEffect(searchQuery, threadId) {
-        resolveThreadSearchQueryResetIndex(
-            currentIndex = currentSearchResultIndex
-        )?.let { currentSearchResultIndex = it }
-    }
-
-    LaunchedEffect(searchMatches) {
-        resolveThreadSearchResultIndexUpdate(
-            currentIndex = currentSearchResultIndex,
-            matchCount = searchMatches.size
-        )?.let { currentSearchResultIndex = it }
-    }
-    LaunchedEffect(threadId, lazyListState) {
-        collectThreadScrollPositionPersistence(
-            listState = lazyListState,
+    val overlayStateBindings = ThreadScreenOverlayStateBindings(
+        currentModalOverlayState = { modalOverlayState },
+        setModalOverlayState = { modalOverlayState = it },
+        currentSheetOverlayState = { sheetOverlayState },
+        setSheetOverlayState = { sheetOverlayState = it },
+        currentPostOverlayState = { postOverlayState },
+        setPostOverlayState = { postOverlayState = it }
+    )
+    val interactionUiBindings = buildThreadScreenInteractionUiWiring(
+        ThreadScreenInteractionUiWiringInputs(
+            coroutineScope = coroutineScope,
+            lazyListState = lazyListState,
+            drawerState = drawerState,
+            snackbarHostState = snackbarHostState,
+            overlayStateBindings = overlayStateBindings,
+            mediaPreviewState = { mediaPreviewState },
+            setMediaPreviewState = { mediaPreviewState = it },
+            mediaPreviewEntries = { mediaPreviewEntries },
+            actionStateBindings = actionStateBindings,
+            actionDependencies = actionDependencies,
+            historyRefreshStateBindings = historyRefreshStateBindings,
+            onHistoryRefresh = onHistoryRefresh,
+            readAloudStateBindings = readAloudStateBindings,
+            readAloudCallbacks = readAloudCallbacks,
+            readAloudDependencies = readAloudDependencies,
+            replyDialogBinding = replyDialogBinding,
+            currentIsRefreshing = { isRefreshing },
+            currentUiState = { uiState.value },
+            currentSearchIndex = { currentSearchResultIndex },
+            setCurrentSearchIndex = { currentSearchResultIndex = it },
+            currentSearchMatches = { searchMatches },
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryCleared = onHistoryCleared,
+            onBack = onBack,
+            lastUsedDeleteKey = lastUsedDeleteKey,
+            currentSaidaneLabel = { post ->
+                saidaneOverrides[post.id] ?: post.saidaneLabel
+            },
+            isSelfPost = isSelfPost,
+            onSaidaneLabelUpdated = { post, updatedLabel ->
+                saidaneOverrides[post.id] = updatedLabel
+            },
+            repository = activeRepository,
+            effectiveBoardUrl = effectiveBoardUrl,
             threadId = threadId,
-            onScrollPositionPersist = onScrollPositionPersist
-        )
-    }
-
-    val interactionUiBindings = buildThreadScreenInteractionUiAggregateBundle(
-        ThreadScreenInteractionUiAggregateRuntimeInputs(
-            mediaInputs = ThreadScreenAggregateMediaInputs(
-            currentPreviewState = { mediaPreviewState },
-            setPreviewState = { mediaPreviewState = it },
-            currentMediaEntries = { mediaPreviewEntries }
-            ),
-            controllerActionInputs = ThreadScreenControllerActionInputs(
-                coroutineScope = coroutineScope,
-                actionStateBindings = actionStateBindings,
-                actionDependencies = actionDependencies,
-                historyRefreshStateBindings = historyRefreshStateBindings,
-                onHistoryRefresh = onHistoryRefresh,
-                showHistoryRefreshMessage = snackbarHostState::showSnackbar,
-                readAloudStateBindings = readAloudStateBindings,
-                readAloudCallbacks = readAloudCallbacks,
-                readAloudDependencies = readAloudDependencies
-            ),
-            controllerInteractionRuntimeInputs = ThreadScreenControllerInteractionRuntimeInputs(
-                coroutineScope = coroutineScope,
-                lazyListState = lazyListState,
-                drawerState = drawerState,
-                replyDialogBinding = replyDialogBinding,
-                currentIsRefreshing = { isRefreshing },
-                currentUiState = { uiState.value },
-                currentModalOverlayState = { modalOverlayState },
-                setModalOverlayState = { modalOverlayState = it },
-                currentSheetOverlayState = { sheetOverlayState },
-                setSheetOverlayState = { sheetOverlayState = it },
-                currentPostOverlayState = { postOverlayState },
-                setPostOverlayState = { postOverlayState = it },
-                currentSearchIndex = { currentSearchResultIndex },
-                setCurrentSearchIndex = { currentSearchResultIndex = it },
-                currentSearchMatches = { searchMatches },
-                onHistoryEntrySelected = onHistoryEntrySelected,
-                onHistoryEntryDismissed = onHistoryEntryDismissed,
-                onHistoryCleared = onHistoryCleared,
-                onBack = onBack,
-                lastUsedDeleteKey = lastUsedDeleteKey,
-                currentSaidaneLabel = { post ->
-                    saidaneOverrides[post.id] ?: post.saidaneLabel
-                },
-                isSelfPost = isSelfPost,
-                onSaidaneLabelUpdated = { post, updatedLabel ->
-                    saidaneOverrides[post.id] = updatedLabel
-                },
-                repository = activeRepository,
-                effectiveBoardUrl = effectiveBoardUrl,
-                threadId = threadId,
-                onStartRefresh = startManualRefresh,
-                onHandleThreadSaveRequest = handleThreadSaveRequest,
-                onShowMessage = showMessage,
-                showSnackbar = snackbarHostState::showSnackbar,
-                onOpenExternalApp = {
-                    externalUrlLauncher(buildThreadExternalAppUrl(effectiveBoardUrl, threadId))
-                },
-                onTogglePrivacy = {
-                    coroutineScope.launch {
-                        stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
-                    }
+            onStartRefresh = startManualRefresh,
+            onHandleThreadSaveRequest = handleThreadSaveRequest,
+            onShowMessage = showMessage,
+            onOpenExternalApp = {
+                externalUrlLauncher(buildThreadExternalAppUrl(effectiveBoardUrl, threadId))
+            },
+            onTogglePrivacy = {
+                coroutineScope.launch {
+                    stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
                 }
-            ),
-            uiRuntimeInputs = ThreadScreenUiRuntimeInputs(
-                coroutineScope = coroutineScope,
-                lazyListState = lazyListState,
-                drawerState = drawerState,
-                currentModalOverlayState = { modalOverlayState },
-                setModalOverlayState = { modalOverlayState = it },
-                currentSheetOverlayState = { sheetOverlayState },
-                setSheetOverlayState = { sheetOverlayState = it },
-                currentPostOverlayState = { postOverlayState },
-                setPostOverlayState = { postOverlayState = it },
-                setSearchQuery = { searchQuery = it },
-                setSearchActive = { isSearchActive = it },
-                replyDialogBinding = replyDialogBinding,
-                mediaPreviewEntryCount = mediaPreviewEntries.size,
-                onSavePreviewMedia = singleMediaSaveBindings.savePreviewMedia,
-                galleryPosts = currentSuccessState?.page?.posts,
-                threadFilterBinding = threadFilterBinding,
-                firstVisibleSegmentIndex = { firstVisibleSegmentIndex },
-                onPauseReadAloud = pauseReadAloud,
-                onStopReadAloud = stopReadAloud,
-                onShowMessage = showMessage,
-                ngMutationCallbacks = threadNgMutationCallbacks,
-                currentManualSaveJob = { manualSaveJob },
-                setSaveProgress = { saveProgress = it },
-                screenPreferencesCallbacks = preferencesCallbacks,
-                onOpenCookieManager = cookieRepository?.let {
-                    {
-                        modalOverlayState = openThreadCookieManagementOverlay(modalOverlayState)
-                    }
-                },
-                onDismissCookieManagement = {
-                    modalOverlayState = dismissThreadCookieManagementOverlay(modalOverlayState)
-                },
-                onBack = onBack
-            )
+            },
+            setSearchQuery = { searchQuery = it },
+            setSearchActive = { isSearchActive = it },
+            singleMediaSaveBindings = singleMediaSaveBindings,
+            currentSuccessState = currentSuccessState,
+            threadFilterBinding = threadFilterBinding,
+            firstVisibleSegmentIndex = { firstVisibleSegmentIndex },
+            pauseReadAloud = pauseReadAloud,
+            stopReadAloud = stopReadAloud,
+            threadNgMutationCallbacks = threadNgMutationCallbacks,
+            currentManualSaveJob = { manualSaveJob },
+            setSaveProgress = { saveProgress = it },
+            preferencesCallbacks = preferencesCallbacks,
+            cookieRepository = cookieRepository
         )
     )
     val mediaBindings = interactionUiBindings.mediaBindings
@@ -853,59 +757,21 @@ fun ThreadScreen(
             backSwipeEdgePx = backSwipeEdgePx,
             backSwipeTriggerPx = backSwipeTriggerPx,
             onReplySubmit = {
-                val submitState = replyDialogBinding.currentState()
-                val submitOutcome = resolveThreadScreenReplySubmitOutcome(
-                    state = submitState,
-                    boardUrl = effectiveBoardUrl,
-                    threadId = threadId
+                handleThreadScreenReplySubmit(
+                    ThreadScreenReplySubmitDependencies(
+                        replyDialogBinding = replyDialogBinding,
+                        effectiveBoardUrl = effectiveBoardUrl,
+                        threadId = threadId,
+                        boardId = board.id,
+                        coroutineScope = coroutineScope,
+                        stateStore = stateStore,
+                        updateLastUsedDeleteKey = updateLastUsedDeleteKey,
+                        actionBindings = actionBindings,
+                        threadReplyActionCallbacks = threadReplyActionCallbacks,
+                        refreshThread = refreshThread,
+                        showMessage = showMessage
+                    )
                 )
-                if (submitOutcome.validationMessage != null) {
-                    showMessage(submitOutcome.validationMessage)
-                } else {
-                    val replyActionConfig = submitOutcome.actionConfig
-                    val dismissedState = submitOutcome.dismissedState
-                    if (replyActionConfig != null && dismissedState != null) {
-                        coroutineScope.launch {
-                            val needsPostingNotice = stateStore?.hasShownPostingNotice?.first() == false
-                            if (needsPostingNotice) {
-                                val accepted = confirmPostingNotice()
-                                if (!accepted) {
-                                    return@launch
-                                }
-                                stateStore.setHasShownPostingNotice(true)
-                            }
-                            replyDialogBinding.setState(dismissedState)
-                            submitOutcome.normalizedPassword?.let(updateLastUsedDeleteKey)
-                            actionBindings.launch(
-                                successMessage = "返信を送信しました",
-                                failurePrefix = "返信の送信に失敗しました",
-                                onSuccess = { thisNo ->
-                                    if (!thisNo.isNullOrBlank()) {
-                                        stateStore?.let { store ->
-                                            coroutineScope.launch {
-                                                store.addSelfPostIdentifier(
-                                                    threadId = threadId,
-                                                    identifier = thisNo,
-                                                    boardId = board.id.ifBlank { null }
-                                                )
-                                            }
-                                        }
-                                    }
-                                    val completedState = submitOutcome.completedState
-                                    if (completedState != null) {
-                                        replyDialogBinding.setState(completedState)
-                                        refreshThread()
-                                    }
-                                }
-                            ) {
-                                performThreadReplyAction(
-                                    config = replyActionConfig,
-                                    callbacks = threadReplyActionCallbacks
-                                )
-                            }
-                        }
-                    }
-                }
             }
         )
     )

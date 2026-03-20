@@ -29,31 +29,11 @@ class IosFileSystem : FileSystem {
     private val fileManager = NSFileManager.defaultManager
     private val cleanupMaxAgeMillis = 60 * 60 * 1000L
 
-    private inline fun <T> runFsCatching(block: () -> T): Result<T> {
-        return try {
-            Result.success(block())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Result.failure(t)
-        }
-    }
+    private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
 
-    /**
-     * FIX: 入力検証 - セキュリティとデータ整合性のための検証
-     *
-     * @throws IllegalArgumentException パスが不正な場合
-     */
-    private fun validatePath(path: String, paramName: String = "path") =
-        validateFileSystemPath(path, paramName)
+    private fun validatePath(path: String, paramName: String = "path") = validateFileSystemPath(path, paramName)
 
-    /**
-     * FIX: ファイルサイズ検証 - OOM防止
-     *
-     * @throws IllegalArgumentException サイズが上限を超える場合
-     */
-    private fun validateFileSize(size: Long, paramName: String = "file") =
-        validateFileSystemSize(size, paramName)
+    private fun validateFileSize(size: Long, paramName: String = "file") = validateFileSystemSize(size, paramName)
 
     private fun isNoSuchFileError(error: NSError?): Boolean {
         // NSFileNoSuchFileError
@@ -62,20 +42,11 @@ class IosFileSystem : FileSystem {
 
     private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
         val resolvedBase = resolveAbsolutePath(basePath)
-        return if (relativePath.isEmpty()) {
-            resolvedBase
-        } else {
-            "$resolvedBase/$relativePath"
-        }
+        return joinPathSegments(resolvedBase, relativePath)
     }
 
-    private fun joinBaseAndRelativePath(basePath: String, relativePath: String): String {
-        return if (relativePath.isEmpty()) {
-            basePath
-        } else {
-            "$basePath/$relativePath"
-        }
-    }
+    private fun joinBaseAndRelativePath(basePath: String, relativePath: String): String =
+        joinPathSegments(basePath, relativePath)
 
     private suspend fun <T> withBookmarkPath(
         bookmarkData: String,
@@ -138,7 +109,7 @@ class IosFileSystem : FileSystem {
     }
 
     private fun parentDirectory(path: String): String =
-        path.substringBeforeLast('/', "")
+        com.valoser.futacha.shared.util.parentDirectory(path)
 
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(AppDispatchers.io) {
         runFsCatching {

@@ -40,3 +40,35 @@ internal fun validateFileSystemSize(size: Long, paramName: String = "file") {
         throw IllegalArgumentException("$paramName size cannot be negative: $size")
     }
 }
+
+internal inline fun <T> runFsCatching(block: () -> T): Result<T> {
+    return try {
+        Result.success(block())
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        Result.failure(t)
+    }
+}
+
+
+internal fun splitParentAndFileName(relativePath: String): Pair<String, String> {
+    val normalized = relativePath.trim().trim('/')
+    val lastSlash = normalized.lastIndexOf('/')
+    return if (lastSlash < 0) {
+        "" to normalized
+    } else {
+        normalized.substring(0, lastSlash) to normalized.substring(lastSlash + 1)
+    }
+}
+
+internal fun parentDirectory(path: String): String =
+    path.substringBeforeLast('/', "")
+
+internal fun joinPathSegments(basePath: String, relativePath: String): String {
+    return if (relativePath.isEmpty()) {
+        basePath
+    } else {
+        "${basePath.trimEnd('/')}/$relativePath"
+    }
+}
