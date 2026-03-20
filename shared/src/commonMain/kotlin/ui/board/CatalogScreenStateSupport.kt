@@ -152,6 +152,22 @@ internal data class CatalogScreenMutableStateRefs(
     val draftDisplay: CatalogScreenDraftDisplayMutableStateRefs
 )
 
+internal data class CatalogScreenMutableStateHandles(
+    val uiRuntimeStateRefs: CatalogScreenUiRuntimeMutableStateRefs,
+    val searchOverlayStateRefs: CatalogScreenSearchOverlayMutableStateRefs,
+    val draftDisplayStateRefs: CatalogScreenDraftDisplayMutableStateRefs
+)
+
+internal fun resolveCatalogScreenMutableStateHandles(
+    refs: CatalogScreenMutableStateRefs
+): CatalogScreenMutableStateHandles {
+    return CatalogScreenMutableStateHandles(
+        uiRuntimeStateRefs = refs.uiRuntime,
+        searchOverlayStateRefs = refs.searchOverlay,
+        draftDisplayStateRefs = refs.draftDisplay
+    )
+}
+
 internal fun resolveCatalogScreenMutableStateRefs(
     bundle: CatalogScreenMutableStateBundle
 ): CatalogScreenMutableStateRefs {

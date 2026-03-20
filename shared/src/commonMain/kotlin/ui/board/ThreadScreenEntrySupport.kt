@@ -17,16 +17,11 @@ internal data class ThreadScreenContentArgs(
     val onBack: () -> Unit,
     val onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit,
     val onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit,
-    val screenContext: ResolvedScreenContext,
+    override val screenContext: ResolvedScreenContext,
     val dependencies: ThreadScreenResolvedDependencies,
     val onRegisteredThreadUrlClick: (String) -> Boolean,
     val modifier: Modifier
-) {
-    val history: List<ThreadHistoryEntry> get() = screenContext.history
-    val historyCallbacks: ResolvedScreenHistoryCallbacks get() = screenContext.historyCallbacks
-    val preferencesState: ScreenPreferencesState get() = screenContext.preferencesState
-    val preferencesCallbacks: ScreenPreferencesCallbacks get() = screenContext.preferencesCallbacks
-}
+) : ScreenContextOwner
 
 internal fun resolveThreadScreenDependencies(
     dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
@@ -138,16 +133,9 @@ internal fun buildThreadScreenContentArgs(
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ): ThreadScreenContentArgs {
-    return assembleThreadScreenContentArgs(
+    return buildThreadScreenContentArgsFromContract(
         board = board,
-        threadId = threadId,
-        threadTitle = threadTitle,
-        initialReplyCount = initialReplyCount,
-        threadUrlOverride = threadUrlOverride,
-        onBack = onBack,
-        onScrollPositionPersist = onScrollPositionPersist,
-        onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-        screenContext = resolveScreenContext(
+        screenContract = buildScreenContract(
             history = history,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
@@ -158,8 +146,14 @@ internal fun buildThreadScreenContentArgs(
             preferencesState = preferencesState,
             preferencesCallbacks = preferencesCallbacks
         ),
-        dependencies = resolveThreadScreenDependencies(
-            dependencies = dependencies,
+        threadId = threadId,
+        threadTitle = threadTitle,
+        initialReplyCount = initialReplyCount,
+        threadUrlOverride = threadUrlOverride,
+        onBack = onBack,
+        onScrollPositionPersist = onScrollPositionPersist,
+        onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
+        dependencies = dependencies.withOverrides(
             repository = repository,
             httpClient = httpClient,
             fileSystem = fileSystem,

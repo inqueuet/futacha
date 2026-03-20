@@ -108,29 +108,30 @@ fun CatalogScreen(
     modifier: Modifier = Modifier,
     httpClient: HttpClient? = dependencies.httpClient
 ) {
-    CatalogScreenContent(
-        args = buildCatalogScreenContentArgs(
-            board = board,
+    CatalogScreen(
+        board = board,
+        screenContract = buildScreenContract(
             history = history,
-            onBack = onBack,
-            onThreadSelected = onThreadSelected,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
             onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryCleared = onHistoryCleared,
             onHistoryEntryUpdated = onHistoryEntryUpdated,
             onHistoryRefresh = onHistoryRefresh,
-            onHistoryCleared = onHistoryCleared,
-            dependencies = dependencies,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
+        ),
+        onBack = onBack,
+        onThreadSelected = onThreadSelected,
+        dependencies = dependencies.withOverrides(
             repository = repository,
             stateStore = stateStore,
             autoSavedThreadRepository = autoSavedThreadRepository,
             cookieRepository = cookieRepository,
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks,
             fileSystem = fileSystem,
-            modifier = modifier,
             httpClient = httpClient
-        )
+        ),
+        modifier = modifier
     )
 }
 
@@ -140,37 +141,38 @@ private fun CatalogScreenContent(
     args: CatalogScreenContentArgs
 ) {
     val preparedSetup = rememberCatalogScreenPreparedSetupBundle(args)
-    val context = preparedSetup.context
-    val board = context.board
-    val history = context.history
-    val onBack = context.onBack
-    val onThreadSelected = context.onThreadSelected
-    val onHistoryEntrySelected = context.onHistoryEntrySelected
-    val onHistoryEntryDismissed = context.onHistoryEntryDismissed
-    val onHistoryEntryUpdated = context.onHistoryEntryUpdated
-    val onHistoryRefresh = context.onHistoryRefresh
-    val onHistoryCleared = context.onHistoryCleared
-    val repository = context.repository
-    val stateStore = context.stateStore
-    val autoSavedThreadRepository = context.autoSavedThreadRepository
-    val cookieRepository = context.cookieRepository
-    val fileSystem = context.fileSystem
-    val preferencesState = context.preferencesState
-    val preferencesCallbacks = context.preferencesCallbacks
-    val httpClient = context.httpClient
-    val modifier = context.modifier
-    val activeRepository = preparedSetup.activeRepository
-    val archiveSearchScope = preparedSetup.archiveSearchScope
-    val runtimeObjects = preparedSetup.runtimeObjects
-    val snackbarHostState = runtimeObjects.snackbarHostState
-    val coroutineScope = runtimeObjects.coroutineScope
-    val drawerState = runtimeObjects.drawerState
-    val isDrawerOpen = runtimeObjects.isDrawerOpen
-    val persistentBindings = preparedSetup.persistentBindings
-    val mutableStateRefs = preparedSetup.mutableStateRefs
-    val uiRuntimeStateRefs = mutableStateRefs.uiRuntime
-    val searchOverlayStateRefs = mutableStateRefs.searchOverlay
-    val draftDisplayStateRefs = mutableStateRefs.draftDisplay
+    val setupHandles = rememberCatalogScreenPreparedSetupHandles(preparedSetup)
+    val contextHandles = setupHandles.contextHandles
+    val board = contextHandles.board
+    val history = contextHandles.history
+    val onBack = contextHandles.onBack
+    val onThreadSelected = contextHandles.onThreadSelected
+    val onHistoryEntrySelected = contextHandles.onHistoryEntrySelected
+    val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
+    val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
+    val onHistoryRefresh = contextHandles.onHistoryRefresh
+    val onHistoryCleared = contextHandles.onHistoryCleared
+    val stateStore = contextHandles.stateStore
+    val autoSavedThreadRepository = contextHandles.autoSavedThreadRepository
+    val cookieRepository = contextHandles.cookieRepository
+    val fileSystem = contextHandles.fileSystem
+    val preferencesState = contextHandles.preferencesState
+    val preferencesCallbacks = contextHandles.preferencesCallbacks
+    val httpClient = contextHandles.httpClient
+    val modifier = contextHandles.modifier
+    val screenSetupHandles = setupHandles.setupHandles
+    val activeRepository = screenSetupHandles.activeRepository
+    val archiveSearchScope = screenSetupHandles.archiveSearchScope
+    val runtimeHandles = setupHandles.runtimeHandles
+    val snackbarHostState = runtimeHandles.snackbarHostState
+    val coroutineScope = runtimeHandles.coroutineScope
+    val drawerState = runtimeHandles.drawerState
+    val isDrawerOpen = runtimeHandles.isDrawerOpen
+    val persistentBindings = screenSetupHandles.persistentBindings
+    val mutableStateHandles = setupHandles.mutableStateHandles
+    val uiRuntimeStateRefs = mutableStateHandles.uiRuntimeStateRefs
+    val searchOverlayStateRefs = mutableStateHandles.searchOverlayStateRefs
+    val draftDisplayStateRefs = mutableStateHandles.draftDisplayStateRefs
     val uiState = uiRuntimeStateRefs.uiState
     var catalogMode by uiRuntimeStateRefs.catalogMode
     var isRefreshing by uiRuntimeStateRefs.isRefreshing
@@ -189,10 +191,10 @@ private fun CatalogScreenContent(
     val watchWords = persistentBindings.watchWords
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
-    val archiveSearchJson = runtimeObjects.archiveSearchJson
+    val archiveSearchJson = runtimeHandles.archiveSearchJson
     var pastSearchRuntimeState by searchOverlayStateRefs.pastSearchRuntimeState
-    val catalogGridState = runtimeObjects.catalogGridState
-    val catalogListState = runtimeObjects.catalogListState
+    val catalogGridState = runtimeHandles.catalogGridState
+    val catalogListState = runtimeHandles.catalogListState
     LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes) {
         resolveCatalogModeSyncValue(
             boardId = board?.id,
@@ -365,19 +367,20 @@ private fun CatalogScreenContent(
             currentArchiveSearchQuery = { archiveSearchQuery },
             currentLastArchiveSearchScope = { pastSearchRuntimeState.lastArchiveSearchScope },
             onThreadSelected = onThreadSelected,
-            urlLauncher = preparedSetup.urlLauncher,
+            urlLauncher = screenSetupHandles.urlLauncher,
             stateStore = stateStore,
             isPrivacyFilterEnabled = { isPrivacyFilterEnabled },
             coroutineScope = coroutineScope,
             cookieRepository = cookieRepository
         )
     )
-    val mutationBindings = interactionBindings.mutationBindings
-    val runtimeBindings = interactionBindings.runtimeBindings
-    val performRefresh = runtimeBindings.executionBindings.performRefresh
-    val initialLoadBindings = runtimeBindings.initialLoadBindings
-    val createThreadBindings = runtimeBindings.createThreadBindings
-    val historyDrawerCallbacks = runtimeBindings.historyDrawerCallbacks
+    val interactionHandles = resolveCatalogScreenInteractionHandles(interactionBindings)
+    val mutationBindings = interactionHandles.mutationBindings
+    val runtimeBindings = interactionHandles.runtimeBindings
+    val performRefresh = interactionHandles.performRefresh
+    val initialLoadBindings = interactionHandles.initialLoadBindings
+    val createThreadBindings = interactionHandles.createThreadBindings
+    val historyDrawerCallbacks = interactionHandles.historyDrawerCallbacks
     val lifecycleBindings = rememberCatalogScreenLifecycleBindings(
         coroutineScope,
         drawerState,
@@ -410,7 +413,7 @@ private fun CatalogScreenContent(
     LaunchedEffect(board?.url, catalogMode) {
         lifecycleBindings.onInitialLoad()
     }
-    val overlayBindings = interactionBindings.overlayBindings
+    val overlayBindings = interactionHandles.overlayBindings
     val (scaffoldBindings, overlayHostBindings) = buildCatalogScreenHostBindings(
         CatalogScreenHostBindingsInputs(
             history = history,

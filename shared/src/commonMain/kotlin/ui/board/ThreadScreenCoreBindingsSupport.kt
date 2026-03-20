@@ -10,6 +10,30 @@ internal data class ThreadScreenStateRuntimeBindingsBundle(
     val jobBindings: ThreadScreenJobBindings
 )
 
+internal data class ThreadScreenStateRuntimeHandles(
+    val messageRuntime: ThreadMessageRuntimeBindings,
+    val threadNgMutationCallbacks: ThreadNgMutationCallbacks,
+    val threadFilterBinding: ThreadFilterUiStateBinding,
+    val replyDraftBinding: ThreadReplyDraftBinding,
+    val replyDialogBinding: ThreadReplyDialogStateBinding,
+    val readAloudRuntimeBindings: ThreadReadAloudRuntimeBindings,
+    val jobBindings: ThreadScreenJobBindings
+)
+
+internal fun resolveThreadScreenStateRuntimeHandles(
+    bundle: ThreadScreenStateRuntimeBindingsBundle
+): ThreadScreenStateRuntimeHandles {
+    return ThreadScreenStateRuntimeHandles(
+        messageRuntime = bundle.messageRuntime,
+        threadNgMutationCallbacks = bundle.threadNgMutationCallbacks,
+        threadFilterBinding = bundle.threadFilterBinding,
+        replyDraftBinding = bundle.replyDraftBinding,
+        replyDialogBinding = bundle.replyDialogBinding,
+        readAloudRuntimeBindings = bundle.readAloudRuntimeBindings,
+        jobBindings = bundle.jobBindings
+    )
+}
+
 internal fun buildThreadScreenStateRuntimeBindingsBundle(
     runtimeJobInputs: ThreadScreenRuntimeJobInputs,
     messageNgInputs: ThreadScreenMessageNgInputs,

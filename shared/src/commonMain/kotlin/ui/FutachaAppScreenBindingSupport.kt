@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.ui.board.buildScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
@@ -68,7 +69,7 @@ internal fun buildFutachaScreenContractContext(
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks
 ): ScreenContract {
-    return ScreenContract(
+    return buildScreenContract(
         history = history,
         historyCallbacks = historyCallbacks,
         preferencesState = preferencesState,

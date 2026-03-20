@@ -15,6 +15,32 @@ import kotlin.test.assertSame
 
 class ThreadScreenEntrySupportTest {
     @Test
+    fun buildScreenContract_prefersExplicitCallbacksOverDefaults() {
+        val historyCallbacks = ScreenHistoryCallbacks(
+            onHistoryEntrySelected = { error("default selected callback should not be used") },
+            onHistoryRefresh = { error("default refresh callback should not be used") }
+        )
+        val explicitSelected: (ThreadHistoryEntry) -> Unit = {}
+        val explicitRefresh: suspend () -> Unit = {}
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = {}
+        )
+
+        val contract = buildScreenContract(
+            history = listOf(historyEntry()),
+            historyCallbacks = historyCallbacks,
+            onHistoryEntrySelected = explicitSelected,
+            onHistoryRefresh = explicitRefresh,
+            preferencesState = ScreenPreferencesState(appVersion = "1.0"),
+            preferencesCallbacks = preferencesCallbacks
+        )
+
+        assertSame(explicitSelected, contract.historyCallbacks.onHistoryEntrySelected)
+        assertSame(explicitRefresh, contract.historyCallbacks.onHistoryRefresh)
+        assertSame(preferencesCallbacks, contract.preferencesCallbacks)
+    }
+
+    @Test
     fun buildThreadScreenContentArgsFromContract_usesScreenContractCallbacksAndPreferences() {
         val historyEntrySelected: (ThreadHistoryEntry) -> Unit = {}
         val historyEntryDismissed: (ThreadHistoryEntry) -> Unit = {}
@@ -24,7 +50,7 @@ class ThreadScreenEntrySupportTest {
         val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = {}
         )
-        val screenContract = ScreenContract(
+        val screenContract = buildScreenContract(
             history = listOf(historyEntry()),
             historyCallbacks = ScreenHistoryCallbacks(
                 onHistoryEntrySelected = historyEntrySelected,
@@ -106,10 +132,10 @@ class ThreadScreenEntrySupportTest {
         assertSame(explicitUpdated, args.historyCallbacks.onHistoryEntryUpdated)
         assertSame(explicitRefresh, args.historyCallbacks.onHistoryRefresh)
         assertSame(explicitRepository, args.dependencies.repository)
-        assertSame(httpClient, args.dependencies.services.httpClient)
-        assertSame(fileSystem, args.dependencies.services.fileSystem)
-        assertSame(stateStore, args.dependencies.services.stateStore)
-        assertSame(savedThreadRepository, args.dependencies.services.autoSavedThreadRepository)
+        assertSame(httpClient, args.dependencies.httpClient)
+        assertSame(fileSystem, args.dependencies.fileSystem)
+        assertSame(stateStore, args.dependencies.stateStore)
+        assertSame(savedThreadRepository, args.dependencies.autoSavedThreadRepository)
         httpClient.close()
     }
 

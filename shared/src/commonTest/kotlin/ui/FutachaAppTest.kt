@@ -24,6 +24,9 @@ import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
 import com.valoser.futacha.shared.ui.board.ThreadScreenDependencies
+import com.valoser.futacha.shared.ui.board.autoSavedThreadRepository
+import com.valoser.futacha.shared.ui.board.fileSystem
+import com.valoser.futacha.shared.ui.board.stateStore
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -231,8 +234,27 @@ class FutachaAppTest {
         assertTrue(pickerOpened)
         assertEquals("img", selectedBoardId)
         assertEquals(listOf(entry), bundle.screenContract.history)
-        assertSame(bundle.screenHistoryCallbacks, bundle.screenContract.historyCallbacks)
         assertSame(bundle.screenPreferencesCallbacks, bundle.screenContract.preferencesCallbacks)
+        assertSame(
+            bundle.screenHistoryCallbacks.onHistoryEntrySelected,
+            bundle.screenContract.historyCallbacks.onHistoryEntrySelected
+        )
+        assertSame(
+            bundle.screenHistoryCallbacks.onHistoryEntryDismissed,
+            bundle.screenContract.historyCallbacks.onHistoryEntryDismissed
+        )
+        assertSame(
+            bundle.screenHistoryCallbacks.onHistoryEntryUpdated,
+            bundle.screenContract.historyCallbacks.onHistoryEntryUpdated
+        )
+        assertSame(
+            bundle.screenHistoryCallbacks.onHistoryRefresh,
+            bundle.screenContract.historyCallbacks.onHistoryRefresh
+        )
+        assertSame(
+            bundle.screenHistoryCallbacks.onHistoryCleared,
+            bundle.screenContract.historyCallbacks.onHistoryCleared
+        )
         assertEquals("1.2.3", bundle.screenPreferencesState.appVersion)
         assertSame(bundle.screenPreferencesState, bundle.screenContract.preferencesState)
     }
@@ -476,7 +498,26 @@ class FutachaAppTest {
         assertEquals("1.2.3", screenPreferencesState.appVersion)
         assertEquals(listOf(entry), screenContract.history)
         assertSame(screenPreferencesCallbacks, screenContract.preferencesCallbacks)
-        assertSame(screenHistoryCallbacks, screenContract.historyCallbacks)
+        assertSame(
+            screenHistoryCallbacks.onHistoryEntrySelected,
+            screenContract.historyCallbacks.onHistoryEntrySelected
+        )
+        assertSame(
+            screenHistoryCallbacks.onHistoryEntryDismissed,
+            screenContract.historyCallbacks.onHistoryEntryDismissed
+        )
+        assertSame(
+            screenHistoryCallbacks.onHistoryEntryUpdated,
+            screenContract.historyCallbacks.onHistoryEntryUpdated
+        )
+        assertSame(
+            screenHistoryCallbacks.onHistoryRefresh,
+            screenContract.historyCallbacks.onHistoryRefresh
+        )
+        assertSame(
+            screenHistoryCallbacks.onHistoryCleared,
+            screenContract.historyCallbacks.onHistoryCleared
+        )
     }
 
     @Test

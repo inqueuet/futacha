@@ -65,6 +65,20 @@ internal data class BoardManagementMutableStateRefs(
     val overlay: BoardManagementOverlayMutableStateRefs
 )
 
+internal data class BoardManagementMutableStateHandles(
+    val modeStateRefs: BoardManagementModeMutableStateRefs,
+    val overlayStateRefs: BoardManagementOverlayMutableStateRefs
+)
+
+internal fun resolveBoardManagementMutableStateHandles(
+    refs: BoardManagementMutableStateRefs
+): BoardManagementMutableStateHandles {
+    return BoardManagementMutableStateHandles(
+        modeStateRefs = refs.modes,
+        overlayStateRefs = refs.overlay
+    )
+}
+
 internal fun resolveBoardManagementMutableStateRefs(
     bundle: BoardManagementMutableStateBundle
 ): BoardManagementMutableStateRefs {

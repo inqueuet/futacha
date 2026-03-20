@@ -158,35 +158,36 @@ fun ThreadScreen(
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
-    ThreadScreenContent(
-        args = buildThreadScreenContentArgs(
-            board = board,
+    ThreadScreen(
+        board = board,
+        screenContract = buildScreenContract(
             history = history,
-            threadId = threadId,
-            threadTitle = threadTitle,
-            initialReplyCount = initialReplyCount,
-            threadUrlOverride = threadUrlOverride,
-            onBack = onBack,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryEntryUpdated = onHistoryEntryUpdated,
             onHistoryRefresh = onHistoryRefresh,
-            onScrollPositionPersist = onScrollPositionPersist,
-            onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-            dependencies = dependencies,
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks
+        ),
+        threadId = threadId,
+        threadTitle = threadTitle,
+        initialReplyCount = initialReplyCount,
+        onBack = onBack,
+        onScrollPositionPersist = onScrollPositionPersist,
+        onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
+        threadUrlOverride = threadUrlOverride,
+        dependencies = dependencies.withOverrides(
             repository = repository,
             httpClient = httpClient,
             fileSystem = fileSystem,
             cookieRepository = cookieRepository,
             stateStore = stateStore,
-            autoSavedThreadRepository = autoSavedThreadRepository,
-            preferencesState = preferencesState,
-            preferencesCallbacks = preferencesCallbacks,
-            onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
-            modifier = modifier
-        )
+            autoSavedThreadRepository = autoSavedThreadRepository
+        ),
+        onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+        modifier = modifier
     )
 }
 
@@ -196,70 +197,64 @@ private fun ThreadScreenContent(
     args: ThreadScreenContentArgs
 ) {
     val preparedSetup = rememberThreadScreenPreparedSetupBundle(args)
-    val context = preparedSetup.context
-    val board = context.board
-    val history = context.history
-    val threadId = context.threadId
-    val threadTitle = context.threadTitle
-    val initialReplyCount = context.initialReplyCount
-    val threadUrlOverride = context.threadUrlOverride
-    val onBack = context.onBack
-    val onScrollPositionPersist = context.onScrollPositionPersist
-    val onScrollPositionPersistImmediately = context.onScrollPositionPersistImmediately
-    val onHistoryEntrySelected = context.onHistoryEntrySelected
-    val onHistoryEntryDismissed = context.onHistoryEntryDismissed
-    val onHistoryCleared = context.onHistoryCleared
-    val onHistoryEntryUpdated = context.onHistoryEntryUpdated
-    val onHistoryRefresh = context.onHistoryRefresh
-    val repository = context.repository
-    val httpClient = context.httpClient
-    val fileSystem = context.fileSystem
-    val cookieRepository = context.cookieRepository
-    val stateStore = context.stateStore
-    val autoSavedThreadRepository = context.autoSavedThreadRepository
-    val preferencesState = context.preferencesState
-    val preferencesCallbacks = context.preferencesCallbacks
-    val onRegisteredThreadUrlClick = context.onRegisteredThreadUrlClick
-    val modifier = context.modifier
-    val mutableStateRefs = preparedSetup.mutableStateRefs
-    val runtimeStateRefs = mutableStateRefs.runtime
-    val readAloudStateRefs = mutableStateRefs.readAloud
-    val saveJobStateRefs = mutableStateRefs.saveJobs
-    val interactionStateRefs = mutableStateRefs.interaction
-    val formStateRefs = mutableStateRefs.form
-    val refreshStateRefs = mutableStateRefs.refresh
-    val searchStateRefs = mutableStateRefs.search
+    val setupHandles = rememberThreadScreenPreparedSetupHandles(preparedSetup)
+    val contextHandles = setupHandles.contextHandles
+    val board = contextHandles.board
+    val history = contextHandles.history
+    val threadId = contextHandles.threadId
+    val threadTitle = contextHandles.threadTitle
+    val initialReplyCount = contextHandles.initialReplyCount
+    val threadUrlOverride = contextHandles.threadUrlOverride
+    val onBack = contextHandles.onBack
+    val onScrollPositionPersist = contextHandles.onScrollPositionPersist
+    val onScrollPositionPersistImmediately = contextHandles.onScrollPositionPersistImmediately
+    val onHistoryEntrySelected = contextHandles.onHistoryEntrySelected
+    val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
+    val onHistoryCleared = contextHandles.onHistoryCleared
+    val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
+    val onHistoryRefresh = contextHandles.onHistoryRefresh
+    val httpClient = contextHandles.httpClient
+    val fileSystem = contextHandles.fileSystem
+    val cookieRepository = contextHandles.cookieRepository
+    val stateStore = contextHandles.stateStore
+    val preferencesState = contextHandles.preferencesState
+    val preferencesCallbacks = contextHandles.preferencesCallbacks
+    val modifier = contextHandles.modifier
+    val runtimeStateRefs = setupHandles.runtimeStateRefs
+    val readAloudStateRefs = setupHandles.readAloudStateRefs
+    val saveJobStateRefs = setupHandles.saveJobStateRefs
+    val interactionStateRefs = setupHandles.interactionStateRefs
+    val formStateRefs = setupHandles.formStateRefs
+    val refreshStateRefs = setupHandles.refreshStateRefs
+    val searchStateRefs = setupHandles.searchStateRefs
     var resolvedThreadUrlOverride by runtimeStateRefs.resolvedThreadUrlOverride
     ThreadUrlOverrideSyncEffect(
         threadUrlOverride = threadUrlOverride,
         resolvedThreadUrlOverride = resolvedThreadUrlOverride,
         onResolvedThreadUrlOverrideChanged = { resolvedThreadUrlOverride = it }
     )
-    val coreSetupBundle = preparedSetup.coreSetupBundle
-    val environmentBundle = coreSetupBundle.environmentBundle
-    val activeRepository = environmentBundle.activeRepository
-    val effectiveBoardUrl = environmentBundle.effectiveBoardUrl
+    val screenSetupHandles = setupHandles.setupHandles
+    val activeRepository = screenSetupHandles.activeRepository
+    val effectiveBoardUrl = screenSetupHandles.effectiveBoardUrl
     val uiState = runtimeStateRefs.uiState
-    val runtimeObjectBundle = coreSetupBundle.runtimeObjectBundle
-    val snackbarHostState = runtimeObjectBundle.snackbarHostState
-    val coroutineScope = runtimeObjectBundle.coroutineScope
-    val platformRuntimeBindings = coreSetupBundle.platformRuntimeBindings
-    val externalUrlLauncher = platformRuntimeBindings.externalUrlLauncher
-    val handleUrlClick = platformRuntimeBindings.handleUrlClick
-    val archiveSearchJson = platformRuntimeBindings.archiveSearchJson
-    val persistentBindings = coreSetupBundle.persistentBindings
+    val runtimeHandles = setupHandles.runtimeHandles
+    val snackbarHostState = runtimeHandles.snackbarHostState
+    val coroutineScope = runtimeHandles.coroutineScope
+    val externalUrlLauncher = runtimeHandles.externalUrlLauncher
+    val handleUrlClick = runtimeHandles.handleUrlClick
+    val archiveSearchJson = runtimeHandles.archiveSearchJson
+    val persistentBindings = screenSetupHandles.persistentBindings
     val lastUsedDeleteKey = persistentBindings.lastUsedDeleteKey
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
-    val textSpeaker = platformRuntimeBindings.textSpeaker
+    val textSpeaker = runtimeHandles.textSpeaker
     var readAloudJob by readAloudStateRefs.job
     var readAloudStatus by readAloudStateRefs.status
     var sheetOverlayState by readAloudStateRefs.sheetOverlayState
     var currentReadAloudIndex by readAloudStateRefs.currentIndex
     var readAloudCancelRequestedByUser by readAloudStateRefs.cancelRequestedByUser
     val isAndroidPlatform = remember { isAndroid() }
-    val autoSaveRepository = environmentBundle.autoSaveRepository
-    val manualSaveRepository = environmentBundle.manualSaveRepository
-    val legacyManualSaveRepository = environmentBundle.legacyManualSaveRepository
+    val autoSaveRepository = screenSetupHandles.autoSaveRepository
+    val manualSaveRepository = screenSetupHandles.manualSaveRepository
     var autoSaveJob by saveJobStateRefs.autoSaveJob
     var manualSaveJob by saveJobStateRefs.manualSaveJob
     var singleMediaSaveJob by saveJobStateRefs.singleMediaSaveJob
@@ -268,8 +263,8 @@ private fun ThreadScreenContent(
     var isSingleMediaSaveInProgress by saveJobStateRefs.isSingleMediaSaveInProgress
     val lastAutoSaveTimestamp = saveJobStateRefs.lastAutoSaveTimestamp
     var isShowingOfflineCopy by saveJobStateRefs.isShowingOfflineCopy
-    val drawerState = runtimeObjectBundle.drawerState
-    val isDrawerOpen by runtimeObjectBundle.isDrawerOpen
+    val drawerState = runtimeHandles.drawerState
+    val isDrawerOpen by runtimeHandles.isDrawerOpen
     var actionInProgress by interactionStateRefs.actionInProgress
     var lastBusyActionNoticeAtMillis by interactionStateRefs.lastBusyActionNoticeAtMillis
     val saidaneOverrides = interactionStateRefs.saidaneOverrides
@@ -357,17 +352,18 @@ private fun ThreadScreenContent(
             setReplyDialogVisible = { isReplyDialogVisible = it }
         )
     )
-    val readAloudRuntimeBindings = stateRuntimeBindingsBundle.readAloudRuntimeBindings
-    val cancelActiveReadAloud = readAloudRuntimeBindings.cancelActive
-    val stopReadAloud = readAloudRuntimeBindings.stop
-    val jobBindings = stateRuntimeBindingsBundle.jobBindings
-    val messageRuntime = stateRuntimeBindingsBundle.messageRuntime
+    val stateRuntimeHandles = resolveThreadScreenStateRuntimeHandles(stateRuntimeBindingsBundle)
+    val messageRuntime = stateRuntimeHandles.messageRuntime
     val showMessage = messageRuntime.showMessage
     val showOptionalMessage = messageRuntime.showOptionalMessage
     val applyThreadSaveErrorState = messageRuntime.applySaveErrorState
-    val threadNgMutationCallbacks = stateRuntimeBindingsBundle.threadNgMutationCallbacks
-    val threadFilterBinding = stateRuntimeBindingsBundle.threadFilterBinding
-    val replyDialogBinding = stateRuntimeBindingsBundle.replyDialogBinding
+    val readAloudRuntimeBindings = stateRuntimeHandles.readAloudRuntimeBindings
+    val cancelActiveReadAloud = readAloudRuntimeBindings.cancelActive
+    val stopReadAloud = readAloudRuntimeBindings.stop
+    val jobBindings = stateRuntimeHandles.jobBindings
+    val threadNgMutationCallbacks = stateRuntimeHandles.threadNgMutationCallbacks
+    val threadFilterBinding = stateRuntimeHandles.threadFilterBinding
+    val replyDialogBinding = stateRuntimeHandles.replyDialogBinding
     ThreadReplyDialogAutofillEffect(
         isReplyDialogVisible = isReplyDialogVisible,
         lastUsedDeleteKey = lastUsedDeleteKey,
@@ -377,10 +373,10 @@ private fun ThreadScreenContent(
     var manualRefreshGeneration by refreshStateRefs.manualRefreshGeneration
     var isHistoryRefreshing by refreshStateRefs.isHistoryRefreshing
     var saveProgress by saveJobStateRefs.saveProgress
-    val isPrivacyFilterEnabled = coreSetupBundle.isPrivacyFilterEnabled
+    val isPrivacyFilterEnabled = screenSetupHandles.isPrivacyFilterEnabled
     val currentState = uiState.value
-    val initialHistoryEntry = environmentBundle.initialHistoryEntry
-    val lazyListState = runtimeObjectBundle.lazyListState
+    val initialHistoryEntry = screenSetupHandles.initialHistoryEntry
+    val lazyListState = runtimeHandles.lazyListState
     val actionStateBindings = ThreadScreenActionStateBindings(
         currentActionInProgress = { actionInProgress },
         setActionInProgress = { actionInProgress = it },
@@ -408,8 +404,8 @@ private fun ThreadScreenContent(
         cancelActiveReadAloud = cancelActiveReadAloud
     )
     var hasRestoredInitialScroll by refreshStateRefs.hasRestoredInitialScroll
-    val offlineLookupContext = environmentBundle.offlineLookupContext
-    val offlineSources = environmentBundle.offlineSources
+    val offlineLookupContext = screenSetupHandles.offlineLookupContext
+    val offlineSources = screenSetupHandles.offlineSources
     val asyncRuntimeBindingsBundle = buildThreadScreenAsyncRuntimeBindingsBundle(
         ThreadScreenAsyncRuntimeInputs(
             currentAutoSaveJob = { autoSaveJob },
@@ -473,14 +469,13 @@ private fun ThreadScreenContent(
         preferencesState = preferencesState,
         isAndroidPlatform = isAndroidPlatform
     )
-    val runnerBindings = asyncBindingsBundle.runnerBindings
-    val threadDeleteByUserActionCallbacks = runnerBindings.deleteByUserActionCallbacks
-    val threadReplyActionCallbacks = runnerBindings.replyActionCallbacks
-    val saveExecutionBindings = asyncBindingsBundle.saveExecutionBindings
-    val autoSaveBindings = saveExecutionBindings.autoSaveBindings
-    val manualSaveBindings = saveExecutionBindings.manualSaveBindings
-    val singleMediaSaveBindings = saveExecutionBindings.singleMediaSaveBindings
-    val loadBindings = asyncBindingsBundle.loadBindings
+    val asyncHandles = resolveThreadScreenAsyncHandles(asyncBindingsBundle)
+    val threadDeleteByUserActionCallbacks = asyncHandles.threadDeleteByUserActionCallbacks
+    val threadReplyActionCallbacks = asyncHandles.threadReplyActionCallbacks
+    val autoSaveBindings = asyncHandles.autoSaveBindings
+    val manualSaveBindings = asyncHandles.manualSaveBindings
+    val singleMediaSaveBindings = asyncHandles.singleMediaSaveBindings
+    val loadBindings = asyncHandles.loadBindings
     val startManualRefresh = loadBindings.startManualRefresh
     val handleThreadSaveRequest = manualSaveBindings.handleThreadSaveRequest
     val persistCurrentScrollPositionImmediately = remember(
@@ -694,32 +689,29 @@ private fun ThreadScreenContent(
             cookieRepository = cookieRepository
         )
     )
-    val mediaBindings = interactionUiBindings.mediaBindings
+    val interactionUiHandles = resolveThreadScreenInteractionUiHandles(interactionUiBindings)
+    val mediaBindings = interactionUiHandles.mediaBindings
     LaunchedEffect(mediaPreviewEntries.size) {
         mediaBindings.normalizePreviewState()
     }
-    val controllerBindings = interactionUiBindings.controllerBindings
-    val actionExecutionBindings = controllerBindings.actionExecutionBindings
-    val actionBindings = actionExecutionBindings.actionBindings
-    val handleHistoryRefresh = actionExecutionBindings.historyRefreshBindings.handleHistoryRefresh
-    val readAloudBindings = actionExecutionBindings.readAloudBindings
-    val startReadAloud = readAloudBindings.startReadAloud
-    val seekReadAloudToIndex = readAloudBindings.seekReadAloudToIndex
-    val interactionBindings = controllerBindings.interactionBindings
-    val handleMenuEntry = interactionBindings.menuEntryHandler
-    val searchNavigationCallbacks = interactionBindings.searchNavigationCallbacks
-    val postActionHandlers = interactionBindings.postActionHandlers
+    val actionBindings = interactionUiHandles.actionBindings
+    val handleHistoryRefresh = interactionUiHandles.handleHistoryRefresh
+    val startReadAloud = interactionUiHandles.startReadAloud
+    val seekReadAloudToIndex = interactionUiHandles.seekReadAloudToIndex
+    val handleMenuEntry = interactionUiHandles.handleMenuEntry
+    val searchNavigationCallbacks = interactionUiHandles.searchNavigationCallbacks
+    val postActionHandlers = interactionUiHandles.postActionHandlers
     val handleSaidaneAction = postActionHandlers.onSaidane
     val handleDelRequest = postActionHandlers.onDelRequest
     val openDeleteDialog = postActionHandlers.onOpenDeleteDialog
     val openQuoteSelection = postActionHandlers.onOpenQuoteSelection
     val handleNgRegistration = postActionHandlers.onNgRegister
-    val performRefresh = interactionBindings.refreshHandler
-    val uiBindings = interactionUiBindings.uiBindings
+    val performRefresh = interactionUiHandles.performRefresh
+    val uiBindings = interactionUiHandles.uiBindings
 
     val appColorScheme = MaterialTheme.colorScheme
     val futabaThreadColorScheme = rememberFutabaThreadColorScheme(appColorScheme)
-    val historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks
+    val historyDrawerCallbacks = interactionUiHandles.historyDrawerCallbacks
     val readAloudIndicatorSegment = (readAloudStatus as? ReadAloudStatus.Speaking)?.segment
     val replyDialogState = replyDialogBinding.currentState()
     val currentFilterUiState = threadFilterBinding.currentState()

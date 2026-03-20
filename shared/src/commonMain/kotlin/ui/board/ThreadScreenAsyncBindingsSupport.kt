@@ -19,6 +19,32 @@ internal data class ThreadScreenAsyncBindingsBundle(
     val loadBindings: ThreadScreenLoadBindings
 )
 
+internal data class ThreadScreenAsyncHandles(
+    val runnerBindings: ThreadScreenRunnerBindings,
+    val saveExecutionBindings: ThreadScreenSaveExecutionBindingsBundle,
+    val loadBindings: ThreadScreenLoadBindings,
+    val threadDeleteByUserActionCallbacks: ThreadDeleteByUserActionCallbacks,
+    val threadReplyActionCallbacks: ThreadReplyActionCallbacks,
+    val autoSaveBindings: ThreadScreenAutoSaveBindings,
+    val manualSaveBindings: ThreadScreenManualSaveBindings,
+    val singleMediaSaveBindings: ThreadScreenSingleMediaSaveBindings
+)
+
+internal fun resolveThreadScreenAsyncHandles(
+    bundle: ThreadScreenAsyncBindingsBundle
+): ThreadScreenAsyncHandles {
+    return ThreadScreenAsyncHandles(
+        runnerBindings = bundle.runnerBindings,
+        saveExecutionBindings = bundle.saveExecutionBindings,
+        loadBindings = bundle.loadBindings,
+        threadDeleteByUserActionCallbacks = bundle.runnerBindings.deleteByUserActionCallbacks,
+        threadReplyActionCallbacks = bundle.runnerBindings.replyActionCallbacks,
+        autoSaveBindings = bundle.saveExecutionBindings.autoSaveBindings,
+        manualSaveBindings = bundle.saveExecutionBindings.manualSaveBindings,
+        singleMediaSaveBindings = bundle.saveExecutionBindings.singleMediaSaveBindings
+    )
+}
+
 internal data class ThreadScreenAsyncBindingsInputs(
     val coroutineScope: CoroutineScope,
     val repository: BoardRepository,

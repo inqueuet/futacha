@@ -25,7 +25,7 @@ class CatalogScreenEntrySupportTest {
         val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = {}
         )
-        val screenContract = ScreenContract(
+        val screenContract = buildScreenContract(
             history = listOf(historyEntry()),
             historyCallbacks = ScreenHistoryCallbacks(
                 onHistoryEntrySelected = historyEntrySelected,
@@ -80,10 +80,61 @@ class CatalogScreenEntrySupportTest {
 
         assertSame(onThreadSelected, args.onThreadSelected)
         assertSame(repository, args.dependencies.repository)
-        assertSame(stateStore, args.dependencies.services.stateStore)
-        assertSame(savedThreadRepository, args.dependencies.services.autoSavedThreadRepository)
-        assertSame(fileSystem, args.dependencies.services.fileSystem)
-        assertSame(httpClient, args.dependencies.services.httpClient)
+        assertSame(stateStore, args.dependencies.stateStore)
+        assertSame(savedThreadRepository, args.dependencies.autoSavedThreadRepository)
+        assertSame(fileSystem, args.dependencies.fileSystem)
+        assertSame(httpClient, args.dependencies.httpClient)
+        httpClient.close()
+    }
+
+    @Test
+    fun resolveContentContext_exposesResolvedCallbacksPreferencesAndDependencies() {
+        val explicitSelected: (ThreadHistoryEntry) -> Unit = {}
+        val explicitDismissed: (ThreadHistoryEntry) -> Unit = {}
+        val explicitUpdated: (ThreadHistoryEntry) -> Unit = {}
+        val explicitRefresh: suspend () -> Unit = {}
+        val explicitCleared: () -> Unit = {}
+        val repository = FakeBoardRepository()
+        val stateStore = AppStateStore(FakePlatformStateStorage())
+        val fileSystem = InMemoryFileSystem()
+        val savedThreadRepository = SavedThreadRepository(fileSystem)
+        val httpClient = HttpClient()
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = {}
+        )
+        val args = buildCatalogScreenContentArgs(
+            board = boardSummary(),
+            history = listOf(historyEntry()),
+            onBack = {},
+            onThreadSelected = {},
+            onHistoryEntrySelected = explicitSelected,
+            onHistoryEntryDismissed = explicitDismissed,
+            onHistoryEntryUpdated = explicitUpdated,
+            onHistoryRefresh = explicitRefresh,
+            onHistoryCleared = explicitCleared,
+            repository = repository,
+            stateStore = stateStore,
+            autoSavedThreadRepository = savedThreadRepository,
+            fileSystem = fileSystem,
+            httpClient = httpClient,
+            preferencesState = ScreenPreferencesState(appVersion = "1.0"),
+            preferencesCallbacks = preferencesCallbacks,
+            modifier = Modifier
+        )
+
+        val context = args.resolveContentContext()
+
+        assertSame(explicitSelected, context.onHistoryEntrySelected)
+        assertSame(explicitDismissed, context.onHistoryEntryDismissed)
+        assertSame(explicitUpdated, context.onHistoryEntryUpdated)
+        assertSame(explicitRefresh, context.onHistoryRefresh)
+        assertSame(explicitCleared, context.onHistoryCleared)
+        assertSame(stateStore, context.stateStore)
+        assertSame(savedThreadRepository, context.autoSavedThreadRepository)
+        assertSame(fileSystem, context.fileSystem)
+        assertSame(httpClient, context.httpClient)
+        assertSame(args.preferencesState, context.preferencesState)
+        assertSame(preferencesCallbacks, context.preferencesCallbacks)
         httpClient.close()
     }
 

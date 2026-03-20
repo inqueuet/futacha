@@ -13,15 +13,10 @@ internal data class CatalogScreenContentArgs(
     val board: BoardSummary?,
     val onBack: () -> Unit,
     val onThreadSelected: (CatalogItem) -> Unit,
-    val screenContext: ResolvedScreenContext,
+    override val screenContext: ResolvedScreenContext,
     val dependencies: CatalogScreenResolvedDependencies,
     val modifier: Modifier
-) {
-    val history: List<ThreadHistoryEntry> get() = screenContext.history
-    val historyCallbacks: ResolvedScreenHistoryCallbacks get() = screenContext.historyCallbacks
-    val preferencesState: ScreenPreferencesState get() = screenContext.preferencesState
-    val preferencesCallbacks: ScreenPreferencesCallbacks get() = screenContext.preferencesCallbacks
-}
+) : ScreenContextOwner
 
 internal fun resolveCatalogScreenDependencies(
     dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
@@ -103,11 +98,9 @@ internal fun buildCatalogScreenContentArgs(
     modifier: Modifier = Modifier,
     httpClient: HttpClient? = dependencies.httpClient
 ): CatalogScreenContentArgs {
-    return assembleCatalogScreenContentArgs(
+    return buildCatalogScreenContentArgsFromContract(
         board = board,
-        onBack = onBack,
-        onThreadSelected = onThreadSelected,
-        screenContext = resolveScreenContext(
+        screenContract = buildScreenContract(
             history = history,
             historyCallbacks = historyCallbacks,
             onHistoryEntrySelected = onHistoryEntrySelected,
@@ -118,8 +111,9 @@ internal fun buildCatalogScreenContentArgs(
             preferencesState = preferencesState,
             preferencesCallbacks = preferencesCallbacks
         ),
-        dependencies = resolveCatalogScreenDependencies(
-            dependencies = dependencies,
+        onBack = onBack,
+        onThreadSelected = onThreadSelected,
+        dependencies = dependencies.withOverrides(
             repository = repository,
             stateStore = stateStore,
             autoSavedThreadRepository = autoSavedThreadRepository,

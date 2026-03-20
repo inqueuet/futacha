@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -13,12 +17,14 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.audio.TextSpeaker
 import com.valoser.futacha.shared.util.FileSystem
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.serialization.json.Json
 
 internal data class ThreadScreenContentContext(
     val board: BoardSummary,
-    val history: List<ThreadHistoryEntry>,
     val threadId: String,
     val threadTitle: String?,
     val initialReplyCount: Int?,
@@ -26,27 +32,16 @@ internal data class ThreadScreenContentContext(
     val onBack: () -> Unit,
     val onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit,
     val onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit,
-    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
-    val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
-    val onHistoryCleared: () -> Unit,
-    val onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit,
-    val onHistoryRefresh: suspend () -> Unit,
     val repository: BoardRepository?,
-    val httpClient: HttpClient?,
-    val fileSystem: FileSystem?,
-    val cookieRepository: CookieRepository?,
-    val stateStore: AppStateStore?,
-    val autoSavedThreadRepository: SavedThreadRepository?,
-    val preferencesState: ScreenPreferencesState,
-    val preferencesCallbacks: ScreenPreferencesCallbacks,
+    override val screenContext: ResolvedScreenContext,
+    override val services: ResolvedScreenServiceDependencies,
     val onRegisteredThreadUrlClick: (String) -> Boolean,
     val modifier: Modifier
-)
+) : ScreenContextOwner, ResolvedScreenServiceDependenciesOwner
 
 internal fun ThreadScreenContentArgs.resolveContentContext(): ThreadScreenContentContext {
     return ThreadScreenContentContext(
         board = board,
-        history = history,
         threadId = threadId,
         threadTitle = threadTitle,
         initialReplyCount = initialReplyCount,
@@ -54,19 +49,9 @@ internal fun ThreadScreenContentArgs.resolveContentContext(): ThreadScreenConten
         onBack = onBack,
         onScrollPositionPersist = onScrollPositionPersist,
         onScrollPositionPersistImmediately = onScrollPositionPersistImmediately,
-        onHistoryEntrySelected = historyCallbacks.onHistoryEntrySelected,
-        onHistoryEntryDismissed = historyCallbacks.onHistoryEntryDismissed,
-        onHistoryCleared = historyCallbacks.onHistoryCleared,
-        onHistoryEntryUpdated = historyCallbacks.onHistoryEntryUpdated,
-        onHistoryRefresh = historyCallbacks.onHistoryRefresh,
         repository = dependencies.repository,
-        httpClient = dependencies.httpClient,
-        fileSystem = dependencies.fileSystem,
-        cookieRepository = dependencies.cookieRepository,
-        stateStore = dependencies.stateStore,
-        autoSavedThreadRepository = dependencies.autoSavedThreadRepository,
-        preferencesState = preferencesState,
-        preferencesCallbacks = preferencesCallbacks,
+        screenContext = screenContext,
+        services = dependencies.services,
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
         modifier = modifier
     )
@@ -86,6 +71,144 @@ internal data class ThreadScreenCoreSetupBundle(
     val isPrivacyFilterEnabled: Boolean
 )
 
+internal data class ThreadScreenPreparedSetupHandles(
+    val contextHandles: ThreadScreenContextHandles,
+    val runtimeStateRefs: ThreadScreenRuntimeMutableStateRefs,
+    val readAloudStateRefs: ThreadScreenReadAloudMutableStateRefs,
+    val saveJobStateRefs: ThreadScreenSaveJobMutableStateRefs,
+    val interactionStateRefs: ThreadScreenInteractionMutableStateRefs,
+    val formStateRefs: ThreadScreenFormMutableStateRefs,
+    val refreshStateRefs: ThreadScreenRefreshMutableStateRefs,
+    val searchStateRefs: ThreadScreenSearchMutableStateRefs,
+    val runtimeHandles: ThreadScreenRuntimeHandles,
+    val setupHandles: ThreadScreenSetupHandles
+)
+
+internal data class ThreadScreenContextHandles(
+    val board: BoardSummary,
+    val history: List<ThreadHistoryEntry>,
+    val threadId: String,
+    val threadTitle: String?,
+    val initialReplyCount: Int?,
+    val threadUrlOverride: String?,
+    val onBack: () -> Unit,
+    val onScrollPositionPersist: (threadId: String, index: Int, offset: Int) -> Unit,
+    val onScrollPositionPersistImmediately: (threadId: String, index: Int, offset: Int) -> Unit,
+    val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
+    val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
+    val onHistoryCleared: () -> Unit,
+    val onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit,
+    val onHistoryRefresh: suspend () -> Unit,
+    val httpClient: HttpClient?,
+    val fileSystem: FileSystem?,
+    val cookieRepository: CookieRepository?,
+    val stateStore: AppStateStore?,
+    val preferencesState: ScreenPreferencesState,
+    val preferencesCallbacks: ScreenPreferencesCallbacks,
+    val modifier: Modifier
+)
+
+internal data class ThreadScreenRuntimeHandles(
+    val snackbarHostState: SnackbarHostState,
+    val coroutineScope: CoroutineScope,
+    val drawerState: DrawerState,
+    val isDrawerOpen: State<Boolean>,
+    val lazyListState: LazyListState,
+    val archiveSearchJson: Json,
+    val externalUrlLauncher: (String) -> Unit,
+    val handleUrlClick: (String) -> Unit,
+    val textSpeaker: TextSpeaker
+)
+
+internal data class ThreadScreenSetupHandles(
+    val activeRepository: BoardRepository,
+    val effectiveBoardUrl: String,
+    val initialHistoryEntry: ThreadHistoryEntry?,
+    val autoSaveRepository: SavedThreadRepository?,
+    val manualSaveRepository: SavedThreadRepository?,
+    val legacyManualSaveRepository: SavedThreadRepository?,
+    val offlineLookupContext: OfflineThreadLookupContext,
+    val offlineSources: List<OfflineThreadSource>,
+    val persistentBindings: ThreadScreenPersistentBindings,
+    val isPrivacyFilterEnabled: Boolean
+)
+
+internal fun resolveThreadScreenPreparedSetupHandles(
+    preparedSetup: ThreadScreenPreparedSetupBundle
+): ThreadScreenPreparedSetupHandles {
+    val context = preparedSetup.context
+    val mutableStateRefs = preparedSetup.mutableStateRefs
+    val coreSetupBundle = preparedSetup.coreSetupBundle
+    val environmentBundle = coreSetupBundle.environmentBundle
+    val runtimeObjectBundle = coreSetupBundle.runtimeObjectBundle
+    val platformRuntimeBindings = coreSetupBundle.platformRuntimeBindings
+    return ThreadScreenPreparedSetupHandles(
+        contextHandles = ThreadScreenContextHandles(
+            board = context.board,
+            history = context.history,
+            threadId = context.threadId,
+            threadTitle = context.threadTitle,
+            initialReplyCount = context.initialReplyCount,
+            threadUrlOverride = context.threadUrlOverride,
+            onBack = context.onBack,
+            onScrollPositionPersist = context.onScrollPositionPersist,
+            onScrollPositionPersistImmediately = context.onScrollPositionPersistImmediately,
+            onHistoryEntrySelected = context.onHistoryEntrySelected,
+            onHistoryEntryDismissed = context.onHistoryEntryDismissed,
+            onHistoryCleared = context.onHistoryCleared,
+            onHistoryEntryUpdated = context.onHistoryEntryUpdated,
+            onHistoryRefresh = context.onHistoryRefresh,
+            httpClient = context.httpClient,
+            fileSystem = context.fileSystem,
+            cookieRepository = context.cookieRepository,
+            stateStore = context.stateStore,
+            preferencesState = context.preferencesState,
+            preferencesCallbacks = context.preferencesCallbacks,
+            modifier = context.modifier
+        ),
+        runtimeStateRefs = mutableStateRefs.runtime,
+        readAloudStateRefs = mutableStateRefs.readAloud,
+        saveJobStateRefs = mutableStateRefs.saveJobs,
+        interactionStateRefs = mutableStateRefs.interaction,
+        formStateRefs = mutableStateRefs.form,
+        refreshStateRefs = mutableStateRefs.refresh,
+        searchStateRefs = mutableStateRefs.search,
+        runtimeHandles = ThreadScreenRuntimeHandles(
+            snackbarHostState = runtimeObjectBundle.snackbarHostState,
+            coroutineScope = runtimeObjectBundle.coroutineScope,
+            drawerState = runtimeObjectBundle.drawerState,
+            isDrawerOpen = runtimeObjectBundle.isDrawerOpen,
+            lazyListState = runtimeObjectBundle.lazyListState,
+            archiveSearchJson = platformRuntimeBindings.archiveSearchJson,
+            externalUrlLauncher = platformRuntimeBindings.externalUrlLauncher,
+            handleUrlClick = platformRuntimeBindings.handleUrlClick,
+            textSpeaker = platformRuntimeBindings.textSpeaker
+        ),
+        setupHandles = ThreadScreenSetupHandles(
+            activeRepository = environmentBundle.activeRepository,
+            effectiveBoardUrl = environmentBundle.effectiveBoardUrl,
+            initialHistoryEntry = environmentBundle.initialHistoryEntry,
+            autoSaveRepository = environmentBundle.autoSaveRepository,
+            manualSaveRepository = environmentBundle.manualSaveRepository,
+            legacyManualSaveRepository = environmentBundle.legacyManualSaveRepository,
+            offlineLookupContext = environmentBundle.offlineLookupContext,
+            offlineSources = environmentBundle.offlineSources,
+            persistentBindings = coreSetupBundle.persistentBindings,
+            isPrivacyFilterEnabled = coreSetupBundle.isPrivacyFilterEnabled
+        )
+    )
+}
+
+@Composable
+internal fun rememberThreadScreenPreparedSetupHandles(
+    preparedSetup: ThreadScreenPreparedSetupBundle
+): ThreadScreenPreparedSetupHandles {
+    return rememberResolvedSetupHandles(
+        preparedSetup = preparedSetup,
+        resolver = ::resolveThreadScreenPreparedSetupHandles
+    )
+}
+
 @Composable
 internal fun rememberThreadScreenPreparedSetupBundle(
     args: ThreadScreenContentArgs
@@ -96,9 +219,10 @@ internal fun rememberThreadScreenPreparedSetupBundle(
         threadId = context.threadId,
         threadUrlOverride = context.threadUrlOverride
     )
-    val mutableStateRefs = remember(mutableStateBundle) {
-        resolveThreadScreenMutableStateRefs(mutableStateBundle)
-    }
+    val mutableStateRefs = rememberResolvedStateRefs(
+        bundle = mutableStateBundle,
+        resolver = ::resolveThreadScreenMutableStateRefs
+    )
     val coreSetupBundle = rememberThreadScreenCoreSetupBundle(
         board = context.board,
         history = context.history,

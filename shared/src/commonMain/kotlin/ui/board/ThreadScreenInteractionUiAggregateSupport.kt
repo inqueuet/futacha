@@ -6,6 +6,7 @@ import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,50 @@ internal data class ThreadScreenInteractionUiAggregateBundle(
     val controllerBindings: ThreadScreenControllerBindingsBundle,
     val uiBindings: ThreadScreenUiBindingsBundle
 )
+
+internal data class ThreadScreenInteractionUiHandles(
+    val mediaBindings: ThreadScreenMediaBindings,
+    val controllerBindings: ThreadScreenControllerBindingsBundle,
+    val uiBindings: ThreadScreenUiBindingsBundle,
+    val actionExecutionBindings: ThreadScreenActionExecutionBindingsBundle,
+    val actionBindings: ThreadScreenActionBindings,
+    val handleHistoryRefresh: suspend () -> Unit,
+    val readAloudBindings: ThreadScreenReadAloudBindings,
+    val startReadAloud: () -> Unit,
+    val seekReadAloudToIndex: (Int, Boolean) -> Unit,
+    val interactionBindings: ThreadScreenInteractionBindingsBundle,
+    val handleMenuEntry: (ThreadMenuEntryId) -> Unit,
+    val searchNavigationCallbacks: ThreadSearchNavigationCallbacks,
+    val postActionHandlers: ThreadPostActionHandlers,
+    val performRefresh: () -> Unit,
+    val historyDrawerCallbacks: ThreadHistoryDrawerCallbacks
+)
+
+internal fun resolveThreadScreenInteractionUiHandles(
+    bundle: ThreadScreenInteractionUiAggregateBundle
+): ThreadScreenInteractionUiHandles {
+    val controllerBindings = bundle.controllerBindings
+    val actionExecutionBindings = controllerBindings.actionExecutionBindings
+    val interactionBindings = controllerBindings.interactionBindings
+    val readAloudBindings = actionExecutionBindings.readAloudBindings
+    return ThreadScreenInteractionUiHandles(
+        mediaBindings = bundle.mediaBindings,
+        controllerBindings = controllerBindings,
+        uiBindings = bundle.uiBindings,
+        actionExecutionBindings = actionExecutionBindings,
+        actionBindings = actionExecutionBindings.actionBindings,
+        handleHistoryRefresh = actionExecutionBindings.historyRefreshBindings.handleHistoryRefresh,
+        readAloudBindings = readAloudBindings,
+        startReadAloud = readAloudBindings.startReadAloud,
+        seekReadAloudToIndex = readAloudBindings.seekReadAloudToIndex,
+        interactionBindings = interactionBindings,
+        handleMenuEntry = interactionBindings.menuEntryHandler,
+        searchNavigationCallbacks = interactionBindings.searchNavigationCallbacks,
+        postActionHandlers = interactionBindings.postActionHandlers,
+        performRefresh = interactionBindings.refreshHandler,
+        historyDrawerCallbacks = interactionBindings.historyDrawerCallbacks
+    )
+}
 
 internal data class ThreadScreenInteractionUiAggregateRuntimeInputs(
     val mediaInputs: ThreadScreenAggregateMediaInputs,

@@ -25,6 +25,30 @@ internal data class CatalogScreenInteractionBindingsBundle(
     val overlayBindings: CatalogScreenOverlayBindingsBundle
 )
 
+internal data class CatalogScreenInteractionHandles(
+    val mutationBindings: CatalogScreenMutationBindings,
+    val runtimeBindings: CatalogScreenRuntimeBindingsBundle,
+    val overlayBindings: CatalogScreenOverlayBindingsBundle,
+    val performRefresh: () -> Unit,
+    val initialLoadBindings: CatalogInitialLoadBindings,
+    val createThreadBindings: CatalogCreateThreadBindings,
+    val historyDrawerCallbacks: CatalogHistoryDrawerCallbacks
+)
+
+internal fun resolveCatalogScreenInteractionHandles(
+    bundle: CatalogScreenInteractionBindingsBundle
+): CatalogScreenInteractionHandles {
+    return CatalogScreenInteractionHandles(
+        mutationBindings = bundle.mutationBindings,
+        runtimeBindings = bundle.runtimeBindings,
+        overlayBindings = bundle.overlayBindings,
+        performRefresh = bundle.runtimeBindings.executionBindings.performRefresh,
+        initialLoadBindings = bundle.runtimeBindings.initialLoadBindings,
+        createThreadBindings = bundle.runtimeBindings.createThreadBindings,
+        historyDrawerCallbacks = bundle.runtimeBindings.historyDrawerCallbacks
+    )
+}
+
 internal data class CatalogScreenMutationInputs(
     val coroutineScope: CoroutineScope,
     val stateStore: AppStateStore?,

@@ -20,7 +20,7 @@ class BoardManagementScreenEntrySupportTest {
         val preferencesCallbacks = ScreenPreferencesCallbacks(
             onBackgroundRefreshChanged = {}
         )
-        val screenContract = ScreenContract(
+        val screenContract = buildScreenContract(
             history = listOf(historyEntry()),
             historyCallbacks = ScreenHistoryCallbacks(
                 onHistoryEntrySelected = historyEntrySelected,

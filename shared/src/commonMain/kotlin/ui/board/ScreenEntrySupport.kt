@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -23,6 +25,37 @@ internal data class ResolvedScreenContext(
     val preferencesCallbacks: ScreenPreferencesCallbacks
 )
 
+internal interface ScreenContextOwner {
+    val screenContext: ResolvedScreenContext
+}
+
+internal val ScreenContextOwner.history: List<ThreadHistoryEntry>
+    get() = screenContext.history
+
+internal val ScreenContextOwner.historyCallbacks: ResolvedScreenHistoryCallbacks
+    get() = screenContext.historyCallbacks
+
+internal val ScreenContextOwner.onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit
+    get() = historyCallbacks.onHistoryEntrySelected
+
+internal val ScreenContextOwner.onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit
+    get() = historyCallbacks.onHistoryEntryDismissed
+
+internal val ScreenContextOwner.onHistoryCleared: () -> Unit
+    get() = historyCallbacks.onHistoryCleared
+
+internal val ScreenContextOwner.onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit
+    get() = historyCallbacks.onHistoryEntryUpdated
+
+internal val ScreenContextOwner.onHistoryRefresh: suspend () -> Unit
+    get() = historyCallbacks.onHistoryRefresh
+
+internal val ScreenContextOwner.preferencesState: ScreenPreferencesState
+    get() = screenContext.preferencesState
+
+internal val ScreenContextOwner.preferencesCallbacks: ScreenPreferencesCallbacks
+    get() = screenContext.preferencesCallbacks
+
 internal data class ResolvedScreenServiceDependencies(
     val stateStore: AppStateStore?,
     val autoSavedThreadRepository: SavedThreadRepository?,
@@ -31,16 +64,49 @@ internal data class ResolvedScreenServiceDependencies(
     val httpClient: HttpClient?
 )
 
+internal interface ResolvedScreenServiceDependenciesOwner {
+    val services: ResolvedScreenServiceDependencies
+}
+
+internal val ResolvedScreenServiceDependenciesOwner.stateStore: AppStateStore?
+    get() = services.stateStore
+
+internal val ResolvedScreenServiceDependenciesOwner.autoSavedThreadRepository: SavedThreadRepository?
+    get() = services.autoSavedThreadRepository
+
+internal val ResolvedScreenServiceDependenciesOwner.cookieRepository: CookieRepository?
+    get() = services.cookieRepository
+
+internal val ResolvedScreenServiceDependenciesOwner.fileSystem: FileSystem?
+    get() = services.fileSystem
+
+internal val ResolvedScreenServiceDependenciesOwner.httpClient: HttpClient?
+    get() = services.httpClient
+
+@Composable
+internal fun <Bundle, Refs> rememberResolvedStateRefs(
+    bundle: Bundle,
+    resolver: (Bundle) -> Refs
+): Refs {
+    return remember(bundle) {
+        resolver(bundle)
+    }
+}
+
+@Composable
+internal fun <PreparedSetup, Handles> rememberResolvedSetupHandles(
+    preparedSetup: PreparedSetup,
+    resolver: (PreparedSetup) -> Handles
+): Handles {
+    return remember(preparedSetup) {
+        resolver(preparedSetup)
+    }
+}
+
 internal data class ResolvedBoardRepositoryScreenDependencies(
     val repository: BoardRepository?,
-    val services: ResolvedScreenServiceDependencies
-) {
-    val stateStore: AppStateStore? get() = services.stateStore
-    val autoSavedThreadRepository: SavedThreadRepository? get() = services.autoSavedThreadRepository
-    val cookieRepository: CookieRepository? get() = services.cookieRepository
-    val fileSystem: FileSystem? get() = services.fileSystem
-    val httpClient: HttpClient? get() = services.httpClient
-}
+    override val services: ResolvedScreenServiceDependencies
+) : ResolvedScreenServiceDependenciesOwner
 
 internal fun resolveScreenHistoryCallbacks(
     historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
@@ -95,6 +161,31 @@ internal fun resolveScreenContext(
         ),
         preferencesState = screenContract.preferencesState,
         preferencesCallbacks = screenContract.preferencesCallbacks
+    )
+}
+
+internal fun buildScreenContract(
+    history: List<ThreadHistoryEntry>,
+    historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
+    onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
+    onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
+    onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
+    onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks()
+): ScreenContract {
+    return ScreenContract(
+        history = history,
+        historyCallbacks = ScreenHistoryCallbacks(
+            onHistoryEntrySelected = onHistoryEntrySelected,
+            onHistoryEntryDismissed = onHistoryEntryDismissed,
+            onHistoryCleared = onHistoryCleared,
+            onHistoryEntryUpdated = onHistoryEntryUpdated,
+            onHistoryRefresh = onHistoryRefresh
+        ),
+        preferencesState = preferencesState,
+        preferencesCallbacks = preferencesCallbacks
     )
 }
 

@@ -14,6 +14,7 @@ import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
 import com.valoser.futacha.shared.ui.board.SavedThreadsScreen
 import com.valoser.futacha.shared.ui.board.ThreadScreen
+import com.valoser.futacha.shared.ui.board.stateStore
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
