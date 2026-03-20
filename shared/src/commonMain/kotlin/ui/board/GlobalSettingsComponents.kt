@@ -228,10 +228,10 @@ internal fun GlobalSettingsBehaviorSection(
         description = "履歴更新と軽量化の挙動をまとめています。"
     ) {
         ListItem(
-            headlineContent = { Text("バックグラウンド更新 (15分)") },
+            headlineContent = { Text("バックグラウンド更新") },
             supportingContent = {
                 Text(
-                    text = "アプリ起動中は15分ごとに履歴を更新します(通知あり)",
+                    text = "Android は最短15分間隔の定期更新、iOS は OS 管理の間欠実行です。どちらも実際の実行時刻は端末状態や OS により前後します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

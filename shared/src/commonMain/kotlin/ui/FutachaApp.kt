@@ -15,6 +15,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -47,8 +48,9 @@ fun FutachaApp(
     autoSavedThreadRepository: SavedThreadRepository? = null
 ) {
     FutachaTheme {
-        val devicePerformanceProfile = remember {
-            detectDevicePerformanceProfile(null)
+        val platformContext = LocalPlatformContext.current
+        val devicePerformanceProfile = remember(platformContext) {
+            detectDevicePerformanceProfile(platformContext)
         }
         val observedRuntimeState = rememberFutachaObservedRuntimeState(
             stateStore = stateStore,

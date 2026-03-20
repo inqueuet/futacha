@@ -194,8 +194,8 @@ class AndroidFileSystem(
     }
 
     override fun getAppDataDirectory(): String {
-        // Android 10以降、またはストレージ状態が正常な場合は共有Documentsフォルダを使用
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || isExternalStorageWritable()) {
+        // Modern Android uses app-scoped external storage by default to avoid scoped-storage write failures.
+        return if (isExternalStorageWritable()) {
             getPublicDocumentsDirectory()
         } else {
             // フォールバック: 内部ストレージ
@@ -214,11 +214,9 @@ class AndroidFileSystem(
     }
 
     /**
-     * 共有Documentsフォルダのパスを取得
-     *
-     * 警告: Android 10以降、getExternalStoragePublicDirectory()は非推奨で、書き込み制限があります。
-     * SAF (Storage Access Framework)の使用を推奨します。
-     * このメソッドはフォールバックとしてのみ使用され、失敗時は内部ストレージにフォールバックします。
+     * Documents 相当の app-scoped 外部ディレクトリを取得。
+     * 共有ストレージへ直接書き込むと scoped storage で失敗しやすいため、
+     * デフォルト経路は SAF 未選択でも安定して書ける app-scoped 領域を使う。
      */
     private fun getPublicDocumentsDirectory(): String {
         return getPublicAppDirectory(
@@ -228,11 +226,7 @@ class AndroidFileSystem(
     }
 
     /**
-     * 共有Downloadフォルダのパスを取得
-     *
-     * 警告: Android 10以降、getExternalStoragePublicDirectory()は非推奨で、書き込み制限があります。
-     * SAF (Storage Access Framework)の使用を推奨します。
-     * このメソッドはフォールバックとしてのみ使用され、失敗時は内部ストレージにフォールバックします。
+     * Downloads 相当の app-scoped 外部ディレクトリを取得。
      */
     private fun getPublicDownloadsDirectory(): String {
         return getPublicAppDirectory(
@@ -246,15 +240,15 @@ class AndroidFileSystem(
         directoryLabel: String
     ): String {
         try {
-            val publicDir = Environment.getExternalStoragePublicDirectory(directoryType)
-            if (publicDir == null) {
+            val externalDir = context.getExternalFilesDir(directoryType)
+            if (externalDir == null) {
                 Logger.e(
                     "FileSystem.android",
-                    "External storage $directoryLabel directory is null, falling back to internal storage"
+                    "App-scoped external $directoryLabel directory is null, falling back to internal storage"
                 )
                 return getFallbackAppDirectory()
             }
-            return ensureAppDirectory(publicDir).absolutePath
+            return ensureAppDirectory(externalDir).absolutePath
         } catch (e: SecurityException) {
             Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
             return getFallbackAppDirectory(e, "SecurityException")

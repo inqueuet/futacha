@@ -924,7 +924,7 @@ class FutachaAppTest {
         legacyRepository.addThreadToIndex(savedThread(threadId = "legacy", boardId = "img")).getOrThrow()
 
         assertSame(
-            currentRepository,
+            legacyRepository,
             selectPreferredSavedThreadsRepository(
                 currentRepository = currentRepository,
                 legacyRepository = legacyRepository,
@@ -933,7 +933,7 @@ class FutachaAppTest {
             )
         )
         assertSame(
-            currentRepository,
+            legacyRepository,
             resolveActiveSavedThreadsRepository(
                 FutachaActiveSavedThreadsRepositoryInputs(
                     currentRepository = currentRepository,

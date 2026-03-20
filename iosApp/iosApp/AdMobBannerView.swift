@@ -1,6 +1,7 @@
 import SwiftUI
 import GoogleMobileAds
 import Foundation
+import UIKit
 
 struct AdMobBannerView: UIViewRepresentable {
     let adUnitID: String
@@ -23,8 +24,7 @@ struct AdMobBannerView: UIViewRepresentable {
         bannerView.adUnitID = adUnitID
         bannerView.delegate = context.coordinator
 
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
+        if let rootViewController = resolveActiveRootViewController() {
             bannerView.rootViewController = rootViewController
             NSLog("AdMobBannerView rootViewController attached: %@", String(describing: type(of: rootViewController)))
         } else {
@@ -39,8 +39,7 @@ struct AdMobBannerView: UIViewRepresentable {
     func updateUIView(_ uiView: BannerView, context: Context) {
         context.coordinator.onAdLoadStateChanged = onAdLoadStateChanged
         if uiView.rootViewController == nil,
-           let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
+           let rootViewController = resolveActiveRootViewController() {
             uiView.rootViewController = rootViewController
             NSLog("AdMobBannerView rootViewController reattached during update")
         }
@@ -63,4 +62,18 @@ struct AdMobBannerView: UIViewRepresentable {
             onAdLoadStateChanged(false)
         }
     }
+}
+
+private func resolveActiveRootViewController() -> UIViewController? {
+    let candidateScenes = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .filter {
+            $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
+        }
+
+    let windows = candidateScenes
+        .flatMap { $0.windows }
+
+    let targetWindow = windows.first(where: \.isKeyWindow) ?? windows.first
+    return targetWindow?.rootViewController
 }

@@ -47,7 +47,7 @@ internal actual fun ThreadScreenBannerAd(
     val context = LocalContext.current
     val widthDp = LocalConfiguration.current.screenWidthDp.coerceAtLeast(320)
     val adSize = remember(context, widthDp) {
-        AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(context, widthDp)
+        AdSize.getLargeAnchoredAdaptiveBannerAdSize(context, widthDp)
     }
     var isBannerVisible by remember(context, adSize) { mutableStateOf(false) }
     val adView = remember(context, adSize) {

@@ -21,6 +21,7 @@ import platform.PhotosUI.PHPickerResult
 import platform.PhotosUI.PHPickerViewController
 import platform.PhotosUI.PHPickerViewControllerDelegateProtocol
 import platform.UIKit.UIApplication
+import platform.UIKit.UIWindowScene
 import platform.UIKit.UIViewController
 import platform.UIKit.UIWindow
 import platform.UniformTypeIdentifiers.UTType
@@ -465,7 +466,18 @@ private fun createSecureBookmark(url: NSURL): SaveLocation.Bookmark? {
 
 private fun getRootViewController(): UIViewController? {
     val application = UIApplication.sharedApplication
-    val windows = application.windows.filterIsInstance<UIWindow>()
+    val windows = buildList {
+        application.connectedScenes
+            .filterIsInstance<UIWindowScene>()
+            .forEach { scene ->
+                if (scene.activationState == 0L || scene.activationState == 1L) {
+                    addAll(scene.windows.filterIsInstance<UIWindow>())
+                }
+            }
+        if (isEmpty()) {
+            addAll(application.windows.filterIsInstance<UIWindow>())
+        }
+    }
     val keyWindow = windows.firstOrNull { it.isKeyWindow() } ?: windows.firstOrNull()
     return keyWindow?.rootViewController
 }

@@ -106,7 +106,7 @@ internal fun GlobalSettingsSaveSection(
             supportingContent = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Documents/futacha 配下がデフォルトです。「Documents」か「Download」と入力すると futacha/saved_threads まで自動指定します。絶対パス指定もできます。",
+                        text = "手入力ではプラットフォーム既定の保存領域を使います。「Documents」や「Download」は端末ごとの既定フォルダ系統に解決されます。絶対パス指定もできます。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
