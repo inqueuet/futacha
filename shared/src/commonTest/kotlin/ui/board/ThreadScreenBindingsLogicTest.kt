@@ -548,6 +548,7 @@ class ThreadScreenBindingsLogicTest {
             showMessage = { shownMessage = it },
             applySaveErrorState = {},
             onOpenSaveDirectoryPicker = null,
+            onOpenSaveSettings = null,
             currentSingleMediaSaveJob = { singleMediaSaveJob },
             setSingleMediaSaveJob = { singleMediaSaveJob = it },
             setIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress = it },
@@ -598,6 +599,7 @@ class ThreadScreenBindingsLogicTest {
             manualSaveLocation = null,
             resolvedManualSaveDirectory = null,
             requiresManualLocationSelection = false,
+            shouldRequireManualSaveDirectoryChange = false,
             manualSaveCallbacks = runtimeBundle.manualSaveCallbacks,
             singleMediaSaveStateBindings = runtimeBundle.singleMediaSaveStateBindings,
             singleMediaSaveCallbacks = runtimeBundle.singleMediaSaveCallbacks,
@@ -1032,6 +1034,7 @@ class ThreadScreenBindingsLogicTest {
                 manualSaveLocation = SaveLocation.Path("/manual"),
                 resolvedManualSaveDirectory = "/manual",
                 requiresManualLocationSelection = false,
+                shouldRequireManualSaveDirectoryChange = false,
                 buildSaveRuntime = { _, _ ->
                     buildThreadSaveRuntime(ThreadSaveService(HttpClient(), fileSystem))
                 },
@@ -1132,6 +1135,7 @@ class ThreadScreenBindingsLogicTest {
                 manualSaveLocation = SaveLocation.Path("/manual"),
                 resolvedManualSaveDirectory = "/manual",
                 requiresManualLocationSelection = false,
+                shouldRequireManualSaveDirectoryChange = false,
                 buildSaveRuntime = { _, _ ->
                     buildThreadSaveRuntime(ThreadSaveService(HttpClient(), fileSystem))
                 },
@@ -1261,6 +1265,7 @@ class ThreadScreenBindingsLogicTest {
                 manualSaveDirectory = "/manual",
                 resolvedManualSaveDirectory = "/manual",
                 requiresManualLocationSelection = false,
+                shouldRequireManualSaveDirectoryChange = false,
                 hasStorageDependencies = true,
                 performSingleMediaSave = { config, _ ->
                     assertEquals("https://example.com/src/a.jpg", config.mediaUrl)
@@ -1365,6 +1370,8 @@ class ThreadScreenBindingsLogicTest {
                 manualSaveLocation = null,
                 resolvedManualSaveDirectory = null,
                 requiresManualLocationSelection = false
+                ,
+                shouldRequireManualSaveDirectoryChange = false
             ),
             manualSaveCallbacks = ThreadScreenManualSaveCallbacks(
                 showMessage = { shownMessages += it },
@@ -1385,6 +1392,7 @@ class ThreadScreenBindingsLogicTest {
                 manualSaveDirectory = "/manual",
                 resolvedManualSaveDirectory = null,
                 requiresManualLocationSelection = false,
+                shouldRequireManualSaveDirectoryChange = false,
                 hasStorageDependencies = false
             ),
             singleMediaSaveCallbacks = ThreadScreenSingleMediaSaveCallbacks(

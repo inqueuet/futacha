@@ -69,6 +69,7 @@ internal data class ThreadScreenAsyncBindingsInputs(
     val manualSaveLocation: SaveLocation?,
     val resolvedManualSaveDirectory: String?,
     val requiresManualLocationSelection: Boolean,
+    val shouldRequireManualSaveDirectoryChange: Boolean,
     val onWarning: (String) -> Unit = {},
     val onInfo: (String) -> Unit = {}
 )
@@ -99,6 +100,7 @@ internal data class ThreadScreenAsyncRuntimeInputs(
     val showMessage: (String) -> Unit,
     val applySaveErrorState: (ThreadManualSaveErrorState) -> Unit,
     val onOpenSaveDirectoryPicker: (() -> Unit)?,
+    val onOpenSaveSettings: (() -> Unit)?,
     val currentSingleMediaSaveJob: () -> kotlinx.coroutines.Job?,
     val setSingleMediaSaveJob: (kotlinx.coroutines.Job?) -> Unit,
     val setIsSingleMediaSaveInProgress: (Boolean) -> Unit,
@@ -166,6 +168,7 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
         showMessage = inputs.showMessage,
         applySaveErrorState = inputs.applySaveErrorState,
         onOpenSaveDirectoryPicker = inputs.onOpenSaveDirectoryPicker,
+        onOpenSaveSettings = inputs.onOpenSaveSettings,
         currentSingleMediaSaveJob = inputs.currentSingleMediaSaveJob,
         setSingleMediaSaveJob = inputs.setSingleMediaSaveJob,
         setIsSingleMediaSaveInProgress = inputs.setIsSingleMediaSaveInProgress,
@@ -199,6 +202,7 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
     showMessage: (String) -> Unit,
     applySaveErrorState: (ThreadManualSaveErrorState) -> Unit,
     onOpenSaveDirectoryPicker: (() -> Unit)?,
+    onOpenSaveSettings: (() -> Unit)?,
     currentSingleMediaSaveJob: () -> kotlinx.coroutines.Job?,
     setSingleMediaSaveJob: (kotlinx.coroutines.Job?) -> Unit,
     setIsSingleMediaSaveInProgress: (Boolean) -> Unit,
@@ -234,7 +238,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
         manualSaveCallbacks = ThreadScreenManualSaveCallbacks(
             showMessage = showMessage,
             applySaveErrorState = applySaveErrorState,
-            openSaveDirectoryPicker = onOpenSaveDirectoryPicker
+            openSaveDirectoryPicker = onOpenSaveDirectoryPicker,
+            openSaveSettings = onOpenSaveSettings
         ),
         singleMediaSaveStateBindings = ThreadScreenSingleMediaSaveStateBindings(
             currentSingleMediaSaveJob = currentSingleMediaSaveJob,
@@ -246,7 +251,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
         singleMediaSaveCallbacks = ThreadScreenSingleMediaSaveCallbacks(
             showOptionalMessage = showOptionalMessage,
             applySaveErrorState = applySaveErrorState,
-            showMessage = showMessage
+            showMessage = showMessage,
+            openSaveSettings = onOpenSaveSettings
         ),
         loadStateBindings = ThreadScreenLoadStateBindings(
             currentRefreshThreadJob = currentRefreshThreadJob,
@@ -295,6 +301,7 @@ internal fun buildThreadScreenAsyncBindingsBundle(
         manualSaveLocation = inputs.manualSaveLocation,
         resolvedManualSaveDirectory = inputs.resolvedManualSaveDirectory,
         requiresManualLocationSelection = inputs.requiresManualLocationSelection,
+        shouldRequireManualSaveDirectoryChange = inputs.shouldRequireManualSaveDirectoryChange,
         manualSaveCallbacks = inputs.runtimeBindings.manualSaveCallbacks,
         singleMediaSaveStateBindings = inputs.runtimeBindings.singleMediaSaveStateBindings,
         singleMediaSaveCallbacks = inputs.runtimeBindings.singleMediaSaveCallbacks,
@@ -330,6 +337,7 @@ internal fun buildThreadScreenAsyncBindingsBundle(
     manualSaveLocation: SaveLocation?,
     resolvedManualSaveDirectory: String?,
     requiresManualLocationSelection: Boolean,
+    shouldRequireManualSaveDirectoryChange: Boolean,
     manualSaveCallbacks: ThreadScreenManualSaveCallbacks,
     singleMediaSaveStateBindings: ThreadScreenSingleMediaSaveStateBindings,
     singleMediaSaveCallbacks: ThreadScreenSingleMediaSaveCallbacks,
@@ -379,7 +387,8 @@ internal fun buildThreadScreenAsyncBindingsBundle(
             manualSaveDirectory = manualSaveDirectory,
             manualSaveLocation = manualSaveLocation,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
-            requiresManualLocationSelection = requiresManualLocationSelection
+            requiresManualLocationSelection = requiresManualLocationSelection,
+            shouldRequireManualSaveDirectoryChange = shouldRequireManualSaveDirectoryChange
         ),
         manualSaveCallbacks = manualSaveCallbacks,
         singleMediaSaveStateBindings = singleMediaSaveStateBindings,
@@ -391,6 +400,7 @@ internal fun buildThreadScreenAsyncBindingsBundle(
             manualSaveDirectory = manualSaveDirectory,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory,
             requiresManualLocationSelection = requiresManualLocationSelection,
+            shouldRequireManualSaveDirectoryChange = shouldRequireManualSaveDirectoryChange,
             hasStorageDependencies = httpClient != null && fileSystem != null
         ),
         singleMediaSaveCallbacks = singleMediaSaveCallbacks
@@ -479,6 +489,11 @@ internal fun rememberThreadScreenAsyncBindingsBundle(
                 requiresManualLocationSelection = requiresThreadManualSaveLocationSelection(
                     isAndroidPlatform,
                     preferencesState.manualSaveLocation
+                ),
+                shouldRequireManualSaveDirectoryChange = shouldRequireAndroidManualSaveDirectoryChange(
+                    isAndroidPlatform = isAndroidPlatform,
+                    manualSaveLocation = preferencesState.manualSaveLocation,
+                    manualSaveDirectory = preferencesState.manualSaveDirectory
                 ),
                 onWarning = { message ->
                     Logger.w(THREAD_SCREEN_TAG, message)

@@ -2,12 +2,14 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal data class GlobalSettingsDerivedState(
     val resolvedManualPath: String,
     val saveDestinationModeLabel: String,
     val saveDestinationHint: String,
+    val defaultAndroidSaveWarningText: String?,
     val settingsEntries: List<GlobalSettingsEntry>,
     val preferredFileManagerState: PreferredFileManagerSummaryState,
     val saveDirectoryPickerState: SaveDirectoryPickerState,
@@ -17,6 +19,7 @@ internal data class GlobalSettingsDerivedState(
 @Composable
 internal fun rememberGlobalSettingsDerivedState(
     manualSaveDirectory: String,
+    manualSaveLocation: SaveLocation?,
     resolvedManualSaveDirectory: String?,
     saveDirectorySelection: SaveDirectorySelection,
     isAndroidPlatform: Boolean,
@@ -35,6 +38,19 @@ internal fun rememberGlobalSettingsDerivedState(
     }
     val saveDestinationHint = remember(saveDirectorySelection, isAndroidPlatform) {
         buildSaveDestinationHintValue(saveDirectorySelection, isAndroidPlatform)
+    }
+    val defaultAndroidSaveWarningText = remember(
+        manualSaveDirectory,
+        manualSaveLocation,
+        saveDirectorySelection,
+        isAndroidPlatform
+    ) {
+        resolveDefaultAndroidSaveWarningText(
+            manualSaveDirectory = manualSaveDirectory,
+            manualSaveLocation = manualSaveLocation,
+            saveDirectorySelection = saveDirectorySelection,
+            isAndroidPlatform = isAndroidPlatform
+        )
     }
     val settingsEntries = remember(hasCookieManager) {
         buildList {
@@ -60,6 +76,7 @@ internal fun rememberGlobalSettingsDerivedState(
         resolvedManualPath = resolvedManualPath,
         saveDestinationModeLabel = saveDestinationModeLabel,
         saveDestinationHint = saveDestinationHint,
+        defaultAndroidSaveWarningText = defaultAndroidSaveWarningText,
         settingsEntries = settingsEntries,
         preferredFileManagerState = preferredFileManagerState,
         saveDirectoryPickerState = saveDirectoryPickerState,

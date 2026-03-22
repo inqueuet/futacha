@@ -78,6 +78,7 @@ internal data class ThreadScreenManualSaveDependencies(
     val manualSaveLocation: SaveLocation?,
     val resolvedManualSaveDirectory: String?,
     val requiresManualLocationSelection: Boolean,
+    val shouldRequireManualSaveDirectoryChange: Boolean,
     val buildSaveRuntime: (HttpClient, FileSystem) -> ThreadSaveRuntime = ::buildThreadSaveRuntime,
     val launchProgressCollector: CoroutineScope.(ThreadSaveService, (SaveProgress?) -> Unit) -> Job = { saveService, onProgress ->
         launchThreadSaveProgressCollector(saveService, onProgress)
@@ -91,7 +92,8 @@ internal data class ThreadScreenManualSaveDependencies(
 internal data class ThreadScreenManualSaveCallbacks(
     val showMessage: (String) -> Unit,
     val applySaveErrorState: (ThreadManualSaveErrorState) -> Unit,
-    val openSaveDirectoryPicker: (() -> Unit)? = null
+    val openSaveDirectoryPicker: (() -> Unit)? = null,
+    val openSaveSettings: (() -> Unit)? = null
 )
 
 internal data class ThreadScreenManualSaveBindings(
@@ -130,6 +132,12 @@ internal fun buildThreadScreenManualSaveBindings(
                     return@save
                 }
                 ThreadSaveAvailability.Ready -> Unit
+            }
+
+            if (dependencies.shouldRequireManualSaveDirectoryChange) {
+                callbacks.showMessage(buildThreadSaveDefaultAndroidDirectoryMessage())
+                callbacks.openSaveSettings?.invoke()
+                return@save
             }
 
             val currentState = stateBindings.currentUiState() as? ThreadUiState.Success ?: run {
@@ -241,6 +249,7 @@ internal data class ThreadScreenSingleMediaSaveDependencies(
     val manualSaveDirectory: String,
     val resolvedManualSaveDirectory: String?,
     val requiresManualLocationSelection: Boolean,
+    val shouldRequireManualSaveDirectoryChange: Boolean,
     val hasStorageDependencies: Boolean,
     val onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     val performSingleMediaSave: suspend (ThreadSingleMediaSaveRunnerConfig, ThreadSingleMediaSaveRunnerCallbacks) -> ThreadSingleMediaSaveRunResult = ::performThreadSingleMediaSave
@@ -249,7 +258,8 @@ internal data class ThreadScreenSingleMediaSaveDependencies(
 internal data class ThreadScreenSingleMediaSaveCallbacks(
     val showOptionalMessage: (String?) -> Unit,
     val applySaveErrorState: (ThreadManualSaveErrorState) -> Unit,
-    val showMessage: (String) -> Unit
+    val showMessage: (String) -> Unit,
+    val openSaveSettings: (() -> Unit)? = null
 )
 
 internal data class ThreadScreenSingleMediaSaveBindings(
@@ -264,6 +274,11 @@ internal fun buildThreadScreenSingleMediaSaveBindings(
 ): ThreadScreenSingleMediaSaveBindings {
     return ThreadScreenSingleMediaSaveBindings(
         savePreviewMedia = savePreviewMedia@{ entry ->
+            if (dependencies.shouldRequireManualSaveDirectoryChange) {
+                callbacks.showMessage(buildThreadSaveDefaultAndroidDirectoryMessage())
+                callbacks.openSaveSettings?.invoke()
+                return@savePreviewMedia
+            }
             val saveRequestState = resolveThreadMediaSaveRequestState(
                 isAnySaveInProgress = stateBindings.currentIsManualSaveInProgress() || stateBindings.currentIsSingleMediaSaveInProgress(),
                 isRemoteMedia = isRemoteMediaUrl(entry.url),

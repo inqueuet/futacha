@@ -34,6 +34,7 @@ internal data class GlobalSettingsSaveSectionBindings(
     val saveDestinationModeLabel: String,
     val resolvedManualPath: String,
     val saveDestinationHint: String,
+    val defaultAndroidSaveWarningText: String?,
     val manualSaveInput: String,
     val onManualSaveInputChanged: (String) -> Unit,
     val onResetManualSaveDirectory: () -> Unit,

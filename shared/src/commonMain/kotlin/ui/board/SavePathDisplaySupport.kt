@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
+import com.valoser.futacha.shared.ui.isDefaultManualSaveRoot
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal enum class ManualSaveInputKind {
@@ -118,6 +119,21 @@ internal fun buildSaveDestinationHintValue(
                 "選んだフォルダ配下に保存します。画像・動画の単体保存も同じフォルダ系統です。"
             }
     }
+}
+
+internal fun resolveDefaultAndroidSaveWarningText(
+    manualSaveDirectory: String,
+    manualSaveLocation: SaveLocation?,
+    saveDirectorySelection: SaveDirectorySelection,
+    isAndroidPlatform: Boolean
+): String? {
+    if (!isAndroidPlatform || saveDirectorySelection != SaveDirectorySelection.MANUAL_INPUT) {
+        return null
+    }
+    if (manualSaveLocation !is SaveLocation.Path || !isDefaultManualSaveRoot(manualSaveDirectory)) {
+        return null
+    }
+    return "Android のデフォルト保存先はアプリ専用の Documents 系領域に解決され、端末上で見失いやすい状態です。保存前に「ファイラーで選ぶ」か、手入力で Download など分かる場所へ変更してください。"
 }
 
 internal fun buildDisplayedSavePathValue(

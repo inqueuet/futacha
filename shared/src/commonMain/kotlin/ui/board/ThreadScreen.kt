@@ -423,6 +423,9 @@ private fun ThreadScreenContent(
             showMessage = showMessage,
             applySaveErrorState = applyThreadSaveErrorState,
             onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+            onOpenSaveSettings = {
+                modalOverlayState = openThreadGlobalSettingsOverlay(modalOverlayState)
+            },
             currentSingleMediaSaveJob = { singleMediaSaveJob },
             setSingleMediaSaveJob = { singleMediaSaveJob = it },
             setIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress = it },

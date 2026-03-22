@@ -396,6 +396,7 @@ class GlobalSettingsSupportTest {
                 SaveDirectorySelection.MANUAL_INPUT,
                 isAndroidPlatform = true
             ),
+            defaultAndroidSaveWarningText = null,
             settingsEntries = buildList {
                 if (shouldShowCookieSettingsEntry(true)) add(cookieSettingsEntry)
                 addAll(globalSettingsEntries)
@@ -488,6 +489,7 @@ class GlobalSettingsSupportTest {
             resolvedManualPath = "/storage/emulated/0/Documents/futacha/saved_threads",
             saveDestinationModeLabel = "ファイラーで選んだ保存先",
             saveDestinationHint = "現在の保存先です。",
+            defaultAndroidSaveWarningText = null,
             settingsEntries = listOf(cookieSettingsEntry),
             preferredFileManagerState = PreferredFileManagerSummaryState(
                 currentSettingText = "現在の設定: Files",
@@ -575,6 +577,7 @@ class GlobalSettingsSupportTest {
                 saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
                 resolvedManualPath = derivedState.resolvedManualPath,
                 saveDestinationHint = derivedState.saveDestinationHint,
+                defaultAndroidSaveWarningText = derivedState.defaultAndroidSaveWarningText,
                 manualSaveInput = "Download",
                 onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
                 onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,

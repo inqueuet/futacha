@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
@@ -54,6 +55,8 @@ fun SaveProgressDialog(
     if (progress == null) return
 
     val isCompleted = isSaveProgressCompleted(progress)
+    val primaryTextColor = MaterialTheme.colorScheme.onSurface
+    val buttonColors = ButtonDefaults.textButtonColors(contentColor = primaryTextColor)
 
     AlertDialog(
         onDismissRequest = {
@@ -77,7 +80,8 @@ fun SaveProgressDialog(
                 Text(
                     text = "$overallPercentage%",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = primaryTextColor,
+                    fontWeight = FontWeight.SemiBold
                 )
 
                 // 進捗バー
@@ -91,27 +95,34 @@ fun SaveProgressDialog(
                     Text(
                         text = "${progress.current} / ${progress.total}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = primaryTextColor
                     )
                 }
 
                 // 現在の処理内容
                 Text(
                     text = progress.currentItem,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = primaryTextColor
                 )
             }
         },
         confirmButton = {
             if (isCompleted) {
-                TextButton(onClick = onDismissRequest) {
+                TextButton(
+                    onClick = onDismissRequest,
+                    colors = buttonColors
+                ) {
                     Text("閉じる")
                 }
             }
         },
         dismissButton = {
             if (!isCompleted && onCancelRequest != null) {
-                TextButton(onClick = onCancelRequest) {
+                TextButton(
+                    onClick = onCancelRequest,
+                    colors = buttonColors
+                ) {
                     Text("キャンセル")
                 }
             }

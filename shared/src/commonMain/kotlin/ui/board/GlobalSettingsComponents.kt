@@ -139,6 +139,7 @@ internal fun GlobalSettingsScaffold(
                     saveDestinationModeLabel = bindings.save.saveDestinationModeLabel,
                     resolvedManualPath = bindings.save.resolvedManualPath,
                     saveDestinationHint = bindings.save.saveDestinationHint,
+                    defaultAndroidSaveWarningText = bindings.save.defaultAndroidSaveWarningText,
                     manualSaveInput = bindings.save.manualSaveInput,
                     onManualSaveInputChanged = bindings.save.onManualSaveInputChanged,
                     onResetManualSaveDirectory = bindings.save.onResetManualSaveDirectory,

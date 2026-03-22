@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.service.SavedMediaFile
 import com.valoser.futacha.shared.service.SavedMediaType
 import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.ui.isDefaultManualSaveRoot
 
 internal fun isThreadSaveLocationPermissionIssue(error: Throwable): Boolean {
     val message = error.message?.lowercase().orEmpty()
@@ -23,6 +24,16 @@ internal fun requiresThreadManualSaveLocationSelection(
     return isAndroidPlatform &&
         manualSaveLocation !is SaveLocation.TreeUri &&
         manualSaveLocation !is SaveLocation.Path
+}
+
+internal fun shouldRequireAndroidManualSaveDirectoryChange(
+    isAndroidPlatform: Boolean,
+    manualSaveLocation: SaveLocation?,
+    manualSaveDirectory: String
+): Boolean {
+    return isAndroidPlatform &&
+        manualSaveLocation is SaveLocation.Path &&
+        isDefaultManualSaveRoot(manualSaveDirectory)
 }
 
 internal enum class ThreadAutoSaveAvailability {
@@ -101,6 +112,10 @@ internal fun buildThreadSaveBusyMessage(): String = "保存処理を実行中で
 
 internal fun buildThreadSaveLocationRequiredMessage(): String {
     return "保存先が未選択です。設定からフォルダを選択してください。"
+}
+
+internal fun buildThreadSaveDefaultAndroidDirectoryMessage(): String {
+    return "Android のデフォルト保存先はアプリ専用領域に解決されて見失いやすいため、このままでは保存しません。設定で保存先を変更してください。"
 }
 
 internal fun buildThreadSaveUnavailableMessage(): String = "保存機能が利用できません"

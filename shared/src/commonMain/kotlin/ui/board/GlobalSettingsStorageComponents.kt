@@ -55,6 +55,7 @@ internal fun GlobalSettingsSaveSection(
     saveDestinationModeLabel: String,
     resolvedManualPath: String,
     saveDestinationHint: String,
+    defaultAndroidSaveWarningText: String?,
     manualSaveInput: String,
     onManualSaveInputChanged: (String) -> Unit,
     onResetManualSaveDirectory: () -> Unit,
@@ -149,6 +150,28 @@ internal fun GlobalSettingsSaveSection(
                                 text = saveDestinationHint,
                                 style = MaterialTheme.typography.bodySmall
                             )
+                        }
+                    }
+                    defaultAndroidSaveWarningText?.let { warningText ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "Android では保存先の変更が必要です",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Text(
+                                    text = warningText,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
                     }
                     when (effectiveSaveDirectorySelection) {

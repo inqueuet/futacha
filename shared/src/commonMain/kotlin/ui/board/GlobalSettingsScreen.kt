@@ -85,6 +85,7 @@ internal fun GlobalSettingsScreen(
     val effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection
     val derivedState = rememberGlobalSettingsDerivedState(
         manualSaveDirectory = preferencesState.manualSaveDirectory,
+        manualSaveLocation = preferencesState.manualSaveLocation,
         resolvedManualSaveDirectory = preferencesState.resolvedManualSaveDirectory,
         saveDirectorySelection = effectiveSaveDirectorySelection,
         isAndroidPlatform = isAndroidPlatform,
@@ -187,6 +188,7 @@ internal fun GlobalSettingsScreen(
             saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
             resolvedManualPath = derivedState.resolvedManualPath,
             saveDestinationHint = derivedState.saveDestinationHint,
+            defaultAndroidSaveWarningText = derivedState.defaultAndroidSaveWarningText,
             manualSaveInput = manualSaveInput,
             onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
             onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,
