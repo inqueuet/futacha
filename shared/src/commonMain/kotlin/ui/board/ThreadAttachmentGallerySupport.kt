@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.rounded.PlayArrow
+import coil3.Bitmap
 import coil3.PlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -10,7 +11,6 @@ import coil3.request.transformations
 import coil3.size.Size
 import coil3.transform.Transformation
 import com.valoser.futacha.shared.model.Post
-import org.jetbrains.skia.Bitmap
 
 internal data class ThreadAttachmentGalleryItem(
     val post: Post,

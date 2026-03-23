@@ -27,7 +27,8 @@ internal data class MediaPreviewEntry(
 internal data class ThreadAttachmentActionTarget(
     val post: Post,
     val url: String,
-    val mediaType: MediaType
+    val mediaType: MediaType,
+    val canJumpToPost: Boolean
 )
 
 internal fun resolvePostDisplayMediaUrl(post: Post): String? {
@@ -81,7 +82,8 @@ internal fun buildMediaPreviewEntry(
 internal fun buildThreadAttachmentActionTarget(
     post: Post,
     preferredUrl: String? = null,
-    preferredMediaType: MediaType? = null
+    preferredMediaType: MediaType? = null,
+    canJumpToPost: Boolean = false
 ): ThreadAttachmentActionTarget? {
     val entry = buildMediaPreviewEntry(
         post = post,
@@ -91,7 +93,8 @@ internal fun buildThreadAttachmentActionTarget(
     return ThreadAttachmentActionTarget(
         post = post,
         url = entry.url,
-        mediaType = entry.mediaType
+        mediaType = entry.mediaType,
+        canJumpToPost = canJumpToPost
     )
 }
 

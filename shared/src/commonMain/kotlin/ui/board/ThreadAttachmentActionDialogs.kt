@@ -64,14 +64,16 @@ internal fun ThreadAttachmentActionSheet(
                 supportingContent = { Text("プレビューを開きます") },
                 modifier = Modifier.clickable { onPreview() }
             )
-            ListItem(
-                leadingContent = {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
-                },
-                headlineContent = { Text("No.${target.post.id} へ移動") },
-                supportingContent = { Text("対象レスまでスクロールします") },
-                modifier = Modifier.clickable { onJumpToPost() }
-            )
+            if (target.canJumpToPost) {
+                ListItem(
+                    leadingContent = {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
+                    },
+                    headlineContent = { Text("No.${target.post.id} へ移動") },
+                    supportingContent = { Text("対象レスまでスクロールします") },
+                    modifier = Modifier.clickable { onJumpToPost() }
+                )
+            }
             ListItem(
                 leadingContent = {
                     Icon(Icons.Rounded.Archive, contentDescription = null)

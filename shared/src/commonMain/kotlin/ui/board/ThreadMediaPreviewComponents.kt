@@ -7,11 +7,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -97,48 +102,119 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .fillMaxSize()
                 .background(Color.Black)
                 .onSizeChanged { previewSize = it }
-                .then(
-                    if (isSwipeNavigationEnabled) {
-                        Modifier.pointerInput(navigationKey) {
-                            detectHorizontalDragGestures(
-                                onHorizontalDrag = { change, dragAmount ->
-                                    change.consume()
-                                    swipeDistance += dragAmount
-                                },
-                                onDragEnd = {
-                                    when {
-                                        swipeDistance <= -120f -> onNavigateNext()
-                                        swipeDistance >= 120f -> onNavigatePrevious()
-                                    }
-                                    swipeDistance = 0f
-                                },
-                                onDragCancel = { swipeDistance = 0f }
-                            )
-                        }
-                    } else {
-                        Modifier
-                    }
-                )
                 .then(containerModifier)
-                .then(
-                    if (isTapNavigationEnabled) {
-                        Modifier.pointerInput(navigationKey, previewSize.width) {
-                            detectTapGestures { offset ->
-                                val width = previewSize.width.toFloat()
-                                if (width <= 0f) return@detectTapGestures
-                                if (offset.x < width / 2f) {
-                                    onNavigatePrevious()
-                                } else {
-                                    onNavigateNext()
-                                }
-                            }
-                        }
-                    } else {
-                        Modifier
-                    }
-                )
         ) {
             content(previewSize)
+            if (isSwipeNavigationEnabled || isTapNavigationEnabled) {
+                ThreadMediaPreviewNavigationOverlay(
+                    navigationKey = navigationKey,
+                    onNavigateNext = onNavigateNext,
+                    onNavigatePrevious = onNavigatePrevious,
+                    isSwipeNavigationEnabled = isSwipeNavigationEnabled,
+                    isTapNavigationEnabled = isTapNavigationEnabled,
+                    onSwipeDistanceChanged = { swipeDistance += it },
+                    onSwipeFinished = {
+                        when {
+                            swipeDistance <= -120f -> onNavigateNext()
+                            swipeDistance >= 120f -> onNavigatePrevious()
+                        }
+                        swipeDistance = 0f
+                    },
+                    onSwipeCancelled = { swipeDistance = 0f }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
+    navigationKey: String,
+    onNavigateNext: () -> Unit,
+    onNavigatePrevious: () -> Unit,
+    isSwipeNavigationEnabled: Boolean,
+    isTapNavigationEnabled: Boolean,
+    onSwipeDistanceChanged: (Float) -> Unit,
+    onSwipeFinished: () -> Unit,
+    onSwipeCancelled: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ThreadMediaPreviewNavigationZone(
+            navigationKey = "$navigationKey-prev",
+            onNavigate = onNavigatePrevious,
+            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+            contentDescription = "前の添付へ移動",
+            isSwipeNavigationEnabled = isSwipeNavigationEnabled,
+            isTapNavigationEnabled = isTapNavigationEnabled,
+            onSwipeDistanceChanged = onSwipeDistanceChanged,
+            onSwipeFinished = onSwipeFinished,
+            onSwipeCancelled = onSwipeCancelled
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        ThreadMediaPreviewNavigationZone(
+            navigationKey = "$navigationKey-next",
+            onNavigate = onNavigateNext,
+            imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = "次の添付へ移動",
+            isSwipeNavigationEnabled = isSwipeNavigationEnabled,
+            isTapNavigationEnabled = isTapNavigationEnabled,
+            onSwipeDistanceChanged = onSwipeDistanceChanged,
+            onSwipeFinished = onSwipeFinished,
+            onSwipeCancelled = onSwipeCancelled
+        )
+    }
+}
+
+@Composable
+private fun ThreadMediaPreviewNavigationZone(
+    navigationKey: String,
+    onNavigate: () -> Unit,
+    imageVector: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    isSwipeNavigationEnabled: Boolean,
+    isTapNavigationEnabled: Boolean,
+    onSwipeDistanceChanged: (Float) -> Unit,
+    onSwipeFinished: () -> Unit,
+    onSwipeCancelled: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .width(72.dp)
+            .fillMaxHeight()
+            .pointerInput(navigationKey, isSwipeNavigationEnabled) {
+                if (!isSwipeNavigationEnabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        onSwipeDistanceChanged(dragAmount)
+                    },
+                    onDragEnd = onSwipeFinished,
+                    onDragCancel = onSwipeCancelled
+                )
+            }
+            .pointerInput(navigationKey, isTapNavigationEnabled) {
+                if (!isTapNavigationEnabled) return@pointerInput
+                detectTapGestures(onTap = { onNavigate() })
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        IconButton(
+            onClick = onNavigate,
+            colors = IconButtonDefaults.iconButtonColors(
+                containerColor = Color.Black.copy(alpha = 0.28f),
+                contentColor = Color.White.copy(alpha = 0.88f)
+            )
+        ) {
+            Icon(
+                imageVector = imageVector,
+                contentDescription = contentDescription
+            )
         }
     }
 }

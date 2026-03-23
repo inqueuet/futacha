@@ -12,7 +12,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.EmbeddedHtmlContent
+import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.ThreadPage
 
 internal data class ThreadPostDerivedData(
     val posterIdLabels: Map<String, PosterIdLabel> = emptyMap(),
@@ -28,6 +31,29 @@ internal fun buildThreadPostDerivedData(posts: List<Post>): ThreadPostDerivedDat
         referencedByMap = buildReferencedPostsMap(posts),
         postsByPosterId = buildPostsByPosterId(posts)
     )
+}
+
+internal fun countThreadContentItemsBeforePosts(
+    page: ThreadPage?,
+    embeddedHtml: List<EmbeddedHtmlContent>
+): Int {
+    if (page == null) return 0
+    var count = 0
+    if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
+        count += 1
+    }
+    if (!page.deletedNotice.isNullOrBlank()) {
+        count += 1
+    }
+    return count
+}
+
+internal fun resolveThreadLazyListIndexForPost(
+    postIndex: Int,
+    page: ThreadPage?,
+    embeddedHtml: List<EmbeddedHtmlContent>
+): Int {
+    return (countThreadContentItemsBeforePosts(page, embeddedHtml) + postIndex).coerceAtLeast(0)
 }
 
 internal data class ThreadPostListFingerprint(

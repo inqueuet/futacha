@@ -267,6 +267,7 @@ internal data class ThreadScreenUiRuntimeInputs(
     val coroutineScope: CoroutineScope,
     val lazyListState: LazyListState,
     val drawerState: DrawerState,
+    val onScrollToPostIndex: (Int) -> Unit,
     val currentModalOverlayState: () -> ThreadModalOverlayState,
     val setModalOverlayState: (ThreadModalOverlayState) -> Unit,
     val currentSheetOverlayState: () -> ThreadSheetOverlayState,
@@ -318,11 +319,7 @@ internal fun buildThreadScreenAggregateUiInputs(
                 dismissThreadGalleryOverlay(inputs.currentModalOverlayState())
             )
         },
-        onScrollToPostIndex = { index ->
-            inputs.coroutineScope.launch {
-                inputs.lazyListState.animateScrollToItem(index)
-            }
-        },
+        onScrollToPostIndex = inputs.onScrollToPostIndex,
         threadFilterBinding = inputs.threadFilterBinding,
         onDismissSettingsSheet = {
             inputs.setSheetOverlayState(
@@ -475,6 +472,7 @@ internal data class ThreadScreenInteractionUiWiringInputs(
     val lazyListState: LazyListState,
     val drawerState: DrawerState,
     val snackbarHostState: SnackbarHostState,
+    val onScrollToPostIndex: (Int) -> Unit,
     val overlayStateBindings: ThreadScreenOverlayStateBindings,
     val mediaPreviewState: () -> ThreadMediaPreviewState,
     val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
@@ -583,6 +581,7 @@ internal fun buildThreadScreenInteractionUiWiring(
                 coroutineScope = inputs.coroutineScope,
                 lazyListState = inputs.lazyListState,
                 drawerState = inputs.drawerState,
+                onScrollToPostIndex = inputs.onScrollToPostIndex,
                 currentModalOverlayState = overlayBindings.currentModalOverlayState,
                 setModalOverlayState = overlayBindings.setModalOverlayState,
                 currentSheetOverlayState = overlayBindings.currentSheetOverlayState,

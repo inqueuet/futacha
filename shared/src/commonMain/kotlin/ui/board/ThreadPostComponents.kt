@@ -116,7 +116,7 @@ internal fun ThreadPostCard(
                         .heightIn(max = 200.dp)
                         .clip(MaterialTheme.shapes.small)
                         .background(backgroundColor)
-                    val targetUrl = resolvePostTargetMediaUrl(post, displayUrl) ?: displayUrl
+                    val targetUrl = resolvePostTargetMediaUrl(post) ?: displayUrl
                     val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
                     if (onMediaLongPress != null) {
                         baseModifier.combinedClickable(

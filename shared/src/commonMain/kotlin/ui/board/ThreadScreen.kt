@@ -647,6 +647,17 @@ private fun ThreadScreenContent(
             readAloudDependencies = readAloudDependencies,
             replyDialogBinding = replyDialogBinding,
             currentIsRefreshing = { isRefreshing },
+            onScrollToPostIndex = { postIndex ->
+                coroutineScope.launch {
+                    lazyListState.animateScrollToItem(
+                        resolveThreadLazyListIndexForPost(
+                            postIndex = postIndex,
+                            page = currentSuccessState?.page,
+                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty()
+                        )
+                    )
+                }
+            },
             currentUiState = { uiState.value },
             currentSearchIndex = { currentSearchResultIndex },
             setCurrentSearchIndex = { currentSearchResultIndex = it },
@@ -711,17 +722,25 @@ private fun ThreadScreenContent(
     val handleNgRegistration = postActionHandlers.onNgRegister
     val performRefresh = interactionUiHandles.performRefresh
     val uiBindings = interactionUiHandles.uiBindings
-    val scrollToPost = remember(currentSuccessState?.page?.posts, lazyListState, coroutineScope) {
+    val scrollToPost = remember(currentSuccessState, lazyListState, coroutineScope) {
         buildThreadPostIndexAction(
             currentPosts = currentSuccessState?.page?.posts.orEmpty(),
             onScrollToPostIndex = { index ->
-                coroutineScope.launch { lazyListState.animateScrollToItem(index) }
+                coroutineScope.launch {
+                    lazyListState.animateScrollToItem(
+                        resolveThreadLazyListIndexForPost(
+                            postIndex = index,
+                            page = currentSuccessState?.page,
+                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty()
+                        )
+                    )
+                }
             }
         )
     }
     val openAttachmentActionsForPost = remember(currentSuccessState?.page?.posts, postOverlayState) {
         { post: Post ->
-            val target = buildThreadAttachmentActionTarget(post)
+            val target = buildThreadAttachmentActionTarget(post, canJumpToPost = true)
             if (target != null) {
                 postOverlayState = openThreadAttachmentActionOverlay(
                     currentState = postOverlayState,
@@ -735,7 +754,8 @@ private fun ThreadScreenContent(
             val target = buildThreadAttachmentActionTarget(
                 post = post,
                 preferredUrl = url,
-                preferredMediaType = mediaType
+                preferredMediaType = mediaType,
+                canJumpToPost = false
             )
             if (target != null) {
                 postOverlayState = openThreadAttachmentActionOverlay(
@@ -859,7 +879,12 @@ private fun ThreadScreenContent(
             },
             onPreviewAttachment = { target ->
                 postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
-                mediaBindings.onMediaClick(target.url, target.mediaType)
+                val previewEntry = buildMediaPreviewEntry(target.post)
+                if (previewEntry != null) {
+                    mediaBindings.onMediaClick(previewEntry.url, previewEntry.mediaType)
+                } else {
+                    mediaBindings.onMediaClick(target.url, target.mediaType)
+                }
             },
             onJumpToAttachmentPost = { target ->
                 postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
