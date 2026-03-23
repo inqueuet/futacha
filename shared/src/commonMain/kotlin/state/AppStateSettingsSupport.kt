@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -134,6 +135,12 @@ internal fun decodeSaveDirectorySelectionValue(raw: String?): SaveDirectorySelec
     return runCatching {
         raw?.let { SaveDirectorySelection.valueOf(it) }
     }.getOrNull() ?: SaveDirectorySelection.MANUAL_INPUT
+}
+
+internal fun decodeThreadGalleryTapActionValue(raw: String?): ThreadGalleryTapAction {
+    return runCatching {
+        raw?.let { ThreadGalleryTapAction.valueOf(it) }
+    }.getOrNull() ?: ThreadGalleryTapAction.OpenMedia
 }
 
 internal fun decodeThreadMenuConfigValue(

@@ -33,7 +33,7 @@ actual fun PlatformVideoPlayer(
     val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
     val player = remember(context) {
         ExoPlayer.Builder(context).build().apply {
-            playWhenReady = true
+            playWhenReady = false
         }
     }
     val mediaItem = remember(videoUrl) {

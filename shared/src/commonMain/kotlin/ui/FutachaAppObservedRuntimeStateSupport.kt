@@ -8,6 +8,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
@@ -36,6 +37,7 @@ internal data class FutachaObservedRuntimeState(
     val activeSavedThreadsRepository: SavedThreadRepository?,
     val attachmentPickerPreference: AttachmentPickerPreference,
     val saveDirectorySelection: SaveDirectorySelection,
+    val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
     val preferredFileManager: PreferredFileManager?,
     val appVersion: String,
     val resolvedManualSaveDirectory: String?
@@ -93,6 +95,9 @@ internal fun rememberFutachaObservedRuntimeState(
     val saveDirectorySelection by stateStore.saveDirectorySelection.collectAsState(
         initial = SaveDirectorySelection.MANUAL_INPUT
     )
+    val threadGalleryTapAction by stateStore.threadGalleryTapAction.collectAsState(
+        initial = ThreadGalleryTapAction.OpenMedia
+    )
     val preferredFileManagerFlow = remember(stateStore) { stateStore.getPreferredFileManager() }
     val preferredFileManager by preferredFileManagerFlow.collectAsState(initial = null)
     val appVersion = remember(versionChecker) {
@@ -117,6 +122,7 @@ internal fun rememberFutachaObservedRuntimeState(
         activeSavedThreadsRepository,
         attachmentPickerPreference,
         saveDirectorySelection,
+        threadGalleryTapAction,
         preferredFileManager,
         appVersion,
         resolvedManualSaveDirectory
@@ -133,6 +139,7 @@ internal fun rememberFutachaObservedRuntimeState(
             activeSavedThreadsRepository = activeSavedThreadsRepository,
             attachmentPickerPreference = attachmentPickerPreference,
             saveDirectorySelection = saveDirectorySelection,
+            threadGalleryTapAction = threadGalleryTapAction,
             preferredFileManager = preferredFileManager,
             appVersion = appVersion,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory

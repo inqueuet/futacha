@@ -19,6 +19,7 @@ internal data class ThreadScreenOverlayHostBindings(
     val postOverlayState: ThreadPostOverlayState,
     val sheetOverlayState: ThreadSheetOverlayState,
     val modalOverlayState: ThreadModalOverlayState,
+    val galleryCallbacks: ThreadGalleryCallbacks?,
     val history: List<ThreadHistoryEntry>,
     val boardName: String,
     val resolvedThreadTitle: String,
@@ -44,7 +45,12 @@ internal data class ThreadScreenOverlayHostBindings(
     val cookieRepository: CookieRepository?,
     val appColorScheme: ColorScheme,
     val onDismissPostActionSheet: () -> Unit,
+    val onDismissAttachmentActionSheet: () -> Unit,
     val isSaidaneEnabled: (Post) -> Boolean,
+    val onPreviewAttachment: (ThreadAttachmentActionTarget) -> Unit,
+    val onJumpToAttachmentPost: (ThreadAttachmentActionTarget) -> Unit,
+    val onSaveAttachment: (ThreadAttachmentActionTarget) -> Unit,
+    val onOpenAttachmentExternally: (ThreadAttachmentActionTarget) -> Unit,
     val onQuoteFromActionSheet: (Post) -> Unit,
     val onNgRegisterFromActionSheet: (Post) -> Unit,
     val onSaidaneFromActionSheet: (Post) -> Unit,
@@ -73,6 +79,18 @@ internal fun ThreadScreenOverlayHost(
             isSaidaneEnabled = bindings.isSaidaneEnabled(sheetTarget),
             onDelRequest = { bindings.onDelRequestFromActionSheet(sheetTarget) },
             onDelete = { bindings.onDeleteFromActionSheet(sheetTarget) }
+        )
+    }
+
+    val attachmentTarget = bindings.postOverlayState.attachmentActionState.target
+    if (bindings.postOverlayState.attachmentActionState.isVisible && attachmentTarget != null) {
+        ThreadAttachmentActionSheet(
+            target = attachmentTarget,
+            onDismiss = bindings.onDismissAttachmentActionSheet,
+            onPreview = { bindings.onPreviewAttachment(attachmentTarget) },
+            onJumpToPost = { bindings.onJumpToAttachmentPost(attachmentTarget) },
+            onSave = { bindings.onSaveAttachment(attachmentTarget) },
+            onOpenExternal = { bindings.onOpenAttachmentExternally(attachmentTarget) }
         )
     }
 
@@ -158,11 +176,13 @@ internal fun ThreadScreenOverlayHost(
     }
 
     if (bindings.modalOverlayState.isGalleryVisible && bindings.galleryPosts != null) {
-        bindings.uiBindings.galleryCallbacks?.let { galleryCallbacks ->
+        bindings.galleryCallbacks?.let { galleryCallbacks ->
             ThreadImageGallery(
                 posts = bindings.galleryPosts,
                 onDismiss = galleryCallbacks.onDismiss,
-                onImageClick = galleryCallbacks.onImageClick
+                onImageClick = galleryCallbacks.onImageClick,
+                onImageLongPress = galleryCallbacks.onImageLongPress,
+                onPostClick = galleryCallbacks.onPostClick
             )
         }
     }

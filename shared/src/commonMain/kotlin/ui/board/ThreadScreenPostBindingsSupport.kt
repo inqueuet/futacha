@@ -96,22 +96,51 @@ internal fun buildThreadScreenPostActionHandlers(
 
 internal data class ThreadGalleryCallbacks(
     val onDismiss: () -> Unit,
-    val onImageClick: (Post) -> Unit
+    val onImageClick: (Post) -> Unit,
+    val onImageLongPress: (Post) -> Unit,
+    val onPostClick: (Post) -> Unit
 )
+
+internal fun buildThreadPostIndexAction(
+    currentPosts: List<Post>,
+    onScrollToPostIndex: (Int) -> Unit
+): (Post) -> Unit {
+    return { post ->
+        val index = currentPosts.indexOfFirst { it.id == post.id }
+        if (index >= 0) {
+            onScrollToPostIndex(index)
+        }
+    }
+}
+
+internal fun buildThreadScreenGalleryCallbacks(
+    onDismiss: () -> Unit,
+    onImageClick: (Post) -> Unit,
+    onImageLongPress: (Post) -> Unit,
+    onPostClick: (Post) -> Unit
+): ThreadGalleryCallbacks {
+    return ThreadGalleryCallbacks(
+        onDismiss = onDismiss,
+        onImageClick = onImageClick,
+        onImageLongPress = onImageLongPress,
+        onPostClick = onPostClick
+    )
+}
 
 internal fun buildThreadScreenGalleryCallbacks(
     currentPosts: List<Post>,
     onDismiss: () -> Unit,
     onScrollToPostIndex: (Int) -> Unit
 ): ThreadGalleryCallbacks {
-    return ThreadGalleryCallbacks(
+    val jumpToPost = buildThreadPostIndexAction(
+        currentPosts = currentPosts,
+        onScrollToPostIndex = onScrollToPostIndex
+    )
+    return buildThreadScreenGalleryCallbacks(
         onDismiss = onDismiss,
-        onImageClick = { post ->
-            val index = currentPosts.indexOfFirst { it.id == post.id }
-            if (index >= 0) {
-                onScrollToPostIndex(index)
-            }
-        }
+        onImageClick = jumpToPost,
+        onImageLongPress = jumpToPost,
+        onPostClick = jumpToPost
     )
 }
 
@@ -122,6 +151,7 @@ internal data class ThreadPostCardCallbacks(
     val onReferencedByClick: (() -> Unit)?,
     val onSaidaneClick: () -> Unit,
     val onMediaClick: ((String, MediaType) -> Unit)?,
+    val onMediaLongPress: ((Post, String, MediaType) -> Unit)?,
     val onLongPress: () -> Unit
 )
 
@@ -136,6 +166,7 @@ internal fun buildThreadScreenPostCardCallbacks(
     onQuoteRequestedForPost: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)?,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
     onPostLongPress: (Post) -> Unit
 ): ThreadPostCardCallbacks {
     return ThreadPostCardCallbacks(
@@ -160,9 +191,10 @@ internal fun buildThreadScreenPostCardCallbacks(
                 {
                     onShowQuotePreview(">>${post.id} を引用したレス", referencingPosts)
                 }
-            },
+        },
         onSaidaneClick = { onSaidaneClick(post) },
         onMediaClick = onMediaClick,
+        onMediaLongPress = onMediaLongPress,
         onLongPress = {
             if (canHandleThreadPostLongPress(quotePreviewState)) {
                 onPostLongPress(post)

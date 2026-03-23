@@ -22,6 +22,7 @@ private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
 private const val SAVE_DIRECTORY_SELECTION_KEY = "save_directory_selection"
+private const val THREAD_GALLERY_TAP_ACTION_KEY = "thread_gallery_tap_action"
 private const val CATALOG_MODE_MAP_KEY = "catalog_mode_map_json"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
@@ -62,6 +63,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     )
     private val attachmentPickerPreferenceState = MutableStateFlow(readStringState(ATTACHMENT_PICKER_PREF_KEY))
     private val saveDirectorySelectionState = MutableStateFlow(readStringState(SAVE_DIRECTORY_SELECTION_KEY))
+    private val threadGalleryTapActionState = MutableStateFlow(readStringState(THREAD_GALLERY_TAP_ACTION_KEY))
     private val catalogModeMapState = MutableStateFlow(readStringState(CATALOG_MODE_MAP_KEY))
     private val ngHeadersState = MutableStateFlow(readStringState(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(readStringState(NG_WORDS_KEY))
@@ -86,6 +88,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
+    override val threadGalleryTapAction: Flow<String?> = threadGalleryTapActionState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val catalogGridColumns: Flow<String?> = gridColumnsState
@@ -320,6 +323,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             saveDirectorySelectionState
         )
         seedOptionalStringState(
+            THREAD_GALLERY_TAP_ACTION_KEY,
+            seedBundles.preferences.threadGalleryTapAction,
+            threadGalleryTapActionState
+        )
+        seedOptionalStringState(
             THREAD_MENU_CONFIG_KEY,
             seedBundles.preferences.threadMenuConfigJson,
             threadMenuConfigState
@@ -396,6 +404,14 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun updateSaveDirectorySelection(selection: String) {
         updateStringState(SAVE_DIRECTORY_SELECTION_KEY, selection, saveDirectorySelectionState)
+    }
+
+    override suspend fun updateThreadGalleryTapAction(action: String) {
+        updateStringState(
+            THREAD_GALLERY_TAP_ACTION_KEY,
+            action,
+            threadGalleryTapActionState
+        )
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {

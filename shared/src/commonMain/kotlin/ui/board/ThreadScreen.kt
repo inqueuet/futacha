@@ -711,6 +711,65 @@ private fun ThreadScreenContent(
     val handleNgRegistration = postActionHandlers.onNgRegister
     val performRefresh = interactionUiHandles.performRefresh
     val uiBindings = interactionUiHandles.uiBindings
+    val scrollToPost = remember(currentSuccessState?.page?.posts, lazyListState, coroutineScope) {
+        buildThreadPostIndexAction(
+            currentPosts = currentSuccessState?.page?.posts.orEmpty(),
+            onScrollToPostIndex = { index ->
+                coroutineScope.launch { lazyListState.animateScrollToItem(index) }
+            }
+        )
+    }
+    val openAttachmentActionsForPost = remember(currentSuccessState?.page?.posts, postOverlayState) {
+        { post: Post ->
+            val target = buildThreadAttachmentActionTarget(post)
+            if (target != null) {
+                postOverlayState = openThreadAttachmentActionOverlay(
+                    currentState = postOverlayState,
+                    target = target
+                )
+            }
+        }
+    }
+    val onMediaLongPress = remember(postOverlayState) {
+        { post: Post, url: String, mediaType: MediaType ->
+            val target = buildThreadAttachmentActionTarget(
+                post = post,
+                preferredUrl = url,
+                preferredMediaType = mediaType
+            )
+            if (target != null) {
+                postOverlayState = openThreadAttachmentActionOverlay(
+                    currentState = postOverlayState,
+                    target = target
+                )
+            }
+        }
+    }
+    val galleryCallbacks = remember(
+        preferencesState.threadGalleryTapAction,
+        currentSuccessState?.page?.posts,
+        modalOverlayState,
+        postOverlayState,
+        mediaBindings
+    ) {
+        val openMediaFromGallery: (Post) -> Unit = { post ->
+            buildMediaPreviewEntry(post)?.let { entry ->
+                mediaBindings.onMediaClick(entry.url, entry.mediaType)
+            }
+        }
+        val primaryAction = when (preferencesState.threadGalleryTapAction) {
+            ThreadGalleryTapAction.OpenMedia -> openMediaFromGallery
+            ThreadGalleryTapAction.JumpToPost -> scrollToPost
+        }
+        buildThreadScreenGalleryCallbacks(
+            onDismiss = {
+                modalOverlayState = dismissThreadGalleryOverlay(modalOverlayState)
+            },
+            onImageClick = primaryAction,
+            onImageLongPress = openAttachmentActionsForPost,
+            onPostClick = scrollToPost
+        )
+    }
 
     val appColorScheme = MaterialTheme.colorScheme
     val futabaThreadColorScheme = rememberFutabaThreadColorScheme(appColorScheme)
@@ -745,6 +804,7 @@ private fun ThreadScreenContent(
             snackbarHostState = snackbarHostState,
             history = history,
             historyDrawerCallbacks = historyDrawerCallbacks,
+            galleryCallbacks = galleryCallbacks,
             boardName = board.name,
             resolvedThreadTitle = resolvedThreadTitle,
             resolvedReplyCount = resolvedReplyCount,
@@ -769,6 +829,7 @@ private fun ThreadScreenContent(
             setPostOverlayState = { postOverlayState = it },
             onSaidaneClick = handleSaidaneAction,
             onMediaClick = mediaBindings.onMediaClick,
+            onMediaLongPress = onMediaLongPress,
             onUrlClick = handleUrlClick,
             onRefresh = performRefresh,
             isRefreshing = isRefreshing,
@@ -793,6 +854,29 @@ private fun ThreadScreenContent(
             cookieRepository = cookieRepository,
             appColorScheme = appColorScheme,
             overlayActionCallbacks = overlayActionCallbacks,
+            onDismissAttachmentActionSheet = {
+                postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+            },
+            onPreviewAttachment = { target ->
+                postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                mediaBindings.onMediaClick(target.url, target.mediaType)
+            },
+            onJumpToAttachmentPost = { target ->
+                postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                scrollToPost(target.post)
+            },
+            onSaveAttachment = { target ->
+                postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                buildMediaPreviewEntry(
+                    post = target.post,
+                    preferredUrl = target.url,
+                    preferredMediaType = target.mediaType
+                )?.let(singleMediaSaveBindings.savePreviewMedia)
+            },
+            onOpenAttachmentExternally = { target ->
+                postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                handleUrlClick(target.url)
+            },
             onQuoteFromActionSheet = openQuoteSelection,
             onNgRegisterFromActionSheet = handleNgRegistration,
             onSaidaneFromActionSheet = handleSaidaneAction,

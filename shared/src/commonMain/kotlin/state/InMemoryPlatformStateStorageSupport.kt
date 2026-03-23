@@ -18,6 +18,7 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val manualSaveDirectoryState = MutableStateFlow(DEFAULT_MANUAL_SAVE_ROOT)
     val attachmentPickerPreferenceState = MutableStateFlow<String?>(null)
     val saveDirectorySelectionState = MutableStateFlow<String?>(null)
+    val threadGalleryTapActionState = MutableStateFlow<String?>(null)
     val lastUsedDeleteKeyState = MutableStateFlow<String?>(null)
     val catalogModeMapState = MutableStateFlow<String?>(null)
     val catalogDisplayStyleState = MutableStateFlow<String?>(null)
@@ -44,6 +45,7 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
+    override val threadGalleryTapAction: Flow<String?> = threadGalleryTapActionState
     override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = catalogDisplayStyleState
@@ -70,6 +72,7 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override suspend fun updateManualSaveDirectory(directory: String) { manualSaveDirectoryState.value = directory }
     override suspend fun updateAttachmentPickerPreference(preference: String) { attachmentPickerPreferenceState.value = preference }
     override suspend fun updateSaveDirectorySelection(selection: String) { saveDirectorySelectionState.value = selection }
+    override suspend fun updateThreadGalleryTapAction(action: String) { threadGalleryTapActionState.value = action }
     override suspend fun updateLastUsedDeleteKey(value: String) { lastUsedDeleteKeyState.value = value }
     override suspend fun updateCatalogModeMapJson(value: String) { catalogModeMapState.value = value }
     override suspend fun updateCatalogDisplayStyle(style: String) { catalogDisplayStyleState.value = style }
@@ -114,6 +117,9 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
             }
             if (saveDirectorySelectionState.value == null) {
                 saveDirectorySelectionState.value = seedBundles.preferences.saveDirectorySelection
+            }
+            if (threadGalleryTapActionState.value == null) {
+                threadGalleryTapActionState.value = seedBundles.preferences.threadGalleryTapAction
             }
             if (lastUsedDeleteKeyState.value == null) {
                 lastUsedDeleteKeyState.value = seedBundles.preferences.lastUsedDeleteKey

@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -24,6 +25,7 @@ internal data class AppStatePreferenceFlows(
     val manualSaveLocation: Flow<SaveLocation>,
     val attachmentPickerPreference: Flow<AttachmentPickerPreference>,
     val saveDirectorySelection: Flow<SaveDirectorySelection>,
+    val threadGalleryTapAction: Flow<ThreadGalleryTapAction>,
     val lastUsedDeleteKey: Flow<String>,
     val catalogModes: Flow<Map<String, CatalogMode>>,
     val catalogDisplayStyle: Flow<CatalogDisplayStyle>,
@@ -76,6 +78,9 @@ internal fun buildAppStatePreferenceFlows(
             .distinctUntilChanged(),
         saveDirectorySelection = storage.saveDirectorySelection
             .map { raw -> decodeSaveDirectorySelectionValue(raw) }
+            .distinctUntilChanged(),
+        threadGalleryTapAction = storage.threadGalleryTapAction
+            .map { raw -> decodeThreadGalleryTapActionValue(raw) }
             .distinctUntilChanged(),
         lastUsedDeleteKey = storage.lastUsedDeleteKey
             .map { raw -> raw?.take(8).orEmpty() }

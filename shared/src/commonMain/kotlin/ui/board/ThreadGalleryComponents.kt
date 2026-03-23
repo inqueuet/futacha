@@ -1,9 +1,12 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,26 +14,31 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
-import coil3.request.ImageRequest
-import coil3.request.crossfade
+import coil3.compose.rememberAsyncImagePainter
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 
@@ -39,10 +47,12 @@ import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 internal fun ThreadImageGallery(
     posts: List<Post>,
     onDismiss: () -> Unit,
-    onImageClick: (Post) -> Unit
+    onImageClick: (Post) -> Unit,
+    onImageLongPress: (Post) -> Unit,
+    onPostClick: (Post) -> Unit
 ) {
-    val imagesWithPosts = remember(posts) {
-        posts.filter { it.imageUrl != null && it.thumbnailUrl != null }
+    val attachmentItems = remember(posts) {
+        buildThreadAttachmentGalleryItems(posts)
     }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
@@ -56,12 +66,18 @@ internal fun ThreadImageGallery(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Text(
-                text = "画像一覧 (${imagesWithPosts.size}枚)",
+                text = "添付一覧 (${attachmentItems.size}件)",
                 style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Text(
+                text = "タップは既定動作、長押しで添付メニュー、No.表示でレスへ移動します。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            if (imagesWithPosts.isEmpty()) {
+            if (attachmentItems.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -69,7 +85,7 @@ internal fun ThreadImageGallery(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "画像がありません",
+                        text = "添付がありません",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -83,12 +99,23 @@ internal fun ThreadImageGallery(
                         .fillMaxWidth()
                         .heightIn(max = 600.dp)
                 ) {
-                    items(imagesWithPosts) { post ->
-                        GalleryImageItem(
-                            post = post,
+                    items(
+                        items = attachmentItems,
+                        key = { item -> "${item.post.id}:${item.targetUrl}" }
+                    ) { item ->
+                        GalleryAttachmentItem(
+                            item = item,
                             onClick = {
                                 onDismiss()
-                                onImageClick(post)
+                                onImageClick(item.post)
+                            },
+                            onLongClick = {
+                                onDismiss()
+                                onImageLongPress(item.post)
+                            },
+                            onPostClick = {
+                                onDismiss()
+                                onPostClick(item.post)
                             }
                         )
                     }
@@ -100,45 +127,135 @@ internal fun ThreadImageGallery(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GalleryImageItem(
-    post: Post,
-    onClick: () -> Unit
+private fun GalleryAttachmentItem(
+    item: ThreadAttachmentGalleryItem,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onPostClick: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
-    val thumbnailRequest = remember(platformContext, post.thumbnailUrl) {
-        ImageRequest.Builder(platformContext)
-            .data(post.thumbnailUrl)
-            .crossfade(true)
-            .build()
+    val previewRequest = remember(platformContext, item.previewUrl) {
+        buildThreadAttachmentPreviewRequest(
+            platformContext = platformContext,
+            previewUrl = item.previewUrl
+        )
     }
+    val previewPainter = rememberAsyncImagePainter(
+        model = previewRequest,
+        imageLoader = LocalFutachaImageLoader.current
+    )
+    val previewPainterState by previewPainter.state.collectAsState()
+    val hasPreviewImage = item.previewUrl != null &&
+        previewPainterState !is AsyncImagePainter.State.Error &&
+        previewPainterState !is AsyncImagePainter.State.Empty
+    val isLoadingPreview = previewPainterState is AsyncImagePainter.State.Loading
     Card(
-        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1f),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         shape = MaterialTheme.shapes.medium
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = thumbnailRequest,
-                imageLoader = LocalFutachaImageLoader.current,
-                contentDescription = "No.${post.id}",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Surface(
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(4.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                shape = MaterialTheme.shapes.extraSmall
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {}
+                if (hasPreviewImage) {
+                    Image(
+                        painter = previewPainter,
+                        contentDescription = "No.${item.post.id} の添付プレビュー",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        MediaThumbnailFallbackIcon(
+                            url = item.targetUrl,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (isLoadingPreview) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.Center),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                item.badge?.let { badge ->
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.84f),
+                        shape = MaterialTheme.shapes.extraSmall
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = badge.icon,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .padding(top = 1.dp)
+                            )
+                            Text(
+                                text = badge.label,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "No.${post.id}",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    text = item.fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                        shape = MaterialTheme.shapes.extraSmall
+                    ) {
+                        Text(
+                            text = "No.${item.post.id}",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier
+                                .combinedClickable(
+                                    onClick = onPostClick,
+                                    onLongClick = onLongClick
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
         }
     }

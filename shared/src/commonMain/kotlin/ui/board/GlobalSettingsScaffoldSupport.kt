@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
@@ -11,7 +12,9 @@ internal data class GlobalSettingsBehaviorSectionBindings(
     val isAdsEnabled: Boolean,
     val onAdsEnabledChanged: (Boolean) -> Unit,
     val isLightweightModeEnabled: Boolean,
-    val onLightweightModeChanged: (Boolean) -> Unit
+    val onLightweightModeChanged: (Boolean) -> Unit,
+    val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
+    val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {}
 )
 
 internal data class GlobalSettingsCatalogMenuSectionBindings(

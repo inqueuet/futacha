@@ -9,7 +9,7 @@ class VideoPlayerSupportTest {
     @Test
     fun resolveVideoPreviewChromeState_maps_preview_ui_flags() {
         val idle = resolveVideoPreviewChromeState(VideoPlayerState.Idle)
-        assertTrue(idle.isBuffering)
+        assertFalse(idle.isBuffering)
         assertFalse(idle.showsError)
         assertTrue(idle.showsCloseButton)
 
@@ -38,6 +38,7 @@ class VideoPlayerSupportTest {
         assertTrue("%3C" in html)
         assertTrue("%3E" in html)
         assertTrue("&y=2" in html)
+        assertFalse("autoplay" in html)
         assertFalse("video<1>" in html)
     }
 

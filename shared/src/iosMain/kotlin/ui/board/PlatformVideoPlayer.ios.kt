@@ -119,7 +119,7 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
                 onVideoSizeKnown?.invoke(width, height)
             }
         }
-        onStateChanged?.invoke(VideoPlayerState.Ready)
+        onStateChanged?.invoke(VideoPlayerState.Idle)
     }
 
     @ObjCSignatureOverride

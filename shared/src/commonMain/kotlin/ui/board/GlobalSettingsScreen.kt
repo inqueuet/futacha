@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.LocalPlatformContext
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
@@ -168,7 +169,9 @@ internal fun GlobalSettingsScreen(
             isAdsEnabled = preferencesState.isAdsEnabled,
             onAdsEnabledChanged = preferencesCallbacks.onAdsEnabledChanged,
             isLightweightModeEnabled = preferencesState.isLightweightModeEnabled,
-            onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged
+            onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged,
+            threadGalleryTapAction = preferencesState.threadGalleryTapAction,
+            onThreadGalleryTapActionChanged = preferencesCallbacks.onThreadGalleryTapActionChanged
         ),
         catalogMenu = GlobalSettingsCatalogMenuSectionBindings(
             localCatalogNavEntries = localCatalogNavEntries,

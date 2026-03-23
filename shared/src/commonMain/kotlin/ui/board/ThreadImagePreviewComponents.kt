@@ -80,10 +80,17 @@ internal fun ImagePreviewDialog(
         onDismiss = onDismiss,
         onNavigateNext = onNavigateNext,
         onNavigatePrevious = onNavigatePrevious,
+        isSwipeNavigationEnabled = scale <= 1.05f,
+        isTapNavigationEnabled = scale <= 1.05f,
         containerModifier = Modifier.pointerInput(Unit) {
             detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
-                scale = (scale * zoom).coerceIn(1f, 6f)
-                translation += pan
+                val updatedScale = (scale * zoom).coerceIn(1f, 6f)
+                scale = updatedScale
+                translation = if (updatedScale <= 1.05f) {
+                    Offset.Zero
+                } else {
+                    translation + pan
+                }
             }
         }
     ) { previewSize ->

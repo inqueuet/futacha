@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,16 +14,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +54,7 @@ internal fun ThreadPostCard(
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
     onSaidaneClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -93,9 +91,11 @@ internal fun ThreadPostCard(
             onQuoteRequested = onQuoteRequested,
             onSaidaneClick = onSaidaneClick,
             onPosterIdClick = onPosterIdClick,
-            onReferencedByClick = onReferencedByClick
+            onReferencedByClick = onReferencedByClick,
+            onMediaClick = onMediaClick,
+            onMediaLongPress = onMediaLongPress
         )
-        val thumbnailForDisplay = post.thumbnailUrl ?: post.imageUrl
+        val thumbnailForDisplay = resolvePostDisplayMediaUrl(post)
         thumbnailForDisplay?.let { displayUrl ->
             val imageLoader = LocalFutachaImageLoader.current
             val thumbnailRequest = remember(platformContext, displayUrl) {
@@ -110,15 +110,29 @@ internal fun ThreadPostCard(
             )
             val thumbnailPainterState by thumbnailPainter.state.collectAsState()
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 200.dp)
-                    .clip(MaterialTheme.shapes.small)
-                    .background(backgroundColor)
-                    .clickable {
-                        val targetUrl = post.imageUrl ?: displayUrl
-                        onMediaClick?.invoke(targetUrl, determineMediaType(targetUrl))
+                modifier = run {
+                    val baseModifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(backgroundColor)
+                    val targetUrl = resolvePostTargetMediaUrl(post, displayUrl) ?: displayUrl
+                    val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
+                    if (onMediaLongPress != null) {
+                        baseModifier.combinedClickable(
+                            onClick = {
+                                onMediaClick?.invoke(targetUrl, targetMediaType)
+                            },
+                            onLongClick = {
+                                onMediaLongPress.invoke(post, targetUrl, targetMediaType)
+                            }
+                        )
+                    } else {
+                        baseModifier.clickable {
+                            onMediaClick?.invoke(targetUrl, targetMediaType)
+                        }
                     }
+                }
             ) {
                 when (thumbnailPainterState) {
                     is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
@@ -163,7 +177,9 @@ internal fun ThreadPostMetadata(
     onQuoteRequested: (() -> Unit)? = null,
     onSaidaneClick: (() -> Unit)? = null,
     onPosterIdClick: (() -> Unit)? = null,
-    onReferencedByClick: (() -> Unit)? = null
+    onReferencedByClick: (() -> Unit)? = null,
+    onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -254,40 +270,30 @@ internal fun ThreadPostMetadata(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            val fileName = extractFileNameFromUrl(post.imageUrl ?: post.thumbnailUrl)
-            val targetUrl = post.imageUrl ?: post.thumbnailUrl
+            val targetUrl = resolvePostTargetMediaUrl(post)
+            val fileName = extractFileNameFromUrl(targetUrl)
             if (fileName != null && targetUrl != null) {
-                var showFileMenu by remember { mutableStateOf(false) }
-                Box {
-                    Text(
-                        text = fileName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = FutabaLinkColor,
-                        textDecoration = TextDecoration.None,
-                        modifier = Modifier.clickable { showFileMenu = true }
-                    )
-                    DropdownMenu(
-                        expanded = showFileMenu,
-                        onDismissRequest = { showFileMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("添付を開く") },
+                val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
+                Text(
+                    text = fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = FutabaLinkColor,
+                    textDecoration = TextDecoration.None,
+                    modifier = if (onMediaLongPress != null) {
+                        Modifier.combinedClickable(
                             onClick = {
-                                showFileMenu = false
-                                onUrlClick(targetUrl)
+                                onMediaClick?.invoke(targetUrl, targetMediaType)
+                            },
+                            onLongClick = {
+                                onMediaLongPress.invoke(post, targetUrl, targetMediaType)
                             }
                         )
-                        onQuoteRequested?.let { quote ->
-                            DropdownMenuItem(
-                                text = { Text("引用") },
-                                onClick = {
-                                    showFileMenu = false
-                                    quote()
-                                }
-                            )
+                    } else {
+                        Modifier.clickable {
+                            onMediaClick?.invoke(targetUrl, targetMediaType)
                         }
                     }
-                }
+                )
             }
         }
     }

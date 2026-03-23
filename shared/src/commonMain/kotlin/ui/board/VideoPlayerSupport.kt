@@ -15,7 +15,7 @@ internal fun normalizeVideoPlayerVolume(
 ): Float = if (isMuted) 0f else volume.coerceIn(0f, 1f)
 
 internal fun resolveVideoPreviewChromeState(playbackState: VideoPlayerState): VideoPreviewChromeState {
-    val isBuffering = playbackState == VideoPlayerState.Buffering || playbackState == VideoPlayerState.Idle
+    val isBuffering = playbackState == VideoPlayerState.Buffering
     val showsError = playbackState == VideoPlayerState.Error
     val showsCloseButton = playbackState != VideoPlayerState.Ready
     return VideoPreviewChromeState(
@@ -26,11 +26,7 @@ internal fun resolveVideoPreviewChromeState(playbackState: VideoPlayerState): Vi
 }
 
 internal fun extractVideoUrlExtension(videoUrl: String): String =
-    videoUrl.substringBefore('?')
-        .substringBefore('#')
-        .substringAfterLast('/')
-        .substringAfterLast('.', "")
-        .lowercase()
+    parseMediaUrlInfo(videoUrl)?.extension.orEmpty()
 
 internal fun sanitizeVideoHtmlUrl(videoUrl: String): String =
     videoUrl
@@ -50,7 +46,7 @@ internal fun buildEmbeddedVideoHtml(videoUrl: String): String {
         </style>
         </head>
         <body>
-        <video controls playsinline autoplay src="$sanitizedUrl"></video>
+        <video controls playsinline src="$sanitizedUrl"></video>
         </body>
         </html>
         """.trimIndent()

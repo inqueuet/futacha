@@ -67,10 +67,7 @@ internal fun appendSelectedQuoteLines(
 }
 
 internal fun extractFileNameFromUrl(url: String?): String? {
-    if (url.isNullOrBlank()) return null
-    val sanitized = url.substringBefore('#').substringBefore('?')
-    val name = sanitized.substringAfterLast('/', "")
-    return name.takeIf { it.isNotBlank() }
+    return parseMediaUrlInfo(url)?.fileName
 }
 
 internal fun buildPosterIdLabels(posts: List<Post>): Map<String, PosterIdLabel> {

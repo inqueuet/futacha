@@ -7,6 +7,11 @@ internal data class ThreadPostActionSelectionState(
     val isActionSheetVisible: Boolean
 )
 
+internal data class ThreadAttachmentActionSelectionState(
+    val target: ThreadAttachmentActionTarget?,
+    val isVisible: Boolean
+)
+
 internal fun openThreadPostActionSheet(post: Post): ThreadPostActionSelectionState {
     return ThreadPostActionSelectionState(
         targetPost = post,
@@ -18,6 +23,22 @@ internal fun dismissThreadPostActionSheet(): ThreadPostActionSelectionState {
     return ThreadPostActionSelectionState(
         targetPost = null,
         isActionSheetVisible = false
+    )
+}
+
+internal fun openThreadAttachmentActionSheet(
+    target: ThreadAttachmentActionTarget
+): ThreadAttachmentActionSelectionState {
+    return ThreadAttachmentActionSelectionState(
+        target = target,
+        isVisible = true
+    )
+}
+
+internal fun dismissThreadAttachmentActionSheet(): ThreadAttachmentActionSelectionState {
+    return ThreadAttachmentActionSelectionState(
+        target = null,
+        isVisible = false
     )
 }
 
@@ -102,6 +123,7 @@ private fun resetThreadPostOverlayTransientState(
 ): ThreadPostOverlayState {
     return currentState.copy(
         actionSheetState = dismissThreadPostActionSheet(),
+        attachmentActionState = dismissThreadAttachmentActionSheet(),
         deleteDialogState = dismissThreadDeleteDialog(),
         quoteSelectionState = dismissThreadQuoteSelection()
     )
@@ -109,6 +131,7 @@ private fun resetThreadPostOverlayTransientState(
 
 internal data class ThreadPostOverlayState(
     val actionSheetState: ThreadPostActionSelectionState = dismissThreadPostActionSheet(),
+    val attachmentActionState: ThreadAttachmentActionSelectionState = dismissThreadAttachmentActionSheet(),
     val deleteDialogState: ThreadDeleteDialogState = dismissThreadDeleteDialog(),
     val quoteSelectionState: ThreadQuoteSelectionState = dismissThreadQuoteSelection(),
     val isNgManagementVisible: Boolean = false,
@@ -130,6 +153,21 @@ internal fun dismissThreadPostActionOverlay(
     currentState: ThreadPostOverlayState
 ): ThreadPostOverlayState {
     return currentState.copy(actionSheetState = dismissThreadPostActionSheet())
+}
+
+internal fun openThreadAttachmentActionOverlay(
+    currentState: ThreadPostOverlayState,
+    target: ThreadAttachmentActionTarget
+): ThreadPostOverlayState {
+    return resetThreadPostOverlayTransientState(currentState).copy(
+        attachmentActionState = openThreadAttachmentActionSheet(target)
+    )
+}
+
+internal fun dismissThreadAttachmentActionOverlay(
+    currentState: ThreadPostOverlayState
+): ThreadPostOverlayState {
+    return currentState.copy(attachmentActionState = dismissThreadAttachmentActionSheet())
 }
 
 internal fun openThreadDeleteOverlay(

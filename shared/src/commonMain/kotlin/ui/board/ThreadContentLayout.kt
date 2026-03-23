@@ -43,6 +43,7 @@ internal fun ThreadContent(
     onQuoteRequestedForPost: (Post) -> Unit,
     onSaidaneClick: (Post) -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
     onUrlClick: (String) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
@@ -126,6 +127,7 @@ internal fun ThreadContent(
                         onQuoteRequestedForPost = onQuoteRequestedForPost,
                         onSaidaneClick = onSaidaneClick,
                         onMediaClick = onMediaClick,
+                        onMediaLongPress = onMediaLongPress,
                         onPostLongPress = onPostLongPress
                     )
                     ThreadPostCard(
@@ -143,6 +145,7 @@ internal fun ThreadContent(
                         onReferencedByClick = postCardCallbacks.onReferencedByClick,
                         onSaidaneClick = postCardCallbacks.onSaidaneClick,
                         onMediaClick = postCardCallbacks.onMediaClick,
+                        onMediaLongPress = postCardCallbacks.onMediaLongPress,
                         onLongPress = postCardCallbacks.onLongPress,
                         modifier = Modifier.fillMaxWidth()
                     )

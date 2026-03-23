@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui
 
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -16,6 +17,7 @@ internal data class FutachaPreferenceMutationInputs(
     val setManualSaveDirectory: suspend (String) -> Unit,
     val setAttachmentPickerPreference: suspend (AttachmentPickerPreference) -> Unit,
     val setSaveDirectorySelection: suspend (SaveDirectorySelection) -> Unit,
+    val setThreadGalleryTapAction: suspend (ThreadGalleryTapAction) -> Unit = {},
     val setManualSaveLocation: suspend (SaveLocation) -> Unit,
     val setPreferredFileManager: suspend (String?, String?) -> Unit,
     val setThreadMenuEntries: suspend (List<ThreadMenuEntryConfig>) -> Unit,
@@ -29,6 +31,7 @@ internal data class FutachaPreferenceMutationCallbacks(
     val onManualSaveDirectoryChanged: (String) -> Unit,
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit,
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
+    val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit,
     val onManualSaveLocationChanged: (SaveLocation) -> Unit,
     val onFileManagerSelected: (packageName: String, label: String) -> Unit,
     val onClearPreferredFileManager: () -> Unit,
@@ -77,6 +80,11 @@ internal fun buildFutachaPreferenceMutationCallbacks(
         onSaveDirectorySelectionChanged = { selection ->
             launchFutachaCallbackMutation(coroutineScope) {
                 inputs.setSaveDirectorySelection(selection)
+            }
+        },
+        onThreadGalleryTapActionChanged = { action ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setThreadGalleryTapAction(action)
             }
         },
         onManualSaveLocationChanged = { location ->

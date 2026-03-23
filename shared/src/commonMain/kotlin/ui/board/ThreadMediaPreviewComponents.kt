@@ -76,6 +76,8 @@ internal fun ThreadMediaPreviewDialogFrame(
     onDismiss: () -> Unit,
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
+    isSwipeNavigationEnabled: Boolean = true,
+    isTapNavigationEnabled: Boolean = true,
     containerModifier: Modifier = Modifier,
     content: @Composable BoxScope.(IntSize) -> Unit
 ) {
@@ -95,32 +97,46 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .fillMaxSize()
                 .background(Color.Black)
                 .onSizeChanged { previewSize = it }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            swipeDistance += dragAmount
-                            if (swipeDistance < -200f) {
-                                swipeDistance = 0f
-                                onDismiss()
-                            }
-                        },
-                        onDragEnd = { swipeDistance = 0f },
-                        onDragCancel = { swipeDistance = 0f }
-                    )
-                }
-                .then(containerModifier)
-                .pointerInput(navigationKey, previewSize.width) {
-                    detectTapGestures { offset ->
-                        val width = previewSize.width.toFloat()
-                        if (width <= 0f) return@detectTapGestures
-                        if (offset.x < width / 2f) {
-                            onNavigatePrevious()
-                        } else {
-                            onNavigateNext()
+                .then(
+                    if (isSwipeNavigationEnabled) {
+                        Modifier.pointerInput(navigationKey) {
+                            detectHorizontalDragGestures(
+                                onHorizontalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    swipeDistance += dragAmount
+                                },
+                                onDragEnd = {
+                                    when {
+                                        swipeDistance <= -120f -> onNavigateNext()
+                                        swipeDistance >= 120f -> onNavigatePrevious()
+                                    }
+                                    swipeDistance = 0f
+                                },
+                                onDragCancel = { swipeDistance = 0f }
+                            )
                         }
+                    } else {
+                        Modifier
                     }
-                }
+                )
+                .then(containerModifier)
+                .then(
+                    if (isTapNavigationEnabled) {
+                        Modifier.pointerInput(navigationKey, previewSize.width) {
+                            detectTapGestures { offset ->
+                                val width = previewSize.width.toFloat()
+                                if (width <= 0f) return@detectTapGestures
+                                if (offset.x < width / 2f) {
+                                    onNavigatePrevious()
+                                } else {
+                                    onNavigateNext()
+                                }
+                            }
+                        }
+                    } else {
+                        Modifier
+                    }
+                )
         ) {
             content(previewSize)
         }

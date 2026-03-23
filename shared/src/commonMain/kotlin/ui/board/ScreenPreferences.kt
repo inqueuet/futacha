@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
@@ -19,6 +20,7 @@ data class ScreenPreferencesState(
     val resolvedManualSaveDirectory: String? = null,
     val attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
     val saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
+    val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
     val preferredFileManagerPackage: String? = null,
     val preferredFileManagerLabel: String? = null,
     val threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
@@ -32,6 +34,7 @@ data class ScreenPreferencesCallbacks(
     val onManualSaveDirectoryChanged: (String) -> Unit = {},
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
+    val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {},
     val onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     val onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     val onClearPreferredFileManager: (() -> Unit)? = null,

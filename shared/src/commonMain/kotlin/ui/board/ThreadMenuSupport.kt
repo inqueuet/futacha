@@ -184,7 +184,7 @@ internal fun ThreadMenuEntryId.toMeta(): ThreadMenuEntryMeta {
         ThreadMenuEntryId.ScrollToTop -> ThreadMenuEntryMeta("最上部", Icons.Filled.ArrowUpward)
         ThreadMenuEntryId.ScrollToBottom -> ThreadMenuEntryMeta("最下部", Icons.Filled.ArrowDownward)
         ThreadMenuEntryId.Refresh -> ThreadMenuEntryMeta("更新", Icons.Rounded.Refresh)
-        ThreadMenuEntryId.Gallery -> ThreadMenuEntryMeta("画像", Icons.Outlined.Image)
+        ThreadMenuEntryId.Gallery -> ThreadMenuEntryMeta("添付", Icons.Outlined.Image)
         ThreadMenuEntryId.Save -> ThreadMenuEntryMeta("保存", Icons.Rounded.Archive)
         ThreadMenuEntryId.Filter -> ThreadMenuEntryMeta("レスフィルター", Icons.Rounded.FilterList)
         ThreadMenuEntryId.Settings -> ThreadMenuEntryMeta("設定", Icons.Rounded.Settings)

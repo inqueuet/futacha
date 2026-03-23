@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.ui.board.buildScreenContract
@@ -24,6 +25,7 @@ internal data class FutachaScreenPreferencesStateInputs(
     val resolvedManualSaveDirectory: String?,
     val attachmentPickerPreference: AttachmentPickerPreference,
     val saveDirectorySelection: SaveDirectorySelection,
+    val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
     val preferredFileManagerPackage: String?,
     val preferredFileManagerLabel: String?,
     val threadMenuEntries: List<ThreadMenuEntryConfig>,
@@ -90,6 +92,7 @@ internal fun buildFutachaScreenPreferencesState(
         resolvedManualSaveDirectory = inputs.resolvedManualSaveDirectory,
         attachmentPickerPreference = inputs.attachmentPickerPreference,
         saveDirectorySelection = inputs.saveDirectorySelection,
+        threadGalleryTapAction = inputs.threadGalleryTapAction,
         preferredFileManagerPackage = inputs.preferredFileManagerPackage,
         preferredFileManagerLabel = inputs.preferredFileManagerLabel,
         threadMenuEntries = inputs.threadMenuEntries,
@@ -107,6 +110,7 @@ internal fun buildFutachaScreenPreferencesCallbacks(
         onManualSaveDirectoryChanged = inputs.preferenceMutations.onManualSaveDirectoryChanged,
         onAttachmentPickerPreferenceChanged = inputs.preferenceMutations.onAttachmentPickerPreferenceChanged,
         onSaveDirectorySelectionChanged = inputs.preferenceMutations.onSaveDirectorySelectionChanged,
+        onThreadGalleryTapActionChanged = inputs.preferenceMutations.onThreadGalleryTapActionChanged,
         onOpenSaveDirectoryPicker = inputs.onOpenSaveDirectoryPicker,
         onFileManagerSelected = inputs.preferenceMutations.onFileManagerSelected,
         onClearPreferredFileManager = inputs.preferenceMutations.onClearPreferredFileManager,

@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -171,6 +172,7 @@ class AppStateStore internal constructor(
 
     val attachmentPickerPreference: Flow<AttachmentPickerPreference> = preferenceFlows.attachmentPickerPreference
     val saveDirectorySelection: Flow<SaveDirectorySelection> = preferenceFlows.saveDirectorySelection
+    val threadGalleryTapAction: Flow<ThreadGalleryTapAction> = preferenceFlows.threadGalleryTapAction
     val lastUsedDeleteKey: Flow<String> = preferenceFlows.lastUsedDeleteKey
 
     val catalogModes: Flow<Map<String, CatalogMode>> = preferenceFlows.catalogModes
@@ -242,6 +244,9 @@ class AppStateStore internal constructor(
 
     suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) =
         preferenceOperations.setSaveDirectorySelection(selection)
+
+    suspend fun setThreadGalleryTapAction(action: ThreadGalleryTapAction) =
+        preferenceOperations.setThreadGalleryTapAction(action)
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) =
         preferenceOperations.setPreferredFileManager(packageName, label)
@@ -394,6 +399,7 @@ internal interface PlatformStateStorage {
     val manualSaveDirectory: Flow<String>
     val attachmentPickerPreference: Flow<String?>
     val saveDirectorySelection: Flow<String?>
+    val threadGalleryTapAction: Flow<String?>
     val lastUsedDeleteKey: Flow<String?>
     val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
@@ -420,6 +426,7 @@ internal interface PlatformStateStorage {
     suspend fun updateManualSaveDirectory(directory: String)
     suspend fun updateAttachmentPickerPreference(preference: String)
     suspend fun updateSaveDirectorySelection(selection: String)
+    suspend fun updateThreadGalleryTapAction(action: String)
     suspend fun updateLastUsedDeleteKey(value: String)
     suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)

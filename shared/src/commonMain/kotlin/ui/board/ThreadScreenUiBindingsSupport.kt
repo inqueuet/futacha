@@ -104,10 +104,15 @@ internal fun buildThreadScreenUiBindingsBundle(
             onSave = overlayInputs.onSavePreviewMedia
         ),
         galleryCallbacks = overlayInputs.galleryPosts?.let { posts ->
-            buildThreadScreenGalleryCallbacks(
+            val jumpToPost = buildThreadPostIndexAction(
                 currentPosts = posts,
-                onDismiss = overlayInputs.onDismissGallery,
                 onScrollToPostIndex = overlayInputs.onScrollToPostIndex
+            )
+            buildThreadScreenGalleryCallbacks(
+                onDismiss = overlayInputs.onDismissGallery,
+                onImageClick = jumpToPost,
+                onImageLongPress = jumpToPost,
+                onPostClick = jumpToPost
             )
         },
         settingsSheetCallbacks = buildThreadSettingsSheetCallbacks(

@@ -43,6 +43,7 @@ private class AndroidPlatformStateStorage(
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
     private val attachmentPickerPreferenceKey = stringPreferencesKey("attachment_picker_preference")
     private val saveDirectorySelectionKey = stringPreferencesKey("save_directory_selection")
+    private val threadGalleryTapActionKey = stringPreferencesKey("thread_gallery_tap_action")
     private val catalogModeMapKey = stringPreferencesKey("catalog_mode_map_json")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
@@ -123,6 +124,9 @@ private class AndroidPlatformStateStorage(
 
     override val saveDirectorySelection: Flow<String?> =
         safeData.map { prefs -> prefs[saveDirectorySelectionKey] }
+
+    override val threadGalleryTapAction: Flow<String?> =
+        safeData.map { prefs -> prefs[threadGalleryTapActionKey] }
 
     override val catalogModeMapJson: Flow<String?> =
         safeData.map { prefs -> prefs[catalogModeMapKey] }
@@ -268,6 +272,10 @@ private class AndroidPlatformStateStorage(
             seedBundles.preferences.saveDirectorySelection
         )
         seedOptionalStringPreference(
+            threadGalleryTapActionKey,
+            seedBundles.preferences.threadGalleryTapAction
+        )
+        seedOptionalStringPreference(
             lastUsedDeleteKeyPreferencesKey,
             seedBundles.preferences.lastUsedDeleteKey
         )
@@ -364,6 +372,15 @@ private class AndroidPlatformStateStorage(
             selection,
             "save directory selection",
             "Failed to save save directory selection"
+        )
+    }
+
+    override suspend fun updateThreadGalleryTapAction(action: String) {
+        updateStringPreference(
+            threadGalleryTapActionKey,
+            action,
+            "thread gallery tap action",
+            "Failed to save thread gallery tap action"
         )
     }
 

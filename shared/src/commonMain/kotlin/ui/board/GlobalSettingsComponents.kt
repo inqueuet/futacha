@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -24,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
@@ -34,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 
 internal data class GlobalSettingsEntry(
     val label: String,
@@ -113,7 +116,9 @@ internal fun GlobalSettingsScaffold(
                     isAdsEnabled = bindings.behavior.isAdsEnabled,
                     onAdsEnabledChanged = bindings.behavior.onAdsEnabledChanged,
                     isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
-                    onLightweightModeChanged = bindings.behavior.onLightweightModeChanged
+                    onLightweightModeChanged = bindings.behavior.onLightweightModeChanged,
+                    threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,
+                    onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged
                 )
             }
             item {
@@ -221,7 +226,9 @@ internal fun GlobalSettingsBehaviorSection(
     isAdsEnabled: Boolean,
     onAdsEnabledChanged: (Boolean) -> Unit,
     isLightweightModeEnabled: Boolean,
-    onLightweightModeChanged: (Boolean) -> Unit
+    onLightweightModeChanged: (Boolean) -> Unit,
+    threadGalleryTapAction: ThreadGalleryTapAction,
+    onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit
 ) {
     SettingsSection(
         title = "動作",
@@ -281,5 +288,57 @@ internal fun GlobalSettingsBehaviorSection(
             },
             modifier = Modifier.fillMaxWidth()
         )
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("添付一覧のタップ動作") },
+            supportingContent = {
+                Text(
+                    text = "添付一覧でカードをタップしたときの既定動作です。長押しすると添付メニューを開き、No.表示からはいつでもレスへ移動できます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        GalleryTapActionOptionRow(
+            label = "添付を開く",
+            description = "画像や動画のプレビューを優先して開きます。",
+            selected = threadGalleryTapAction == ThreadGalleryTapAction.OpenMedia,
+            onClick = { onThreadGalleryTapActionChanged(ThreadGalleryTapAction.OpenMedia) }
+        )
+        GalleryTapActionOptionRow(
+            label = "レスに移動",
+            description = "対象レスまでスクロールします。",
+            selected = threadGalleryTapAction == ThreadGalleryTapAction.JumpToPost,
+            onClick = { onThreadGalleryTapActionChanged(ThreadGalleryTapAction.JumpToPost) }
+        )
     }
+}
+
+@Composable
+private fun GalleryTapActionOptionRow(
+    label: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(label) },
+        supportingContent = {
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            RadioButton(
+                selected = selected,
+                onClick = null
+            )
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    )
 }

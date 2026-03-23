@@ -31,6 +31,7 @@ internal data class ThreadScreenContentHostBindings(
     val setPostOverlayState: (ThreadPostOverlayState) -> Unit,
     val onSaidaneClick: (Post) -> Unit,
     val onMediaClick: ((String, MediaType) -> Unit)?,
+    val onMediaLongPress: ((Post, String, MediaType) -> Unit)?,
     val onUrlClick: (String) -> Unit,
     val onRefresh: () -> Unit,
     val isRefreshing: Boolean
@@ -174,6 +175,7 @@ internal fun ThreadScreenContentHost(
                 },
                 onSaidaneClick = bindings.onSaidaneClick,
                 onMediaClick = bindings.onMediaClick,
+                onMediaLongPress = bindings.onMediaLongPress,
                 onUrlClick = bindings.onUrlClick,
                 onRefresh = bindings.onRefresh,
                 isRefreshing = bindings.isRefreshing,

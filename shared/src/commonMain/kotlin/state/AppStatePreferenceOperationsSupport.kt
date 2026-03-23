@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -111,6 +112,10 @@ internal class AppStatePreferenceOperations(
 
     suspend fun setSaveDirectorySelection(selection: SaveDirectorySelection) {
         setSimple(selection.name, storage::updateSaveDirectorySelection, "save directory selection")
+    }
+
+    suspend fun setThreadGalleryTapAction(action: ThreadGalleryTapAction) {
+        setSimple(action.name, storage::updateThreadGalleryTapAction, "thread gallery tap action")
     }
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) {
