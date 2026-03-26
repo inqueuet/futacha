@@ -6,6 +6,8 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal data class GlobalSettingsDerivedState(
+    val behaviorText: GlobalSettingsBehaviorText,
+    val saveText: GlobalSettingsSaveText,
     val resolvedManualPath: String,
     val saveDestinationModeLabel: String,
     val saveDestinationHint: String,
@@ -30,6 +32,12 @@ internal fun rememberGlobalSettingsDerivedState(
     autoSavedCount: Int?,
     autoSavedSize: Long?
 ): GlobalSettingsDerivedState {
+    val behaviorText = remember(isAndroidPlatform) {
+        resolveGlobalSettingsBehaviorText(isAndroidPlatform)
+    }
+    val saveText = remember(isAndroidPlatform) {
+        resolveGlobalSettingsSaveText(isAndroidPlatform)
+    }
     val resolvedManualPath = remember(manualSaveDirectory, resolvedManualSaveDirectory) {
         resolvedManualSaveDirectory ?: resolveFallbackManualSavePathValue(manualSaveDirectory)
     }
@@ -73,6 +81,8 @@ internal fun rememberGlobalSettingsDerivedState(
         resolveGlobalSettingsStorageSummaryState(historyCount, autoSavedCount, autoSavedSize)
     }
     return GlobalSettingsDerivedState(
+        behaviorText = behaviorText,
+        saveText = saveText,
         resolvedManualPath = resolvedManualPath,
         saveDestinationModeLabel = saveDestinationModeLabel,
         saveDestinationHint = saveDestinationHint,

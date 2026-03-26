@@ -19,6 +19,37 @@ internal data class GlobalSettingsCatalogMenuCallbacks(
     val setPlacement: (CatalogNavEntryId, CatalogNavEntryPlacement) -> Unit
 )
 
+internal data class GlobalSettingsCallbackBundle(
+    val saveCallbacks: GlobalSettingsSaveCallbacks,
+    val catalogMenuCallbacks: GlobalSettingsCatalogMenuCallbacks,
+    val threadMenuCallbacks: GlobalSettingsThreadMenuCallbacks,
+    val linkCallbacks: GlobalSettingsLinkCallbacks,
+    val cacheCallbacks: GlobalSettingsCacheCallbacks
+)
+
+internal data class GlobalSettingsCallbackBundleInputs(
+    val currentManualSaveInput: () -> String,
+    val setManualSaveInput: (String) -> Unit,
+    val setIsFileManagerPickerVisible: (Boolean) -> Unit,
+    val onManualSaveDirectoryChanged: (String) -> Unit,
+    val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
+    val onFileManagerSelected: ((packageName: String, label: String) -> Unit)?,
+    val currentCatalogEntries: () -> List<CatalogNavEntryConfig>,
+    val setLocalCatalogEntries: (List<CatalogNavEntryConfig>) -> Unit,
+    val onCatalogNavEntriesChanged: (List<CatalogNavEntryConfig>) -> Unit,
+    val currentThreadEntries: () -> List<ThreadMenuEntryConfig>,
+    val setLocalThreadEntries: (List<ThreadMenuEntryConfig>) -> Unit,
+    val onThreadMenuEntriesChanged: (List<ThreadMenuEntryConfig>) -> Unit,
+    val onOpenCookieManager: (() -> Unit)?,
+    val urlLauncher: (String) -> Unit,
+    val onBack: () -> Unit,
+    val coroutineScope: CoroutineScope,
+    val showSnackbar: suspend (String) -> Unit,
+    val clearImageCache: suspend () -> Unit,
+    val clearTemporaryCache: suspend () -> Unit,
+    val refreshAutoSavedStats: suspend () -> Unit
+)
+
 internal data class GlobalSettingsCatalogMenuInputs(
     val currentEntries: () -> List<CatalogNavEntryConfig>,
     val setLocalEntries: (List<CatalogNavEntryConfig>) -> Unit,
@@ -42,6 +73,58 @@ internal fun buildGlobalSettingsCatalogMenuCallbacks(
         setPlacement = { id, placement ->
             updateCatalogEntries(setCatalogMenuEntryPlacement(inputs.currentEntries(), id, placement))
         }
+    )
+}
+
+internal fun buildGlobalSettingsCallbackBundle(
+    inputs: GlobalSettingsCallbackBundleInputs
+): GlobalSettingsCallbackBundle {
+    val saveCallbacks = buildGlobalSettingsSaveCallbacks(
+        inputs = GlobalSettingsSaveInputs(
+            currentManualSaveInput = inputs.currentManualSaveInput,
+            setManualSaveInput = inputs.setManualSaveInput,
+            setIsFileManagerPickerVisible = inputs.setIsFileManagerPickerVisible,
+            onManualSaveDirectoryChanged = inputs.onManualSaveDirectoryChanged,
+            onSaveDirectorySelectionChanged = inputs.onSaveDirectorySelectionChanged,
+            onFileManagerSelected = inputs.onFileManagerSelected
+        )
+    )
+    val catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
+        inputs = GlobalSettingsCatalogMenuInputs(
+            currentEntries = inputs.currentCatalogEntries,
+            setLocalEntries = inputs.setLocalCatalogEntries,
+            onCatalogNavEntriesChanged = inputs.onCatalogNavEntriesChanged
+        )
+    )
+    val threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
+        inputs = GlobalSettingsThreadMenuInputs(
+            currentEntries = inputs.currentThreadEntries,
+            setLocalEntries = inputs.setLocalThreadEntries,
+            onThreadMenuEntriesChanged = inputs.onThreadMenuEntriesChanged
+        )
+    )
+    val linkCallbacks = buildGlobalSettingsLinkCallbacks(
+        inputs = GlobalSettingsLinkInputs(
+            onOpenCookieManager = inputs.onOpenCookieManager,
+            urlLauncher = inputs.urlLauncher,
+            onBack = inputs.onBack
+        )
+    )
+    val cacheCallbacks = buildGlobalSettingsCacheCallbacks(
+        inputs = GlobalSettingsCacheInputs(
+            coroutineScope = inputs.coroutineScope,
+            showSnackbar = inputs.showSnackbar,
+            clearImageCache = inputs.clearImageCache,
+            clearTemporaryCache = inputs.clearTemporaryCache,
+            refreshAutoSavedStats = inputs.refreshAutoSavedStats
+        )
+    )
+    return GlobalSettingsCallbackBundle(
+        saveCallbacks = saveCallbacks,
+        catalogMenuCallbacks = catalogMenuCallbacks,
+        threadMenuCallbacks = threadMenuCallbacks,
+        linkCallbacks = linkCallbacks,
+        cacheCallbacks = cacheCallbacks
     )
 }
 

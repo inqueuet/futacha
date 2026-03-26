@@ -111,6 +111,7 @@ internal fun GlobalSettingsScaffold(
         ) {
             item {
                 GlobalSettingsBehaviorSection(
+                    text = bindings.behavior.text,
                     isBackgroundRefreshEnabled = bindings.behavior.isBackgroundRefreshEnabled,
                     onBackgroundRefreshChanged = bindings.behavior.onBackgroundRefreshChanged,
                     isAdsEnabled = bindings.behavior.isAdsEnabled,
@@ -135,23 +136,7 @@ internal fun GlobalSettingsScaffold(
             }
             item {
                 GlobalSettingsSaveSection(
-                    preferredFileManagerState = bindings.save.preferredFileManagerState,
-                    onOpenFileManagerPicker = bindings.save.onOpenFileManagerPicker,
-                    onClearPreferredFileManager = bindings.save.onClearPreferredFileManager,
-                    availableSaveDirectorySelections = bindings.save.availableSaveDirectorySelections,
-                    effectiveSaveDirectorySelection = bindings.save.effectiveSaveDirectorySelection,
-                    onSaveDirectorySelectionChanged = bindings.save.onSaveDirectorySelectionChanged,
-                    saveDestinationModeLabel = bindings.save.saveDestinationModeLabel,
-                    resolvedManualPath = bindings.save.resolvedManualPath,
-                    saveDestinationHint = bindings.save.saveDestinationHint,
-                    defaultAndroidSaveWarningText = bindings.save.defaultAndroidSaveWarningText,
-                    manualSaveInput = bindings.save.manualSaveInput,
-                    onManualSaveInputChanged = bindings.save.onManualSaveInputChanged,
-                    onResetManualSaveDirectory = bindings.save.onResetManualSaveDirectory,
-                    onUpdateManualSaveDirectory = bindings.save.onUpdateManualSaveDirectory,
-                    saveDirectoryPickerState = bindings.save.saveDirectoryPickerState,
-                    onOpenSaveDirectoryPicker = bindings.save.onOpenSaveDirectoryPicker,
-                    onFallbackToManualInput = bindings.save.onFallbackToManualInput
+                    bindings = bindings.save
                 )
             }
             item {
@@ -221,6 +206,7 @@ internal fun SettingsSection(
 
 @Composable
 internal fun GlobalSettingsBehaviorSection(
+    text: GlobalSettingsBehaviorText,
     isBackgroundRefreshEnabled: Boolean,
     onBackgroundRefreshChanged: (Boolean) -> Unit,
     isAdsEnabled: Boolean,
@@ -239,7 +225,7 @@ internal fun GlobalSettingsBehaviorSection(
             headlineContent = { Text("バックグラウンド更新") },
             supportingContent = {
                 Text(
-                    text = "Android は最短15分間隔の定期更新、iOS は OS 管理の間欠実行です。どちらも実際の実行時刻は端末状態や OS により前後します。",
+                    text = text.backgroundRefreshDescription,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

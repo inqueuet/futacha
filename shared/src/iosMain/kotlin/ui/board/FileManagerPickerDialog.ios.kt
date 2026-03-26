@@ -38,11 +38,11 @@ actual fun FileManagerPickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("ファイラーを選択") },
+        title = { Text("保存先アプリを選択") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "iOS では Files アプリのプロバイダを経由して保存先を選択します。",
+                    text = "iOS では Files に表示される保存先アプリを経由してフォルダを選択します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

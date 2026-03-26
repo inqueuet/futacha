@@ -1,19 +1,27 @@
 package com.valoser.futacha.shared.ui.board
 
+import coil3.compose.LocalPlatformContext
+import androidx.compose.runtime.getValue
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.isAndroid
+import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
@@ -58,6 +66,13 @@ internal data class GlobalSettingsRuntimeBundle(
     val availableSaveDirectorySelections: List<com.valoser.futacha.shared.util.SaveDirectorySelection>
 )
 
+internal data class GlobalSettingsScreenRuntime(
+    val scaffoldBindings: GlobalSettingsScaffoldBindings,
+    val isFileManagerPickerVisible: Boolean,
+    val onDismissFileManagerPicker: () -> Unit,
+    val onFileManagerSelected: (String, String) -> Unit
+)
+
 @Composable
 internal fun rememberGlobalSettingsRuntimeBundle(): GlobalSettingsRuntimeBundle {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -84,6 +99,140 @@ internal fun rememberGlobalSettingsAutoSavedRepository(
             SavedThreadRepository(it, baseDirectory = AUTO_SAVE_DIRECTORY)
         }
     }
+}
+
+@Composable
+internal fun rememberGlobalSettingsScreenRuntime(
+    onBack: () -> Unit,
+    preferencesState: ScreenPreferencesState,
+    preferencesCallbacks: ScreenPreferencesCallbacks,
+    onOpenCookieManager: (() -> Unit)?,
+    historyEntries: List<ThreadHistoryEntry>,
+    fileSystem: FileSystem?,
+    autoSavedThreadRepository: SavedThreadRepository?
+): GlobalSettingsScreenRuntime {
+    val urlLauncher = rememberUrlLauncher()
+    val runtimeBundle = rememberGlobalSettingsRuntimeBundle()
+    val mutableStateBundle = rememberGlobalSettingsMutableStateBundle(
+        manualSaveDirectory = preferencesState.manualSaveDirectory,
+        threadMenuEntries = preferencesState.threadMenuEntries,
+        catalogNavEntries = preferencesState.catalogNavEntries
+    )
+    val snackbarHostState = runtimeBundle.snackbarHostState
+    val coroutineScope = runtimeBundle.coroutineScope
+    val imageLoader = LocalFutachaImageLoader.current
+    val platformContext = LocalPlatformContext.current
+    val historyCount = historyEntries.size
+    var isFileManagerPickerVisible by mutableStateBundle.isFileManagerPickerVisible
+    var autoSavedCount by mutableStateBundle.autoSavedCount
+    var autoSavedSize by mutableStateBundle.autoSavedSize
+    var manualSaveInput by mutableStateBundle.manualSaveInput
+    var localThreadMenuEntries by mutableStateBundle.localThreadMenuEntries
+    var localCatalogNavEntries by mutableStateBundle.localCatalogNavEntries
+
+    val effectiveAutoSavedRepository = rememberGlobalSettingsAutoSavedRepository(
+        fileSystem = fileSystem,
+        autoSavedThreadRepository = autoSavedThreadRepository
+    )
+    val applyAutoSavedStatsUpdate: (GlobalSettingsAutoSavedStatsUpdate) -> Unit = { update ->
+        applyGlobalSettingsAutoSavedStatsUpdate(
+            update = update,
+            setAutoSavedCount = { autoSavedCount = it },
+            setAutoSavedSize = { autoSavedSize = it }
+        )
+    }
+    LaunchedEffect(effectiveAutoSavedRepository) {
+        applyAutoSavedStatsUpdate(
+            loadGlobalSettingsAutoSavedStatsUpdate(effectiveAutoSavedRepository)
+        )
+    }
+
+    val effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection
+    val derivedState = rememberGlobalSettingsDerivedState(
+        manualSaveDirectory = preferencesState.manualSaveDirectory,
+        manualSaveLocation = preferencesState.manualSaveLocation,
+        resolvedManualSaveDirectory = preferencesState.resolvedManualSaveDirectory,
+        saveDirectorySelection = effectiveSaveDirectorySelection,
+        isAndroidPlatform = runtimeBundle.isAndroidPlatform,
+        hasCookieManager = onOpenCookieManager != null,
+        preferredFileManagerLabel = preferencesState.preferredFileManagerLabel,
+        hasPickerLauncher = preferencesCallbacks.onOpenSaveDirectoryPicker != null,
+        historyCount = historyCount,
+        autoSavedCount = autoSavedCount,
+        autoSavedSize = autoSavedSize
+    )
+    val callbackBundle = buildGlobalSettingsCallbackBundle(
+        inputs = GlobalSettingsCallbackBundleInputs(
+            currentManualSaveInput = { manualSaveInput },
+            setManualSaveInput = { manualSaveInput = it },
+            setIsFileManagerPickerVisible = { isFileManagerPickerVisible = it },
+            onManualSaveDirectoryChanged = preferencesCallbacks.onManualSaveDirectoryChanged,
+            onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+            onFileManagerSelected = preferencesCallbacks.onFileManagerSelected,
+            currentCatalogEntries = { localCatalogNavEntries },
+            setLocalCatalogEntries = { localCatalogNavEntries = it },
+            onCatalogNavEntriesChanged = preferencesCallbacks.onCatalogNavEntriesChanged,
+            currentThreadEntries = { localThreadMenuEntries },
+            setLocalThreadEntries = { localThreadMenuEntries = it },
+            onThreadMenuEntriesChanged = preferencesCallbacks.onThreadMenuEntriesChanged,
+            onOpenCookieManager = onOpenCookieManager,
+            urlLauncher = urlLauncher,
+            onBack = onBack,
+            coroutineScope = coroutineScope,
+            showSnackbar = snackbarHostState::showSnackbar,
+            clearImageCache = {
+                withContext(AppDispatchers.io) {
+                    imageLoader.diskCache?.clear()
+                    imageLoader.memoryCache?.clear()
+                    Unit
+                }
+            },
+            clearTemporaryCache = {
+                withContext(AppDispatchers.io) {
+                    fileSystem
+                        ?.let { fs ->
+                            resolveImageCacheDirectory(platformContext)
+                                ?.toString()
+                                ?.let { pathString ->
+                                    fs.deleteRecursively(pathString).getOrThrow()
+                                }
+                        }
+                    Unit
+                }
+            },
+            refreshAutoSavedStats = {
+                applyAutoSavedStatsUpdate(
+                    loadGlobalSettingsAutoSavedStatsUpdate(effectiveAutoSavedRepository)
+                )
+            }
+        )
+    )
+    val scaffoldBindings = buildGlobalSettingsScaffoldBindings(
+        inputs = GlobalSettingsScaffoldBindingInputs(
+            preferencesState = preferencesState,
+            preferencesCallbacks = preferencesCallbacks,
+            derivedState = derivedState,
+            localCatalogNavEntries = localCatalogNavEntries,
+            catalogMenuCallbacks = callbackBundle.catalogMenuCallbacks,
+            localThreadMenuEntries = localThreadMenuEntries,
+            threadMenuCallbacks = callbackBundle.threadMenuCallbacks,
+            availableSaveDirectorySelections = runtimeBundle.availableSaveDirectorySelections,
+            effectiveSaveDirectorySelection = effectiveSaveDirectorySelection,
+            manualSaveInput = manualSaveInput,
+            saveCallbacks = callbackBundle.saveCallbacks,
+            cacheCallbacks = callbackBundle.cacheCallbacks,
+            linkCallbacks = callbackBundle.linkCallbacks,
+            snackbarHostState = snackbarHostState,
+            onBack = onBack
+        )
+    )
+
+    return GlobalSettingsScreenRuntime(
+        scaffoldBindings = scaffoldBindings,
+        isFileManagerPickerVisible = isFileManagerPickerVisible,
+        onDismissFileManagerPicker = callbackBundle.saveCallbacks.onDismissFileManagerPicker,
+        onFileManagerSelected = callbackBundle.saveCallbacks.onFileManagerSelected
+    )
 }
 
 internal data class GlobalSettingsAutoSavedStatsUpdate(
@@ -138,4 +287,14 @@ internal suspend fun loadGlobalSettingsAutoSavedStatsUpdate(
         hasRepository = true,
         stats = stats
     )
+}
+
+internal fun applyGlobalSettingsAutoSavedStatsUpdate(
+    update: GlobalSettingsAutoSavedStatsUpdate,
+    setAutoSavedCount: (Int?) -> Unit,
+    setAutoSavedSize: (Long?) -> Unit
+) {
+    if (!update.shouldApply) return
+    setAutoSavedCount(update.autoSavedCount)
+    setAutoSavedSize(update.autoSavedSize)
 }

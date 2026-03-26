@@ -46,53 +46,41 @@ internal fun GlobalSettingsFileManagerPickerHost(
 
 @Composable
 internal fun GlobalSettingsSaveSection(
-    preferredFileManagerState: PreferredFileManagerSummaryState,
-    onOpenFileManagerPicker: () -> Unit,
-    onClearPreferredFileManager: (() -> Unit)?,
-    availableSaveDirectorySelections: List<SaveDirectorySelection>,
-    effectiveSaveDirectorySelection: SaveDirectorySelection,
-    onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
-    saveDestinationModeLabel: String,
-    resolvedManualPath: String,
-    saveDestinationHint: String,
-    defaultAndroidSaveWarningText: String?,
-    manualSaveInput: String,
-    onManualSaveInputChanged: (String) -> Unit,
-    onResetManualSaveDirectory: () -> Unit,
-    onUpdateManualSaveDirectory: () -> Unit,
-    saveDirectoryPickerState: SaveDirectoryPickerState,
-    onOpenSaveDirectoryPicker: (() -> Unit)?,
-    onFallbackToManualInput: () -> Unit
+    bindings: GlobalSettingsSaveSectionBindings
 ) {
+    val state = bindings.state
+    val callbacks = bindings.callbacks
+    val text = state.text
+
     SettingsSection(
-        title = "保存とファイラー",
+        title = text.sectionTitle,
         icon = Icons.Rounded.Folder,
-        description = "保存先とディレクトリ選択まわりをまとめました。"
+        description = text.sectionDescription
     ) {
         ListItem(
-            headlineContent = { Text("優先ファイラー") },
+            headlineContent = { Text(text.preferredAppTitle) },
             supportingContent = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "ディレクトリ選択で使うファイラーアプリを指定できます。設定すると次回からそのアプリを直接起動します。",
+                        text = text.preferredAppDescription,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = preferredFileManagerState.currentSettingText,
+                        text = state.preferredFileManagerState.currentSettingText,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (preferredFileManagerState.isConfigured) {
+                        color = if (state.preferredFileManagerState.isConfigured) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         }
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onOpenFileManagerPicker) {
-                            Text("ファイラーを選択")
+                        Button(onClick = callbacks.onOpenFileManagerPicker) {
+                            Text(text.preferredAppButtonLabel)
                         }
-                        if (preferredFileManagerState.isConfigured) {
-                            OutlinedButton(onClick = { onClearPreferredFileManager?.invoke() }) {
+                        if (state.preferredFileManagerState.isConfigured) {
+                            OutlinedButton(onClick = { callbacks.onClearPreferredFileManager?.invoke() }) {
                                 Text("クリア")
                             }
                         }
@@ -107,20 +95,20 @@ internal fun GlobalSettingsSaveSection(
             supportingContent = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "手入力ではプラットフォーム既定の保存領域を使います。「Documents」や「Download」は端末ごとの既定フォルダ系統に解決されます。絶対パス指定もできます。",
+                        text = text.manualSaveDescription,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        availableSaveDirectorySelections.forEach { selection ->
+                        state.availableSaveDirectorySelections.forEach { selection ->
                             FilterChip(
-                                selected = effectiveSaveDirectorySelection == selection,
-                                onClick = { onSaveDirectorySelectionChanged(selection) },
+                                selected = state.effectiveSaveDirectorySelection == selection,
+                                onClick = { callbacks.onSaveDirectorySelectionChanged(selection) },
                                 label = {
                                     Text(
                                         when (selection) {
                                             SaveDirectorySelection.MANUAL_INPUT -> "手入力"
-                                            SaveDirectorySelection.PICKER -> "ファイラーで選ぶ"
+                                            SaveDirectorySelection.PICKER -> text.pickerSelectionLabel
                                         }
                                     )
                                 }
@@ -139,20 +127,20 @@ internal fun GlobalSettingsSaveSection(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
-                                text = saveDestinationModeLabel,
+                                text = state.saveDestinationModeLabel,
                                 style = MaterialTheme.typography.labelLarge
                             )
                             Text(
-                                text = resolvedManualPath,
+                                text = state.resolvedManualPath,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = saveDestinationHint,
+                                text = state.saveDestinationHint,
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
-                    defaultAndroidSaveWarningText?.let { warningText ->
+                    state.defaultSaveWarningText?.let { warningText ->
                         Surface(
                             color = MaterialTheme.colorScheme.errorContainer,
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -163,10 +151,12 @@ internal fun GlobalSettingsSaveSection(
                                 modifier = Modifier.padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Text(
-                                    text = "Android では保存先の変更が必要です",
-                                    style = MaterialTheme.typography.labelLarge
-                                )
+                                text.defaultWarningTitle?.let { title ->
+                                    Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
                                 Text(
                                     text = warningText,
                                     style = MaterialTheme.typography.bodySmall
@@ -174,46 +164,46 @@ internal fun GlobalSettingsSaveSection(
                             }
                         }
                     }
-                    when (effectiveSaveDirectorySelection) {
+                    when (state.effectiveSaveDirectorySelection) {
                         SaveDirectorySelection.MANUAL_INPUT -> {
                             OutlinedTextField(
-                                value = manualSaveInput,
-                                onValueChange = onManualSaveInputChanged,
+                                value = state.manualSaveInput,
+                                onValueChange = callbacks.onManualSaveInputChanged,
                                 singleLine = true,
                                 placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("フォルダ名またはパス") }
+                                label = { Text(text.manualSaveInputLabel) }
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                TextButton(onClick = onResetManualSaveDirectory) {
-                                    Text("デフォルトに戻す")
+                                TextButton(onClick = callbacks.onResetManualSaveDirectory) {
+                                    Text(text.resetManualSaveButtonLabel)
                                 }
-                                Button(onClick = onUpdateManualSaveDirectory) {
-                                    Text("保存先を更新")
+                                Button(onClick = callbacks.onUpdateManualSaveDirectory) {
+                                    Text(text.updateManualSaveButtonLabel)
                                 }
                             }
                         }
                         SaveDirectorySelection.PICKER -> {
                             Text(
-                                text = saveDirectoryPickerState.descriptionText,
+                                text = state.saveDirectoryPickerState.descriptionText,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = saveDirectoryPickerState.warningText,
+                                text = state.saveDirectoryPickerState.warningText,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Button(
-                                    onClick = { onOpenSaveDirectoryPicker?.invoke() },
-                                    enabled = saveDirectoryPickerState.isPickerButtonEnabled
+                                    onClick = { callbacks.onOpenSaveDirectoryPicker?.invoke() },
+                                    enabled = state.saveDirectoryPickerState.isPickerButtonEnabled
                                 ) {
-                                    Text("フォルダを選択")
+                                    Text(text.pickerButtonLabel)
                                 }
-                                if (saveDirectoryPickerState.showManualInputFallbackButton) {
-                                    OutlinedButton(onClick = onFallbackToManualInput) {
-                                        Text("手入力に戻す")
+                                if (state.saveDirectoryPickerState.showManualInputFallbackButton) {
+                                    OutlinedButton(onClick = callbacks.onFallbackToManualInput) {
+                                        Text(text.pickerFallbackButtonLabel)
                                     }
                                 }
                             }

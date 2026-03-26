@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -86,8 +87,9 @@ internal fun ThreadMediaPreviewDialogFrame(
     containerModifier: Modifier = Modifier,
     content: @Composable BoxScope.(IntSize) -> Unit
 ) {
-    var swipeDistance by remember { mutableStateOf(0f) }
+    var swipeDistance by remember(navigationKey) { mutableStateOf(0f) }
     var previewSize by remember { mutableStateOf(IntSize.Zero) }
+    val swipeThresholdPx = rememberSwipeNavigationThresholdPx()
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -102,25 +104,34 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .fillMaxSize()
                 .background(Color.Black)
                 .onSizeChanged { previewSize = it }
+                .pointerInput(navigationKey, isSwipeNavigationEnabled) {
+                    if (!isSwipeNavigationEnabled) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            swipeDistance += dragAmount
+                        },
+                        onDragEnd = {
+                            when {
+                                swipeDistance <= -swipeThresholdPx -> onNavigateNext()
+                                swipeDistance >= swipeThresholdPx -> onNavigatePrevious()
+                            }
+                            swipeDistance = 0f
+                        },
+                        onDragCancel = {
+                            swipeDistance = 0f
+                        }
+                    )
+                }
                 .then(containerModifier)
         ) {
             content(previewSize)
-            if (isSwipeNavigationEnabled || isTapNavigationEnabled) {
+            if (isTapNavigationEnabled) {
                 ThreadMediaPreviewNavigationOverlay(
                     navigationKey = navigationKey,
                     onNavigateNext = onNavigateNext,
                     onNavigatePrevious = onNavigatePrevious,
-                    isSwipeNavigationEnabled = isSwipeNavigationEnabled,
                     isTapNavigationEnabled = isTapNavigationEnabled,
-                    onSwipeDistanceChanged = { swipeDistance += it },
-                    onSwipeFinished = {
-                        when {
-                            swipeDistance <= -120f -> onNavigateNext()
-                            swipeDistance >= 120f -> onNavigatePrevious()
-                        }
-                        swipeDistance = 0f
-                    },
-                    onSwipeCancelled = { swipeDistance = 0f }
                 )
             }
         }
@@ -132,11 +143,7 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
     navigationKey: String,
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
-    isSwipeNavigationEnabled: Boolean,
     isTapNavigationEnabled: Boolean,
-    onSwipeDistanceChanged: (Float) -> Unit,
-    onSwipeFinished: () -> Unit,
-    onSwipeCancelled: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -150,11 +157,7 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
             onNavigate = onNavigatePrevious,
             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
             contentDescription = "前の添付へ移動",
-            isSwipeNavigationEnabled = isSwipeNavigationEnabled,
-            isTapNavigationEnabled = isTapNavigationEnabled,
-            onSwipeDistanceChanged = onSwipeDistanceChanged,
-            onSwipeFinished = onSwipeFinished,
-            onSwipeCancelled = onSwipeCancelled
+            isTapNavigationEnabled = isTapNavigationEnabled
         )
         Spacer(modifier = Modifier.weight(1f))
         ThreadMediaPreviewNavigationZone(
@@ -162,11 +165,7 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
             onNavigate = onNavigateNext,
             imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
             contentDescription = "次の添付へ移動",
-            isSwipeNavigationEnabled = isSwipeNavigationEnabled,
-            isTapNavigationEnabled = isTapNavigationEnabled,
-            onSwipeDistanceChanged = onSwipeDistanceChanged,
-            onSwipeFinished = onSwipeFinished,
-            onSwipeCancelled = onSwipeCancelled
+            isTapNavigationEnabled = isTapNavigationEnabled
         )
     }
 }
@@ -177,27 +176,12 @@ private fun ThreadMediaPreviewNavigationZone(
     onNavigate: () -> Unit,
     imageVector: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
-    isSwipeNavigationEnabled: Boolean,
-    isTapNavigationEnabled: Boolean,
-    onSwipeDistanceChanged: (Float) -> Unit,
-    onSwipeFinished: () -> Unit,
-    onSwipeCancelled: () -> Unit
+    isTapNavigationEnabled: Boolean
 ) {
     Box(
         modifier = Modifier
             .width(72.dp)
             .fillMaxHeight()
-            .pointerInput(navigationKey, isSwipeNavigationEnabled) {
-                if (!isSwipeNavigationEnabled) return@pointerInput
-                detectHorizontalDragGestures(
-                    onHorizontalDrag = { change, dragAmount ->
-                        change.consume()
-                        onSwipeDistanceChanged(dragAmount)
-                    },
-                    onDragEnd = onSwipeFinished,
-                    onDragCancel = onSwipeCancelled
-                )
-            }
             .pointerInput(navigationKey, isTapNavigationEnabled) {
                 if (!isTapNavigationEnabled) return@pointerInput
                 detectTapGestures(onTap = { onNavigate() })
@@ -216,6 +200,14 @@ private fun ThreadMediaPreviewNavigationZone(
                 contentDescription = contentDescription
             )
         }
+    }
+}
+
+@Composable
+private fun rememberSwipeNavigationThresholdPx(): Float {
+    val density = LocalDensity.current
+    return remember(density) {
+        density.run { 56.dp.toPx() }
     }
 }
 
