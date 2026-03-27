@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -61,7 +62,8 @@ internal fun VideoPreviewDialog(
         navigationKey = entry.url,
         onDismiss = onDismiss,
         onNavigateNext = onNavigateNext,
-        onNavigatePrevious = onNavigatePrevious
+        onNavigatePrevious = onNavigatePrevious,
+        navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp, bottom = 160.dp)
     ) { previewSize ->
         val videoContentModifier by remember(previewSize, videoSize) {
             derivedStateOf {

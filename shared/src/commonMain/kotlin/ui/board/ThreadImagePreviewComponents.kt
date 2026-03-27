@@ -82,6 +82,7 @@ internal fun ImagePreviewDialog(
         onNavigatePrevious = onNavigatePrevious,
         isSwipeNavigationEnabled = scale <= 1.05f,
         isTapNavigationEnabled = scale <= 1.05f,
+        navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp, bottom = 8.dp),
         containerModifier = Modifier.pointerInput(Unit) {
             detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
                 val updatedScale = (scale * zoom).coerceIn(1f, 6f)

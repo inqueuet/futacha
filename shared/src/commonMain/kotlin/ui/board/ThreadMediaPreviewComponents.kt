@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -86,6 +87,7 @@ internal fun ThreadMediaPreviewDialogFrame(
     onNavigatePrevious: () -> Unit,
     isSwipeNavigationEnabled: Boolean = true,
     isTapNavigationEnabled: Boolean = true,
+    navigationOverlayPadding: PaddingValues = PaddingValues(horizontal = 8.dp),
     containerModifier: Modifier = Modifier,
     content: @Composable BoxScope.(IntSize) -> Unit
 ) {
@@ -152,6 +154,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                     onNavigateNext = onNavigateNext,
                     onNavigatePrevious = onNavigatePrevious,
                     isTapNavigationEnabled = isTapNavigationEnabled,
+                    paddingValues = navigationOverlayPadding
                 )
             }
         }
@@ -164,11 +167,12 @@ private fun BoxScope.ThreadMediaPreviewNavigationOverlay(
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
     isTapNavigationEnabled: Boolean,
+    paddingValues: PaddingValues
 ) {
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 8.dp),
+            .padding(paddingValues),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
