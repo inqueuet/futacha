@@ -58,8 +58,8 @@ class GlobalSettingsSupportTest {
         )
         assertEquals(
             SaveDirectoryPickerState(
-                descriptionText = "ファイラーで選んだディレクトリを保存先に使います。パスが取得できない場合は手入力に切り替えてください。",
-                warningText = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
+                descriptionText = "選択したフォルダを保存先に使います。取得できない場合は手入力に切り替えてください。",
+                warningText = "※ 保存先アプリによってはフォルダ指定に制限があります。その場合は Files か手入力を利用してください。",
                 isPickerButtonEnabled = false,
                 showManualInputFallbackButton = true
             ),
@@ -387,6 +387,8 @@ class GlobalSettingsSupportTest {
     @Test
     fun globalSettingsDerivedSupport_buildsExpectedDerivedState() {
         val state = GlobalSettingsDerivedState(
+            behaviorText = resolveGlobalSettingsBehaviorText(isAndroidPlatform = true),
+            saveText = resolveGlobalSettingsSaveText(isAndroidPlatform = true),
             resolvedManualPath = resolveFallbackManualSavePathValue("Documents"),
             saveDestinationModeLabel = buildSaveDestinationModeLabelValue(
                 SaveDirectorySelection.MANUAL_INPUT,
@@ -415,6 +417,7 @@ class GlobalSettingsSupportTest {
 
         assertEquals("Documents/futacha/saved_threads", state.resolvedManualPath)
         assertEquals("手入力の保存先", state.saveDestinationModeLabel)
+        assertEquals("保存とファイラー", state.saveText.sectionTitle)
         assertTrue(state.settingsEntries.any { it.action == GlobalSettingsAction.Cookies })
         assertTrue(state.preferredFileManagerState.isConfigured)
         assertTrue(state.saveDirectoryPickerState.isPickerButtonEnabled)
@@ -486,6 +489,8 @@ class GlobalSettingsSupportTest {
             onClearPreferredFileManager = {}
         )
         val derivedState = GlobalSettingsDerivedState(
+            behaviorText = resolveGlobalSettingsBehaviorText(isAndroidPlatform = true),
+            saveText = resolveGlobalSettingsSaveText(isAndroidPlatform = true),
             resolvedManualPath = "/storage/emulated/0/Documents/futacha/saved_threads",
             saveDestinationModeLabel = "ファイラーで選んだ保存先",
             saveDestinationHint = "現在の保存先です。",
@@ -549,6 +554,7 @@ class GlobalSettingsSupportTest {
         val bindings = GlobalSettingsScaffoldBindings(
             appVersion = preferencesState.appVersion,
             behavior = GlobalSettingsBehaviorSectionBindings(
+                text = derivedState.behaviorText,
                 isBackgroundRefreshEnabled = preferencesState.isBackgroundRefreshEnabled,
                 onBackgroundRefreshChanged = preferencesCallbacks.onBackgroundRefreshChanged,
                 isAdsEnabled = preferencesState.isAdsEnabled,
@@ -565,26 +571,31 @@ class GlobalSettingsSupportTest {
                 threadMenuCallbacks = threadMenuCallbacks
             ),
             save = GlobalSettingsSaveSectionBindings(
-                preferredFileManagerState = derivedState.preferredFileManagerState,
-                onOpenFileManagerPicker = saveCallbacks.onOpenFileManagerPicker,
-                onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
-                availableSaveDirectorySelections = listOf(
-                    SaveDirectorySelection.MANUAL_INPUT,
-                    SaveDirectorySelection.PICKER
+                state = GlobalSettingsSaveSectionState(
+                    text = derivedState.saveText,
+                    preferredFileManagerState = derivedState.preferredFileManagerState,
+                    availableSaveDirectorySelections = listOf(
+                        SaveDirectorySelection.MANUAL_INPUT,
+                        SaveDirectorySelection.PICKER
+                    ),
+                    effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection,
+                    saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
+                    resolvedManualPath = derivedState.resolvedManualPath,
+                    saveDestinationHint = derivedState.saveDestinationHint,
+                    defaultSaveWarningText = derivedState.defaultAndroidSaveWarningText,
+                    manualSaveInput = "Download",
+                    saveDirectoryPickerState = derivedState.saveDirectoryPickerState
                 ),
-                effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection,
-                onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
-                saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
-                resolvedManualPath = derivedState.resolvedManualPath,
-                saveDestinationHint = derivedState.saveDestinationHint,
-                defaultAndroidSaveWarningText = derivedState.defaultAndroidSaveWarningText,
-                manualSaveInput = "Download",
-                onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
-                onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,
-                onUpdateManualSaveDirectory = saveCallbacks.onUpdateManualSaveDirectory,
-                saveDirectoryPickerState = derivedState.saveDirectoryPickerState,
-                onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
-                onFallbackToManualInput = saveCallbacks.onFallbackToManualInput
+                callbacks = GlobalSettingsSaveSectionCallbacks(
+                    onOpenFileManagerPicker = saveCallbacks.onOpenFileManagerPicker,
+                    onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
+                    onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+                    onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
+                    onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,
+                    onUpdateManualSaveDirectory = saveCallbacks.onUpdateManualSaveDirectory,
+                    onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+                    onFallbackToManualInput = saveCallbacks.onFallbackToManualInput
+                )
             ),
             cacheCallbacks = cacheCallbacks,
             storage = GlobalSettingsStorageSectionBindings(
@@ -605,9 +616,9 @@ class GlobalSettingsSupportTest {
         assertTrue(bindings.behavior.isLightweightModeEnabled)
         assertEquals(preferencesState.catalogNavEntries, bindings.catalogMenu.localCatalogNavEntries)
         assertEquals(preferencesState.threadMenuEntries, bindings.threadMenu.localThreadMenuEntries)
-        assertEquals("現在の設定: Files", bindings.save.preferredFileManagerState.currentSettingText)
-        assertEquals("Download", bindings.save.manualSaveInput)
-        assertEquals(SaveDirectorySelection.PICKER, bindings.save.effectiveSaveDirectorySelection)
+        assertEquals("現在の設定: Files", bindings.save.state.preferredFileManagerState.currentSettingText)
+        assertEquals("Download", bindings.save.state.manualSaveInput)
+        assertEquals(SaveDirectorySelection.PICKER, bindings.save.state.effectiveSaveDirectorySelection)
         assertEquals("履歴: 4件", bindings.storage.storageSummaryState.historyText)
         assertEquals(listOf(cookieSettingsEntry), bindings.links.settingsEntries)
         assertTrue(bindings.snackbarHostState === snackbarHostState)

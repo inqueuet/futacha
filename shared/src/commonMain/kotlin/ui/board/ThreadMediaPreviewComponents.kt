@@ -1,7 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,7 +89,6 @@ internal fun ThreadMediaPreviewDialogFrame(
     containerModifier: Modifier = Modifier,
     content: @Composable BoxScope.(IntSize) -> Unit
 ) {
-    var swipeDistance by remember(navigationKey) { mutableStateOf(0f) }
     var previewSize by remember { mutableStateOf(IntSize.Zero) }
     val swipeThresholdPx = rememberSwipeNavigationThresholdPx()
 
@@ -106,22 +107,41 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .onSizeChanged { previewSize = it }
                 .pointerInput(navigationKey, isSwipeNavigationEnabled) {
                     if (!isSwipeNavigationEnabled) return@pointerInput
-                    detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            swipeDistance += dragAmount
-                        },
-                        onDragEnd = {
-                            when {
-                                swipeDistance <= -swipeThresholdPx -> onNavigateNext()
-                                swipeDistance >= swipeThresholdPx -> onNavigatePrevious()
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                        )
+                        val pointerId = down.id
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        var cancelled = false
+
+                        while (true) {
+                            val event = awaitPointerEvent(
+                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                            )
+                            if (event.changes.count { it.pressed } > 1) {
+                                cancelled = true
+                                break
                             }
-                            swipeDistance = 0f
-                        },
-                        onDragCancel = {
-                            swipeDistance = 0f
+                            val change = event.changes.firstOrNull { it.id == pointerId }
+                                ?: event.changes.firstOrNull()
+                                ?: continue
+                            if (!change.pressed || event.changes.none { it.pressed }) {
+                                break
+                            }
+                            val delta = change.positionChange()
+                            totalDx += delta.x
+                            totalDy += delta.y
                         }
-                    )
+                        if (cancelled) return@awaitEachGesture
+                        when (resolveSwipeNavigationAction(totalDx, totalDy, swipeThresholdPx)) {
+                            SwipeNavigationAction.Next -> onNavigateNext()
+                            SwipeNavigationAction.Previous -> onNavigatePrevious()
+                            SwipeNavigationAction.None -> Unit
+                        }
+                    }
                 }
                 .then(containerModifier)
         ) {

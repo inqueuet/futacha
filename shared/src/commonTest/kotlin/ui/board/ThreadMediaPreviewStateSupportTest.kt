@@ -56,4 +56,40 @@ class ThreadMediaPreviewStateSupportTest {
         assertEquals(2, dialogState.totalCount)
         assertEquals(true, dialogState.isSaveEnabled)
     }
+
+    @Test
+    fun resolveSwipeNavigationAction_requires_horizontal_dominance_and_threshold() {
+        assertEquals(
+            SwipeNavigationAction.Next,
+            resolveSwipeNavigationAction(
+                totalDx = -96f,
+                totalDy = 18f,
+                thresholdPx = 56f
+            )
+        )
+        assertEquals(
+            SwipeNavigationAction.Previous,
+            resolveSwipeNavigationAction(
+                totalDx = 80f,
+                totalDy = 12f,
+                thresholdPx = 56f
+            )
+        )
+        assertEquals(
+            SwipeNavigationAction.None,
+            resolveSwipeNavigationAction(
+                totalDx = -40f,
+                totalDy = 5f,
+                thresholdPx = 56f
+            )
+        )
+        assertEquals(
+            SwipeNavigationAction.None,
+            resolveSwipeNavigationAction(
+                totalDx = -72f,
+                totalDy = 90f,
+                thresholdPx = 56f
+            )
+        )
+    }
 }

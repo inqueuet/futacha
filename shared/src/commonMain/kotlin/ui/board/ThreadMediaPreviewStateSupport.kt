@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import kotlin.math.abs
+
 internal data class ThreadMediaPreviewState(
     val previewMediaIndex: Int? = null
 )
@@ -130,4 +132,28 @@ internal fun previousMediaPreviewIndex(currentIndex: Int?, totalCount: Int): Int
     if (totalCount <= 0) return null
     val resolvedIndex = currentIndex ?: 0
     return (resolvedIndex + totalCount - 1) % totalCount
+}
+
+internal enum class SwipeNavigationAction {
+    None,
+    Next,
+    Previous
+}
+
+internal fun resolveSwipeNavigationAction(
+    totalDx: Float,
+    totalDy: Float,
+    thresholdPx: Float
+): SwipeNavigationAction {
+    if (thresholdPx <= 0f) return SwipeNavigationAction.None
+    val horizontalDistance = abs(totalDx)
+    val verticalDistance = abs(totalDy)
+    if (horizontalDistance < thresholdPx || horizontalDistance <= verticalDistance) {
+        return SwipeNavigationAction.None
+    }
+    return if (totalDx < 0f) {
+        SwipeNavigationAction.Next
+    } else {
+        SwipeNavigationAction.Previous
+    }
 }
