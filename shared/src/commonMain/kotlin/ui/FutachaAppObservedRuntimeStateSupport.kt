@@ -6,8 +6,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
@@ -38,6 +42,10 @@ internal data class FutachaObservedRuntimeState(
     val attachmentPickerPreference: AttachmentPickerPreference,
     val saveDirectorySelection: SaveDirectorySelection,
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
+    val themeMode: ThemeMode = ThemeMode.System,
+    val themePalette: ThemePalette = ThemePalette.Current,
+    val appIconVariant: AppIconVariant = AppIconVariant.Current,
+    val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
     val preferredFileManager: PreferredFileManager?,
     val appVersion: String,
     val resolvedManualSaveDirectory: String?
@@ -98,6 +106,18 @@ internal fun rememberFutachaObservedRuntimeState(
     val threadGalleryTapAction by stateStore.threadGalleryTapAction.collectAsState(
         initial = ThreadGalleryTapAction.OpenMedia
     )
+    val themeMode by stateStore.themeMode.collectAsState(
+        initial = ThemeMode.System
+    )
+    val themePalette by stateStore.themePalette.collectAsState(
+        initial = ThemePalette.Current
+    )
+    val appIconVariant by stateStore.appIconVariant.collectAsState(
+        initial = AppIconVariant.Current
+    )
+    val threadDisplayMode by stateStore.threadDisplayMode.collectAsState(
+        initial = ThreadDisplayMode.Flat
+    )
     val preferredFileManagerFlow = remember(stateStore) { stateStore.getPreferredFileManager() }
     val preferredFileManager by preferredFileManagerFlow.collectAsState(initial = null)
     val appVersion = remember(versionChecker) {
@@ -123,6 +143,10 @@ internal fun rememberFutachaObservedRuntimeState(
         attachmentPickerPreference,
         saveDirectorySelection,
         threadGalleryTapAction,
+        themeMode,
+        themePalette,
+        appIconVariant,
+        threadDisplayMode,
         preferredFileManager,
         appVersion,
         resolvedManualSaveDirectory
@@ -140,6 +164,10 @@ internal fun rememberFutachaObservedRuntimeState(
             attachmentPickerPreference = attachmentPickerPreference,
             saveDirectorySelection = saveDirectorySelection,
             threadGalleryTapAction = threadGalleryTapAction,
+            themeMode = themeMode,
+            themePalette = themePalette,
+            appIconVariant = appIconVariant,
+            threadDisplayMode = threadDisplayMode,
             preferredFileManager = preferredFileManager,
             appVersion = appVersion,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory

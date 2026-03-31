@@ -1,9 +1,13 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
@@ -173,6 +177,10 @@ class AppStateStore internal constructor(
     val attachmentPickerPreference: Flow<AttachmentPickerPreference> = preferenceFlows.attachmentPickerPreference
     val saveDirectorySelection: Flow<SaveDirectorySelection> = preferenceFlows.saveDirectorySelection
     val threadGalleryTapAction: Flow<ThreadGalleryTapAction> = preferenceFlows.threadGalleryTapAction
+    val themeMode: Flow<ThemeMode> = preferenceFlows.themeMode
+    val themePalette: Flow<ThemePalette> = preferenceFlows.themePalette
+    val appIconVariant: Flow<AppIconVariant> = preferenceFlows.appIconVariant
+    val threadDisplayMode: Flow<ThreadDisplayMode> = preferenceFlows.threadDisplayMode
     val lastUsedDeleteKey: Flow<String> = preferenceFlows.lastUsedDeleteKey
 
     val catalogModes: Flow<Map<String, CatalogMode>> = preferenceFlows.catalogModes
@@ -247,6 +255,18 @@ class AppStateStore internal constructor(
 
     suspend fun setThreadGalleryTapAction(action: ThreadGalleryTapAction) =
         preferenceOperations.setThreadGalleryTapAction(action)
+
+    suspend fun setThemeMode(mode: ThemeMode) =
+        preferenceOperations.setThemeMode(mode)
+
+    suspend fun setThemePalette(palette: ThemePalette) =
+        preferenceOperations.setThemePalette(palette)
+
+    suspend fun setAppIconVariant(variant: AppIconVariant) =
+        preferenceOperations.setAppIconVariant(variant)
+
+    suspend fun setThreadDisplayMode(mode: ThreadDisplayMode) =
+        preferenceOperations.setThreadDisplayMode(mode)
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) =
         preferenceOperations.setPreferredFileManager(packageName, label)
@@ -400,6 +420,10 @@ internal interface PlatformStateStorage {
     val attachmentPickerPreference: Flow<String?>
     val saveDirectorySelection: Flow<String?>
     val threadGalleryTapAction: Flow<String?>
+    val themeMode: Flow<String?>
+    val themePalette: Flow<String?>
+    val appIconVariant: Flow<String?>
+    val threadDisplayMode: Flow<String?>
     val lastUsedDeleteKey: Flow<String?>
     val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
@@ -427,6 +451,10 @@ internal interface PlatformStateStorage {
     suspend fun updateAttachmentPickerPreference(preference: String)
     suspend fun updateSaveDirectorySelection(selection: String)
     suspend fun updateThreadGalleryTapAction(action: String)
+    suspend fun updateThemeMode(mode: String)
+    suspend fun updateThemePalette(palette: String)
+    suspend fun updateAppIconVariant(variant: String)
+    suspend fun updateThreadDisplayMode(mode: String)
     suspend fun updateLastUsedDeleteKey(value: String)
     suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)

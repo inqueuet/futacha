@@ -5,6 +5,7 @@ import androidx.compose.material3.DrawerState
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.lazy.LazyListState
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -41,6 +42,7 @@ internal data class ThreadScreenHostRuntimeInputs(
     val uiState: ThreadUiState,
     val refreshThread: () -> Unit,
     val threadFilterBinding: ThreadFilterUiStateBinding,
+    val threadDisplayMode: ThreadDisplayMode,
     val persistedSelfPostIdentifiers: List<String>,
     val ngHeaders: List<String>,
     val ngWords: List<String>,
@@ -130,6 +132,7 @@ internal data class ThreadScreenHostContentInputs(
     val uiState: ThreadUiState,
     val refreshThread: () -> Unit,
     val threadFilterBinding: ThreadFilterUiStateBinding,
+    val threadDisplayMode: ThreadDisplayMode,
     val persistedSelfPostIdentifiers: List<String>,
     val ngHeaders: List<String>,
     val ngWords: List<String>,
@@ -229,6 +232,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             uiState = contentInputs.uiState,
             refreshThread = contentInputs.refreshThread,
             threadFilterBinding = contentInputs.threadFilterBinding,
+            threadDisplayMode = contentInputs.threadDisplayMode,
             persistedSelfPostIdentifiers = contentInputs.persistedSelfPostIdentifiers,
             ngHeaders = contentInputs.ngHeaders,
             ngWords = contentInputs.ngWords,
@@ -335,6 +339,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             uiState = inputs.uiState,
             refreshThread = inputs.refreshThread,
             threadFilterBinding = inputs.threadFilterBinding,
+            threadDisplayMode = inputs.preferencesState.threadDisplayMode,
             persistedSelfPostIdentifiers = inputs.persistedSelfPostIdentifiers,
             ngHeaders = inputs.ngHeaders,
             ngWords = inputs.ngWords,

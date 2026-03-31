@@ -44,6 +44,10 @@ private class AndroidPlatformStateStorage(
     private val attachmentPickerPreferenceKey = stringPreferencesKey("attachment_picker_preference")
     private val saveDirectorySelectionKey = stringPreferencesKey("save_directory_selection")
     private val threadGalleryTapActionKey = stringPreferencesKey("thread_gallery_tap_action")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
+    private val themePaletteKey = stringPreferencesKey("theme_palette")
+    private val appIconVariantKey = stringPreferencesKey("app_icon_variant")
+    private val threadDisplayModeKey = stringPreferencesKey("thread_display_mode")
     private val catalogModeMapKey = stringPreferencesKey("catalog_mode_map_json")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
@@ -127,6 +131,18 @@ private class AndroidPlatformStateStorage(
 
     override val threadGalleryTapAction: Flow<String?> =
         safeData.map { prefs -> prefs[threadGalleryTapActionKey] }
+
+    override val themeMode: Flow<String?> =
+        safeData.map { prefs -> prefs[themeModeKey] }
+
+    override val themePalette: Flow<String?> =
+        safeData.map { prefs -> prefs[themePaletteKey] }
+
+    override val appIconVariant: Flow<String?> =
+        safeData.map { prefs -> prefs[appIconVariantKey] }
+
+    override val threadDisplayMode: Flow<String?> =
+        safeData.map { prefs -> prefs[threadDisplayModeKey] }
 
     override val catalogModeMapJson: Flow<String?> =
         safeData.map { prefs -> prefs[catalogModeMapKey] }
@@ -275,6 +291,10 @@ private class AndroidPlatformStateStorage(
             threadGalleryTapActionKey,
             seedBundles.preferences.threadGalleryTapAction
         )
+        seedOptionalStringPreference(themeModeKey, seedBundles.preferences.themeMode)
+        seedOptionalStringPreference(themePaletteKey, seedBundles.preferences.themePalette)
+        seedOptionalStringPreference(appIconVariantKey, seedBundles.preferences.appIconVariant)
+        seedOptionalStringPreference(threadDisplayModeKey, seedBundles.preferences.threadDisplayMode)
         seedOptionalStringPreference(
             lastUsedDeleteKeyPreferencesKey,
             seedBundles.preferences.lastUsedDeleteKey
@@ -381,6 +401,42 @@ private class AndroidPlatformStateStorage(
             action,
             "thread gallery tap action",
             "Failed to save thread gallery tap action"
+        )
+    }
+
+    override suspend fun updateThemeMode(mode: String) {
+        updateStringPreference(
+            themeModeKey,
+            mode,
+            "theme mode",
+            "Failed to save theme mode"
+        )
+    }
+
+    override suspend fun updateThemePalette(palette: String) {
+        updateStringPreference(
+            themePaletteKey,
+            palette,
+            "theme palette",
+            "Failed to save theme palette"
+        )
+    }
+
+    override suspend fun updateAppIconVariant(variant: String) {
+        updateStringPreference(
+            appIconVariantKey,
+            variant,
+            "app icon variant",
+            "Failed to save app icon variant"
+        )
+    }
+
+    override suspend fun updateThreadDisplayMode(mode: String) {
+        updateStringPreference(
+            threadDisplayModeKey,
+            mode,
+            "thread display mode",
+            "Failed to save thread display mode"
         )
     }
 

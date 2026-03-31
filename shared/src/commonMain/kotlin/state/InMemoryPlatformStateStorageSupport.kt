@@ -19,6 +19,10 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val attachmentPickerPreferenceState = MutableStateFlow<String?>(null)
     val saveDirectorySelectionState = MutableStateFlow<String?>(null)
     val threadGalleryTapActionState = MutableStateFlow<String?>(null)
+    val themeModeState = MutableStateFlow<String?>(null)
+    val themePaletteState = MutableStateFlow<String?>(null)
+    val appIconVariantState = MutableStateFlow<String?>(null)
+    val threadDisplayModeState = MutableStateFlow<String?>(null)
     val lastUsedDeleteKeyState = MutableStateFlow<String?>(null)
     val catalogModeMapState = MutableStateFlow<String?>(null)
     val catalogDisplayStyleState = MutableStateFlow<String?>(null)
@@ -46,6 +50,10 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
     override val threadGalleryTapAction: Flow<String?> = threadGalleryTapActionState
+    override val themeMode: Flow<String?> = themeModeState
+    override val themePalette: Flow<String?> = themePaletteState
+    override val appIconVariant: Flow<String?> = appIconVariantState
+    override val threadDisplayMode: Flow<String?> = threadDisplayModeState
     override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = catalogDisplayStyleState
@@ -73,6 +81,10 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override suspend fun updateAttachmentPickerPreference(preference: String) { attachmentPickerPreferenceState.value = preference }
     override suspend fun updateSaveDirectorySelection(selection: String) { saveDirectorySelectionState.value = selection }
     override suspend fun updateThreadGalleryTapAction(action: String) { threadGalleryTapActionState.value = action }
+    override suspend fun updateThemeMode(mode: String) { themeModeState.value = mode }
+    override suspend fun updateThemePalette(palette: String) { themePaletteState.value = palette }
+    override suspend fun updateAppIconVariant(variant: String) { appIconVariantState.value = variant }
+    override suspend fun updateThreadDisplayMode(mode: String) { threadDisplayModeState.value = mode }
     override suspend fun updateLastUsedDeleteKey(value: String) { lastUsedDeleteKeyState.value = value }
     override suspend fun updateCatalogModeMapJson(value: String) { catalogModeMapState.value = value }
     override suspend fun updateCatalogDisplayStyle(style: String) { catalogDisplayStyleState.value = style }
@@ -120,6 +132,18 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
             }
             if (threadGalleryTapActionState.value == null) {
                 threadGalleryTapActionState.value = seedBundles.preferences.threadGalleryTapAction
+            }
+            if (themeModeState.value == null) {
+                themeModeState.value = seedBundles.preferences.themeMode
+            }
+            if (themePaletteState.value == null) {
+                themePaletteState.value = seedBundles.preferences.themePalette
+            }
+            if (appIconVariantState.value == null) {
+                appIconVariantState.value = seedBundles.preferences.appIconVariant
+            }
+            if (threadDisplayModeState.value == null) {
+                threadDisplayModeState.value = seedBundles.preferences.threadDisplayMode
             }
             if (lastUsedDeleteKeyState.value == null) {
                 lastUsedDeleteKeyState.value = seedBundles.preferences.lastUsedDeleteKey

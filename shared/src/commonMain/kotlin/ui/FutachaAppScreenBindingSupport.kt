@@ -1,8 +1,12 @@
 package com.valoser.futacha.shared.ui
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
@@ -26,6 +30,10 @@ internal data class FutachaScreenPreferencesStateInputs(
     val attachmentPickerPreference: AttachmentPickerPreference,
     val saveDirectorySelection: SaveDirectorySelection,
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
+    val themeMode: ThemeMode = ThemeMode.System,
+    val themePalette: ThemePalette = ThemePalette.Current,
+    val appIconVariant: AppIconVariant = AppIconVariant.Current,
+    val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
     val preferredFileManagerPackage: String?,
     val preferredFileManagerLabel: String?,
     val threadMenuEntries: List<ThreadMenuEntryConfig>,
@@ -93,6 +101,10 @@ internal fun buildFutachaScreenPreferencesState(
         attachmentPickerPreference = inputs.attachmentPickerPreference,
         saveDirectorySelection = inputs.saveDirectorySelection,
         threadGalleryTapAction = inputs.threadGalleryTapAction,
+        themeMode = inputs.themeMode,
+        themePalette = inputs.themePalette,
+        appIconVariant = inputs.appIconVariant,
+        threadDisplayMode = inputs.threadDisplayMode,
         preferredFileManagerPackage = inputs.preferredFileManagerPackage,
         preferredFileManagerLabel = inputs.preferredFileManagerLabel,
         threadMenuEntries = inputs.threadMenuEntries,
@@ -111,6 +123,10 @@ internal fun buildFutachaScreenPreferencesCallbacks(
         onAttachmentPickerPreferenceChanged = inputs.preferenceMutations.onAttachmentPickerPreferenceChanged,
         onSaveDirectorySelectionChanged = inputs.preferenceMutations.onSaveDirectorySelectionChanged,
         onThreadGalleryTapActionChanged = inputs.preferenceMutations.onThreadGalleryTapActionChanged,
+        onThemeModeChanged = inputs.preferenceMutations.onThemeModeChanged,
+        onThemePaletteChanged = inputs.preferenceMutations.onThemePaletteChanged,
+        onAppIconVariantChanged = inputs.preferenceMutations.onAppIconVariantChanged,
+        onThreadDisplayModeChanged = inputs.preferenceMutations.onThreadDisplayModeChanged,
         onOpenSaveDirectoryPicker = inputs.onOpenSaveDirectoryPicker,
         onFileManagerSelected = inputs.preferenceMutations.onFileManagerSelected,
         onClearPreferredFileManager = inputs.preferenceMutations.onClearPreferredFileManager,

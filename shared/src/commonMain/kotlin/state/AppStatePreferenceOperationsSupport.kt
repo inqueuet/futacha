@@ -1,10 +1,14 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
@@ -116,6 +120,22 @@ internal class AppStatePreferenceOperations(
 
     suspend fun setThreadGalleryTapAction(action: ThreadGalleryTapAction) {
         setSimple(action.name, storage::updateThreadGalleryTapAction, "thread gallery tap action")
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        setSimple(mode.name, storage::updateThemeMode, "theme mode")
+    }
+
+    suspend fun setThemePalette(palette: ThemePalette) {
+        setSimple(palette.name, storage::updateThemePalette, "theme palette")
+    }
+
+    suspend fun setAppIconVariant(variant: AppIconVariant) {
+        setSimple(variant.name, storage::updateAppIconVariant, "app icon variant")
+    }
+
+    suspend fun setThreadDisplayMode(mode: ThreadDisplayMode) {
+        setSimple(mode.name, storage::updateThreadDisplayMode, "thread display mode")
     }
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) {

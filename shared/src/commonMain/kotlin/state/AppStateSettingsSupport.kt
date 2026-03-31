@@ -1,8 +1,12 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
@@ -141,6 +145,30 @@ internal fun decodeThreadGalleryTapActionValue(raw: String?): ThreadGalleryTapAc
     return runCatching {
         raw?.let { ThreadGalleryTapAction.valueOf(it) }
     }.getOrNull() ?: ThreadGalleryTapAction.OpenMedia
+}
+
+internal fun decodeThemeModeValue(raw: String?): ThemeMode {
+    return runCatching {
+        raw?.let { ThemeMode.valueOf(it) }
+    }.getOrNull() ?: ThemeMode.System
+}
+
+internal fun decodeThemePaletteValue(raw: String?): ThemePalette {
+    return runCatching {
+        raw?.let { ThemePalette.valueOf(it) }
+    }.getOrNull() ?: ThemePalette.Current
+}
+
+internal fun decodeAppIconVariantValue(raw: String?): AppIconVariant {
+    return runCatching {
+        raw?.let { AppIconVariant.valueOf(it) }
+    }.getOrNull() ?: AppIconVariant.Current
+}
+
+internal fun decodeThreadDisplayModeValue(raw: String?): ThreadDisplayMode {
+    return runCatching {
+        raw?.let { ThreadDisplayMode.valueOf(it) }
+    }.getOrNull() ?: ThreadDisplayMode.Flat
 }
 
 internal fun decodeThreadMenuConfigValue(

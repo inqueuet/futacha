@@ -1,9 +1,13 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
@@ -26,6 +30,10 @@ internal data class AppStatePreferenceFlows(
     val attachmentPickerPreference: Flow<AttachmentPickerPreference>,
     val saveDirectorySelection: Flow<SaveDirectorySelection>,
     val threadGalleryTapAction: Flow<ThreadGalleryTapAction>,
+    val themeMode: Flow<ThemeMode>,
+    val themePalette: Flow<ThemePalette>,
+    val appIconVariant: Flow<AppIconVariant>,
+    val threadDisplayMode: Flow<ThreadDisplayMode>,
     val lastUsedDeleteKey: Flow<String>,
     val catalogModes: Flow<Map<String, CatalogMode>>,
     val catalogDisplayStyle: Flow<CatalogDisplayStyle>,
@@ -81,6 +89,18 @@ internal fun buildAppStatePreferenceFlows(
             .distinctUntilChanged(),
         threadGalleryTapAction = storage.threadGalleryTapAction
             .map { raw -> decodeThreadGalleryTapActionValue(raw) }
+            .distinctUntilChanged(),
+        themeMode = storage.themeMode
+            .map { raw -> decodeThemeModeValue(raw) }
+            .distinctUntilChanged(),
+        themePalette = storage.themePalette
+            .map { raw -> decodeThemePaletteValue(raw) }
+            .distinctUntilChanged(),
+        appIconVariant = storage.appIconVariant
+            .map { raw -> decodeAppIconVariantValue(raw) }
+            .distinctUntilChanged(),
+        threadDisplayMode = storage.threadDisplayMode
+            .map { raw -> decodeThreadDisplayModeValue(raw) }
             .distinctUntilChanged(),
         lastUsedDeleteKey = storage.lastUsedDeleteKey
             .map { raw -> raw?.take(8).orEmpty() }

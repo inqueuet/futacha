@@ -1,7 +1,11 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
@@ -21,6 +25,10 @@ data class ScreenPreferencesState(
     val attachmentPickerPreference: AttachmentPickerPreference = AttachmentPickerPreference.MEDIA,
     val saveDirectorySelection: SaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT,
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
+    val themeMode: ThemeMode = ThemeMode.System,
+    val themePalette: ThemePalette = ThemePalette.Current,
+    val appIconVariant: AppIconVariant = AppIconVariant.Current,
+    val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
     val preferredFileManagerPackage: String? = null,
     val preferredFileManagerLabel: String? = null,
     val threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
@@ -35,6 +43,10 @@ data class ScreenPreferencesCallbacks(
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},
     val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {},
+    val onThemeModeChanged: (ThemeMode) -> Unit = {},
+    val onThemePaletteChanged: (ThemePalette) -> Unit = {},
+    val onAppIconVariantChanged: (AppIconVariant) -> Unit = {},
+    val onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit = {},
     val onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     val onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     val onClearPreferredFileManager: (() -> Unit)? = null,

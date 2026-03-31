@@ -23,6 +23,10 @@ private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
 private const val SAVE_DIRECTORY_SELECTION_KEY = "save_directory_selection"
 private const val THREAD_GALLERY_TAP_ACTION_KEY = "thread_gallery_tap_action"
+private const val THEME_MODE_KEY = "theme_mode"
+private const val THEME_PALETTE_KEY = "theme_palette"
+private const val APP_ICON_VARIANT_KEY = "app_icon_variant"
+private const val THREAD_DISPLAY_MODE_KEY = "thread_display_mode"
 private const val CATALOG_MODE_MAP_KEY = "catalog_mode_map_json"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
@@ -64,6 +68,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val attachmentPickerPreferenceState = MutableStateFlow(readStringState(ATTACHMENT_PICKER_PREF_KEY))
     private val saveDirectorySelectionState = MutableStateFlow(readStringState(SAVE_DIRECTORY_SELECTION_KEY))
     private val threadGalleryTapActionState = MutableStateFlow(readStringState(THREAD_GALLERY_TAP_ACTION_KEY))
+    private val themeModeState = MutableStateFlow(readStringState(THEME_MODE_KEY))
+    private val themePaletteState = MutableStateFlow(readStringState(THEME_PALETTE_KEY))
+    private val appIconVariantState = MutableStateFlow(readStringState(APP_ICON_VARIANT_KEY))
+    private val threadDisplayModeState = MutableStateFlow(readStringState(THREAD_DISPLAY_MODE_KEY))
     private val catalogModeMapState = MutableStateFlow(readStringState(CATALOG_MODE_MAP_KEY))
     private val ngHeadersState = MutableStateFlow(readStringState(NG_HEADERS_KEY))
     private val ngWordsState = MutableStateFlow(readStringState(NG_WORDS_KEY))
@@ -89,6 +97,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
     override val threadGalleryTapAction: Flow<String?> = threadGalleryTapActionState
+    override val themeMode: Flow<String?> = themeModeState
+    override val themePalette: Flow<String?> = themePaletteState
+    override val appIconVariant: Flow<String?> = appIconVariantState
+    override val threadDisplayMode: Flow<String?> = threadDisplayModeState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = displayStyleState
     override val catalogGridColumns: Flow<String?> = gridColumnsState
@@ -328,6 +340,26 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             threadGalleryTapActionState
         )
         seedOptionalStringState(
+            THEME_MODE_KEY,
+            seedBundles.preferences.themeMode,
+            themeModeState
+        )
+        seedOptionalStringState(
+            THEME_PALETTE_KEY,
+            seedBundles.preferences.themePalette,
+            themePaletteState
+        )
+        seedOptionalStringState(
+            APP_ICON_VARIANT_KEY,
+            seedBundles.preferences.appIconVariant,
+            appIconVariantState
+        )
+        seedOptionalStringState(
+            THREAD_DISPLAY_MODE_KEY,
+            seedBundles.preferences.threadDisplayMode,
+            threadDisplayModeState
+        )
+        seedOptionalStringState(
             THREAD_MENU_CONFIG_KEY,
             seedBundles.preferences.threadMenuConfigJson,
             threadMenuConfigState
@@ -412,6 +444,22 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             action,
             threadGalleryTapActionState
         )
+    }
+
+    override suspend fun updateThemeMode(mode: String) {
+        updateStringState(THEME_MODE_KEY, mode, themeModeState)
+    }
+
+    override suspend fun updateThemePalette(palette: String) {
+        updateStringState(THEME_PALETTE_KEY, palette, themePaletteState)
+    }
+
+    override suspend fun updateAppIconVariant(variant: String) {
+        updateStringState(APP_ICON_VARIANT_KEY, variant, appIconVariantState)
+    }
+
+    override suspend fun updateThreadDisplayMode(mode: String) {
+        updateStringState(THREAD_DISPLAY_MODE_KEY, mode, threadDisplayModeState)
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {

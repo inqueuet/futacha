@@ -792,7 +792,10 @@ private fun ThreadScreenContent(
     }
 
     val appColorScheme = MaterialTheme.colorScheme
-    val futabaThreadColorScheme = rememberFutabaThreadColorScheme(appColorScheme)
+    val futabaThreadColorScheme = rememberFutabaThreadColorScheme(
+        palette = preferencesState.themePalette,
+        base = appColorScheme
+    )
     val historyDrawerCallbacks = interactionUiHandles.historyDrawerCallbacks
     val readAloudIndicatorSegment = (readAloudStatus as? ReadAloudStatus.Speaking)?.segment
     val replyDialogState = replyDialogBinding.currentState()
@@ -836,6 +839,7 @@ private fun ThreadScreenContent(
             uiState = uiState.value,
             refreshThread = refreshThread,
             threadFilterBinding = threadFilterBinding,
+            threadDisplayMode = preferencesState.threadDisplayMode,
             persistedSelfPostIdentifiers = persistedSelfPostIdentifiers,
             ngHeaders = ngHeaders,
             ngWords = ngWords,

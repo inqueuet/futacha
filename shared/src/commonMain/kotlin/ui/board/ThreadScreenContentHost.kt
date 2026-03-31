@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.withFrameNanos
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -18,6 +19,7 @@ internal data class ThreadScreenContentHostBindings(
     val uiState: ThreadUiState,
     val refreshThread: () -> Unit,
     val threadFilterBinding: ThreadFilterUiStateBinding,
+    val threadDisplayMode: ThreadDisplayMode,
     val persistedSelfPostIdentifiers: List<String>,
     val ngHeaders: List<String>,
     val ngWords: List<String>,
@@ -150,37 +152,59 @@ internal fun ThreadScreenContentHost(
                 }
                 bindings.threadFilterCache[filterCacheKey] = value
             }
-            ThreadContent(
-                page = filteredPage,
-                embeddedHtml = state.embeddedHtml,
-                listState = bindings.lazyListState,
-                saidaneOverrides = bindings.saidaneOverrides,
-                selfPostIdentifiers = bindings.selfPostIdentifierSet,
-                searchHighlightRanges = bindings.postHighlightRanges,
-                onPostLongPress = { post ->
-                    bindings.setPostOverlayState(
-                        openThreadPostActionOverlay(
-                            currentState = bindings.postOverlayState,
-                            post = post
-                        )
+            val onPostLongPress: (Post) -> Unit = { post ->
+                bindings.setPostOverlayState(
+                    openThreadPostActionOverlay(
+                        currentState = bindings.postOverlayState,
+                        post = post
                     )
-                },
-                onQuoteRequestedForPost = { post ->
-                    bindings.setPostOverlayState(
-                        openThreadQuoteOverlay(
-                            currentState = bindings.postOverlayState,
-                            post = post
-                        )
+                )
+            }
+            val onQuoteRequestedForPost: (Post) -> Unit = { post ->
+                bindings.setPostOverlayState(
+                    openThreadQuoteOverlay(
+                        currentState = bindings.postOverlayState,
+                        post = post
                     )
-                },
-                onSaidaneClick = bindings.onSaidaneClick,
-                onMediaClick = bindings.onMediaClick,
-                onMediaLongPress = bindings.onMediaLongPress,
-                onUrlClick = bindings.onUrlClick,
-                onRefresh = bindings.onRefresh,
-                isRefreshing = bindings.isRefreshing,
-                modifier = modifier.fillMaxSize()
-            )
+                )
+            }
+            when (bindings.threadDisplayMode) {
+                ThreadDisplayMode.Flat -> ThreadContent(
+                    page = filteredPage,
+                    embeddedHtml = state.embeddedHtml,
+                    listState = bindings.lazyListState,
+                    saidaneOverrides = bindings.saidaneOverrides,
+                    selfPostIdentifiers = bindings.selfPostIdentifierSet,
+                    searchHighlightRanges = bindings.postHighlightRanges,
+                    onPostLongPress = onPostLongPress,
+                    onQuoteRequestedForPost = onQuoteRequestedForPost,
+                    onSaidaneClick = bindings.onSaidaneClick,
+                    onMediaClick = bindings.onMediaClick,
+                    onMediaLongPress = bindings.onMediaLongPress,
+                    onUrlClick = bindings.onUrlClick,
+                    onRefresh = bindings.onRefresh,
+                    isRefreshing = bindings.isRefreshing,
+                    modifier = modifier.fillMaxSize()
+                )
+
+                ThreadDisplayMode.Tree -> ThreadTreeContent(
+                    page = filteredPage,
+                    embeddedHtml = state.embeddedHtml,
+                    listState = bindings.lazyListState,
+                    saidaneOverrides = bindings.saidaneOverrides,
+                    selfPostIdentifiers = bindings.selfPostIdentifierSet,
+                    searchHighlightRanges = bindings.postHighlightRanges,
+                    onPostLongPress = onPostLongPress,
+                    onQuoteRequestedForPost = onQuoteRequestedForPost,
+                    onSaidaneClick = bindings.onSaidaneClick,
+                    onMediaClick = bindings.onMediaClick,
+                    onMediaLongPress = bindings.onMediaLongPress,
+                    onUrlClick = bindings.onUrlClick,
+                    onRefresh = bindings.onRefresh,
+                    isRefreshing = bindings.isRefreshing,
+                    modifier = modifier.fillMaxSize()
+                )
+            }
         }
     }
 }

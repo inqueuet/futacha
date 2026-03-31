@@ -1,7 +1,11 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.material3.SnackbarHostState
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -15,7 +19,15 @@ internal data class GlobalSettingsBehaviorSectionBindings(
     val isLightweightModeEnabled: Boolean,
     val onLightweightModeChanged: (Boolean) -> Unit,
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
-    val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {}
+    val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {},
+    val themeMode: ThemeMode = ThemeMode.System,
+    val onThemeModeChanged: (ThemeMode) -> Unit = {},
+    val themePalette: ThemePalette = ThemePalette.Current,
+    val onThemePaletteChanged: (ThemePalette) -> Unit = {},
+    val appIconVariant: AppIconVariant = AppIconVariant.Current,
+    val onAppIconVariantChanged: (AppIconVariant) -> Unit = {},
+    val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
+    val onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit = {}
 )
 
 internal data class GlobalSettingsCatalogMenuSectionBindings(
@@ -112,7 +124,15 @@ internal fun buildGlobalSettingsBehaviorSectionBindings(
         isLightweightModeEnabled = preferencesState.isLightweightModeEnabled,
         onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged,
         threadGalleryTapAction = preferencesState.threadGalleryTapAction,
-        onThreadGalleryTapActionChanged = preferencesCallbacks.onThreadGalleryTapActionChanged
+        onThreadGalleryTapActionChanged = preferencesCallbacks.onThreadGalleryTapActionChanged,
+        themeMode = preferencesState.themeMode,
+        onThemeModeChanged = preferencesCallbacks.onThemeModeChanged,
+        themePalette = preferencesState.themePalette,
+        onThemePaletteChanged = preferencesCallbacks.onThemePaletteChanged,
+        appIconVariant = preferencesState.appIconVariant,
+        onAppIconVariantChanged = preferencesCallbacks.onAppIconVariantChanged,
+        threadDisplayMode = preferencesState.threadDisplayMode,
+        onThreadDisplayModeChanged = preferencesCallbacks.onThreadDisplayModeChanged
     )
 }
 

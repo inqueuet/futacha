@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PrivacyTip
@@ -36,6 +37,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.AppIconVariant
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 
 internal data class GlobalSettingsEntry(
@@ -119,7 +124,15 @@ internal fun GlobalSettingsScaffold(
                     isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
                     onLightweightModeChanged = bindings.behavior.onLightweightModeChanged,
                     threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,
-                    onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged
+                    onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged,
+                    themeMode = bindings.behavior.themeMode,
+                    onThemeModeChanged = bindings.behavior.onThemeModeChanged,
+                    themePalette = bindings.behavior.themePalette,
+                    onThemePaletteChanged = bindings.behavior.onThemePaletteChanged,
+                    appIconVariant = bindings.behavior.appIconVariant,
+                    onAppIconVariantChanged = bindings.behavior.onAppIconVariantChanged,
+                    threadDisplayMode = bindings.behavior.threadDisplayMode,
+                    onThreadDisplayModeChanged = bindings.behavior.onThreadDisplayModeChanged
                 )
             }
             item {
@@ -214,13 +227,116 @@ internal fun GlobalSettingsBehaviorSection(
     isLightweightModeEnabled: Boolean,
     onLightweightModeChanged: (Boolean) -> Unit,
     threadGalleryTapAction: ThreadGalleryTapAction,
-    onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit
+    onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit,
+    themeMode: ThemeMode,
+    onThemeModeChanged: (ThemeMode) -> Unit,
+    themePalette: ThemePalette,
+    onThemePaletteChanged: (ThemePalette) -> Unit,
+    appIconVariant: AppIconVariant,
+    onAppIconVariantChanged: (AppIconVariant) -> Unit,
+    threadDisplayMode: ThreadDisplayMode,
+    onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit
 ) {
     SettingsSection(
         title = "動作",
-        icon = Icons.Rounded.WatchLater,
-        description = "履歴更新と軽量化の挙動をまとめています。"
+        icon = Icons.Rounded.Palette,
+        description = "テーマ、アイコン、表示モードと基本動作をまとめています。"
     ) {
+        ListItem(
+            headlineContent = { Text("テーマモード") },
+            supportingContent = {
+                Text(
+                    text = "ライト / ダークを固定するか、端末設定に合わせます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        ThemeMode.entries.forEach { mode ->
+            GlobalSettingsRadioOptionRow(
+                label = mode.label,
+                description = when (mode) {
+                    ThemeMode.System -> "端末のライト / ダーク設定に追従します。"
+                    ThemeMode.Light -> "常にライトテーマで表示します。"
+                    ThemeMode.Dark -> "常にダークテーマで表示します。"
+                },
+                selected = themeMode == mode,
+                onClick = { onThemeModeChanged(mode) }
+            )
+        }
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("テーマ種類") },
+            supportingContent = {
+                Text(
+                    text = "現在の見た目に加えて、ふたばクラシックとミッドナイトを選べます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        ThemePalette.entries.forEach { palette ->
+            GlobalSettingsRadioOptionRow(
+                label = palette.label,
+                description = when (palette) {
+                    ThemePalette.Current -> "現在の配色をそのまま使います。"
+                    ThemePalette.FutabaClassic -> "生成りとえんじを基調にした、ふたば寄りの配色です。"
+                    ThemePalette.Midnight -> "暗所向けの高コントラスト配色です。"
+                },
+                selected = themePalette == palette,
+                onClick = { onThemePaletteChanged(palette) }
+            )
+        }
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("アプリアイコン") },
+            supportingContent = {
+                Text(
+                    text = "今のアイコンを含む 3 種類から選べます。仮画像を入れてあるので後から差し替えできます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        AppIconVariant.entries.forEach { variant ->
+            GlobalSettingsRadioOptionRow(
+                label = variant.label,
+                description = when (variant) {
+                    AppIconVariant.Current -> "現在のアイコンです。"
+                    AppIconVariant.Classic -> "クラシック調の差し替え枠です。"
+                    AppIconVariant.Midnight -> "ミッドナイト調の差し替え枠です。"
+                },
+                selected = appIconVariant == variant,
+                onClick = { onAppIconVariantChanged(variant) }
+            )
+        }
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("スレ表示モード") },
+            supportingContent = {
+                Text(
+                    text = "現行の通常表示か、引用関係から組み立てたツリー表示を選べます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        ThreadDisplayMode.entries.forEach { mode ->
+            GlobalSettingsRadioOptionRow(
+                label = mode.label,
+                description = when (mode) {
+                    ThreadDisplayMode.Flat -> "今までどおり時系列順で表示します。"
+                    ThreadDisplayMode.Tree -> "引用先を親にしてインデント付きで表示します。"
+                },
+                selected = threadDisplayMode == mode,
+                onClick = { onThreadDisplayModeChanged(mode) }
+            )
+        }
+        HorizontalDivider()
         ListItem(
             headlineContent = { Text("バックグラウンド更新") },
             supportingContent = {
@@ -240,24 +356,6 @@ internal fun GlobalSettingsBehaviorSection(
         )
         HorizontalDivider()
         ListItem(
-            headlineContent = { Text("広告表示") },
-            supportingContent = {
-                Text(
-                    text = "スレッド画面の下部メニューの下に AdMob バナーを表示します。OFF にすると広告枠ごと消えます。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
-            trailingContent = {
-                Switch(
-                    checked = isAdsEnabled,
-                    onCheckedChange = { onAdsEnabledChanged(it) }
-                )
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-        HorizontalDivider()
-        ListItem(
             headlineContent = { Text("軽量モード") },
             supportingContent = {
                 Text(
@@ -270,6 +368,24 @@ internal fun GlobalSettingsBehaviorSection(
                 Switch(
                     checked = isLightweightModeEnabled,
                     onCheckedChange = { onLightweightModeChanged(it) }
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("広告表示") },
+            supportingContent = {
+                Text(
+                    text = "スレッド画面の下部メニューの下に AdMob バナーを表示します。OFF にすると広告枠ごと消えます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Switch(
+                    checked = isAdsEnabled,
+                    onCheckedChange = { onAdsEnabledChanged(it) }
                 )
             },
             modifier = Modifier.fillMaxWidth()
@@ -302,7 +418,7 @@ internal fun GlobalSettingsBehaviorSection(
 }
 
 @Composable
-private fun GalleryTapActionOptionRow(
+private fun GlobalSettingsRadioOptionRow(
     label: String,
     description: String,
     selected: Boolean,
@@ -326,5 +442,20 @@ private fun GalleryTapActionOptionRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+    )
+}
+
+@Composable
+private fun GalleryTapActionOptionRow(
+    label: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    GlobalSettingsRadioOptionRow(
+        label = label,
+        description = description,
+        selected = selected,
+        onClick = onClick
     )
 }

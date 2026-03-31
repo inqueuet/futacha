@@ -1,7 +1,11 @@
 package com.valoser.futacha.shared.ui
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -18,6 +22,10 @@ internal data class FutachaPreferenceMutationInputs(
     val setAttachmentPickerPreference: suspend (AttachmentPickerPreference) -> Unit,
     val setSaveDirectorySelection: suspend (SaveDirectorySelection) -> Unit,
     val setThreadGalleryTapAction: suspend (ThreadGalleryTapAction) -> Unit = {},
+    val setThemeMode: suspend (ThemeMode) -> Unit = {},
+    val setThemePalette: suspend (ThemePalette) -> Unit = {},
+    val setAppIconVariant: suspend (AppIconVariant) -> Unit = {},
+    val setThreadDisplayMode: suspend (ThreadDisplayMode) -> Unit = {},
     val setManualSaveLocation: suspend (SaveLocation) -> Unit,
     val setPreferredFileManager: suspend (String?, String?) -> Unit,
     val setThreadMenuEntries: suspend (List<ThreadMenuEntryConfig>) -> Unit,
@@ -32,6 +40,10 @@ internal data class FutachaPreferenceMutationCallbacks(
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit,
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
     val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit,
+    val onThemeModeChanged: (ThemeMode) -> Unit,
+    val onThemePaletteChanged: (ThemePalette) -> Unit,
+    val onAppIconVariantChanged: (AppIconVariant) -> Unit,
+    val onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit,
     val onManualSaveLocationChanged: (SaveLocation) -> Unit,
     val onFileManagerSelected: (packageName: String, label: String) -> Unit,
     val onClearPreferredFileManager: () -> Unit,
@@ -85,6 +97,26 @@ internal fun buildFutachaPreferenceMutationCallbacks(
         onThreadGalleryTapActionChanged = { action ->
             launchFutachaCallbackMutation(coroutineScope) {
                 inputs.setThreadGalleryTapAction(action)
+            }
+        },
+        onThemeModeChanged = { mode ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setThemeMode(mode)
+            }
+        },
+        onThemePaletteChanged = { palette ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setThemePalette(palette)
+            }
+        },
+        onAppIconVariantChanged = { variant ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setAppIconVariant(variant)
+            }
+        },
+        onThreadDisplayModeChanged = { mode ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setThreadDisplayMode(mode)
             }
         },
         onManualSaveLocationChanged = { location ->

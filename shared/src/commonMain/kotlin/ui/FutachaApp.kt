@@ -27,6 +27,7 @@ import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
+import com.valoser.futacha.shared.util.applyAppIconVariant
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import com.valoser.futacha.shared.version.UpdateInfo
@@ -47,18 +48,21 @@ fun FutachaApp(
     cookieRepository: CookieRepository? = null,
     autoSavedThreadRepository: SavedThreadRepository? = null
 ) {
-    FutachaTheme {
-        val platformContext = LocalPlatformContext.current
-        val devicePerformanceProfile = remember(platformContext) {
-            detectDevicePerformanceProfile(platformContext)
-        }
-        val observedRuntimeState = rememberFutachaObservedRuntimeState(
-            stateStore = stateStore,
-            boardList = boardList,
-            history = history,
-            versionChecker = versionChecker,
-            fileSystem = fileSystem
-        )
+    val platformContext = LocalPlatformContext.current
+    val devicePerformanceProfile = remember(platformContext) {
+        detectDevicePerformanceProfile(platformContext)
+    }
+    val observedRuntimeState = rememberFutachaObservedRuntimeState(
+        stateStore = stateStore,
+        boardList = boardList,
+        history = history,
+        versionChecker = versionChecker,
+        fileSystem = fileSystem
+    )
+    FutachaTheme(
+        themeMode = observedRuntimeState.themeMode,
+        themePalette = observedRuntimeState.themePalette
+    ) {
         val isLightweightModeEnabled by stateStore.isLightweightModeEnabled.collectAsState(
             initial = devicePerformanceProfile.isLowSpec
         )
@@ -74,6 +78,12 @@ fun FutachaApp(
             }
         }
         CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+            LaunchedEffect(platformContext, observedRuntimeState.appIconVariant) {
+                applyAppIconVariant(
+                    platformContext = platformContext,
+                    variant = observedRuntimeState.appIconVariant
+                )
+            }
             Surface(modifier = Modifier.fillMaxSize()) {
                 val coroutineScope = rememberCoroutineScope()
                 val saveableStateHolder = rememberSaveableStateHolder()
