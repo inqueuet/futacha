@@ -110,6 +110,23 @@ Firebase の設定ファイルはリポジトリに含まれていません。Fi
 - iOS の `GoogleService-Info.plist` は Xcode 上で `iosApp` ターゲットに追加する必要があります。
 - どちらのファイルも `.gitignore` で除外されています。ファイルが存在しない場合でもビルド・起動は可能です。
 
+### アプリアイコン差し替え
+
+設定画面から `Current / Classic / Midnight` の 3 種類を選べます。`Current` は既存アイコン、`Classic` と `Midnight` は差し替え用です。
+
+- iOS
+  - `Current`: `iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png`
+  - `Classic`: `iosApp/iosApp/Assets.xcassets/AppIconClassic.appiconset/app-icon-classic-1024.png`
+  - `Midnight`: `iosApp/iosApp/Assets.xcassets/AppIconMidnight.appiconset/app-icon-midnight-1024.png`
+- Android
+  - `Current`: `app-android/src/main/res/mipmap-*/ic_launcher_current.png`
+  - `Classic`: `app-android/src/main/res/mipmap-*/ic_launcher_classic.png`
+  - `Midnight`: `app-android/src/main/res/mipmap-*/ic_launcher_midnight.png`
+  - 丸アイコンは各 `mipmap-*` の `*_round.webp`
+  - Android 8+ の adaptive icon は `app-android/src/main/res/mipmap-anydpi-v26/` 配下の `ic_launcher_current*.xml`, `ic_launcher_classic*.xml`, `ic_launcher_midnight*.xml`
+
+仮画像として `Classic` と `Midnight` には現行アイコンの複製を置いてあります。最終画像に差し替えるときは、上記の対応ファイルを置き換えてください。
+
 ## 起動方法
 
 ### Android
@@ -179,4 +196,3 @@ Android Instrumentation Test:
 ## 関連ドキュメント
 
 - `AGENTS.md`: 実装の詳細、主要エントリーポイント、画面仕様、保存や通信の補足
-
