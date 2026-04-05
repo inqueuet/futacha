@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
@@ -80,6 +81,18 @@ internal fun buildPreferredFileManagerDescription(isAndroidPlatform: Boolean): S
         "ディレクトリ選択で使うファイラーアプリを指定できます。設定すると次回からそのアプリを直接起動します。"
     } else {
         "Files に表示される保存先アプリを優先できます。設定すると次回から同じ保存先を選びやすくなります。"
+    }
+}
+
+internal fun resolveAppIconSectionDescription(): String {
+    return "デフォルトとクラシックの 2 種類のアイコンを画像で見比べて選べます。"
+}
+
+internal fun resolveAppIconVariantDescription(variant: AppIconVariant): String {
+    return when (variant) {
+        AppIconVariant.Current -> "標準のアプリアイコンを使います。"
+        AppIconVariant.Classic -> "クラシック寄りの配色アイコンに切り替えます。"
+        AppIconVariant.Midnight -> "暗めのミッドナイト配色アイコンに切り替えます。"
     }
 }
 

@@ -1,14 +1,18 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -35,7 +39,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.ThemeMode
@@ -294,21 +300,16 @@ internal fun GlobalSettingsBehaviorSection(
             headlineContent = { Text("アプリアイコン") },
             supportingContent = {
                 Text(
-                    text = "今のアイコンを含む 3 種類から選べます。仮画像を入れてあるので後から差し替えできます。",
+                    text = resolveAppIconSectionDescription(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             },
             modifier = Modifier.fillMaxWidth()
         )
-        AppIconVariant.entries.forEach { variant ->
-            GlobalSettingsRadioOptionRow(
-                label = variant.label,
-                description = when (variant) {
-                    AppIconVariant.Current -> "現在のアイコンです。"
-                    AppIconVariant.Classic -> "クラシック調の差し替え枠です。"
-                    AppIconVariant.Midnight -> "ミッドナイト調の差し替え枠です。"
-                },
+        listOf(AppIconVariant.Current, AppIconVariant.Classic).forEach { variant ->
+            AppIconVariantOptionCard(
+                variant = variant,
                 selected = appIconVariant == variant,
                 onClick = { onAppIconVariantChanged(variant) }
             )
@@ -443,6 +444,70 @@ private fun GlobalSettingsRadioOptionRow(
             .fillMaxWidth()
             .clickable(onClick = onClick)
     )
+}
+
+@Composable
+private fun AppIconVariantOptionCard(
+    variant: AppIconVariant,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        tonalElevation = if (selected) 4.dp else 0.dp,
+        shadowElevation = if (selected) 2.dp else 0.dp,
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                role = Role.RadioButton
+            )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(0.32f)
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(18.dp))
+            ) {
+                AppIconVariantPreview(
+                    variant = variant,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Column(
+                modifier = Modifier.weight(0.68f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = variant.label,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = resolveAppIconVariantDescription(variant),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            RadioButton(
+                selected = selected,
+                onClick = null
+            )
+        }
+    }
 }
 
 @Composable

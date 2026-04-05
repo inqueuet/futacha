@@ -13,7 +13,7 @@ enum class ThemePalette(val label: String) {
 }
 
 enum class AppIconVariant(val label: String) {
-    Current("現在"),
+    Current("デフォルト"),
     Classic("クラシック"),
     Midnight("ミッドナイト")
 }

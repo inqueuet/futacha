@@ -17,18 +17,13 @@ actual fun applyAppIconVariant(
 ) {
     val context = (platformContext as? Context)?.applicationContext ?: return
     val packageManager = context.packageManager
-    val targetAliasClass = when (variant) {
-        AppIconVariant.Current -> CURRENT_ALIAS_CLASS
-        AppIconVariant.Classic -> CLASSIC_ALIAS_CLASS
-        AppIconVariant.Midnight -> MIDNIGHT_ALIAS_CLASS
-    }
-    val componentClassNames = listOf(
-        CURRENT_ALIAS_CLASS,
-        CLASSIC_ALIAS_CLASS,
-        MIDNIGHT_ALIAS_CLASS
-    )
-    componentClassNames.forEach { className ->
-        val newState = if (className == targetAliasClass) {
+    listOf(CURRENT_ALIAS_CLASS, CLASSIC_ALIAS_CLASS, MIDNIGHT_ALIAS_CLASS).forEach { className ->
+        val shouldEnable = when (variant) {
+            AppIconVariant.Current -> className == CURRENT_ALIAS_CLASS
+            AppIconVariant.Classic -> className == CLASSIC_ALIAS_CLASS
+            AppIconVariant.Midnight -> className == MIDNIGHT_ALIAS_CLASS
+        }
+        val newState = if (shouldEnable) {
             PackageManager.COMPONENT_ENABLED_STATE_ENABLED
         } else {
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED
@@ -51,12 +46,11 @@ actual fun applyAppIconVariant(
     }
     runCatching {
         val mainActivityComponent = ComponentName(context.packageName, MAIN_ACTIVITY_CLASS)
-        if (packageManager.getComponentEnabledSetting(mainActivityComponent) !=
-            PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
-        ) {
+        val newState = PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+        if (packageManager.getComponentEnabledSetting(mainActivityComponent) != newState) {
             packageManager.setComponentEnabledSetting(
                 mainActivityComponent,
-                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+                newState,
                 PackageManager.DONT_KILL_APP
             )
         }

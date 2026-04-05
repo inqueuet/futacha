@@ -160,9 +160,14 @@ internal fun decodeThemePaletteValue(raw: String?): ThemePalette {
 }
 
 internal fun decodeAppIconVariantValue(raw: String?): AppIconVariant {
-    return runCatching {
+    val decoded = runCatching {
         raw?.let { AppIconVariant.valueOf(it) }
     }.getOrNull() ?: AppIconVariant.Current
+    return when (decoded) {
+        AppIconVariant.Current,
+        AppIconVariant.Classic -> decoded
+        AppIconVariant.Midnight -> AppIconVariant.Current
+    }
 }
 
 internal fun decodeThreadDisplayModeValue(raw: String?): ThreadDisplayMode {

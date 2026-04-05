@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
@@ -10,6 +11,7 @@ import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.state.decodeAppIconVariantValue
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +26,39 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GlobalSettingsSupportTest {
+    @Test
+    fun appIconVariant_defaultLabelAndScreenDefaultStayInSync() {
+        assertEquals("デフォルト", AppIconVariant.Current.label)
+        assertEquals(AppIconVariant.Current, ScreenPreferencesState(appVersion = "1.0.0").appIconVariant)
+    }
+
+    @Test
+    fun appIconVariantDescriptions_matchCurrentCopy() {
+        assertEquals(
+            "デフォルトとクラシックの 2 種類のアイコンを画像で見比べて選べます。",
+            resolveAppIconSectionDescription()
+        )
+        assertEquals(
+            "標準のアプリアイコンを使います。",
+            resolveAppIconVariantDescription(AppIconVariant.Current)
+        )
+        assertEquals(
+            "クラシック寄りの配色アイコンに切り替えます。",
+            resolveAppIconVariantDescription(AppIconVariant.Classic)
+        )
+        assertEquals(
+            "暗めのミッドナイト配色アイコンに切り替えます。",
+            resolveAppIconVariantDescription(AppIconVariant.Midnight)
+        )
+    }
+
+    @Test
+    fun decodeAppIconVariantValue_mapsRemovedMidnightToCurrent() {
+        assertEquals(AppIconVariant.Current, decodeAppIconVariantValue("Midnight"))
+        assertEquals(AppIconVariant.Classic, decodeAppIconVariantValue("Classic"))
+        assertEquals(AppIconVariant.Current, decodeAppIconVariantValue("Current"))
+    }
+
     @Test
     fun resolvePreferredFileManagerSummaryState_formatsConfiguredAndDefaultStates() {
         assertEquals(
