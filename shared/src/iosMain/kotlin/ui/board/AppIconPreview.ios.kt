@@ -25,7 +25,7 @@ internal actual fun AppIconVariantPreview(
     val assetName = when (variant) {
         AppIconVariant.Current -> "AppIcon"
         AppIconVariant.Classic -> "AppIconClassic"
-        AppIconVariant.Midnight -> "AppIconMidnight"
+        AppIconVariant.Midnight -> "AppIcon"
     }
     val image = UIImage.imageNamed(assetName)
     if (image == null) {

@@ -7,7 +7,6 @@ import platform.UIKit.UIApplication
 
 private const val IOS_APP_ICON_MANAGER_TAG = "IosAppIconManager"
 private const val IOS_CLASSIC_ICON_NAME = "AppIconClassic"
-private const val IOS_MIDNIGHT_ICON_NAME = "AppIconMidnight"
 
 @OptIn(ExperimentalForeignApi::class)
 actual fun applyAppIconVariant(
@@ -27,7 +26,7 @@ actual fun applyAppIconVariant(
     val targetName = when (variant) {
         AppIconVariant.Current -> null
         AppIconVariant.Classic -> IOS_CLASSIC_ICON_NAME
-        AppIconVariant.Midnight -> IOS_MIDNIGHT_ICON_NAME
+        AppIconVariant.Midnight -> null
     }
 
     runCatching {
