@@ -24,6 +24,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.util.shouldResolveCatalogThreadTitleFromHead
 
 @Composable
 internal fun CatalogCard(
@@ -46,6 +49,11 @@ internal fun CatalogCard(
     val density = LocalDensity.current
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
     val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
+    val displayTitle = rememberCatalogDisplayTitle(
+        item = item,
+        boardUrl = boardUrl,
+        repository = repository
+    )
 
     ElevatedCard(
         modifier = modifier
@@ -79,7 +87,7 @@ internal fun CatalogCard(
                         thumbnailUrl = item.thumbnailUrl,
                         fullImageUrl = item.fullImageUrl,
                         targetSizePx = targetSizePx,
-                        contentDescription = item.title ?: "サムネイル",
+                        contentDescription = displayTitle,
                         modifier = Modifier.fillMaxSize(),
                         fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -97,7 +105,7 @@ internal fun CatalogCard(
                     .padding(horizontal = 4.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = item.title ?: "無題",
+                    text = displayTitle,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -119,6 +127,11 @@ internal fun CatalogListItem(
     val density = LocalDensity.current
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
     val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
+    val displayTitle = rememberCatalogDisplayTitle(
+        item = item,
+        boardUrl = boardUrl,
+        repository = repository
+    )
 
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
@@ -149,7 +162,7 @@ internal fun CatalogListItem(
                         thumbnailUrl = item.thumbnailUrl,
                         fullImageUrl = item.fullImageUrl,
                         targetSizePx = targetSizePx,
-                        contentDescription = item.title ?: "サムネイル",
+                        contentDescription = displayTitle,
                         modifier = Modifier.fillMaxSize(),
                         fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -158,7 +171,7 @@ internal fun CatalogListItem(
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = item.title?.takeIf { it.isNotBlank() } ?: "無題",
+                    text = displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
@@ -181,6 +194,33 @@ internal fun CatalogListItem(
             }
         }
     }
+}
+
+@Composable
+private fun rememberCatalogDisplayTitle(
+    item: CatalogItem,
+    boardUrl: String?,
+    repository: BoardRepository
+): String {
+    val fallbackTitle = item.title?.takeIf { it.isNotBlank() } ?: "無題"
+    val resolvedTitle by produceState(
+        fallbackTitle,
+        boardUrl,
+        item.id,
+        item.title,
+        item.replyCount,
+        repository
+    ) {
+        if (boardUrl.isNullOrBlank() || !shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)) {
+            value = fallbackTitle
+            return@produceState
+        }
+        value = repository
+            .resolveCatalogDisplayTitle(boardUrl, item)
+            ?.takeIf { it.isNotBlank() }
+            ?: fallbackTitle
+    }
+    return resolvedTitle
 }
 
 @Composable

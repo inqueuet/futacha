@@ -138,6 +138,10 @@ internal object ThreadHtmlParserCore {
         pattern = "([A-Za-z0-9._-]+\\.(?:jpe?g|png|gif|webp|bmp|mp4|webm|mkv|mov|avi|ts|flv|m4v))",
         options = setOf(RegexOption.IGNORE_CASE)
     )
+    private val uploaderMediaFilenameRegex = Regex(
+        pattern = "(?<![A-Za-z0-9._/-])((?:fu\\d+|f\\d+)\\.(?:jpe?g|png|gif|webp|bmp|mp4|webm|mkv|mov|avi|ts|flv|m4v))(?![A-Za-z0-9._-])",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
     // FIX: 正規表現の再コンパイル防止 - 関数内で毎回生成されていたパターンをトップレベルに移動
     private val deletedRegex = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE)
     private val brTagRegex = Regex("(?i)<br\\s*/?>")
@@ -343,7 +347,9 @@ internal object ThreadHtmlParserCore {
             .orEmpty()
         val normalizedMessageText = normalizeMessageText(messageHtml)
         if (containsIsolationNotice(normalizedMessageText)) return null
+        val uploaderMediaUrl = resolveUploaderMediaUrl(messageHtml)
         val imageUrl = srcLinkRegex.find(block)?.groupValues?.getOrNull(1)?.let { resolveUrl(it, baseUrl) }
+            ?: uploaderMediaUrl
         val thumbnailUrl = thumbImgRegex.find(block)?.groupValues?.getOrNull(1)?.let { resolveUrl(it, baseUrl) }
         val order = orderRegex.find(block)?.groupValues?.getOrNull(1)?.toIntOrNull()
             ?: if (isOp) 0 else null
@@ -412,6 +418,22 @@ internal object ThreadHtmlParserCore {
     private fun containsIsolationNotice(normalizedMessageText: String): Boolean {
         if (normalizedMessageText.isEmpty()) return false
         return normalizedMessageText.contains(ISOLATION_NOTICE_TEXT)
+    }
+
+    private fun resolveUploaderMediaUrl(messageHtml: String): String? {
+        if (messageHtml.isBlank()) return null
+        val messageText = decodeHtmlEntities(stripTags(messageHtml))
+        val fileName = uploaderMediaFilenameRegex.find(messageText)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.lowercase()
+            ?: return null
+        val directory = if (fileName.startsWith("fu")) {
+            "up2"
+        } else {
+            "up"
+        }
+        return "https://dec.2chan.net/$directory/src/$fileName"
     }
 
     private fun decodeHtmlEntities(value: String): String {

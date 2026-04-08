@@ -427,6 +427,73 @@ class ThreadHtmlParserCoreTest {
     }
 
     @Test
+    fun parseThread_resolvesFutabaUploaderBareFileNames() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="801">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.801</span>
+            <blockquote>あぷ小に置いた<br>fu12345.jpg</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:01:00 ID:VID</span><span class="cno">No.802</span>
+            <blockquote>あぷの動画 f67890.mp4</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertEquals(2, page.posts.size)
+        assertEquals("https://dec.2chan.net/up2/src/fu12345.jpg", page.posts[0].imageUrl)
+        assertEquals(null, page.posts[0].thumbnailUrl)
+        assertEquals("https://dec.2chan.net/up/src/f67890.mp4", page.posts[1].imageUrl)
+        assertEquals(null, page.posts[1].thumbnailUrl)
+    }
+
+    @Test
+    fun parseThread_keepsAttachedMediaOverUploaderBareFileName() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="803">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.803</span>
+            画像ファイル名：<a href="/t/src/attached.jpg">attached.jpg</a>
+            <img src="/t/thumb/attacheds.jpg">
+            <blockquote>本文 fu12345.jpg</blockquote>
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertEquals("https://www.example.com/t/src/attached.jpg", page.posts.single().imageUrl)
+        assertEquals("https://www.example.com/t/thumb/attacheds.jpg", page.posts.single().thumbnailUrl)
+    }
+
+    @Test
+    fun parseThread_doesNotResolveUploaderFileNameInsideUrlPath() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="804">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.804</span>
+            <blockquote>別サイト https://example.com/files/f12345.jpg</blockquote>
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertEquals(null, page.posts.single().imageUrl)
+    }
+
+    @Test
     fun extractOpImageUrl_resolvesProtocolRelativeThumbnailForVideo() {
         val snippet = """
             <html>

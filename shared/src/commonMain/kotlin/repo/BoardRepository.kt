@@ -8,18 +8,22 @@ import com.valoser.futacha.shared.model.ThreadPageContent
 import com.valoser.futacha.shared.network.BoardApi
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.parser.extractCatalogDisplayTitleFromThreadHead
 import com.valoser.futacha.shared.parser.HtmlParser
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.shouldResolveCatalogThreadTitleFromHead
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -35,6 +39,7 @@ interface BoardRepository {
         items = getCatalog(board, mode)
     )
     suspend fun fetchOpImageUrl(board: String, threadId: String): String?
+    suspend fun resolveCatalogDisplayTitle(board: String, item: CatalogItem): String? = item.title
     suspend fun getThread(board: String, threadId: String): ThreadPage
     suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent = ThreadPageContent(
         page = getThread(board, threadId)
@@ -111,6 +116,8 @@ class DefaultBoardRepository(
 
     private val opImageCacheMutex = Mutex()
     private val opImageCache = createDefaultBoardRepositoryOpImageCache(opImageCacheMaxEntries)
+    private val catalogTitleCacheMutex = Mutex()
+    private val catalogTitleCache = createDefaultBoardRepositoryCatalogTitleCache(opImageCacheMaxEntries)
 
     // Scope used by async close.
     private val closeScope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
@@ -220,6 +227,28 @@ class DefaultBoardRepository(
         }
         saveOpImageUrlToCache(key, fetchResult.url)
         return fetchResult.url
+    }
+
+    override suspend fun resolveCatalogDisplayTitle(board: String, item: CatalogItem): String? {
+        if (!shouldResolveCatalogThreadTitleFromHead(board, item.title, item.replyCount)) {
+            return item.title
+        }
+        val key = DefaultBoardRepositoryOpImageKey(board, item.id)
+        getCachedCatalogTitle(key)?.let { return it.title ?: item.title }
+
+        val resolvedTitle = withTimeoutOrNull(SEMAPHORE_TIMEOUT_MILLIS) {
+            opImageSemaphore.withPermit {
+                withRetryOnAuthFailure(board) {
+                    resolveCatalogThreadTitle(board, item.id)
+                }
+            }
+        } ?: run {
+            Logger.w(TAG, "Timeout waiting for catalog title fetch permit for thread ${item.id}")
+            null
+        }
+
+        saveCatalogTitleToCache(key, resolvedTitle)
+        return resolvedTitle ?: item.title
     }
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
@@ -353,6 +382,9 @@ class DefaultBoardRepository(
                 opImageCacheMutex.withLock {
                     opImageCache.clear()
                 }
+                catalogTitleCacheMutex.withLock {
+                    catalogTitleCache.clear()
+                }
             }
         }
     }
@@ -393,6 +425,33 @@ class DefaultBoardRepository(
         }
     }
 
+    @OptIn(ExperimentalTime::class)
+    private suspend fun getCachedCatalogTitle(key: DefaultBoardRepositoryOpImageKey): DefaultBoardRepositoryCatalogTitleCacheEntry? {
+        val now = Clock.System.now().toEpochMilliseconds()
+        return catalogTitleCacheMutex.withLock {
+            resolveDefaultBoardRepositoryCachedCatalogTitle(
+                cache = catalogTitleCache,
+                key = key,
+                now = now
+            )
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun saveCatalogTitleToCache(key: DefaultBoardRepositoryOpImageKey, title: String?) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        catalogTitleCacheMutex.withLock {
+            saveDefaultBoardRepositoryCatalogTitleToCache(
+                cache = catalogTitleCache,
+                key = key,
+                title = title,
+                now = now,
+                hitTtlMillis = opImageCacheTtlMillis,
+                missTtlMillis = DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS
+            )
+        }
+    }
+
     private suspend fun resolveOpImageUrl(
         board: String,
         threadId: String
@@ -409,6 +468,26 @@ class DefaultBoardRepository(
             extractOpImageUrl = { snippet ->
                 withContext(AppDispatchers.parsing) {
                     parser.extractOpImageUrl(snippet, baseUrl)
+                }
+            }
+        )
+    }
+
+    private suspend fun resolveCatalogThreadTitle(
+        board: String,
+        threadId: String
+    ): String? {
+        return resolveDefaultBoardRepositoryCatalogThreadTitle(
+            threadId = threadId,
+            logTag = TAG,
+            fetchThreadHead = {
+                withContext(AppDispatchers.io) {
+                    api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
+                }
+            },
+            extractTitle = { snippet ->
+                withContext(AppDispatchers.parsing) {
+                    extractCatalogDisplayTitleFromThreadHead(snippet)
                 }
             }
         )

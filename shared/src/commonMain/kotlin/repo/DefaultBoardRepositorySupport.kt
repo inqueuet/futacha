@@ -2,8 +2,10 @@ package com.valoser.futacha.shared.repo
 
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CancellationException
 
 internal data class DefaultBoardRepositoryOpImageKey(
     val board: String,
@@ -12,6 +14,12 @@ internal data class DefaultBoardRepositoryOpImageKey(
 
 internal data class DefaultBoardRepositoryOpImageCacheEntry(
     val url: String?,
+    val recordedAtMillis: Long,
+    val ttlMillis: Long
+)
+
+internal data class DefaultBoardRepositoryCatalogTitleCacheEntry(
+    val title: String?,
     val recordedAtMillis: Long,
     val ttlMillis: Long
 )
@@ -61,6 +69,10 @@ internal class DefaultBoardRepositoryLruCache<K, V>(
 internal fun createDefaultBoardRepositoryOpImageCache(
     maxEntries: Int
 ) = DefaultBoardRepositoryLruCache<DefaultBoardRepositoryOpImageKey, DefaultBoardRepositoryOpImageCacheEntry>(maxEntries)
+
+internal fun createDefaultBoardRepositoryCatalogTitleCache(
+    maxEntries: Int
+) = DefaultBoardRepositoryLruCache<DefaultBoardRepositoryOpImageKey, DefaultBoardRepositoryCatalogTitleCacheEntry>(maxEntries)
 
 internal suspend fun hasDefaultBoardRepositoryCookies(
     cookieRepository: CookieRepository?,
@@ -150,6 +162,38 @@ internal fun purgeExpiredDefaultBoardRepositoryOpImageEntries(
     }
 }
 
+internal fun resolveDefaultBoardRepositoryCachedCatalogTitle(
+    cache: DefaultBoardRepositoryLruCache<DefaultBoardRepositoryOpImageKey, DefaultBoardRepositoryCatalogTitleCacheEntry>,
+    key: DefaultBoardRepositoryOpImageKey,
+    now: Long
+): DefaultBoardRepositoryCatalogTitleCacheEntry? {
+    val entry = cache[key] ?: return null
+    if (now - entry.recordedAtMillis <= entry.ttlMillis) {
+        return entry
+    }
+    cache.remove(key)
+    return null
+}
+
+internal fun saveDefaultBoardRepositoryCatalogTitleToCache(
+    cache: DefaultBoardRepositoryLruCache<DefaultBoardRepositoryOpImageKey, DefaultBoardRepositoryCatalogTitleCacheEntry>,
+    key: DefaultBoardRepositoryOpImageKey,
+    title: String?,
+    now: Long,
+    hitTtlMillis: Long,
+    missTtlMillis: Long
+) {
+    val ttl = if (title == null) missTtlMillis else hitTtlMillis
+    cache[key] = DefaultBoardRepositoryCatalogTitleCacheEntry(
+        title = title,
+        recordedAtMillis = now,
+        ttlMillis = ttl
+    )
+    cache.removeIf { _, entry ->
+        now - entry.recordedAtMillis > entry.ttlMillis
+    }
+}
+
 internal suspend fun beginDefaultBoardRepositoryClose(
     closeMutex: Mutex,
     closeState: DefaultBoardRepositoryCloseState
@@ -161,6 +205,23 @@ internal suspend fun beginDefaultBoardRepositoryClose(
             closeState.isClosed = true
             true
         }
+    }
+}
+
+internal suspend fun resolveDefaultBoardRepositoryCatalogThreadTitle(
+    threadId: String,
+    logTag: String,
+    fetchThreadHead: suspend () -> String,
+    extractTitle: suspend (String) -> String?
+): String? {
+    return try {
+        val snippet = fetchThreadHead()
+        extractTitle(snippet)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Logger.w(logTag, "Failed to resolve catalog title for thread $threadId: ${e.message}")
+        null
     }
 }
 
