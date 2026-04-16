@@ -111,6 +111,7 @@ internal fun AddBoardDialog(
         confirmButton = {
             TextButton(
                 enabled = validationState.canSubmit,
+                colors = futachaDialogTextButtonColors(),
                 onClick = {
                     onSubmit(validationState.trimmedName, validationState.normalizedInputUrl)
                     name = ""
@@ -121,7 +122,10 @@ internal fun AddBoardDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                colors = futachaDialogTextButtonColors()
+            ) {
                 Text("キャンセル")
             }
         }

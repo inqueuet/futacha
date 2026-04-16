@@ -22,7 +22,7 @@ internal data class GlobalSettingsBehaviorSectionBindings(
     val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {},
     val themeMode: ThemeMode = ThemeMode.System,
     val onThemeModeChanged: (ThemeMode) -> Unit = {},
-    val themePalette: ThemePalette = ThemePalette.Current,
+    val themePalette: ThemePalette = ThemePalette.FutabaClassic,
     val onThemePaletteChanged: (ThemePalette) -> Unit = {},
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val onAppIconVariantChanged: (AppIconVariant) -> Unit = {},

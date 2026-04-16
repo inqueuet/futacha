@@ -58,12 +58,18 @@ internal fun DeleteBoardDialog(
             Text("「${board.name}」を削除してもよろしいですか？")
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            TextButton(
+                onClick = onConfirm,
+                colors = futachaDialogTextButtonColors()
+            ) {
                 Text("削除")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                colors = futachaDialogTextButtonColors()
+            ) {
                 Text("キャンセル")
             }
         }

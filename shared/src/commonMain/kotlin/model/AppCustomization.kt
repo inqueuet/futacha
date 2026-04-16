@@ -7,7 +7,7 @@ enum class ThemeMode(val label: String) {
 }
 
 enum class ThemePalette(val label: String) {
-    Current("現在"),
+    Current("ふたちゃテーマ"),
     FutabaClassic("ふたばクラシック"),
     Midnight("ミッドナイト")
 }

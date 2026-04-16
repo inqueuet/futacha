@@ -156,7 +156,7 @@ internal fun decodeThemeModeValue(raw: String?): ThemeMode {
 internal fun decodeThemePaletteValue(raw: String?): ThemePalette {
     return runCatching {
         raw?.let { ThemePalette.valueOf(it) }
-    }.getOrNull() ?: ThemePalette.Current
+    }.getOrNull() ?: ThemePalette.FutabaClassic
 }
 
 internal fun decodeAppIconVariantValue(raw: String?): AppIconVariant {

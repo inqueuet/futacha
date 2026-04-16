@@ -6,7 +6,9 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
@@ -154,10 +156,12 @@ private fun resolveFutachaColorScheme(
     }
 }
 
+val LocalFutachaThemePalette = staticCompositionLocalOf { ThemePalette.FutabaClassic }
+
 @Composable
 fun FutachaTheme(
     themeMode: ThemeMode = ThemeMode.System,
-    themePalette: ThemePalette = ThemePalette.Current,
+    themePalette: ThemePalette = ThemePalette.FutabaClassic,
     content: @Composable () -> Unit
 ) {
     val systemDarkTheme = isSystemInDarkTheme()
@@ -172,9 +176,11 @@ fun FutachaTheme(
             palette = themePalette
         )
     }
-    MaterialTheme(
-        colorScheme = colors,
-        typography = MaterialTheme.typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalFutachaThemePalette provides themePalette) {
+        MaterialTheme(
+            colorScheme = colors,
+            typography = MaterialTheme.typography,
+            content = content
+        )
+    }
 }

@@ -31,7 +31,7 @@ internal data class FutachaScreenPreferencesStateInputs(
     val saveDirectorySelection: SaveDirectorySelection,
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
     val themeMode: ThemeMode = ThemeMode.System,
-    val themePalette: ThemePalette = ThemePalette.Current,
+    val themePalette: ThemePalette = ThemePalette.FutabaClassic,
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
     val preferredFileManagerPackage: String?,

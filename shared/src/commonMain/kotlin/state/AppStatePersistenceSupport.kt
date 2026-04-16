@@ -262,7 +262,7 @@ internal suspend fun buildAppStateSeedPayload(
             defaultSaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT.name,
             defaultThreadGalleryTapAction = com.valoser.futacha.shared.model.ThreadGalleryTapAction.OpenMedia.name,
             defaultThemeMode = com.valoser.futacha.shared.model.ThemeMode.System.name,
-            defaultThemePalette = com.valoser.futacha.shared.model.ThemePalette.Current.name,
+            defaultThemePalette = com.valoser.futacha.shared.model.ThemePalette.FutabaClassic.name,
             defaultAppIconVariant = com.valoser.futacha.shared.model.AppIconVariant.Current.name,
             defaultThreadDisplayMode = com.valoser.futacha.shared.model.ThreadDisplayMode.Flat.name,
             defaultLastUsedDeleteKey = inputs.defaults.lastUsedDeleteKey.take(8),

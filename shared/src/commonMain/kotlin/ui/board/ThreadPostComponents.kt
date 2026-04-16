@@ -38,6 +38,10 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 
+private val ThreadPostFooterTextColor = FutabaTextDim
+private val ThreadPostFooterAccentColor = FutabaAccentRed
+private val ThreadPostFooterAuthorColor = FutabaNameGreen
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ThreadPostCard(
@@ -201,7 +205,7 @@ internal fun ThreadPostMetadata(
                 text = (post.order ?: 0).toString(),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.tertiary
+                color = ThreadPostFooterAccentColor
             )
             Text(
                 text = subjectText,
@@ -213,7 +217,7 @@ internal fun ThreadPostMetadata(
             Text(
                 text = authorText,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.secondary
+                color = ThreadPostFooterAuthorColor
             )
             Spacer(modifier = Modifier.weight(1f))
             if (post.referencedCount > 0) {
@@ -237,7 +241,7 @@ internal fun ThreadPostMetadata(
                 Text(
                     text = timestampText,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = ThreadPostFooterTextColor
                 )
                 posterIdLabel?.let { label ->
                     val idModifier = if (posterIdValue != null && onPosterIdClick != null) {
@@ -250,9 +254,9 @@ internal fun ThreadPostMetadata(
                         text = label.text,
                         style = MaterialTheme.typography.labelMedium,
                         color = if (label.highlight) {
-                            MaterialTheme.colorScheme.tertiary
+                            ThreadPostFooterAccentColor
                         } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                            ThreadPostFooterTextColor
                         }
                     )
                 }
@@ -268,7 +272,7 @@ internal fun ThreadPostMetadata(
             Text(
                 text = "No.${post.id}",
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = ThreadPostFooterTextColor
             )
             val targetUrl = resolvePostTargetMediaUrl(post)
             val fileName = extractFileNameFromUrl(targetUrl)
@@ -310,7 +314,7 @@ private fun ReplyCountLabel(
         text = "${count}レス",
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.tertiary
+        color = ThreadPostFooterAccentColor
     )
 }
 
@@ -324,7 +328,7 @@ private fun SaidaneLink(
     Text(
         text = normalized,
         style = MaterialTheme.typography.labelMedium.copy(
-            color = MaterialTheme.colorScheme.onSurface,
+            color = ThreadPostFooterTextColor,
             fontWeight = FontWeight.SemiBold
         ),
         textDecoration = TextDecoration.None,

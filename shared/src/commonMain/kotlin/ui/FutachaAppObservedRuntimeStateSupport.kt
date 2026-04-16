@@ -43,7 +43,7 @@ internal data class FutachaObservedRuntimeState(
     val saveDirectorySelection: SaveDirectorySelection,
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
     val themeMode: ThemeMode = ThemeMode.System,
-    val themePalette: ThemePalette = ThemePalette.Current,
+    val themePalette: ThemePalette = ThemePalette.FutabaClassic,
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
     val preferredFileManager: PreferredFileManager?,
@@ -110,7 +110,7 @@ internal fun rememberFutachaObservedRuntimeState(
         initial = ThemeMode.System
     )
     val themePalette by stateStore.themePalette.collectAsState(
-        initial = ThemePalette.Current
+        initial = ThemePalette.FutabaClassic
     )
     val appIconVariant by stateStore.appIconVariant.collectAsState(
         initial = AppIconVariant.Current

@@ -276,7 +276,7 @@ internal fun GlobalSettingsBehaviorSection(
             headlineContent = { Text("テーマ種類") },
             supportingContent = {
                 Text(
-                    text = "現在の見た目に加えて、ふたばクラシックとミッドナイトを選べます。",
+                    text = "ふたちゃテーマを標準に、ふたばクラシックとミッドナイトを選べます。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -287,7 +287,7 @@ internal fun GlobalSettingsBehaviorSection(
             GlobalSettingsRadioOptionRow(
                 label = palette.label,
                 description = when (palette) {
-                    ThemePalette.Current -> "現在の配色をそのまま使います。"
+                    ThemePalette.Current -> "ふたちゃ標準の配色です。"
                     ThemePalette.FutabaClassic -> "生成りとえんじを基調にした、ふたば寄りの配色です。"
                     ThemePalette.Midnight -> "暗所向けの高コントラスト配色です。"
                 },
