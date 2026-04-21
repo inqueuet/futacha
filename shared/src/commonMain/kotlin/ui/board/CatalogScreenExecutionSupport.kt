@@ -153,6 +153,9 @@ internal fun buildCatalogCreateThreadBindings(
     setShowCreateThreadDialog: (Boolean) -> Unit,
     updateLastUsedDeleteKey: (String) -> Unit,
     showSnackbar: suspend (String) -> Unit,
+    showCreateThreadFailure: suspend (Throwable) -> Unit = { error ->
+        showSnackbar(buildCreateThreadFailureMessage(error))
+    },
     performRefresh: () -> Unit
 ): CatalogCreateThreadBindings {
     val resetDraft: () -> Unit = {
@@ -204,7 +207,7 @@ internal fun buildCatalogCreateThreadBindings(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    showSnackbar(buildCreateThreadFailureMessage(e))
+                    showCreateThreadFailure(e)
                 }
             }
         }

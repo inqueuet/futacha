@@ -1164,6 +1164,13 @@ class ThreadScreenSaveActionLogicTest {
             buildThreadActionFailureMessage("返信の送信に失敗しました", IllegalStateException("boom"))
         )
         assertEquals(
+            "返信に失敗しました: posttime の期限切れです",
+            buildThreadActionFailureMessage(
+                "返信の送信に失敗しました",
+                IllegalStateException("返信に失敗しました: posttime の期限切れです")
+            )
+        )
+        assertEquals(
             "返信の送信に失敗しました",
             buildThreadActionFailureMessage("返信の送信に失敗しました", IllegalStateException(""))
         )
@@ -1178,6 +1185,30 @@ class ThreadScreenSaveActionLogicTest {
             buildThreadHistoryRefreshFailureMessage(IllegalStateException("boom"))
         )
         assertEquals("履歴を一括削除しました", buildThreadHistoryBatchDeleteMessage())
+    }
+
+    @Test
+    fun postingFailureSupport_detectsCookieRecoveryCases() {
+        assertTrue(
+            shouldOfferCookieManagerForPostingFailure(
+                NetworkException("返信に失敗しました: posttime の期限切れです")
+            )
+        )
+        assertFalse(
+            shouldOfferCookieManagerForPostingFailure(
+                NetworkException("返信に失敗しました: 規制中です")
+            )
+        )
+        assertEquals("Cookie", POSTING_FAILURE_COOKIE_ACTION_LABEL)
+    }
+
+    @Test
+    fun postingFailureSupport_doesNotOfferCookieActionForGenericIpRestriction() {
+        assertFalse(
+            shouldOfferCookieManagerForPostingFailure(
+                NetworkException("返信に失敗しました: 規制中です。この回線からは書き込めません")
+            )
+        )
     }
 
     @Test

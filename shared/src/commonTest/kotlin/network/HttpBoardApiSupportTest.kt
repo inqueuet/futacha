@@ -60,6 +60,52 @@ class HttpBoardApiSupportTest {
     }
 
     @Test
+    fun postResponseHelpers_detectCookieResetRecoveryRequirement() {
+        assertTrue(
+            requiresHttpBoardApiCookieResetRecovery("posttime の期限切れです")
+        )
+        assertTrue(
+            requiresHttpBoardApiCookieResetRecovery("Cookie を削除して書き込み可能なIPから再生成してください")
+        )
+        assertFalse(
+            requiresHttpBoardApiCookieResetRecovery("規制中です")
+        )
+        assertEquals(
+            "返信に失敗しました: posttime の期限切れです Cookie を削除し、ふたばちゃんねるに書き込み可能なIPからブラウザ等で一度書き込んで、新しい Cookie を生成してください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "posttime の期限切れです"
+            )
+        )
+    }
+
+    @Test
+    fun postResponseHelpers_classifyTemporaryAndIpRestrictions() {
+        assertEquals(
+            HttpBoardApiPostingFailureKind.TEMPORARY_RESTRICTION,
+            classifyHttpBoardApiPostingFailure("連続投稿です。少し待ってください")
+        )
+        assertEquals(
+            HttpBoardApiPostingFailureKind.IP_RESTRICTION,
+            classifyHttpBoardApiPostingFailure("規制中です。この回線からは書き込めません")
+        )
+        assertEquals(
+            "返信に失敗しました: 規制中です。この回線からは書き込めません IP規制の可能性があります。時間を置くか、別の書き込み可能な回線を試してください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "規制中です。この回線からは書き込めません"
+            )
+        )
+        assertEquals(
+            "返信に失敗しました: 連続投稿です。少し待ってください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "連続投稿です。少し待ってください"
+            )
+        )
+    }
+
+    @Test
     fun postResponseHelpers_summarizeJsonAndPlainText() {
         assertEquals(
             "status=error, message=規制中",

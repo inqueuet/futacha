@@ -326,7 +326,7 @@ class DefaultBoardRepository(
     ): String? {
         // Post operations are sensitive, maybe don't auto-retry if side effects occurred?
         // For now, we'll use standard init check but not full retry loop to avoid double-posting risk
-        return runDefaultBoardRepositoryWithInitializedCookies(
+        return runDefaultBoardRepositoryPostingWithInitializedCookies(
             board = board,
             cookieRepository = cookieRepository,
             ensureCookiesInitialized = ::ensureCookiesInitialized
@@ -346,7 +346,7 @@ class DefaultBoardRepository(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        return runDefaultBoardRepositoryWithInitializedCookies(
+        return runDefaultBoardRepositoryPostingWithInitializedCookies(
             board = board,
             cookieRepository = cookieRepository,
             ensureCookiesInitialized = ::ensureCookiesInitialized

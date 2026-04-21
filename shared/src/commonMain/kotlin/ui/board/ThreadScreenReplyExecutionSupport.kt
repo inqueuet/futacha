@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.confirmPostingNotice
+import androidx.compose.material3.SnackbarHostState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -17,6 +18,8 @@ internal data class ThreadScreenReplySubmitDependencies(
     val actionBindings: ThreadScreenActionBindings,
     val threadReplyActionCallbacks: ThreadReplyActionCallbacks,
     val refreshThread: () -> Unit,
+    val snackbarHostState: SnackbarHostState,
+    val onOpenCookieManager: (() -> Unit)?,
     val showMessage: suspend (String) -> Unit
 )
 
@@ -40,6 +43,17 @@ internal fun handleThreadScreenReplySubmit(deps: ThreadScreenReplySubmitDependen
         deps.actionBindings.launch(
             successMessage = "返信を送信しました",
             failurePrefix = "返信の送信に失敗しました",
+            onFailure = { error ->
+                showPostingFailureSnackbar(
+                    snackbarHostState = deps.snackbarHostState,
+                    message = buildThreadActionFailureMessage(
+                        failurePrefix = "返信の送信に失敗しました",
+                        error = error
+                    ),
+                    error = error,
+                    onOpenCookieManager = deps.onOpenCookieManager
+                )
+            },
             onSuccess = { thisNo ->
                 handleReplySuccess(
                     thisNo = thisNo,

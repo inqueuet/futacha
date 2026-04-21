@@ -366,6 +366,8 @@ internal fun resolveThreadSaveAvailability(
 }
 
 internal fun buildThreadActionFailureMessage(failurePrefix: String, error: Throwable): String {
-    val detail = error.message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
-    return "$failurePrefix$detail"
+    return buildPostingAwareFailureMessage(
+        failurePrefix = failurePrefix,
+        error = error
+    )
 }

@@ -74,6 +74,7 @@ internal data class ThreadActionRuntimeCallbacks<T>(
     val onActionInProgressChanged: (Boolean) -> Unit,
     val onSuccess: (T) -> Unit = {},
     val onShowMessage: (String) -> Unit,
+    val onFailure: (suspend (Throwable) -> Unit)? = null,
     val onDebugLog: (String) -> Unit,
     val onInfoLog: (String) -> Unit,
     val onErrorLog: (String, Throwable) -> Unit
@@ -133,7 +134,7 @@ internal fun <T> CoroutineScope.launchManagedThreadAction(
                         buildThreadActionFailureLogMessage(failurePrefix),
                         result.error
                     )
-                    callbacks.onShowMessage(
+                    callbacks.onFailure?.invoke(result.error) ?: callbacks.onShowMessage(
                         buildThreadActionFailureMessage(
                             failurePrefix = failurePrefix,
                             error = result.error

@@ -197,6 +197,44 @@ class HttpBoardApiTest {
     }
 
     @Test
+    fun replyToThread_appendsCookieRecoveryGuidanceWhenCookieResetLooksRequired() = runBlocking {
+        val api = createApi { request ->
+            when {
+                request.url.encodedPath.endsWith("/futaba.htm") ->
+                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+
+                request.url.toString().contains("futaba.php?guid=on") ->
+                    htmlResponse("""posttime の期限切れです""")
+
+                else -> error("Unexpected request: ${request.url}")
+            }
+        }
+
+        try {
+            val error = assertFailsWith<NetworkException> {
+                api.replyToThread(
+                    board = "https://www.2chan.net/b/",
+                    threadId = "777",
+                    name = "",
+                    email = "",
+                    subject = "",
+                    comment = "reply",
+                    password = "1234",
+                    imageFile = null,
+                    imageFileName = null,
+                    textOnly = true
+                )
+            }
+
+            assertTrue(error.message!!.contains("posttime の期限切れです"))
+            assertTrue(error.message!!.contains("書き込み可能なIP"))
+            assertTrue(error.message!!.contains("Cookie を削除"))
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
     fun requestDeletion_sendsExpectedFormParametersAndReferer() = runBlocking {
         lateinit var capturedRequest: HttpRequestData
         val api = createApi { request ->

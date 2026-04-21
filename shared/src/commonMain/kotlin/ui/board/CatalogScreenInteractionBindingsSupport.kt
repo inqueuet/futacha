@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.DrawerState
+import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
@@ -90,7 +91,9 @@ internal data class CatalogScreenRuntimeInputs(
     val setCreateThreadImage: (ImageData?) -> Unit,
     val setShowCreateThreadDialog: (Boolean) -> Unit,
     val updateLastUsedDeleteKey: (String) -> Unit,
+    val snackbarHostState: SnackbarHostState,
     val showSnackbar: suspend (String) -> Unit,
+    val onOpenCookieManager: (() -> Unit)?,
     val currentIsHistoryRefreshing: () -> Boolean,
     val setIsHistoryRefreshing: (Boolean) -> Unit,
     val onHistoryRefresh: suspend () -> Unit,
@@ -184,7 +187,9 @@ internal fun buildCatalogScreenInteractionBindingsBundle(
         setCreateThreadImage = runtimeInputs.setCreateThreadImage,
         setShowCreateThreadDialog = runtimeInputs.setShowCreateThreadDialog,
         updateLastUsedDeleteKey = runtimeInputs.updateLastUsedDeleteKey,
+        snackbarHostState = runtimeInputs.snackbarHostState,
         showSnackbar = runtimeInputs.showSnackbar,
+        onOpenCookieManager = runtimeInputs.onOpenCookieManager,
         currentIsHistoryRefreshing = runtimeInputs.currentIsHistoryRefreshing,
         setIsHistoryRefreshing = runtimeInputs.setIsHistoryRefreshing,
         onHistoryRefresh = runtimeInputs.onHistoryRefresh,

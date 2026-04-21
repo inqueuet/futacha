@@ -86,6 +86,19 @@ internal suspend fun <T> runDefaultBoardRepositoryWithInitializedCookies(
     return cookieRepository?.commitOnSuccess { exec() } ?: exec()
 }
 
+internal suspend fun <T> runDefaultBoardRepositoryPostingWithInitializedCookies(
+    board: String,
+    cookieRepository: CookieRepository?,
+    ensureCookiesInitialized: suspend (String) -> Unit,
+    block: suspend () -> T
+): T {
+    val exec: suspend () -> T = {
+        ensureCookiesInitialized(board)
+        block()
+    }
+    return cookieRepository?.commitOnSuccess { exec() } ?: exec()
+}
+
 internal suspend fun fetchDefaultBoardRepositoryOpImageWithPermit(
     threadId: String,
     semaphoreTimeoutMillis: Long,

@@ -64,13 +64,33 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
             val errorDetail = extractHttpBoardApiServerError(responseBody)
             val summary = summarizeHttpBoardApiResponse(responseBody)
             if (errorDetail != null) {
-                throw NetworkException("スレッド作成に失敗しました: $errorDetail")
+                logHttpBoardApiPostingFailureClassification(
+                    logTag = logTag,
+                    operation = "create-thread",
+                    detail = errorDetail
+                )
+                throw NetworkException(
+                    buildHttpBoardApiPostingFailureMessage(
+                        prefix = "スレッド作成に失敗しました",
+                        detail = errorDetail
+                    )
+                )
             }
             if (isSuccessfulHttpBoardApiPostResponse(responseBody)) {
                 Logger.w(logTag, "Thread created but thread ID was not found in response")
                 null
             } else {
-                throw NetworkException("スレッドIDの取得に失敗しました: $summary")
+                logHttpBoardApiPostingFailureClassification(
+                    logTag = logTag,
+                    operation = "create-thread-id-resolution",
+                    detail = summary
+                )
+                throw NetworkException(
+                    buildHttpBoardApiPostingFailureMessage(
+                        prefix = "スレッドIDの取得に失敗しました",
+                        detail = summary
+                    )
+                )
             }
         }
 
@@ -79,7 +99,17 @@ internal fun resolveHttpBoardApiPostResponseOrThrow(
                 val errorDetail = extractHttpBoardApiServerError(responseBody)
                 val summary = summarizeHttpBoardApiResponse(responseBody)
                 val detail = errorDetail ?: summary
-                throw NetworkException("返信に失敗しました: $detail")
+                logHttpBoardApiPostingFailureClassification(
+                    logTag = logTag,
+                    operation = "reply",
+                    detail = detail
+                )
+                throw NetworkException(
+                    buildHttpBoardApiPostingFailureMessage(
+                        prefix = "返信に失敗しました",
+                        detail = detail
+                    )
+                )
             }
             tryExtractHttpBoardApiThisNo(responseBody)
         }

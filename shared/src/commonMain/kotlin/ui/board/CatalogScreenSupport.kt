@@ -100,7 +100,11 @@ internal fun buildCreateThreadSuccessMessage(threadId: String?): String {
 }
 
 internal fun buildCreateThreadFailureMessage(error: Throwable): String {
-    return "スレッド作成に失敗しました: ${error.message ?: "不明なエラー"}"
+    return buildPostingAwareFailureMessage(
+        failurePrefix = "スレッド作成に失敗しました",
+        error = error,
+        fallbackDetail = "不明なエラー"
+    )
 }
 
 internal fun buildCatalogExternalAppUrl(boardUrl: String, mode: CatalogMode): String {

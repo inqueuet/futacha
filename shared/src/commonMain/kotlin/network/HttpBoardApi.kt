@@ -313,9 +313,21 @@ class HttpBoardApi(
         try {
             if (!response.status.isSuccess()) {
                 val detail = readSmallResponseSummary(response)
-                val suffix = detail?.let { ": $it" }.orEmpty()
+                val prefix = "${submission.responseFailureLabel}に失敗しました (HTTP ${response.status.value})"
+                detail?.let {
+                    logHttpBoardApiPostingFailureClassification(
+                        logTag = TAG,
+                        operation = submission.responseFailureLabel,
+                        detail = it
+                    )
+                }
                 throw NetworkException(
-                    "${submission.responseFailureLabel}に失敗しました (HTTP ${response.status.value}$suffix)"
+                    detail?.let {
+                        buildHttpBoardApiPostingFailureMessage(
+                            prefix = prefix,
+                            detail = it
+                        )
+                    } ?: prefix
                 )
             }
             val responseBody = readResponseBodyAsString(response)

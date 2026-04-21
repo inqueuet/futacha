@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.material3.DrawerState
+import androidx.compose.material3.SnackbarHostState
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
@@ -44,7 +45,9 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
     setCreateThreadImage: (com.valoser.futacha.shared.util.ImageData?) -> Unit,
     setShowCreateThreadDialog: (Boolean) -> Unit,
     updateLastUsedDeleteKey: (String) -> Unit,
+    snackbarHostState: SnackbarHostState,
     showSnackbar: suspend (String) -> Unit,
+    onOpenCookieManager: (() -> Unit)?,
     currentIsHistoryRefreshing: () -> Boolean,
     setIsHistoryRefreshing: (Boolean) -> Unit,
     onHistoryRefresh: suspend () -> Unit,
@@ -116,6 +119,14 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
             setShowCreateThreadDialog = setShowCreateThreadDialog,
             updateLastUsedDeleteKey = updateLastUsedDeleteKey,
             showSnackbar = showSnackbar,
+            showCreateThreadFailure = { error ->
+                showPostingFailureSnackbar(
+                    snackbarHostState = snackbarHostState,
+                    message = buildCreateThreadFailureMessage(error),
+                    error = error,
+                    onOpenCookieManager = onOpenCookieManager
+                )
+            },
             performRefresh = executionBindings.performRefresh
         ),
         historyDrawerCallbacks = buildCatalogHistoryDrawerCallbacks(

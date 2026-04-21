@@ -930,6 +930,12 @@ private fun ThreadScreenContent(
                         actionBindings = actionBindings,
                         threadReplyActionCallbacks = threadReplyActionCallbacks,
                         refreshThread = refreshThread,
+                        snackbarHostState = snackbarHostState,
+                        onOpenCookieManager = cookieRepository?.let {
+                            {
+                                modalOverlayState = openThreadCookieManagementOverlay(modalOverlayState)
+                            }
+                        },
                         showMessage = showMessage
                     )
                 )

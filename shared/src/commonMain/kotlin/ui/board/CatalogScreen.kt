@@ -296,7 +296,14 @@ private fun CatalogScreenContent(
                 overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
             },
             updateLastUsedDeleteKey = updateLastUsedDeleteKey,
+            snackbarHostState = snackbarHostState,
             showSnackbar = snackbarHostState::showSnackbar,
+            onOpenCookieManager = cookieRepository?.let {
+                {
+                    overlayState = setCatalogGlobalSettingsVisible(overlayState, false)
+                    overlayState = setCatalogCookieManagementVisible(overlayState, true)
+                }
+            },
             currentIsHistoryRefreshing = { isHistoryRefreshing },
             setIsHistoryRefreshing = { isHistoryRefreshing = it },
             onHistoryRefresh = onHistoryRefresh,

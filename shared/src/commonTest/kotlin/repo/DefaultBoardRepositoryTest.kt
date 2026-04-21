@@ -349,6 +349,44 @@ class DefaultBoardRepositoryTest {
         assertEquals("done", wrapped)
         assertEquals(1, commitCalls)
 
+        val postingStorage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val postingCookieRepository = CookieRepository(postingStorage)
+        val boardUrl = "https://dec.2chan.net/b/"
+        val postingSuccess = runDefaultBoardRepositoryPostingWithInitializedCookies(
+            board = boardUrl,
+            cookieRepository = postingCookieRepository,
+            ensureCookiesInitialized = {
+                postingStorage.addCookie(
+                    io.ktor.http.Url(boardUrl),
+                    io.ktor.http.Cookie(name = "posttime", value = "ok", domain = "dec.2chan.net", path = "/")
+                )
+            }
+        ) {
+            "posted"
+        }
+        assertEquals("posted", postingSuccess)
+        assertTrue(postingCookieRepository.hasValidCookieFor(boardUrl, preferredNames = setOf("posttime")))
+
+        val rollbackStorage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val rollbackCookieRepository = CookieRepository(rollbackStorage)
+        try {
+            runDefaultBoardRepositoryPostingWithInitializedCookies(
+                board = boardUrl,
+                cookieRepository = rollbackCookieRepository,
+                ensureCookiesInitialized = {
+                    rollbackStorage.addCookie(
+                        io.ktor.http.Url(boardUrl),
+                        io.ktor.http.Cookie(name = "posttime", value = "staged", domain = "dec.2chan.net", path = "/")
+                    )
+                }
+            ) {
+                throw IllegalStateException("post failed")
+            }
+        } catch (error: IllegalStateException) {
+            assertEquals("post failed", error.message)
+        }
+        assertFalse(rollbackCookieRepository.hasValidCookieFor(boardUrl, preferredNames = setOf("posttime")))
+
         val opImage = fetchDefaultBoardRepositoryOpImageWithPermit(
             threadId = "123",
             semaphoreTimeoutMillis = 100L,

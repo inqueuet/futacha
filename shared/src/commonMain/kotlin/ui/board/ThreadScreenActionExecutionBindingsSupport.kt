@@ -33,6 +33,7 @@ internal class ThreadScreenActionBindings(
         successMessage: String,
         failurePrefix: String,
         onSuccess: (T) -> Unit = {},
+        onFailure: (suspend (Throwable) -> Unit)? = null,
         block: suspend () -> ThreadActionRunResult<T>
     ): Job? {
         val launchResult = coroutineScope.launchManagedThreadAction(
@@ -46,6 +47,7 @@ internal class ThreadScreenActionBindings(
                 onActionInProgressChanged = stateBindings.setActionInProgress,
                 onSuccess = onSuccess,
                 onShowMessage = dependencies.showMessage,
+                onFailure = onFailure,
                 onDebugLog = dependencies.onDebugLog,
                 onInfoLog = dependencies.onInfoLog,
                 onErrorLog = dependencies.onErrorLog

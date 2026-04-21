@@ -414,7 +414,9 @@ class CatalogScreenSupportTest {
             setCreateThreadImage = {},
             setShowCreateThreadDialog = {},
             updateLastUsedDeleteKey = {},
+            snackbarHostState = snackbarHostState,
             showSnackbar = {},
+            onOpenCookieManager = null,
             currentIsHistoryRefreshing = { false },
             setIsHistoryRefreshing = {},
             onHistoryRefresh = {},
@@ -1046,6 +1048,12 @@ class CatalogScreenSupportTest {
         assertEquals(
             "スレッド作成に失敗しました: 不明なエラー",
             buildCreateThreadFailureMessage(IllegalStateException())
+        )
+        assertEquals(
+            "スレッド作成に失敗しました: posttime の期限切れです",
+            buildCreateThreadFailureMessage(
+                IllegalStateException("スレッド作成に失敗しました: posttime の期限切れです")
+            )
         )
         var draft = CreateThreadDraft()
         var selectedImage: ImageData? = null
