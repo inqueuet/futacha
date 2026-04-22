@@ -72,7 +72,9 @@ internal data class CatalogScreenOverlayHostBindings(
     val history: List<ThreadHistoryEntry>,
     val fileSystem: FileSystem?,
     val autoSavedThreadRepository: SavedThreadRepository?,
-    val cookieRepository: CookieRepository?
+    val cookieRepository: CookieRepository?,
+    val onDismissCookieRecoveryGuide: () -> Unit,
+    val onOpenCookieManagerFromRecoveryGuide: () -> Unit
 )
 
 internal data class CatalogScreenHostBindingsResult(
@@ -121,7 +123,9 @@ internal data class CatalogScreenHostBindingsInputs(
     val preferencesCallbacks: ScreenPreferencesCallbacks,
     val fileSystem: FileSystem?,
     val autoSavedThreadRepository: SavedThreadRepository?,
-    val cookieRepository: CookieRepository?
+    val cookieRepository: CookieRepository?,
+    val onDismissCookieRecoveryGuide: () -> Unit,
+    val onOpenCookieManagerFromRecoveryGuide: () -> Unit
 )
 
 internal fun buildCatalogScreenHostBindings(
@@ -181,7 +185,9 @@ internal fun buildCatalogScreenHostBindings(
         history = inputs.history,
         fileSystem = inputs.fileSystem,
         autoSavedThreadRepository = inputs.autoSavedThreadRepository,
-        cookieRepository = inputs.cookieRepository
+        cookieRepository = inputs.cookieRepository,
+        onDismissCookieRecoveryGuide = inputs.onDismissCookieRecoveryGuide,
+        onOpenCookieManagerFromRecoveryGuide = inputs.onOpenCookieManagerFromRecoveryGuide
     )
     return CatalogScreenHostBindingsResult(
         scaffoldBindings = scaffoldBindings,

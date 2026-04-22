@@ -825,6 +825,7 @@ private fun ThreadScreenContent(
             coroutineScope = coroutineScope,
             drawerState = drawerState,
             snackbarHostState = snackbarHostState,
+            effectiveBoardUrl = effectiveBoardUrl,
             history = history,
             historyDrawerCallbacks = historyDrawerCallbacks,
             galleryCallbacks = galleryCallbacks,
@@ -911,6 +912,12 @@ private fun ThreadScreenContent(
             onSaidaneFromActionSheet = handleSaidaneAction,
             onDelRequestFromActionSheet = handleDelRequest,
             onDeleteFromActionSheet = openDeleteDialog,
+            onDismissCookieRecoveryGuide = {
+                modalOverlayState = dismissThreadCookieRecoveryGuideOverlay(modalOverlayState)
+            },
+            onOpenCookieManagerFromRecoveryGuide = {
+                modalOverlayState = openThreadCookieManagementOverlay(modalOverlayState)
+            },
             onBackSwipe = onBack,
             actionInProgress = actionInProgress,
             readAloudIndicatorSegment = readAloudIndicatorSegment,
@@ -933,7 +940,7 @@ private fun ThreadScreenContent(
                         snackbarHostState = snackbarHostState,
                         onOpenCookieManager = cookieRepository?.let {
                             {
-                                modalOverlayState = openThreadCookieManagementOverlay(modalOverlayState)
+                                modalOverlayState = openThreadCookieRecoveryGuideOverlay(modalOverlayState)
                             }
                         },
                         showMessage = showMessage

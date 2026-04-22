@@ -550,7 +550,9 @@ class CatalogScreenSupportTest {
             history = history,
             fileSystem = null,
             autoSavedThreadRepository = null,
-            cookieRepository = null
+            cookieRepository = null,
+            onDismissCookieRecoveryGuide = {},
+            onOpenCookieManagerFromRecoveryGuide = {}
         )
 
         assertEquals(history, scaffoldBindings.history)
@@ -888,6 +890,10 @@ class CatalogScreenSupportTest {
         assertEquals(
             CatalogOverlayState(isGlobalSettingsVisible = true),
             setCatalogGlobalSettingsVisible(initial, true)
+        )
+        assertEquals(
+            CatalogOverlayState(isCookieRecoveryGuideVisible = true),
+            setCatalogCookieRecoveryGuideVisible(initial, true)
         )
         assertEquals(
             CatalogOverlayState(isCookieManagementVisible = true),

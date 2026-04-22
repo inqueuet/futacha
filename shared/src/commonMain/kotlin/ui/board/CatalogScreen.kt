@@ -301,7 +301,7 @@ private fun CatalogScreenContent(
             onOpenCookieManager = cookieRepository?.let {
                 {
                     overlayState = setCatalogGlobalSettingsVisible(overlayState, false)
-                    overlayState = setCatalogCookieManagementVisible(overlayState, true)
+                    overlayState = setCatalogCookieRecoveryGuideVisible(overlayState, true)
                 }
             },
             currentIsHistoryRefreshing = { isHistoryRefreshing },
@@ -465,7 +465,13 @@ private fun CatalogScreenContent(
             preferencesCallbacks = preferencesCallbacks,
             fileSystem = fileSystem,
             autoSavedThreadRepository = autoSavedThreadRepository,
-            cookieRepository = cookieRepository
+            cookieRepository = cookieRepository,
+            onDismissCookieRecoveryGuide = {
+                overlayState = setCatalogCookieRecoveryGuideVisible(overlayState, false)
+            },
+            onOpenCookieManagerFromRecoveryGuide = {
+                overlayState = setCatalogCookieManagementVisible(overlayState, true)
+            }
         )
     )
 

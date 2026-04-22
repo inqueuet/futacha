@@ -1463,10 +1463,20 @@ class ThreadScreenInteractionLogicTest {
 
         val settingsOpened = openThreadGlobalSettingsOverlay(initial)
         assertTrue(settingsOpened.isGlobalSettingsVisible)
+        assertFalse(settingsOpened.isCookieRecoveryGuideVisible)
         assertFalse(settingsOpened.isCookieManagementVisible)
+
+        val guideOpened = openThreadCookieRecoveryGuideOverlay(settingsOpened)
+        assertFalse(guideOpened.isGlobalSettingsVisible)
+        assertTrue(guideOpened.isCookieRecoveryGuideVisible)
+        assertFalse(guideOpened.isCookieManagementVisible)
+
+        val guideDismissed = dismissThreadCookieRecoveryGuideOverlay(guideOpened)
+        assertFalse(guideDismissed.isCookieRecoveryGuideVisible)
 
         val cookieOpened = openThreadCookieManagementOverlay(settingsOpened)
         assertFalse(cookieOpened.isGlobalSettingsVisible)
+        assertFalse(cookieOpened.isCookieRecoveryGuideVisible)
         assertTrue(cookieOpened.isCookieManagementVisible)
 
         val cookieDismissed = dismissThreadCookieManagementOverlay(cookieOpened)

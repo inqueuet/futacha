@@ -36,7 +36,11 @@ internal fun shouldOfferCookieManagerForPostingFailure(error: Throwable): Boolea
     if (detail.isEmpty()) {
         return false
     }
-    return classifyHttpBoardApiPostingFailure(detail) == HttpBoardApiPostingFailureKind.COOKIE_RESET_REQUIRED
+    return when (classifyHttpBoardApiPostingFailure(detail)) {
+        HttpBoardApiPostingFailureKind.COOKIE_RESET_REQUIRED,
+        HttpBoardApiPostingFailureKind.IP_RESTRICTION -> true
+        else -> false
+    }
 }
 
 internal suspend fun showPostingFailureSnackbar(

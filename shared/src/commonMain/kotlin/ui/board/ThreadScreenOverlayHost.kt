@@ -19,6 +19,7 @@ internal data class ThreadScreenOverlayHostBindings(
     val postOverlayState: ThreadPostOverlayState,
     val sheetOverlayState: ThreadSheetOverlayState,
     val modalOverlayState: ThreadModalOverlayState,
+    val effectiveBoardUrl: String,
     val galleryCallbacks: ThreadGalleryCallbacks?,
     val history: List<ThreadHistoryEntry>,
     val boardName: String,
@@ -61,6 +62,8 @@ internal data class ThreadScreenOverlayHostBindings(
     val onDeleteDialogDismiss: () -> Unit,
     val onDeleteDialogConfirm: (Post) -> Unit,
     val onQuoteSelectionDismiss: () -> Unit,
+    val onDismissCookieRecoveryGuide: () -> Unit,
+    val onOpenCookieManagerFromRecoveryGuide: () -> Unit,
     val onReplySubmit: () -> Unit
 )
 
@@ -260,6 +263,15 @@ internal fun ThreadScreenOverlayHost(
             historyEntries = bindings.history,
             fileSystem = bindings.fileSystem,
             autoSavedThreadRepository = bindings.autoSavedThreadRepository
+        )
+    }
+
+    if (bindings.modalOverlayState.isCookieRecoveryGuideVisible && bindings.cookieRepository != null) {
+        CookiePostingRecoveryDialog(
+            boardUrl = bindings.effectiveBoardUrl,
+            repository = bindings.cookieRepository,
+            onDismiss = bindings.onDismissCookieRecoveryGuide,
+            onOpenCookieManager = bindings.onOpenCookieManagerFromRecoveryGuide
         )
     }
 

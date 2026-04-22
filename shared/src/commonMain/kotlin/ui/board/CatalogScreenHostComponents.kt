@@ -249,6 +249,15 @@ internal fun CatalogScreenOverlayHost(
         )
     }
 
+    if (bindings.overlayState.isCookieRecoveryGuideVisible && bindings.cookieRepository != null) {
+        CookiePostingRecoveryDialog(
+            boardUrl = bindings.board?.url,
+            repository = bindings.cookieRepository,
+            onDismiss = bindings.onDismissCookieRecoveryGuide,
+            onOpenCookieManager = bindings.onOpenCookieManagerFromRecoveryGuide
+        )
+    }
+
     if (bindings.overlayState.isCookieManagementVisible && bindings.cookieRepository != null) {
         CookieManagementScreen(
             onBack = bindings.overlayBindings.onCookieManagementBack,

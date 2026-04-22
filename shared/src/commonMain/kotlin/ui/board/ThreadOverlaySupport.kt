@@ -336,6 +336,7 @@ internal fun applyThreadSettingsActionOverlayState(
 internal data class ThreadModalOverlayState(
     val isGalleryVisible: Boolean = false,
     val isGlobalSettingsVisible: Boolean = false,
+    val isCookieRecoveryGuideVisible: Boolean = false,
     val isCookieManagementVisible: Boolean = false
 )
 
@@ -346,11 +347,39 @@ private fun ThreadModalOverlayState.withGalleryVisible(isVisible: Boolean): Thre
 }
 
 private fun ThreadModalOverlayState.withGlobalSettingsVisible(isVisible: Boolean): ThreadModalOverlayState {
-    return copy(isGlobalSettingsVisible = isVisible)
+    return if (isVisible) {
+        copy(
+            isGlobalSettingsVisible = true,
+            isCookieRecoveryGuideVisible = false,
+            isCookieManagementVisible = false
+        )
+    } else {
+        copy(isGlobalSettingsVisible = false)
+    }
+}
+
+private fun ThreadModalOverlayState.withCookieRecoveryGuideVisible(isVisible: Boolean): ThreadModalOverlayState {
+    return if (isVisible) {
+        copy(
+            isGlobalSettingsVisible = false,
+            isCookieRecoveryGuideVisible = true,
+            isCookieManagementVisible = false
+        )
+    } else {
+        copy(isCookieRecoveryGuideVisible = false)
+    }
 }
 
 private fun ThreadModalOverlayState.withCookieManagementVisible(isVisible: Boolean): ThreadModalOverlayState {
-    return copy(isCookieManagementVisible = isVisible)
+    return if (isVisible) {
+        copy(
+            isGlobalSettingsVisible = false,
+            isCookieRecoveryGuideVisible = false,
+            isCookieManagementVisible = true
+        )
+    } else {
+        copy(isCookieManagementVisible = false)
+    }
 }
 
 internal fun openThreadGalleryOverlay(
@@ -370,6 +399,7 @@ internal fun openThreadGlobalSettingsOverlay(
 ): ThreadModalOverlayState {
     return currentState.copy(
         isGlobalSettingsVisible = true,
+        isCookieRecoveryGuideVisible = false,
         isCookieManagementVisible = false
     )
 }
@@ -385,8 +415,21 @@ internal fun openThreadCookieManagementOverlay(
 ): ThreadModalOverlayState {
     return currentState.copy(
         isGlobalSettingsVisible = false,
+        isCookieRecoveryGuideVisible = false,
         isCookieManagementVisible = true
     )
+}
+
+internal fun openThreadCookieRecoveryGuideOverlay(
+    currentState: ThreadModalOverlayState
+): ThreadModalOverlayState {
+    return currentState.withCookieRecoveryGuideVisible(true)
+}
+
+internal fun dismissThreadCookieRecoveryGuideOverlay(
+    currentState: ThreadModalOverlayState
+): ThreadModalOverlayState {
+    return currentState.withCookieRecoveryGuideVisible(false)
 }
 
 internal fun dismissThreadCookieManagementOverlay(

@@ -28,6 +28,7 @@ internal data class ThreadScreenHostRuntimeInputs(
     val coroutineScope: CoroutineScope,
     val drawerState: DrawerState,
     val snackbarHostState: SnackbarHostState,
+    val effectiveBoardUrl: String,
     val history: List<ThreadHistoryEntry>,
     val historyDrawerCallbacks: ThreadHistoryDrawerCallbacks,
     val galleryCallbacks: ThreadGalleryCallbacks?,
@@ -91,6 +92,8 @@ internal data class ThreadScreenHostRuntimeInputs(
     val onSaidaneFromActionSheet: (Post) -> Unit,
     val onDelRequestFromActionSheet: (Post) -> Unit,
     val onDeleteFromActionSheet: (Post) -> Unit,
+    val onDismissCookieRecoveryGuide: () -> Unit,
+    val onOpenCookieManagerFromRecoveryGuide: () -> Unit,
     val onReplySubmit: (() -> Unit)? = null,
     val onBackSwipe: () -> Unit,
     val actionInProgress: Boolean,
@@ -156,6 +159,7 @@ internal data class ThreadScreenHostOverlayInputs(
     val postOverlayState: ThreadPostOverlayState,
     val sheetOverlayState: ThreadSheetOverlayState,
     val modalOverlayState: ThreadModalOverlayState,
+    val effectiveBoardUrl: String,
     val galleryCallbacks: ThreadGalleryCallbacks?,
     val history: List<ThreadHistoryEntry>,
     val boardName: String,
@@ -192,6 +196,8 @@ internal data class ThreadScreenHostOverlayInputs(
     val onSaidaneFromActionSheet: (Post) -> Unit,
     val onDelRequestFromActionSheet: (Post) -> Unit,
     val onDeleteFromActionSheet: (Post) -> Unit,
+    val onDismissCookieRecoveryGuide: () -> Unit,
+    val onOpenCookieManagerFromRecoveryGuide: () -> Unit,
     val onReplySubmit: (() -> Unit)? = null
 )
 
@@ -255,6 +261,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             postOverlayState = overlayInputs.postOverlayState,
             sheetOverlayState = overlayInputs.sheetOverlayState,
             modalOverlayState = overlayInputs.modalOverlayState,
+            effectiveBoardUrl = overlayInputs.effectiveBoardUrl,
             galleryCallbacks = overlayInputs.galleryCallbacks,
             history = overlayInputs.history,
             boardName = overlayInputs.boardName,
@@ -297,6 +304,8 @@ internal fun buildThreadScreenHostBindingsBundle(
             onDeleteDialogDismiss = overlayInputs.actionCallbacks.onDeleteDialogDismiss,
             onDeleteDialogConfirm = overlayInputs.actionCallbacks.onDeleteDialogConfirm,
             onQuoteSelectionDismiss = overlayInputs.actionCallbacks.onQuoteSelectionDismiss,
+            onDismissCookieRecoveryGuide = overlayInputs.onDismissCookieRecoveryGuide,
+            onOpenCookieManagerFromRecoveryGuide = overlayInputs.onOpenCookieManagerFromRecoveryGuide,
             onReplySubmit = overlayInputs.onReplySubmit ?: overlayInputs.actionCallbacks.onReplySubmit
         )
     )
@@ -362,6 +371,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             postOverlayState = inputs.postOverlayState,
             sheetOverlayState = inputs.sheetOverlayState,
             modalOverlayState = inputs.modalOverlayState,
+            effectiveBoardUrl = inputs.effectiveBoardUrl,
             galleryCallbacks = inputs.galleryCallbacks,
             history = inputs.history,
             boardName = inputs.boardName,
@@ -398,6 +408,8 @@ internal fun buildThreadScreenHostBindingsBundle(
             onSaidaneFromActionSheet = inputs.onSaidaneFromActionSheet,
             onDelRequestFromActionSheet = inputs.onDelRequestFromActionSheet,
             onDeleteFromActionSheet = inputs.onDeleteFromActionSheet,
+            onDismissCookieRecoveryGuide = inputs.onDismissCookieRecoveryGuide,
+            onOpenCookieManagerFromRecoveryGuide = inputs.onOpenCookieManagerFromRecoveryGuide,
             onReplySubmit = inputs.onReplySubmit
         )
     )

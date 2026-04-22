@@ -7,6 +7,7 @@ internal data class CatalogOverlayState(
     val showSettingsMenu: Boolean = false,
     val showPastThreadSearchDialog: Boolean = false,
     val isGlobalSettingsVisible: Boolean = false,
+    val isCookieRecoveryGuideVisible: Boolean = false,
     val isCookieManagementVisible: Boolean = false,
     val isNgManagementVisible: Boolean = false,
     val isWatchWordsVisible: Boolean = false,
@@ -34,11 +35,39 @@ private fun CatalogOverlayState.withPastThreadSearchDialogVisible(isVisible: Boo
 }
 
 private fun CatalogOverlayState.withGlobalSettingsVisible(isVisible: Boolean): CatalogOverlayState {
-    return copy(isGlobalSettingsVisible = isVisible)
+    return if (isVisible) {
+        copy(
+            isGlobalSettingsVisible = true,
+            isCookieRecoveryGuideVisible = false,
+            isCookieManagementVisible = false
+        )
+    } else {
+        copy(isGlobalSettingsVisible = false)
+    }
+}
+
+private fun CatalogOverlayState.withCookieRecoveryGuideVisible(isVisible: Boolean): CatalogOverlayState {
+    return if (isVisible) {
+        copy(
+            isGlobalSettingsVisible = false,
+            isCookieRecoveryGuideVisible = true,
+            isCookieManagementVisible = false
+        )
+    } else {
+        copy(isCookieRecoveryGuideVisible = false)
+    }
 }
 
 private fun CatalogOverlayState.withCookieManagementVisible(isVisible: Boolean): CatalogOverlayState {
-    return copy(isCookieManagementVisible = isVisible)
+    return if (isVisible) {
+        copy(
+            isGlobalSettingsVisible = false,
+            isCookieRecoveryGuideVisible = false,
+            isCookieManagementVisible = true
+        )
+    } else {
+        copy(isCookieManagementVisible = false)
+    }
 }
 
 private fun CatalogOverlayState.withNgManagementVisible(isVisible: Boolean): CatalogOverlayState {
@@ -82,6 +111,11 @@ internal fun setCatalogGlobalSettingsVisible(
     state: CatalogOverlayState,
     isVisible: Boolean
 ): CatalogOverlayState = state.withGlobalSettingsVisible(isVisible)
+
+internal fun setCatalogCookieRecoveryGuideVisible(
+    state: CatalogOverlayState,
+    isVisible: Boolean
+): CatalogOverlayState = state.withCookieRecoveryGuideVisible(isVisible)
 
 internal fun setCatalogCookieManagementVisible(
     state: CatalogOverlayState,

@@ -1194,7 +1194,7 @@ class ThreadScreenSaveActionLogicTest {
                 NetworkException("返信に失敗しました: posttime の期限切れです")
             )
         )
-        assertFalse(
+        assertTrue(
             shouldOfferCookieManagerForPostingFailure(
                 NetworkException("返信に失敗しました: 規制中です")
             )
@@ -1204,7 +1204,7 @@ class ThreadScreenSaveActionLogicTest {
 
     @Test
     fun postingFailureSupport_doesNotOfferCookieActionForGenericIpRestriction() {
-        assertFalse(
+        assertTrue(
             shouldOfferCookieManagerForPostingFailure(
                 NetworkException("返信に失敗しました: 規制中です。この回線からは書き込めません")
             )
