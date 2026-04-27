@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +72,8 @@ internal data class ThreadScreenOverlayHostBindings(
 internal fun ThreadScreenOverlayHost(
     bindings: ThreadScreenOverlayHostBindings
 ) {
+    val galleryGridState = rememberLazyGridState()
+
     val sheetTarget = bindings.postOverlayState.actionSheetState.targetPost
     if (bindings.postOverlayState.actionSheetState.isActionSheetVisible && sheetTarget != null) {
         ThreadPostActionSheet(
@@ -185,7 +188,8 @@ internal fun ThreadScreenOverlayHost(
                 onDismiss = galleryCallbacks.onDismiss,
                 onImageClick = galleryCallbacks.onImageClick,
                 onImageLongPress = galleryCallbacks.onImageLongPress,
-                onPostClick = galleryCallbacks.onPostClick
+                onPostClick = galleryCallbacks.onPostClick,
+                gridState = galleryGridState
             )
         }
     }

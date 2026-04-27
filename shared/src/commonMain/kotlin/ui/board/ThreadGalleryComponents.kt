@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,7 +51,8 @@ internal fun ThreadImageGallery(
     onDismiss: () -> Unit,
     onImageClick: (Post) -> Unit,
     onImageLongPress: (Post) -> Unit,
-    onPostClick: (Post) -> Unit
+    onPostClick: (Post) -> Unit,
+    gridState: LazyGridState = rememberLazyGridState()
 ) {
     val attachmentItems = remember(posts) {
         buildThreadAttachmentGalleryItems(posts)
@@ -93,6 +96,7 @@ internal fun ThreadImageGallery(
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
+                    state = gridState,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
