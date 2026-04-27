@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.matchesWatchWords
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -19,8 +20,20 @@ internal fun buildVisibleCatalogItems(
         // Guard Lazy* item keys from parser/network duplicates while keeping server order.
         .deduplicateByIdentity()
         .let { mode.applyClientTransform(it, watchWords) }
+        .let { prioritizeWatchWordMatches(it, mode, watchWords) }
         .filterByCatalogNgWords(catalogNgWords, catalogNgFilteringEnabled)
         .filterByQuery(query)
+}
+
+internal fun prioritizeWatchWordMatches(
+    items: List<CatalogItem>,
+    mode: CatalogMode,
+    watchWords: List<String>
+): List<CatalogItem> {
+    if (mode == CatalogMode.WatchWords || watchWords.none { it.isNotBlank() }) return items
+    return items.sortedBy { item ->
+        if (item.matchesWatchWords(watchWords)) 0 else 1
+    }
 }
 
 internal fun mergeWatchSourceCatalogItems(

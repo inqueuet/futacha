@@ -32,12 +32,22 @@ enum class CatalogMode(
     }
 }
 
+internal fun CatalogItem.matchesWatchWords(watchWords: List<String>): Boolean {
+    val titleText = title?.lowercase().orEmpty()
+    if (titleText.isEmpty()) return false
+    return normalizeWatchWords(watchWords).any { titleText.contains(it) }
+}
+
+private fun normalizeWatchWords(watchWords: List<String>): List<String> {
+    return watchWords
+        .mapNotNull { it.trim().takeIf(String::isNotBlank)?.lowercase() }
+        .distinct()
+}
+
 private fun List<CatalogItem>.filterAndSortByWatchWords(
     watchWords: List<String>
 ): List<CatalogItem> {
-    val normalizedWords = watchWords
-        .mapNotNull { it.trim().takeIf(String::isNotBlank)?.lowercase() }
-        .distinct()
+    val normalizedWords = normalizeWatchWords(watchWords)
     if (normalizedWords.isEmpty()) return emptyList()
 
     return mapNotNull { item ->

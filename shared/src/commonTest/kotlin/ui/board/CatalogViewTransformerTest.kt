@@ -51,6 +51,27 @@ class CatalogViewTransformerTest {
     }
 
     @Test
+    fun buildVisibleCatalogItems_prioritizesWatchWordsInNormalModes() {
+        val items = listOf(
+            catalogItem(id = "100", title = "雑談", replyCount = 30),
+            catalogItem(id = "200", title = "猫スレ", replyCount = 10),
+            catalogItem(id = "300", title = "夏休み", replyCount = 50),
+            catalogItem(id = "400", title = "通常", replyCount = 40)
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Many,
+            watchWords = listOf("猫", "夏休み"),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(listOf("200", "300", "100", "400"), result.map { it.id })
+    }
+
+    @Test
     fun buildVisibleCatalogItems_deduplicatesDuplicateThreadIdsBeforeRendering() {
         val items = listOf(
             catalogItem(id = "100", title = "先頭"),

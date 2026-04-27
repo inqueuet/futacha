@@ -549,6 +549,16 @@ private fun ThreadScreenContent(
     val currentSuccessState = derivedUiState.successState
     val mediaPreviewEntries = derivedRuntimeState.mediaPreviewEntries
     var mediaPreviewState by searchStateRefs.mediaPreviewState
+    var restoreGalleryAfterMediaPreview by rememberSaveable { mutableStateOf(false) }
+    var restoreGalleryAfterAttachmentAction by rememberSaveable { mutableStateOf(false) }
+    val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit = { nextState ->
+        val isDismissingPreview = mediaPreviewState.previewMediaIndex != null && nextState.previewMediaIndex == null
+        mediaPreviewState = nextState
+        if (isDismissingPreview && restoreGalleryAfterMediaPreview) {
+            restoreGalleryAfterMediaPreview = false
+            modalOverlayState = openThreadGalleryOverlay(modalOverlayState)
+        }
+    }
 
     val currentPageForAutoSave = derivedUiState.currentPage
     val autoSaveEffectState = rememberThreadAutoSaveEffectState(
@@ -636,7 +646,7 @@ private fun ThreadScreenContent(
             snackbarHostState = snackbarHostState,
             overlayStateBindings = overlayStateBindings,
             mediaPreviewState = { mediaPreviewState },
-            setMediaPreviewState = { mediaPreviewState = it },
+            setMediaPreviewState = setMediaPreviewState,
             mediaPreviewEntries = { mediaPreviewEntries },
             actionStateBindings = actionStateBindings,
             actionDependencies = actionDependencies,
@@ -774,6 +784,8 @@ private fun ThreadScreenContent(
     ) {
         val openMediaFromGallery: (Post) -> Unit = { post ->
             buildMediaPreviewEntry(post)?.let { entry ->
+                modalOverlayState = dismissThreadGalleryOverlay(modalOverlayState)
+                restoreGalleryAfterMediaPreview = true
                 mediaBindings.onMediaClick(entry.url, entry.mediaType)
             }
         }
@@ -783,11 +795,21 @@ private fun ThreadScreenContent(
         }
         buildThreadScreenGalleryCallbacks(
             onDismiss = {
+                restoreGalleryAfterMediaPreview = false
+                restoreGalleryAfterAttachmentAction = false
                 modalOverlayState = dismissThreadGalleryOverlay(modalOverlayState)
             },
             onImageClick = primaryAction,
-            onImageLongPress = openAttachmentActionsForPost,
-            onPostClick = scrollToPost
+            onImageLongPress = { post ->
+                modalOverlayState = dismissThreadGalleryOverlay(modalOverlayState)
+                restoreGalleryAfterAttachmentAction = true
+                openAttachmentActionsForPost(post)
+            },
+            onPostClick = { post ->
+                restoreGalleryAfterMediaPreview = false
+                restoreGalleryAfterAttachmentAction = false
+                scrollToPost(post)
+            }
         )
     }
 
@@ -881,9 +903,17 @@ private fun ThreadScreenContent(
             overlayActionCallbacks = overlayActionCallbacks,
             onDismissAttachmentActionSheet = {
                 postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                if (restoreGalleryAfterAttachmentAction) {
+                    restoreGalleryAfterAttachmentAction = false
+                    modalOverlayState = openThreadGalleryOverlay(modalOverlayState)
+                }
             },
             onPreviewAttachment = { target ->
                 postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                if (restoreGalleryAfterAttachmentAction) {
+                    restoreGalleryAfterAttachmentAction = false
+                    restoreGalleryAfterMediaPreview = true
+                }
                 val previewEntry = buildMediaPreviewEntry(target.post)
                 if (previewEntry != null) {
                     mediaBindings.onMediaClick(previewEntry.url, previewEntry.mediaType)
@@ -893,6 +923,8 @@ private fun ThreadScreenContent(
             },
             onJumpToAttachmentPost = { target ->
                 postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                restoreGalleryAfterAttachmentAction = false
+                restoreGalleryAfterMediaPreview = false
                 scrollToPost(target.post)
             },
             onSaveAttachment = { target ->
@@ -902,9 +934,15 @@ private fun ThreadScreenContent(
                     preferredUrl = target.url,
                     preferredMediaType = target.mediaType
                 )?.let(singleMediaSaveBindings.savePreviewMedia)
+                if (restoreGalleryAfterAttachmentAction) {
+                    restoreGalleryAfterAttachmentAction = false
+                    modalOverlayState = openThreadGalleryOverlay(modalOverlayState)
+                }
             },
             onOpenAttachmentExternally = { target ->
                 postOverlayState = dismissThreadAttachmentActionOverlay(postOverlayState)
+                restoreGalleryAfterAttachmentAction = false
+                restoreGalleryAfterMediaPreview = false
                 handleUrlClick(target.url)
             },
             onQuoteFromActionSheet = openQuoteSelection,

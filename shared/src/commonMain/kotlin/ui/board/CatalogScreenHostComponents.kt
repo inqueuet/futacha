@@ -101,6 +101,7 @@ internal fun CatalogScreenScaffold(
                         embeddedHtml = state.content.embeddedHtml,
                         board = bindings.board,
                         repository = bindings.activeRepository,
+                        watchWords = bindings.watchWords,
                         isSearching = bindings.searchQuery.isNotBlank(),
                         onThreadSelected = bindings.onThreadSelected,
                         onRefresh = bindings.performRefresh,

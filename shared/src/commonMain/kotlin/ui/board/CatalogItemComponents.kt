@@ -18,6 +18,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
+import com.valoser.futacha.shared.model.matchesWatchWords
 import com.valoser.futacha.shared.repo.BoardRepository
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -27,6 +28,7 @@ internal fun CatalogGrid(
     embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
     repository: BoardRepository,
+    watchWords: List<String>,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
@@ -77,6 +79,7 @@ internal fun CatalogGrid(
                 item = catalogItem,
                 boardUrl = board?.url,
                 repository = repository,
+                isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
                 onClick = { onThreadSelected(catalogItem) }
             )
         }
@@ -102,6 +105,7 @@ internal fun CatalogList(
     embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
     repository: BoardRepository,
+    watchWords: List<String>,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
@@ -145,6 +149,7 @@ internal fun CatalogList(
                 item = catalogItem,
                 boardUrl = board?.url,
                 repository = repository,
+                isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
                 onClick = { onThreadSelected(catalogItem) }
             )
         }

@@ -43,6 +43,7 @@ internal fun CatalogCard(
     item: CatalogItem,
     boardUrl: String?,
     repository: BoardRepository,
+    isWatchWordMatch: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -107,6 +108,8 @@ internal fun CatalogCard(
                 Text(
                     text = displayTitle,
                     style = MaterialTheme.typography.bodySmall,
+                    color = if (isWatchWordMatch) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    fontWeight = if (isWatchWordMatch) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = MaterialTheme.typography.bodySmall.fontSize
@@ -121,6 +124,7 @@ internal fun CatalogListItem(
     item: CatalogItem,
     boardUrl: String?,
     repository: BoardRepository,
+    isWatchWordMatch: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -173,6 +177,8 @@ internal fun CatalogListItem(
                 Text(
                     text = displayTitle,
                     style = MaterialTheme.typography.titleMedium,
+                    color = if (isWatchWordMatch) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    fontWeight = if (isWatchWordMatch) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
