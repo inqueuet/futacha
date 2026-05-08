@@ -38,7 +38,7 @@ struct ContentView: View {
     @State private var adsEnabled = UserDefaults.standard.object(forKey: "ads_enabled") == nil ? true : UserDefaults.standard.bool(forKey: "ads_enabled")
     @State private var threadScreenAdVisible = UserDefaults.standard.bool(forKey: "thread_screen_ad_visible")
     @State private var isBannerLoaded = false
-    @State private var shouldShowBannerContainer = false
+    @State private var shouldLoadBanner = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,43 +46,43 @@ struct ContentView: View {
                 .ignoresSafeArea(.container, edges: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if adsEnabled && threadScreenAdVisible && shouldShowBannerContainer {
+            if shouldLoadBanner {
                 AdMobBannerView { isLoaded in
                     DispatchQueue.main.async {
                         if isBannerLoaded != isLoaded {
                             isBannerLoaded = isLoaded
                         }
-                        if !isLoaded {
-                            shouldShowBannerContainer = false
-                        }
                     }
                 }
-                .frame(height: 50)
-                .opacity(isBannerLoaded ? 1 : 0.01)
+                .frame(height: isBannerLoaded ? 50 : 0)
+                .clipped()
                 .background(Color(uiColor: .systemBackground))
             }
         }
         .onAppear {
             reloadAdFlags()
-            shouldShowBannerContainer = adsEnabled && threadScreenAdVisible
+            shouldLoadBanner = adsEnabled && threadScreenAdVisible
             NSLog(
-                "ContentView onAppear ads_enabled=%@ thread_screen_ad_visible=%@ shouldShowBannerContainer=%@",
+                "ContentView onAppear ads_enabled=%@ thread_screen_ad_visible=%@ shouldLoadBanner=%@",
                 adsEnabled.description,
                 threadScreenAdVisible.description,
-                shouldShowBannerContainer.description
+                shouldLoadBanner.description
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             DispatchQueue.main.async {
                 reloadAdFlags()
-                shouldShowBannerContainer = adsEnabled && threadScreenAdVisible
+                let nextShouldLoadBanner = adsEnabled && threadScreenAdVisible
+                if shouldLoadBanner != nextShouldLoadBanner {
+                    shouldLoadBanner = nextShouldLoadBanner
+                }
                 NSLog(
-                    "ContentView defaults changed ads_enabled=%@ thread_screen_ad_visible=%@ shouldShowBannerContainer=%@",
+                    "ContentView defaults changed ads_enabled=%@ thread_screen_ad_visible=%@ shouldLoadBanner=%@",
                     adsEnabled.description,
                     threadScreenAdVisible.description,
-                    shouldShowBannerContainer.description
+                    shouldLoadBanner.description
                 )
-                if !shouldShowBannerContainer {
+                if !shouldLoadBanner {
                     isBannerLoaded = false
                 }
             }

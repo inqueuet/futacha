@@ -28,6 +28,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.cancellation.CancellationException
 
 private object IosAppGraph {
@@ -78,6 +80,8 @@ private object IosAppGraph {
 }
 
 private const val IOS_BG_MAX_THREADS_PER_RUN = 120
+private const val IOS_BG_AUTO_SAVE_BUDGET_MILLIS = 3 * 60 * 1000L
+private const val IOS_BG_REFRESH_TIMEOUT_MILLIS = 9 * 60 * 1000L
 private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 
@@ -97,7 +101,8 @@ fun registerIosBackgroundRefreshTask() {
                 stateStore = IosAppGraph.stateStore,
                 httpClient = httpClient,
                 fileSystem = IosAppGraph.fileSystem,
-                autoSaveRepo = IosAppGraph.autoSavedThreadRepository
+                autoSaveRepo = IosAppGraph.autoSavedThreadRepository,
+                cookieRepository = IosAppGraph.cookieRepository
             )
         } finally {
             IosAppGraph.releaseHttpClient()
@@ -207,7 +212,8 @@ private fun configureIosBackgroundRefresh(
                 stateStore = stateStore,
                 httpClient = managedHttpClient,
                 fileSystem = fileSystem,
-                autoSaveRepo = autoSaveRepo
+                autoSaveRepo = autoSaveRepo,
+                cookieRepository = IosAppGraph.cookieRepository
             )
         } finally {
             IosAppGraph.releaseHttpClient()
@@ -219,14 +225,16 @@ private suspend fun runIosBackgroundRefresh(
     stateStore: com.valoser.futacha.shared.state.AppStateStore,
     httpClient: io.ktor.client.HttpClient,
     fileSystem: com.valoser.futacha.shared.util.FileSystem?,
-    autoSaveRepo: SavedThreadRepository?
+    autoSaveRepo: SavedThreadRepository?,
+    cookieRepository: CookieRepository?
 ) {
     val sharedClientApi = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
     // Keep shared HttpClient ownership in MainViewController. Background repo closes only its own state.
     val nonClosingApi = object : BoardApi by sharedClientApi {}
     val repo = DefaultBoardRepository(
         api = nonClosingApi,
-        parser = createHtmlParser()
+        parser = createHtmlParser(),
+        cookieRepository = cookieRepository
     )
     val refresher = HistoryRefresher(
         stateStore = stateStore,
@@ -238,10 +246,18 @@ private suspend fun runIosBackgroundRefresh(
     )
     try {
         Logger.d("BackgroundRefresh", "Starting iOS background refresh run (maxThreadsPerRun=$IOS_BG_MAX_THREADS_PER_RUN)")
-        refresher.refresh(maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN)
+        withTimeout(IOS_BG_REFRESH_TIMEOUT_MILLIS) {
+            refresher.refresh(
+                autoSaveBudgetMillis = IOS_BG_AUTO_SAVE_BUDGET_MILLIS,
+                maxThreadsPerRun = IOS_BG_MAX_THREADS_PER_RUN
+            )
+        }
         Logger.d("BackgroundRefresh", "Completed iOS background refresh run successfully")
     } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
         Logger.d("BackgroundRefresh", "Refresh already running; skipping duplicate iOS background run")
+    } catch (e: TimeoutCancellationException) {
+        Logger.w("BackgroundRefresh", "iOS background refresh timed out after ${IOS_BG_REFRESH_TIMEOUT_MILLIS}ms")
+        throw e
     } catch (e: CancellationException) {
         Logger.w("BackgroundRefresh", "iOS background refresh run cancelled")
         throw e

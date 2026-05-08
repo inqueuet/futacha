@@ -47,6 +47,29 @@ internal fun buildEmbeddedVideoHtml(videoUrl: String): String {
         </head>
         <body>
         <video controls playsinline src="$sanitizedUrl"></video>
+        <script>
+        (function(){
+            var v = document.querySelector('video');
+            function post(value){
+                try {
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.futachaVideoState) {
+                        window.webkit.messageHandlers.futachaVideoState.postMessage(value);
+                    }
+                } catch(e) {}
+            }
+            if (!v) { post('error'); return; }
+            v.addEventListener('loadedmetadata', function(){
+                post('size:' + (v.videoWidth || 0) + ',' + (v.videoHeight || 0));
+                post('idle');
+            });
+            v.addEventListener('waiting', function(){ post('buffering'); });
+            v.addEventListener('stalled', function(){ post('buffering'); });
+            v.addEventListener('playing', function(){ post('ready'); });
+            v.addEventListener('pause', function(){ post('idle'); });
+            v.addEventListener('ended', function(){ post('idle'); });
+            v.addEventListener('error', function(){ post('error'); });
+        })();
+        </script>
         </body>
         </html>
         """.trimIndent()

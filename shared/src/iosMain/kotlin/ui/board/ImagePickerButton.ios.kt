@@ -15,8 +15,8 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.pickImage
-import com.valoser.futacha.shared.util.pickImageFromDocuments
-import com.valoser.futacha.shared.util.pickDirectoryPath
+import com.valoser.futacha.shared.util.pickVideo
+import com.valoser.futacha.shared.util.pickMediaFromDocuments
 import com.valoser.futacha.shared.util.pickDirectorySaveLocation
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.presentIosTwoOptionAlert
@@ -30,31 +30,38 @@ actual fun rememberAttachmentPickerLauncher(
     preferredFileManagerPackage: String?
 ): () -> Unit {
     val scope = rememberCoroutineScope()
+    val isVideo = mimeType.startsWith("video/", ignoreCase = true)
 
     return {
         scope.launch {
             val imageData = when (preference) {
-                AttachmentPickerPreference.MEDIA -> pickImage()
-                AttachmentPickerPreference.DOCUMENT -> pickImageFromDocuments(preferredFileManagerPackage)
+                AttachmentPickerPreference.MEDIA -> if (isVideo) pickVideo() else pickImage()
+                AttachmentPickerPreference.DOCUMENT -> pickMediaFromDocuments(
+                    mimeType = mimeType,
+                    preferredProviderIdentifier = preferredFileManagerPackage
+                )
                 AttachmentPickerPreference.ALWAYS_ASK -> {
                     val presented = presentIosTwoOptionAlert(
-                        title = "画像を選択",
+                        title = if (isVideo) "動画を選択" else "画像を選択",
                         message = "選択元を選んでください。",
-                        primaryLabel = "フォトライブラリ",
+                        primaryLabel = if (isVideo) "ビデオライブラリ" else "フォトライブラリ",
                         secondaryLabel = "ファイル",
                         onPrimary = {
                             scope.launch {
-                                pickImage()?.let(onImageSelected)
+                                (if (isVideo) pickVideo() else pickImage())?.let(onImageSelected)
                             }
                         },
                         onSecondary = {
                             scope.launch {
-                                pickImageFromDocuments()?.let(onImageSelected)
+                                pickMediaFromDocuments(
+                                    mimeType = mimeType,
+                                    preferredProviderIdentifier = preferredFileManagerPackage
+                                )?.let(onImageSelected)
                             }
                         }
                     )
                     if (!presented) {
-                        pickImage()
+                        if (isVideo) pickVideo() else pickImage()
                     } else {
                         null
                     }

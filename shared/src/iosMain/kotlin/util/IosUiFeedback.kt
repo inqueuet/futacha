@@ -8,12 +8,24 @@ import platform.UIKit.UIAlertControllerStyleAlert
 import platform.UIKit.UIApplication
 import platform.UIKit.UIViewController
 import platform.UIKit.UIWindow
+import platform.UIKit.UIWindowScene
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
 
 internal fun findIosTopViewController(): UIViewController? {
     val application = UIApplication.sharedApplication
-    val windows = application.windows.filterIsInstance<UIWindow>()
+    val windows = buildList {
+        application.connectedScenes
+            .filterIsInstance<UIWindowScene>()
+            .forEach { scene ->
+                if (scene.activationState == 0L || scene.activationState == 1L) {
+                    addAll(scene.windows.filterIsInstance<UIWindow>())
+                }
+            }
+        if (isEmpty()) {
+            addAll(application.windows.filterIsInstance<UIWindow>())
+        }
+    }
     var controller = windows.firstOrNull { it.isKeyWindow() }?.rootViewController
         ?: windows.firstOrNull()?.rootViewController
     while (controller?.presentedViewController != null) {

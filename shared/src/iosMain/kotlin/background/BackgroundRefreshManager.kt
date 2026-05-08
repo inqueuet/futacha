@@ -9,9 +9,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import platform.BackgroundTasks.BGAppRefreshTaskRequest
+import platform.BackgroundTasks.BGProcessingTaskRequest
 import platform.BackgroundTasks.BGTask
 import platform.BackgroundTasks.BGTaskScheduler
+import platform.Foundation.NSDate
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSLog
@@ -26,6 +27,7 @@ import kotlin.time.Clock
 object BackgroundRefreshManager {
     private const val TASK_ID = "com.valoser.futacha.refresh"
     private const val SCHEDULE_BACKOFF_MILLIS = 60_000L
+    private const val MIN_REFRESH_INTERVAL_SECONDS = 15 * 60.0
     private const val MAX_SCHEDULE_RETRY_ATTEMPTS = 12
     private var registered = false
     private val scope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
@@ -194,7 +196,14 @@ object BackgroundRefreshManager {
                 hasPendingRefreshRequest = false
                 return@dispatch_async
             }
-            val request = BGAppRefreshTaskRequest(TASK_ID)
+            val request = BGProcessingTaskRequest(TASK_ID).apply {
+                requiresNetworkConnectivity = true
+                requiresExternalPower = false
+                earliestBeginDate = NSDate(
+                    timeIntervalSinceReferenceDate = NSDate().timeIntervalSinceReferenceDate +
+                        MIN_REFRESH_INTERVAL_SECONDS
+                )
+            }
             runCatching {
                 val submitted = BGTaskScheduler.sharedScheduler().submitTaskRequest(request, null)
                 if (!submitted) {

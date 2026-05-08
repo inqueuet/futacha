@@ -27,6 +27,7 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.util.isAndroid
 import kotlin.math.abs
 
 internal data class ThreadScreenScaffoldBindings(
@@ -62,6 +63,7 @@ internal fun ThreadScreenScaffoldHost(
     bindings: ThreadScreenScaffoldBindings,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val usePointerBackSwipe = isAndroid()
     ModalNavigationDrawer(
         drawerState = bindings.drawerState,
         gesturesEnabled = true,
@@ -144,10 +146,12 @@ internal fun ThreadScreenScaffoldHost(
                     }
                 }
                 .pointerInput(
+                    usePointerBackSwipe,
                     bindings.isDrawerOpen,
                     bindings.backSwipeEdgePx,
                     bindings.backSwipeTriggerPx
                 ) {
+                    if (!usePointerBackSwipe) return@pointerInput
                     if (bindings.isDrawerOpen) return@pointerInput
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)

@@ -15,9 +15,14 @@ import platform.CoreGraphics.CGRectMake
 import platform.Foundation.NSError
 import platform.WebKit.WKNavigation
 import platform.WebKit.WKNavigationDelegateProtocol
+import platform.WebKit.WKScriptMessage
+import platform.WebKit.WKScriptMessageHandlerProtocol
+import platform.WebKit.WKUserContentController
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
 import platform.darwin.NSObject
+
+private const val VIDEO_STATE_MESSAGE_HANDLER = "futachaVideoState"
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
@@ -62,8 +67,12 @@ private fun WebVideoPlayer(
     }
     UIKitView(
         factory = {
+            val userContentController = WKUserContentController().apply {
+                addScriptMessageHandler(delegate, name = VIDEO_STATE_MESSAGE_HANDLER)
+            }
             val configuration = WKWebViewConfiguration().apply {
                 allowsInlineMediaPlayback = true
+                this.userContentController = userContentController
             }
             WKWebView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0), configuration = configuration).apply {
                 navigationDelegate = delegate
@@ -75,6 +84,7 @@ private fun WebVideoPlayer(
         onRelease = { view ->
             view.stopLoading()
             view.loadHTMLString("", baseURL = null)
+            view.configuration.userContentController.removeScriptMessageHandlerForName(VIDEO_STATE_MESSAGE_HANDLER)
             view.navigationDelegate = null
         },
         update = { view ->
@@ -95,9 +105,31 @@ private fun WebVideoPlayer(
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProtocol {
+private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProtocol, WKScriptMessageHandlerProtocol {
     var onStateChanged: ((VideoPlayerState) -> Unit)? = null
     var onVideoSizeKnown: ((Int, Int) -> Unit)? = null
+
+    override fun userContentController(
+        userContentController: WKUserContentController,
+        didReceiveScriptMessage: WKScriptMessage
+    ) {
+        val message = didReceiveScriptMessage.body as? String ?: return
+        when {
+            message == "buffering" -> onStateChanged?.invoke(VideoPlayerState.Buffering)
+            message == "ready" -> onStateChanged?.invoke(VideoPlayerState.Ready)
+            message == "idle" -> onStateChanged?.invoke(VideoPlayerState.Idle)
+            message == "error" -> onStateChanged?.invoke(VideoPlayerState.Error)
+            message.startsWith("size:") -> {
+                val parts = message.removePrefix("size:").split(',')
+                if (parts.size != 2) return
+                val width = parts[0].toIntOrNull() ?: return
+                val height = parts[1].toIntOrNull() ?: return
+                if (width > 0 && height > 0) {
+                    onVideoSizeKnown?.invoke(width, height)
+                }
+            }
+        }
+    }
 
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didStartProvisionalNavigation: WKNavigation?) {

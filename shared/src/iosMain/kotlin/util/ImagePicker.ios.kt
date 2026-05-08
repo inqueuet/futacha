@@ -26,6 +26,14 @@ import platform.UIKit.UIViewController
 import platform.UIKit.UIWindow
 import platform.UniformTypeIdentifiers.UTType
 import platform.UniformTypeIdentifiers.UTTypeFolder
+import platform.UniformTypeIdentifiers.UTTypeGIF
+import platform.UniformTypeIdentifiers.UTTypeImage
+import platform.UniformTypeIdentifiers.UTTypeJPEG
+import platform.UniformTypeIdentifiers.UTTypeMPEG4Movie
+import platform.UniformTypeIdentifiers.UTTypeMovie
+import platform.UniformTypeIdentifiers.UTTypePNG
+import platform.UniformTypeIdentifiers.UTTypeQuickTimeMovie
+import platform.UniformTypeIdentifiers.UTTypeWebP
 import platform.FileProvider.NSFileProviderDomain
 import platform.FileProvider.NSFileProviderManager
 import platform.darwin.NSObject
@@ -44,6 +52,7 @@ import kotlin.coroutines.suspendCoroutine
  * UIDocumentPicker delegate の保持
  */
 private val activePickerDelegate = AtomicReference<NSObject?>(null)
+private const val DEFAULT_PICKED_VIDEO_FILE_NAME = "video.mov"
 
 private class ResumeGate {
     private val resumedMarker = Any()
@@ -61,6 +70,68 @@ private fun releasePickerDelegate(delegate: NSObject?) {
     activePickerDelegate.compareAndSet(delegate, null)
 }
 
+private fun isVideoMimeType(mimeType: String): Boolean =
+    mimeType.trim().startsWith("video/", ignoreCase = true)
+
+private fun documentContentTypesForMimeType(mimeType: String): List<UTType> {
+    return if (isVideoMimeType(mimeType)) {
+        listOf(
+            UTTypeMovie,
+            UTTypeMPEG4Movie,
+            UTTypeQuickTimeMovie
+        )
+    } else {
+        listOf(
+            UTTypeImage,
+            UTTypeJPEG,
+            UTTypePNG,
+            UTTypeGIF,
+            UTTypeWebP
+        )
+    }
+}
+
+private fun loadPickedMediaFromUrl(
+    url: NSURL,
+    isVideo: Boolean,
+    fallbackFileName: String
+): ImageData? {
+    val mediaLabel = if (isVideo) "video" else "image"
+    val knownFileSize = resolveFileSizeBytes(url)
+    if (knownFileSize != null && knownFileSize > MAX_PICKED_IMAGE_BYTES) {
+        Logger.w(
+            "ImagePicker.ios",
+            "Selected $mediaLabel is too large: ${knownFileSize / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+        )
+        return null
+    }
+
+    val data = NSData.dataWithContentsOfURL(url)
+    if (data == null) {
+        Logger.w("ImagePicker.ios", "Failed to load $mediaLabel from ${url.path}")
+        return null
+    }
+
+    val dataLength = data.length.toLong()
+    if (!isPickedImagePayloadSizeValid(dataLength)) {
+        Logger.w(
+            "ImagePicker.ios",
+            if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                "Selected $mediaLabel is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+            } else {
+                "Selected $mediaLabel payload is empty"
+            }
+        )
+        return null
+    }
+
+    val bytes = ByteArray(dataLength.toInt())
+    bytes.usePinned { pinned ->
+        memcpy(pinned.addressOf(0), data.bytes, data.length)
+    }
+    return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
+}
+
 /**
  * 互換性のため公開。現在は pickDirectoryPath() 側で都度解放されるため no-op。
  */
@@ -71,10 +142,19 @@ fun releaseSecurityScopedResource() {
 /**
  * UIDocumentPicker で Files.app 経由の画像を選択
  */
-suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null): ImageData? = suspendCoroutine { continuation ->
+suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null): ImageData? =
+    pickMediaFromDocuments(
+        mimeType = "image/*",
+        preferredProviderIdentifier = preferredProviderIdentifier
+    )
+
+suspend fun pickMediaFromDocuments(
+    mimeType: String,
+    preferredProviderIdentifier: String? = null
+): ImageData? = suspendCoroutine { continuation ->
     val rootViewController = getRootViewController()
     if (rootViewController == null) {
-        Logger.w("ImagePicker.ios", "Cannot present document image picker: root view controller is unavailable")
+        Logger.w("ImagePicker.ios", "Cannot present document media picker: root view controller is unavailable")
         continuation.resume(null)
         return@suspendCoroutine
     }
@@ -86,13 +166,8 @@ suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null):
         continuation.resume(value)
     }
 
-    val imageTypes = listOf(
-        platform.UniformTypeIdentifiers.UTTypeImage,
-        platform.UniformTypeIdentifiers.UTTypeJPEG,
-        platform.UniformTypeIdentifiers.UTTypePNG,
-        platform.UniformTypeIdentifiers.UTTypeGIF,
-        platform.UniformTypeIdentifiers.UTTypeWebP
-    )
+    val isVideo = isVideoMimeType(mimeType)
+    val contentTypes = documentContentTypesForMimeType(mimeType)
     val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol {
         override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
             controller.dismissViewControllerAnimated(true, null)
@@ -102,39 +177,11 @@ suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null):
                 return
             }
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
-                val knownFileSize = resolveFileSizeBytes(url)
-                val selected = if (knownFileSize != null && knownFileSize > MAX_PICKED_IMAGE_BYTES) {
-                    Logger.w(
-                        "ImagePicker.ios",
-                        "Selected image is too large: ${knownFileSize / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
-                    )
-                    null
-                } else {
-                    val data = NSData.dataWithContentsOfURL(url)
-                    if (data == null) {
-                        Logger.w("ImagePicker.ios", "Failed to load image from ${url.path}")
-                        null
-                    } else {
-                        val dataLength = data.length.toLong()
-                        if (!isPickedImagePayloadSizeValid(dataLength)) {
-                            Logger.w(
-                                "ImagePicker.ios",
-                                if (dataLength > MAX_PICKED_IMAGE_BYTES) {
-                                    "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
-                                } else {
-                                    "Selected image payload is empty"
-                                }
-                            )
-                            null
-                        } else {
-                            val bytes = ByteArray(dataLength.toInt())
-                            bytes.usePinned { pinned ->
-                                memcpy(pinned.addressOf(0), data.bytes, data.length)
-                            }
-                            buildPickedImageData(bytes, url.lastPathComponent)
-                        }
-                    }
-                }
+                val selected = loadPickedMediaFromUrl(
+                    url = url,
+                    isVideo = isVideo,
+                    fallbackFileName = if (isVideo) DEFAULT_PICKED_VIDEO_FILE_NAME else DEFAULT_PICKED_IMAGE_FILE_NAME
+                )
                 dispatch_async(dispatch_get_main_queue()) {
                     complete(selected)
                 }
@@ -151,7 +198,7 @@ suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null):
     retainPickerDelegate(delegate)
     resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
         val picker = UIDocumentPickerViewController(
-            forOpeningContentTypes = imageTypes,
+            forOpeningContentTypes = contentTypes,
             asCopy = true
         ).apply {
             directoryURL = preferredUrl
@@ -166,12 +213,35 @@ suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null):
     }
 }
 
+suspend fun pickVideo(): ImageData? = pickFromPhotoLibrary(
+    filter = PHPickerFilter.videosFilter,
+    typeIdentifier = "public.movie",
+    fallbackFileName = DEFAULT_PICKED_VIDEO_FILE_NAME,
+    logLabel = "video"
+)
+
 actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
+    pickFromPhotoLibrary(
+        filter = PHPickerFilter.imagesFilter,
+        typeIdentifier = "public.image",
+        fallbackFileName = DEFAULT_PICKED_IMAGE_FILE_NAME,
+        logLabel = "image",
+        continuation = continuation
+    )
+}
+
+private fun pickFromPhotoLibrary(
+    filter: PHPickerFilter,
+    typeIdentifier: String,
+    fallbackFileName: String,
+    logLabel: String,
+    continuation: kotlin.coroutines.Continuation<ImageData?>
+) {
     val rootViewController = getRootViewController()
     if (rootViewController == null) {
-        Logger.w("ImagePicker.ios", "Cannot present photo picker: root view controller is unavailable")
+        Logger.w("ImagePicker.ios", "Cannot present photo $logLabel picker: root view controller is unavailable")
         continuation.resume(null)
-        return@suspendCoroutine
+        return
     }
     val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
@@ -183,7 +253,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
 
     val config = PHPickerConfiguration().apply {
         selectionLimit = 1
-        filter = PHPickerFilter.imagesFilter
+        this.filter = filter
     }
 
     val picker = PHPickerViewController(configuration = config)
@@ -201,8 +271,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
             val result = results.first()
             val itemProvider = result.itemProvider
 
-            // UTType.imageを使って画像を読み込む
-            itemProvider.loadDataRepresentationForTypeIdentifier("public.image") { data, error ->
+            itemProvider.loadDataRepresentationForTypeIdentifier(typeIdentifier) { data, error ->
                 if (error != null || data == null) {
                     complete(null)
                     return@loadDataRepresentationForTypeIdentifier
@@ -212,9 +281,9 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                     Logger.w(
                         "ImagePicker.ios",
                         if (dataLength > MAX_PICKED_IMAGE_BYTES) {
-                            "Selected image is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                            "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
                         } else {
-                            "Selected image payload is empty"
+                            "Selected $logLabel payload is empty"
                         }
                     )
                     complete(null)
@@ -226,7 +295,7 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
                     memcpy(pinned.addressOf(0), data.bytes, data.length)
                 }
 
-                complete(buildPickedImageData(bytes, null))
+                complete(buildPickedImageData(bytes, null, fallbackFileName))
             }
         }
     }
@@ -238,9 +307,24 @@ actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
     runCatching {
         rootViewController.presentViewController(picker, animated = true, completion = null)
     }.onFailure { error ->
-        Logger.e("ImagePicker.ios", "Failed to present photo picker", error)
+        Logger.e("ImagePicker.ios", "Failed to present photo $logLabel picker", error)
         complete(null)
     }
+}
+
+private suspend fun pickFromPhotoLibrary(
+    filter: PHPickerFilter,
+    typeIdentifier: String,
+    fallbackFileName: String,
+    logLabel: String
+): ImageData? = suspendCoroutine { continuation ->
+    pickFromPhotoLibrary(
+        filter = filter,
+        typeIdentifier = typeIdentifier,
+        fallbackFileName = fallbackFileName,
+        logLabel = logLabel,
+        continuation = continuation
+    )
 }
 
 /**
@@ -365,6 +449,12 @@ suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): Sav
                     null
                 }
                 dispatch_async(dispatch_get_main_queue()) {
+                    if (selected == null) {
+                        presentIosAlert(
+                            title = "フォルダを選択できません",
+                            message = "選択したフォルダに書き込みできません。Files で別のフォルダを選ぶか、手入力に切り替えてください。"
+                        )
+                    }
                     complete(selected)
                 }
             }
@@ -389,6 +479,10 @@ suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): Sav
             rootViewController.presentViewController(picker, animated = true, completion = null)
         }.onFailure { error ->
             Logger.e("ImagePicker.ios", "Failed to present save-location picker", error)
+            presentIosAlert(
+                title = "フォルダ選択を開けません",
+                message = "Files のフォルダ選択を開始できませんでした。手入力で保存先を指定してください。"
+            )
             complete(null)
         }
     }
