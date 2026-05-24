@@ -2,6 +2,10 @@ package com.valoser.futacha.shared.util
 
 import com.valoser.futacha.shared.model.SaveLocation
 
+interface FileWriteSink {
+    suspend fun write(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size)
+}
+
 /**
  * プラットフォーム非依存のファイルシステムインターフェース
  *
@@ -55,6 +59,13 @@ interface FileSystem {
      * @param bytes 追記するデータ
      */
     suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルを1回だけ開いてバイトストリームを書き込み
+     * @param path ファイルパス
+     * @param block 書き込み先シンク
+     */
+    suspend fun writeByteStream(path: String, block: suspend (FileWriteSink) -> Unit): Result<Unit>
 
     /**
      * ファイルに文字列を書き込み
@@ -147,6 +158,18 @@ interface FileSystem {
      * @param bytes 追記するデータ
      */
     suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit>
+
+    /**
+     * ファイルを1回だけ開いてバイトストリームを書き込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス (ファイル名を含む)
+     * @param block 書き込み先シンク
+     */
+    suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit>
 
     /**
      * ファイルに文字列を書き込み (SaveLocation版)

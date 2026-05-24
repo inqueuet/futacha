@@ -82,7 +82,8 @@ class FutachaApplication : Application() {
             dispatcher = Dispatchers.IO,
             autoSavedThreadRepository = autoSavedThreadRepository,
             httpClient = httpClient,
-            fileSystem = fileSystem
+            fileSystem = fileSystem,
+            maxConcurrency = 2
         )
 
         // Initialize WorkManager for background refresh

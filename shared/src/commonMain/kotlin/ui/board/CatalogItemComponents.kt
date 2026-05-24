@@ -34,6 +34,7 @@ internal fun CatalogGrid(
     isRefreshing: Boolean,
     gridColumns: Int,
     gridState: LazyGridState,
+    resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
@@ -79,6 +80,7 @@ internal fun CatalogGrid(
                 item = catalogItem,
                 boardUrl = board?.url,
                 repository = repository,
+                resolveHeadMetadata = resolveHeadMetadata,
                 isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
                 onClick = { onThreadSelected(catalogItem) }
             )
@@ -110,6 +112,7 @@ internal fun CatalogList(
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     listState: LazyListState,
+    resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
@@ -149,6 +152,7 @@ internal fun CatalogList(
                 item = catalogItem,
                 boardUrl = board?.url,
                 repository = repository,
+                resolveHeadMetadata = resolveHeadMetadata,
                 isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
                 onClick = { onThreadSelected(catalogItem) }
             )

@@ -438,6 +438,69 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(AppDispatchers.io) {
+        try {
+            validatePath(path, "path")
+            val absolutePath = resolveAbsolutePath(path)
+            val parentDir = parentDirectory(absolutePath)
+
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
+            }
+
+            val created = fileManager.createFileAtPath(absolutePath, contents = null, attributes = null)
+            if (!created && !fileManager.fileExistsAtPath(absolutePath)) {
+                throw Exception("Failed to create file for stream write: $absolutePath")
+            }
+
+            val fileHandle = NSFileHandle.fileHandleForWritingAtPath(absolutePath)
+                ?: throw Exception("Failed to open file for stream write: $absolutePath")
+
+            try {
+                fileHandle.truncateFileAtOffset(0u)
+                var totalWritten = 0L
+                val sink = object : FileWriteSink {
+                    override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        require(offset >= 0 && length >= 0 && offset <= bytes.size - length) {
+                            "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                        }
+                        val nextTotal = totalWritten + length
+                        validateFileSize(nextTotal, "file")
+                        if (length <= 0) return
+                        bytes.usePinned { pinned ->
+                            val chunk = NSData.create(
+                                bytes = pinned.addressOf(offset),
+                                length = length.toULong()
+                            )
+                            fileHandle.writeData(chunk)
+                        }
+                        totalWritten = nextTotal
+                    }
+                }
+                block(sink)
+            } finally {
+                fileHandle.closeFile()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
     // ========================================
     // SaveLocation-based implementations
     // ========================================
@@ -495,6 +558,27 @@ class IosFileSystem : FileSystem {
             }
         ) { fullPath ->
             appendBytes(fullPath, bytes)
+        }
+    }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            writeByteStream(fullPath, block)
         }
     }
 

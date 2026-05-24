@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.service.buildLegacyThreadStorageId
 import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.util.FileWriteSink
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
@@ -464,6 +465,23 @@ internal class InMemoryFileSystem : FileSystem {
         files[normalized] = current + bytes
     }
 
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = runCatching {
+        val normalized = normalize(path)
+        ensureParentDirectory(normalized)
+        var written = ByteArray(0)
+        val sink = object : FileWriteSink {
+            override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                require(offset >= 0 && length >= 0 && offset + length <= bytes.size)
+                written += bytes.copyOfRange(offset, offset + length)
+            }
+        }
+        block(sink)
+        files[normalized] = written
+    }
+
     override suspend fun writeString(path: String, content: String): Result<Unit> {
         return writeBytes(path, content.encodeToByteArray())
     }
@@ -541,6 +559,14 @@ internal class InMemoryFileSystem : FileSystem {
 
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> {
         return appendBytes(resolvePath(base, relativePath), bytes)
+    }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> {
+        return writeByteStream(resolvePath(base, relativePath), block)
     }
 
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {

@@ -48,10 +48,12 @@ internal fun buildCatalogScreenDependencies(
     stateStore: AppStateStore,
     autoSavedThreadRepository: SavedThreadRepository?,
     cookieRepository: CookieRepository?,
-    httpClient: HttpClient?
+    httpClient: HttpClient?,
+    shouldUseLightweightMode: Boolean = false
 ): CatalogScreenDependencies {
     return CatalogScreenDependencies(
         repository = resolveFutachaBoardRepository(board, sharedRepository),
+        resolveCatalogHeadMetadata = !shouldUseLightweightMode,
         services = buildScreenServiceDependencies(
             stateStore = stateStore,
             autoSavedThreadRepository = autoSavedThreadRepository,

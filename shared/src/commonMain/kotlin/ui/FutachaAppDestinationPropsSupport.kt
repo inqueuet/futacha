@@ -31,7 +31,8 @@ internal data class FutachaDestinationAssemblyContext(
     val fileSystem: FileSystem?,
     val cookieRepository: CookieRepository?,
     val autoSavedThreadRepository: SavedThreadRepository?,
-    val navigationState: FutachaNavigationState
+    val navigationState: FutachaNavigationState,
+    val shouldUseLightweightMode: Boolean
 )
 
 internal data class FutachaBoardManagementDestinationProps(
@@ -89,7 +90,8 @@ internal fun buildFutachaDestinationAssemblyContext(
     fileSystem: FileSystem?,
     cookieRepository: CookieRepository?,
     autoSavedThreadRepository: SavedThreadRepository?,
-    navigationState: FutachaNavigationState
+    navigationState: FutachaNavigationState,
+    shouldUseLightweightMode: Boolean = false
 ): FutachaDestinationAssemblyContext {
     return FutachaDestinationAssemblyContext(
         screenContract = screenBindings.screenContract,
@@ -102,7 +104,8 @@ internal fun buildFutachaDestinationAssemblyContext(
         fileSystem = fileSystem,
         cookieRepository = cookieRepository,
         autoSavedThreadRepository = autoSavedThreadRepository,
-        navigationState = navigationState
+        navigationState = navigationState,
+        shouldUseLightweightMode = shouldUseLightweightMode
     )
 }
 
@@ -148,7 +151,8 @@ internal fun buildFutachaCatalogDestinationProps(
             stateStore = context.stateStore,
             autoSavedThreadRepository = context.autoSavedThreadRepository,
             cookieRepository = context.cookieRepository,
-            httpClient = context.httpClient
+            httpClient = context.httpClient,
+            shouldUseLightweightMode = context.shouldUseLightweightMode
         ),
         screenContract = context.screenContract,
         saveableStateKey = "catalog-${board.id}"

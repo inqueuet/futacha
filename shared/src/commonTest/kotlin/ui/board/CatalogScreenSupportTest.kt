@@ -20,6 +20,7 @@ import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.PersistentCookieStorage
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.util.FileWriteSink
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.model.SaveLocation
@@ -1444,6 +1445,14 @@ private class NoOpFileSystem : FileSystem {
 
     override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = Result.success(Unit)
 
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> {
+        block(NoOpFileWriteSink)
+        return Result.success(Unit)
+    }
+
     override suspend fun writeString(path: String, content: String): Result<Unit> = Result.success(Unit)
 
     override suspend fun readBytes(path: String): Result<ByteArray> = Result.failure(IllegalStateException("unused"))
@@ -1472,6 +1481,15 @@ private class NoOpFileSystem : FileSystem {
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> =
         Result.success(Unit)
 
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> {
+        block(NoOpFileWriteSink)
+        return Result.success(Unit)
+    }
+
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> =
         Result.success(Unit)
 
@@ -1481,4 +1499,8 @@ private class NoOpFileSystem : FileSystem {
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = false
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = Result.success(Unit)
+
+    private object NoOpFileWriteSink : FileWriteSink {
+        override suspend fun write(bytes: ByteArray, offset: Int, length: Int) = Unit
+    }
 }

@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.util
 
 import com.valoser.futacha.shared.model.SaveLocation
 import java.io.File
+import java.io.FileOutputStream
+import kotlin.coroutines.cancellation.CancellationException
 
 private class JvmFileSystem : FileSystem {
     private val rootDirectory = File(System.getProperty("java.io.tmpdir"), "futacha-jvm")
@@ -26,6 +28,37 @@ private class JvmFileSystem : FileSystem {
         val file = File(resolveAbsolutePath(path))
         file.parentFile?.mkdirs()
         file.appendBytes(bytes)
+    }
+
+    override suspend fun writeByteStream(path: String, block: suspend (FileWriteSink) -> Unit): Result<Unit> {
+        return try {
+            validateFileSystemPath(path)
+            val file = File(resolveAbsolutePath(path))
+            file.parentFile?.mkdirs()
+            FileOutputStream(file, false).use { output ->
+                var totalWritten = 0L
+                val sink = object : FileWriteSink {
+                    override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        require(offset >= 0 && length >= 0 && offset + length <= bytes.size) {
+                            "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                        }
+                        val nextTotal = totalWritten + length
+                        validateFileSystemSize(nextTotal, "file")
+                        if (length > 0) {
+                            output.write(bytes, offset, length)
+                            totalWritten = nextTotal
+                        }
+                    }
+                }
+                block(sink)
+                output.flush()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
     }
 
     override suspend fun writeString(path: String, content: String): Result<Unit> =
@@ -87,6 +120,17 @@ private class JvmFileSystem : FileSystem {
     override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> =
         when (base) {
             is SaveLocation.Path -> appendBytes(join(base.path, relativePath), bytes)
+            is SaveLocation.TreeUri -> Result.failure(UnsupportedOperationException("TreeUri unsupported on JVM"))
+            is SaveLocation.Bookmark -> Result.failure(UnsupportedOperationException("Bookmark unsupported on JVM"))
+        }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> =
+        when (base) {
+            is SaveLocation.Path -> writeByteStream(join(base.path, relativePath), block)
             is SaveLocation.TreeUri -> Result.failure(UnsupportedOperationException("TreeUri unsupported on JVM"))
             is SaveLocation.Bookmark -> Result.failure(UnsupportedOperationException("Bookmark unsupported on JVM"))
         }

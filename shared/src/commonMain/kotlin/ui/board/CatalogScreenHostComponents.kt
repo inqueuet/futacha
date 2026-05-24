@@ -110,6 +110,7 @@ internal fun CatalogScreenScaffold(
                         gridColumns = bindings.catalogGridColumns,
                         gridState = bindings.catalogGridState,
                         listState = bindings.catalogListState,
+                        resolveHeadMetadata = bindings.resolveCatalogHeadMetadata,
                         modifier = contentModifier
                     )
                 }

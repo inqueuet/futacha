@@ -44,7 +44,8 @@ internal data class CatalogScreenScaffoldBindings(
     val catalogDisplayStyle: CatalogDisplayStyle,
     val catalogGridColumns: Int,
     val catalogGridState: LazyGridState,
-    val catalogListState: LazyListState
+    val catalogListState: LazyListState,
+    val resolveCatalogHeadMetadata: Boolean = true
 )
 
 internal data class CatalogScreenOverlayHostBindings(
@@ -109,6 +110,7 @@ internal data class CatalogScreenHostBindingsInputs(
     val catalogGridColumns: Int,
     val catalogGridState: LazyGridState,
     val catalogListState: LazyListState,
+    val resolveCatalogHeadMetadata: Boolean = true,
     val overlayState: CatalogOverlayState,
     val overlayBindings: CatalogScreenOverlayBindingsBundle,
     val createThreadDraft: CreateThreadDraft,
@@ -158,7 +160,8 @@ internal fun buildCatalogScreenHostBindings(
         catalogDisplayStyle = inputs.catalogDisplayStyle,
         catalogGridColumns = inputs.catalogGridColumns,
         catalogGridState = inputs.catalogGridState,
-        catalogListState = inputs.catalogListState
+        catalogListState = inputs.catalogListState,
+        resolveCatalogHeadMetadata = inputs.resolveCatalogHeadMetadata
     )
     val overlayHostBindings = CatalogScreenOverlayHostBindings(
         overlayState = inputs.overlayState,

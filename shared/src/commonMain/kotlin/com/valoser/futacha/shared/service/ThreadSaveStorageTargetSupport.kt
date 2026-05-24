@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.util.FileWriteSink
 import com.valoser.futacha.shared.util.FileSystem
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -141,6 +142,56 @@ internal suspend fun writeThreadSaveBinaryFile(
     } ?: false
     if (!completed) {
         throw IllegalStateException("Save aborted: timed out while writing media file")
+    }
+}
+
+internal suspend fun appendThreadSaveBinaryFile(
+    fileSystem: FileSystem,
+    target: ThreadSaveBinaryWriteTarget,
+    payload: ByteArray,
+    writeTimeoutMillis: Long
+) {
+    val completed = withTimeoutOrNull(writeTimeoutMillis) {
+        when {
+            target.saveLocation != null && target.relativePath != null -> {
+                fileSystem.appendBytes(target.saveLocation, target.relativePath, payload).getOrThrow()
+            }
+            target.absolutePath != null -> {
+                fileSystem.appendBytes(target.absolutePath, payload).getOrThrow()
+            }
+            else -> {
+                throw IllegalStateException("No target path specified for media stream")
+            }
+        }
+        true
+    } ?: false
+    if (!completed) {
+        throw IllegalStateException("Save aborted: timed out while writing media chunk")
+    }
+}
+
+internal suspend fun writeThreadSaveBinaryStream(
+    fileSystem: FileSystem,
+    target: ThreadSaveBinaryWriteTarget,
+    writeTimeoutMillis: Long,
+    block: suspend (FileWriteSink) -> Unit
+) {
+    val completed = withTimeoutOrNull(writeTimeoutMillis) {
+        when {
+            target.saveLocation != null && target.relativePath != null -> {
+                fileSystem.writeByteStream(target.saveLocation, target.relativePath, block).getOrThrow()
+            }
+            target.absolutePath != null -> {
+                fileSystem.writeByteStream(target.absolutePath, block).getOrThrow()
+            }
+            else -> {
+                throw IllegalStateException("No target path specified for media stream")
+            }
+        }
+        true
+    } ?: false
+    if (!completed) {
+        throw IllegalStateException("Save aborted: timed out while writing media stream")
     }
 }
 

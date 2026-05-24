@@ -1,6 +1,6 @@
 package com.valoser.futacha.shared.util
 
-internal const val MAX_PICKED_IMAGE_BYTES = 10L * 1024L * 1024L
+internal const val MAX_PICKED_IMAGE_BYTES = 8_192_000L
 internal const val DEFAULT_PICKED_IMAGE_FILE_NAME = "image.jpg"
 
 internal fun isPickedImagePayloadSizeValid(

@@ -15,6 +15,7 @@ internal data class CatalogScreenContentArgs(
     val onThreadSelected: (CatalogItem) -> Unit,
     override val screenContext: ResolvedScreenContext,
     val dependencies: CatalogScreenResolvedDependencies,
+    val resolveCatalogHeadMetadata: Boolean,
     val modifier: Modifier
 ) : ScreenContextOwner
 
@@ -44,6 +45,7 @@ internal fun assembleCatalogScreenContentArgs(
     onThreadSelected: (CatalogItem) -> Unit,
     screenContext: ResolvedScreenContext,
     dependencies: CatalogScreenResolvedDependencies,
+    resolveCatalogHeadMetadata: Boolean = true,
     modifier: Modifier = Modifier
 ): CatalogScreenContentArgs {
     return CatalogScreenContentArgs(
@@ -52,6 +54,7 @@ internal fun assembleCatalogScreenContentArgs(
         onThreadSelected = onThreadSelected,
         screenContext = screenContext,
         dependencies = dependencies,
+        resolveCatalogHeadMetadata = resolveCatalogHeadMetadata,
         modifier = modifier
     )
 }
@@ -72,6 +75,7 @@ internal fun buildCatalogScreenContentArgsFromContract(
         dependencies = resolveCatalogScreenDependencies(
             dependencies = dependencies
         ),
+        resolveCatalogHeadMetadata = dependencies.resolveCatalogHeadMetadata,
         modifier = modifier
     )
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
@@ -13,9 +14,11 @@ import io.ktor.client.HttpClient
 import kotlin.time.Clock
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 
 internal data class ThreadAutoSaveEffectState(
     val availability: ThreadAutoSaveAvailability,
@@ -290,13 +293,25 @@ internal fun ThreadAutoSaveLaunchEffect(
     autoSaveEffectState: ThreadAutoSaveEffectState,
     onStartAutoSave: (ThreadPage) -> Unit
 ) {
+    val currentOnStartAutoSave = rememberUpdatedState(onStartAutoSave)
     LaunchedEffect(
         threadId,
         currentPageForAutoSave,
         isShowingOfflineCopy,
         httpClient,
-        fileSystem
+        fileSystem,
+        autoSaveEffectState.availability
     ) {
-        autoSaveEffectState.page?.let(onStartAutoSave)
+        val page = currentPageForAutoSave ?: return@LaunchedEffect
+        if (autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingDependencies ||
+            autoSaveEffectState.availability == ThreadAutoSaveAvailability.OfflineCopy ||
+            autoSaveEffectState.availability == ThreadAutoSaveAvailability.ThreadMismatch
+        ) {
+            return@LaunchedEffect
+        }
+        while (isActive) {
+            currentOnStartAutoSave.value(page)
+            delay(AUTO_SAVE_INTERVAL_MS)
+        }
     }
 }

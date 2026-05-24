@@ -1,10 +1,10 @@
 package com.valoser.futacha.shared.background
 
-import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -16,6 +16,7 @@ import platform.Foundation.NSDate
 import platform.Foundation.NSBundle
 import platform.Foundation.NSProcessInfo
 import platform.Foundation.NSLog
+import platform.Foundation.NSThread
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
 import kotlin.time.Clock
@@ -30,7 +31,7 @@ object BackgroundRefreshManager {
     private const val MIN_REFRESH_INTERVAL_SECONDS = 15 * 60.0
     private const val MAX_SCHEDULE_RETRY_ATTEMPTS = 12
     private var registered = false
-    private val scope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var isEnabled = false
     private var executeBlock: (suspend () -> Unit)? = null
     private var activeTaskJob: Job? = null
@@ -40,6 +41,12 @@ object BackgroundRefreshManager {
     private var scheduleRetryAttempts: Int = 0
 
     fun registerAtLaunch() {
+        runOnMain {
+            registerAtLaunchOnMain()
+        }
+    }
+
+    private fun registerAtLaunchOnMain() {
         if (!isSupported()) return
         if (!isTaskIdentifierPermitted()) {
             NSLog("Skipping BGTask registration: '$TASK_ID' is not listed in BGTaskSchedulerPermittedIdentifiers")
@@ -50,6 +57,12 @@ object BackgroundRefreshManager {
     }
 
     fun configure(enabled: Boolean, onExecute: suspend () -> Unit) {
+        runOnMain {
+            configureOnMain(enabled, onExecute)
+        }
+    }
+
+    private fun configureOnMain(enabled: Boolean, onExecute: suspend () -> Unit) {
         NSLog("BGTask configure(enabled=$enabled)")
         isEnabled = enabled
         executeBlock = onExecute
@@ -69,7 +82,7 @@ object BackgroundRefreshManager {
             registerIfNeeded()
             scheduleRefresh()
         } else {
-            cancel()
+            cancelOnMain()
         }
     }
 
@@ -261,6 +274,12 @@ object BackgroundRefreshManager {
     }
 
     fun cancel() {
+        runOnMain {
+            cancelOnMain()
+        }
+    }
+
+    private fun cancelOnMain() {
         NSLog("Cancelling BGTask manager state for $TASK_ID")
         isEnabled = false
         executeBlock = null
@@ -272,8 +291,16 @@ object BackgroundRefreshManager {
         hasPendingRefreshRequest = false
         scheduleRetryAttempts = 0
         if (!isSupported()) return
-        dispatch_async(dispatch_get_main_queue()) {
-            BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(TASK_ID)
+        BGTaskScheduler.sharedScheduler().cancelTaskRequestWithIdentifier(TASK_ID)
+    }
+
+    private fun runOnMain(block: () -> Unit) {
+        if (NSThread.isMainThread) {
+            block()
+        } else {
+            dispatch_async(dispatch_get_main_queue()) {
+                block()
+            }
         }
     }
 

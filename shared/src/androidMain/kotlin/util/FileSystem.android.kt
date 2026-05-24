@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -121,6 +122,47 @@ class AndroidFileSystem(
                 }
             }
             file.appendBytes(bytes)
+        }
+    }
+
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            validatePath(path, "path")
+            val file = File(resolveAbsolutePath(path))
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    if (!parent.mkdirs() && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
+            FileOutputStream(file, false).use { output ->
+                var totalWritten = 0L
+                val sink = object : FileWriteSink {
+                    override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        coroutineContext.ensureActive()
+                        require(offset >= 0 && length >= 0 && offset + length <= bytes.size) {
+                            "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                        }
+                        val nextTotal = totalWritten + length
+                        validateFileSize(nextTotal, "file")
+                        if (length > 0) {
+                            output.write(bytes, offset, length)
+                            totalWritten = nextTotal
+                        }
+                    }
+                }
+                block(sink)
+                output.flush()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
     }
 
@@ -487,6 +529,61 @@ class AndroidFileSystem(
                     context.contentResolver.openOutputStream(file.uri, "wa")?.use { output ->
                         output.write(bytes)
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                writeByteStream(fullPath, block)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val result = runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                        val (parentDir, fileName) = resolveTreeParentDirectory(
+                            baseDir = baseDir,
+                            relativePath = relativePath,
+                            createDirectories = true
+                        )
+                        val file = findOrCreateTreeFile(parentDir, fileName)
+                        context.contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
+                            var totalWritten = 0L
+                            val sink = object : FileWriteSink {
+                                override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                                    coroutineContext.ensureActive()
+                                    require(offset >= 0 && length >= 0 && offset + length <= bytes.size) {
+                                        "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                                    }
+                                    val nextTotal = totalWritten + length
+                                    validateFileSize(nextTotal, "file")
+                                    if (length > 0) {
+                                        output.write(bytes, offset, length)
+                                        totalWritten = nextTotal
+                                    }
+                                }
+                            }
+                            block(sink)
+                            output.flush()
+                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                    }
+                    result
+                } catch (e: CancellationException) {
+                    throw e
                 }
             }
             is SaveLocation.Bookmark -> {

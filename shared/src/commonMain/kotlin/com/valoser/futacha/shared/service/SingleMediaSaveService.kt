@@ -92,7 +92,6 @@ class SingleMediaSaveService(
                                 else -> IMAGE_SUB_DIRECTORY
                             }
 
-                            val payload = readPayloadBytes(response, startedAtMillis)
                             val savedAt = Clock.System.now().toEpochMilliseconds()
                             val fileName = buildOutputFileName(
                                 mediaUrl = normalizedUrl,
@@ -100,28 +99,41 @@ class SingleMediaSaveService(
                                 savedAt = savedAt
                             )
 
-                            val relativePath = buildSingleMediaRelativePath(
-                                storageId = storageId,
+                            val relativeMediaPath = buildSingleMediaRelativePath(
+                                storageId = "",
                                 targetSubDirectory = targetSubDirectory,
                                 fileName = fileName
+                            ).trimStart('/')
+                            val storageTarget = buildThreadSaveStorageTarget(
+                                saveLocation = baseSaveLocation,
+                                baseDirectory = baseDirectory,
+                                storageId = storageId
                             )
-                            val mediaBaseRelativePath = relativePath.substringBeforeLast('/')
+                            val relativePath = storageTarget.relativeStoragePath(relativeMediaPath)
+                            val mediaBaseRelativePath = relativeMediaPath.substringBeforeLast('/')
 
                             if (baseSaveLocation != null) {
-                                fileSystem.createDirectory(baseSaveLocation, mediaBaseRelativePath).getOrThrow()
-                                fileSystem.writeBytes(baseSaveLocation, relativePath, payload).getOrThrow()
+                                fileSystem.createDirectory(
+                                    baseSaveLocation,
+                                    storageTarget.relativeStoragePath(mediaBaseRelativePath)
+                                ).getOrThrow()
                             } else {
-                                val absoluteDirectory = "$baseDirectory/$mediaBaseRelativePath"
-                                val absolutePath = "$absoluteDirectory/$fileName"
-                                fileSystem.createDirectory(absoluteDirectory).getOrThrow()
-                                fileSystem.writeBytes(absolutePath, payload).getOrThrow()
+                                fileSystem.createDirectory(
+                                    storageTarget.absoluteStoragePath(mediaBaseRelativePath)
+                                ).getOrThrow()
                             }
+                            val binaryTarget = resolveThreadSaveBinaryWriteTarget(storageTarget, relativeMediaPath)
+                            val byteSize = streamPayloadToStorage(
+                                response = response,
+                                binaryTarget = binaryTarget,
+                                startedAtMillis = startedAtMillis
+                            )
 
                             SavedMediaFile(
                                 fileName = fileName,
                                 relativePath = relativePath,
                                 mediaType = mediaType,
-                                byteSize = payload.size.toLong(),
+                                byteSize = byteSize,
                                 savedAtEpochMillis = savedAt
                             )
                         } finally {
@@ -139,71 +151,67 @@ class SingleMediaSaveService(
         )
     }
 
-    private suspend fun readPayloadBytes(response: HttpResponse, startedAtMillis: Long): ByteArray {
+    private suspend fun streamPayloadToStorage(
+        response: HttpResponse,
+        binaryTarget: ThreadSaveBinaryWriteTarget,
+        startedAtMillis: Long
+    ): Long {
+        cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
         val channel = response.bodyAsChannel()
         val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
-        var output = ByteArray(minOf(STREAM_READ_BUFFER_BYTES, MAX_FILE_SIZE_BYTES.toInt()))
-        var totalBytesRead = 0
+        var totalBytesRead = 0L
         var zeroReadCount = 0
         var loopCount = 0L
 
-        while (true) {
-            coroutineContext.ensureActive()
-            val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
-                channel.readAvailable(buffer, 0, buffer.size)
-            } ?: throw IllegalStateException("保存に失敗しました: ストリーム読み込みがタイムアウトしました")
+        try {
+            writeThreadSaveBinaryStream(
+                fileSystem = fileSystem,
+                target = binaryTarget,
+                writeTimeoutMillis = WRITE_TIMEOUT_MILLIS
+            ) { sink ->
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
+                        channel.readAvailable(buffer, 0, buffer.size)
+                    } ?: throw IllegalStateException("保存に失敗しました: ストリーム読み込みがタイムアウトしました")
 
-            if (read == -1) break
-            if (read == 0) {
-                zeroReadCount += 1
-                if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
-                    throw IllegalStateException("保存に失敗しました: メディアストリームが停止しました")
+                    if (read == -1) break
+                    if (read == 0) {
+                        zeroReadCount += 1
+                        if (zeroReadCount >= MAX_ZERO_READ_RETRIES) {
+                            throw IllegalStateException("保存に失敗しました: メディアストリームが停止しました")
+                        }
+                        delay(ZERO_READ_BACKOFF_MILLIS)
+                        continue
+                    }
+
+                    zeroReadCount = 0
+                    val requiredSize = totalBytesRead + read
+                    if (requiredSize > MAX_FILE_SIZE_BYTES) {
+                        throw IllegalStateException("保存に失敗しました: 実際のファイルサイズが上限を超えました")
+                    }
+
+                    val elapsed = Clock.System.now().toEpochMilliseconds() - startedAtMillis
+                    if (elapsed > MAX_SAVE_DURATION_MILLIS) {
+                        throw IllegalStateException("保存に失敗しました: 処理時間が上限を超えました")
+                    }
+
+                    sink.write(buffer, 0, read)
+                    totalBytesRead = requiredSize
+
+                    loopCount += 1
+                    if (loopCount % 32L == 0L) {
+                        yield()
+                    }
                 }
-                delay(ZERO_READ_BACKOFF_MILLIS)
-                continue
             }
-
-            zeroReadCount = 0
-            val requiredSize = totalBytesRead + read
-            if (requiredSize.toLong() > MAX_FILE_SIZE_BYTES) {
-                throw IllegalStateException("保存に失敗しました: 実際のファイルサイズが上限を超えました")
+            if (totalBytesRead <= 0L) {
+                throw IllegalStateException("保存に失敗しました: メディアファイルが空です")
             }
-
-            val elapsed = Clock.System.now().toEpochMilliseconds() - startedAtMillis
-            if (elapsed > MAX_SAVE_DURATION_MILLIS) {
-                throw IllegalStateException("保存に失敗しました: 処理時間が上限を超えました")
-            }
-
-            if (requiredSize > output.size) {
-                var newSize = output.size
-                while (newSize < requiredSize) {
-                    newSize = (newSize * 2).coerceAtMost(MAX_FILE_SIZE_BYTES.toInt())
-                    if (newSize == output.size) break
-                }
-                if (newSize < requiredSize) {
-                    throw IllegalStateException("保存に失敗しました: バッファ拡張に失敗しました")
-                }
-                output = output.copyOf(newSize)
-            }
-
-            buffer.copyInto(
-                destination = output,
-                destinationOffset = totalBytesRead,
-                startIndex = 0,
-                endIndex = read
-            )
-            totalBytesRead = requiredSize
-
-            loopCount += 1
-            if (loopCount % 32L == 0L) {
-                yield()
-            }
-        }
-
-        return if (totalBytesRead == output.size) {
-            output
-        } else {
-            output.copyOf(totalBytesRead)
+            return totalBytesRead
+        } catch (t: Throwable) {
+            cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
+            throw t
         }
     }
 
@@ -287,7 +295,8 @@ class SingleMediaSaveService(
         private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 120_000L
         private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
-        private const val STREAM_READ_BUFFER_BYTES = 64 * 1024
+        private const val WRITE_TIMEOUT_MILLIS = 15_000L
+        private const val STREAM_READ_BUFFER_BYTES = 512 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val MAX_FILENAME_LENGTH = 96

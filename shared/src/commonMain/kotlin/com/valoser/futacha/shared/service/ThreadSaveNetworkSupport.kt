@@ -14,9 +14,14 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.cancel
+import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
 
 internal data class ThreadSaveHtmlFetchRequest(
@@ -131,34 +136,57 @@ internal suspend fun streamThreadSaveResponseToStorage(
     fileSystem: FileSystem,
     request: ThreadSaveResponseStreamRequest
 ): Long {
-    val payload = readThreadSaveChannelBytes(
-        channel = response.bodyAsChannel(),
-        config = ThreadSaveChannelReadConfig(
-            maxBytes = request.maxFileSizeBytes.toInt(),
-            streamReadBufferBytes = request.streamReadBufferBytes,
-            maxZeroReadRetries = request.maxZeroReadRetries,
-            zeroReadBackoffMillis = request.zeroReadBackoffMillis,
-            readIdleTimeoutMillis = request.readIdleTimeoutMillis,
-            stalledMessage = "Save aborted: media stream stalled",
-            oversizeMessage = { requiredSize ->
-                "Actual file size exceeds limit: ${requiredSize / 1024}KB"
-            },
-            bufferExpandFailureMessage = "Failed to expand media buffer safely",
-            onBytesRead = {
-                if (request.nowMillis() - request.startedAtMillis > request.maxSaveDurationMs) {
-                    throw IllegalStateException("Save aborted: exceeded time limit during download")
-                }
-            }
-        )
-    )
-    writeThreadSaveBinaryFile(
+    cleanupThreadSaveBinaryWriteTarget(fileSystem, request.binaryTarget)
+    val channel = response.bodyAsChannel()
+    val buffer = ByteArray(request.streamReadBufferBytes)
+    var totalBytesRead = 0L
+    var zeroReadCount = 0
+    var readLoopCount = 0L
+
+    writeThreadSaveBinaryStream(
         fileSystem = fileSystem,
         target = request.binaryTarget,
-        payload = payload,
         writeTimeoutMillis = request.writeTimeoutMillis
-    )
+    ) { sink ->
+        while (true) {
+            coroutineContext.ensureActive()
+            val read = withTimeoutOrNull(request.readIdleTimeoutMillis) {
+                channel.readAvailable(buffer, 0, buffer.size)
+            } ?: throw IllegalStateException("Save aborted: media stream stalled")
 
-    return payload.size.toLong()
+            if (read == -1) break
+            if (read == 0) {
+                zeroReadCount += 1
+                if (zeroReadCount >= request.maxZeroReadRetries) {
+                    throw IllegalStateException("Save aborted: media stream stalled")
+                }
+                delay(request.zeroReadBackoffMillis)
+                continue
+            }
+
+            zeroReadCount = 0
+            val requiredSize = totalBytesRead + read
+            if (requiredSize > request.maxFileSizeBytes) {
+                throw IllegalStateException("Actual file size exceeds limit: ${requiredSize / 1024}KB")
+            }
+            if (request.nowMillis() - request.startedAtMillis > request.maxSaveDurationMs) {
+                throw IllegalStateException("Save aborted: exceeded time limit during download")
+            }
+
+            sink.write(buffer, 0, read)
+            totalBytesRead = requiredSize
+
+            readLoopCount += 1
+            if (readLoopCount % 32L == 0L) {
+                yield()
+            }
+        }
+    }
+    if (totalBytesRead <= 0L) {
+        throw IllegalStateException("Downloaded media file is empty")
+    }
+
+    return totalBytesRead
 }
 
 internal suspend fun downloadAndStoreThreadSaveMedia(

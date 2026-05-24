@@ -40,6 +40,7 @@ data class BoardManagementScreenDependencies(
 
 data class CatalogScreenDependencies(
     val repository: BoardRepository? = null,
+    val resolveCatalogHeadMetadata: Boolean = true,
     override val services: ScreenServiceDependencies = ScreenServiceDependencies()
 ) : ScreenServiceDependenciesOwner
 

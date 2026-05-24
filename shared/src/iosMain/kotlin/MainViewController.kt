@@ -242,7 +242,8 @@ private suspend fun runIosBackgroundRefresh(
         dispatcher = AppDispatchers.io,
         autoSavedThreadRepository = autoSaveRepo,
         httpClient = httpClient,
-        fileSystem = fileSystem
+        fileSystem = fileSystem,
+        maxConcurrency = 2
     )
     try {
         Logger.d("BackgroundRefresh", "Starting iOS background refresh run (maxThreadsPerRun=$IOS_BG_MAX_THREADS_PER_RUN)")

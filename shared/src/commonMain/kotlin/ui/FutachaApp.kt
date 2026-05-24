@@ -179,6 +179,7 @@ fun FutachaApp(
                     fileSystem = fileSystem,
                     cookieRepository = cookieRepository,
                     autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                    shouldUseLightweightMode = shouldUseLightweightMode,
                     coroutineScope = coroutineScope
                 )
                 val resolvedDestinationContent = navigationRuntimeState.resolvedDestinationContent

@@ -62,6 +62,7 @@ internal fun CatalogSuccessContent(
     gridColumns: Int,
     gridState: LazyGridState,
     listState: LazyListState,
+    resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
     if (items.isEmpty()) {
@@ -82,6 +83,7 @@ internal fun CatalogSuccessContent(
                 isRefreshing = isRefreshing,
                 gridColumns = gridColumns,
                 gridState = gridState,
+                resolveHeadMetadata = resolveHeadMetadata,
                 modifier = modifier
             )
 
@@ -95,6 +97,7 @@ internal fun CatalogSuccessContent(
                 onRefresh = onRefresh,
                 isRefreshing = isRefreshing,
                 listState = listState,
+                resolveHeadMetadata = resolveHeadMetadata,
                 modifier = modifier
             )
         }

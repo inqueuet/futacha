@@ -43,6 +43,7 @@ internal fun CatalogCard(
     item: CatalogItem,
     boardUrl: String?,
     repository: BoardRepository,
+    resolveHeadMetadata: Boolean,
     isWatchWordMatch: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -53,7 +54,8 @@ internal fun CatalogCard(
     val displayTitle = rememberCatalogDisplayTitle(
         item = item,
         boardUrl = boardUrl,
-        repository = repository
+        repository = repository,
+        resolveHeadMetadata = resolveHeadMetadata
     )
 
     ElevatedCard(
@@ -124,6 +126,7 @@ internal fun CatalogListItem(
     item: CatalogItem,
     boardUrl: String?,
     repository: BoardRepository,
+    resolveHeadMetadata: Boolean,
     isWatchWordMatch: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -134,7 +137,8 @@ internal fun CatalogListItem(
     val displayTitle = rememberCatalogDisplayTitle(
         item = item,
         boardUrl = boardUrl,
-        repository = repository
+        repository = repository,
+        resolveHeadMetadata = resolveHeadMetadata
     )
 
     ElevatedCard(
@@ -206,7 +210,8 @@ internal fun CatalogListItem(
 private fun rememberCatalogDisplayTitle(
     item: CatalogItem,
     boardUrl: String?,
-    repository: BoardRepository
+    repository: BoardRepository,
+    resolveHeadMetadata: Boolean
 ): String {
     val fallbackTitle = item.title?.takeIf { it.isNotBlank() } ?: "無題"
     val resolvedTitle by produceState(
@@ -215,9 +220,13 @@ private fun rememberCatalogDisplayTitle(
         item.id,
         item.title,
         item.replyCount,
-        repository
+        repository,
+        resolveHeadMetadata
     ) {
-        if (boardUrl.isNullOrBlank() || !shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)) {
+        if (!resolveHeadMetadata ||
+            boardUrl.isNullOrBlank() ||
+            !shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)
+        ) {
             value = fallbackTitle
             return@produceState
         }

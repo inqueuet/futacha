@@ -106,6 +106,12 @@ private fun loadPickedMediaFromUrl(
         return null
     }
 
+    if (knownFileSize != null && knownFileSize > 0L) {
+        readPickedMediaBytesFromFileUrl(url, knownFileSize, mediaLabel)?.let { bytes ->
+            return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
+        }
+    }
+
     val data = NSData.dataWithContentsOfURL(url)
     if (data == null) {
         Logger.w("ImagePicker.ios", "Failed to load $mediaLabel from ${url.path}")
@@ -130,6 +136,44 @@ private fun loadPickedMediaFromUrl(
         memcpy(pinned.addressOf(0), data.bytes, data.length)
     }
     return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
+}
+
+private fun readPickedMediaBytesFromFileUrl(
+    url: NSURL,
+    expectedFileSize: Long,
+    mediaLabel: String
+): ByteArray? {
+    val path = url.path ?: return null
+    if (expectedFileSize <= 0L || expectedFileSize > MAX_PICKED_IMAGE_BYTES) return null
+
+    val expectedSize = expectedFileSize.toInt()
+    val output = ByteArray(expectedSize)
+    val fileHandle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
+    var totalRead = 0
+
+    try {
+        while (true) {
+            val chunk = fileHandle.readDataOfLength(64UL * 1024UL)
+            val chunkLength = chunk.length.toInt()
+            if (chunkLength <= 0) break
+            if (totalRead + chunkLength > expectedSize) {
+                Logger.w("ImagePicker.ios", "Selected $mediaLabel exceeded declared file size while reading")
+                return null
+            }
+            output.usePinned { pinned ->
+                memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
+            }
+            totalRead += chunkLength
+        }
+    } finally {
+        fileHandle.closeFile()
+    }
+
+    if (totalRead <= 0 || totalRead > MAX_PICKED_IMAGE_BYTES) {
+        Logger.w("ImagePicker.ios", "Selected $mediaLabel payload is empty or too large")
+        return null
+    }
+    return if (totalRead == expectedSize) output else output.copyOf(totalRead)
 }
 
 /**
@@ -271,31 +315,49 @@ private fun pickFromPhotoLibrary(
             val result = results.first()
             val itemProvider = result.itemProvider
 
-            itemProvider.loadDataRepresentationForTypeIdentifier(typeIdentifier) { data, error ->
-                if (error != null || data == null) {
-                    complete(null)
-                    return@loadDataRepresentationForTypeIdentifier
-                }
-                val dataLength = data.length.toLong()
-                if (!isPickedImagePayloadSizeValid(dataLength)) {
-                    Logger.w(
-                        "ImagePicker.ios",
-                        if (dataLength > MAX_PICKED_IMAGE_BYTES) {
-                            "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
-                        } else {
-                            "Selected $logLabel payload is empty"
-                        }
+            itemProvider.loadFileRepresentationForTypeIdentifier(typeIdentifier) { url, fileError ->
+                if (url != null) {
+                    val selected = loadPickedMediaFromUrl(
+                        url = url,
+                        isVideo = logLabel == "video",
+                        fallbackFileName = fallbackFileName
                     )
-                    complete(null)
-                    return@loadDataRepresentationForTypeIdentifier
+                    dispatch_async(dispatch_get_main_queue()) {
+                        complete(selected)
+                    }
+                    return@loadFileRepresentationForTypeIdentifier
                 }
 
-                val bytes = ByteArray(dataLength.toInt())
-                bytes.usePinned { pinned ->
-                    memcpy(pinned.addressOf(0), data.bytes, data.length)
-                }
+                itemProvider.loadDataRepresentationForTypeIdentifier(typeIdentifier) { data, dataError ->
+                    if (dataError != null || data == null) {
+                        Logger.w(
+                            "ImagePicker.ios",
+                            "Failed to load selected $logLabel as file or data: ${fileError?.localizedDescription ?: dataError?.localizedDescription.orEmpty()}"
+                        )
+                        complete(null)
+                        return@loadDataRepresentationForTypeIdentifier
+                    }
+                    val dataLength = data.length.toLong()
+                    if (!isPickedImagePayloadSizeValid(dataLength)) {
+                        Logger.w(
+                            "ImagePicker.ios",
+                            if (dataLength > MAX_PICKED_IMAGE_BYTES) {
+                                "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                            } else {
+                                "Selected $logLabel payload is empty"
+                            }
+                        )
+                        complete(null)
+                        return@loadDataRepresentationForTypeIdentifier
+                    }
 
-                complete(buildPickedImageData(bytes, null, fallbackFileName))
+                    val bytes = ByteArray(dataLength.toInt())
+                    bytes.usePinned { pinned ->
+                        memcpy(pinned.addressOf(0), data.bytes, data.length)
+                    }
+
+                    complete(buildPickedImageData(bytes, null, fallbackFileName))
+                }
             }
         }
     }

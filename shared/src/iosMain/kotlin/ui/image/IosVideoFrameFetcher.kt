@@ -41,6 +41,10 @@ import platform.darwin.DISPATCH_TIME_NOW
 import platform.posix.memcpy
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 
 @OptIn(ExperimentalForeignApi::class)
 internal class IosVideoFrameFetcher(
@@ -51,7 +55,7 @@ internal class IosVideoFrameFetcher(
     override suspend fun fetch(): FetchResult {
         val extension = url.pathExtension?.lowercase().orEmpty()
         val data = when (extension) {
-            "webm" -> createWebKitThumbnail(url, options)
+            "webm" -> createCachedWebKitThumbnail(url, options)
             else -> createAvFoundationThumbnail(url, options)
         }
         return SourceFetchResult(
@@ -81,6 +85,9 @@ internal class IosVideoFrameFetcher(
 }
 
 private val IOS_VIDEO_THUMBNAIL_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm")
+private val webKitThumbnailSemaphore = Semaphore(permits = 1)
+private val webKitThumbnailCacheMutex = Mutex()
+private val webKitThumbnailCache = LinkedHashMap<String, NSData>()
 
 private fun String.toVideoThumbnailUrlOrNull(): NSURL? {
     val trimmed = trim()
@@ -131,9 +138,57 @@ private fun createAvFoundationThumbnail(
 }
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
-private suspend fun createWebKitThumbnail(
+private suspend fun createCachedWebKitThumbnail(
     url: NSURL,
     options: Options
+): NSData {
+    val (targetWidth, targetHeight) = resolveWebKitThumbnailSize(options)
+    val cacheKey = buildWebKitThumbnailCacheKey(url, targetWidth, targetHeight)
+    readCachedWebKitThumbnail(cacheKey)?.let { return it }
+    return webKitThumbnailSemaphore.withPermit {
+        readCachedWebKitThumbnail(cacheKey)?.let { return@withPermit it }
+        createWebKitThumbnail(
+            url = url,
+            targetWidth = targetWidth,
+            targetHeight = targetHeight
+        ).also { data ->
+            rememberWebKitThumbnail(cacheKey, data)
+        }
+    }
+}
+
+private suspend fun readCachedWebKitThumbnail(cacheKey: String): NSData? {
+    return webKitThumbnailCacheMutex.withLock {
+        webKitThumbnailCache.remove(cacheKey)?.also { data ->
+            webKitThumbnailCache[cacheKey] = data
+        }
+    }
+}
+
+private suspend fun rememberWebKitThumbnail(cacheKey: String, data: NSData) {
+    webKitThumbnailCacheMutex.withLock {
+        webKitThumbnailCache.remove(cacheKey)
+        webKitThumbnailCache[cacheKey] = data
+        while (webKitThumbnailCache.size > WEBKIT_THUMBNAIL_CACHE_MAX_ENTRIES) {
+            val eldestKey = webKitThumbnailCache.keys.firstOrNull() ?: break
+            webKitThumbnailCache.remove(eldestKey)
+        }
+    }
+}
+
+private fun buildWebKitThumbnailCacheKey(
+    url: NSURL,
+    width: Double,
+    height: Double
+): String {
+    return "${url.absoluteString.orEmpty()}#${width.toInt()}x${height.toInt()}"
+}
+
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+private suspend fun createWebKitThumbnail(
+    url: NSURL,
+    targetWidth: Double,
+    targetHeight: Double
 ): NSData = suspendCancellableCoroutine { continuation ->
     val delegateRetainer = WebmThumbnailDelegateRetainer()
     continuation.invokeOnCancellation {
@@ -145,9 +200,6 @@ private suspend fun createWebKitThumbnail(
         val configuration = WKWebViewConfiguration().apply {
             allowsInlineMediaPlayback = true
         }
-        val maximumSize = resolveMaximumThumbnailSize(options)
-        val targetWidth = maximumSize?.first ?: DEFAULT_WEBKIT_THUMBNAIL_WIDTH
-        val targetHeight = maximumSize?.second ?: DEFAULT_WEBKIT_THUMBNAIL_HEIGHT
         val webView = WKWebView(
             frame = CGRectMake(0.0, 0.0, targetWidth, targetHeight),
             configuration = configuration
@@ -171,10 +223,22 @@ private suspend fun createWebKitThumbnail(
     }
 }
 
-private const val DEFAULT_WEBKIT_THUMBNAIL_WIDTH = 320.0
-private const val DEFAULT_WEBKIT_THUMBNAIL_HEIGHT = 180.0
-private const val WEBKIT_READY_POLL_LIMIT = 40
+private const val DEFAULT_WEBKIT_THUMBNAIL_WIDTH = 160.0
+private const val DEFAULT_WEBKIT_THUMBNAIL_HEIGHT = 90.0
+private const val MAX_WEBKIT_THUMBNAIL_WIDTH = 240.0
+private const val MAX_WEBKIT_THUMBNAIL_HEIGHT = 180.0
+private const val WEBKIT_THUMBNAIL_CACHE_MAX_ENTRIES = 32
+private const val WEBKIT_READY_POLL_LIMIT = 25
 private const val WEBKIT_READY_POLL_DELAY_MILLIS = 100L
+
+private fun resolveWebKitThumbnailSize(options: Options): Pair<Double, Double> {
+    val maximumSize = resolveMaximumThumbnailSize(options)
+    val width = (maximumSize?.first ?: DEFAULT_WEBKIT_THUMBNAIL_WIDTH)
+        .coerceIn(1.0, MAX_WEBKIT_THUMBNAIL_WIDTH)
+    val height = (maximumSize?.second ?: DEFAULT_WEBKIT_THUMBNAIL_HEIGHT)
+        .coerceIn(1.0, MAX_WEBKIT_THUMBNAIL_HEIGHT)
+    return width to height
+}
 
 private class WebmThumbnailDelegateRetainer {
     private var delegate: WebmThumbnailNavigationDelegate? = null
@@ -301,6 +365,10 @@ private class WebmThumbnailNavigationDelegate(
 
     private fun cleanup() {
         webView.stopLoading()
+        webView.evaluateJavaScript(
+            "(function(){var v=document.querySelector('video'); if(v){v.pause(); v.removeAttribute('src'); v.load();} document.body.innerHTML='';})()",
+            completionHandler = null
+        )
         webView.navigationDelegate = null
     }
 }
@@ -329,9 +397,23 @@ private fun buildThumbnailHtml(rawUrl: String): String {
         </style>
         </head>
         <body>
-        <video muted playsinline preload="auto" autoplay>
+        <video muted playsinline preload="metadata">
             <source src="$escapedUrl" type="video/webm">
         </video>
+        <script>
+        (function(){
+          var v=document.querySelector('video');
+          if(!v){return;}
+          var seek=function(){
+            try {
+              var t = isFinite(v.duration) && v.duration > 0.2 ? 0.1 : 0;
+              v.currentTime = t;
+            } catch(e) {}
+          };
+          v.addEventListener('loadedmetadata', seek, {once:true});
+          v.load();
+        })();
+        </script>
         </body>
         </html>
     """.trimIndent()

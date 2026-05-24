@@ -13,8 +13,7 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
             } else -1L
         } ?: -1L
 
-        // 最大ファイルサイズ: 10MB
-        val maxFileSize = 10 * 1024 * 1024L
+        val maxFileSize = MAX_PICKED_IMAGE_BYTES
 
         // FIX: fileSizeが不明(-1)の場合は実際に読み込んでサイズをチェック
         if (fileSize > 0 && fileSize > maxFileSize) {
@@ -26,36 +25,65 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
             Logger.w("ImagePicker", "Unable to determine file size beforehand, will check after reading")
         }
 
-        // FIX: InputStreamをバッファリングして読み込み、サイズ制限をチェック
+        // 既知サイズのURIは事前確保したByteArrayへ直接読み、toByteArray()の追加コピーを避ける。
         val bytes = context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            val buffer = java.io.ByteArrayOutputStream()
-            val chunk = ByteArray(8192)
-            var bytesRead: Int
-            var totalRead = 0L
-            var zeroReadCount = 0
+            if (fileSize in 1..maxFileSize) {
+                val expectedSize = fileSize.toInt()
+                val output = ByteArray(expectedSize)
+                var totalRead = 0
+                var zeroReadCount = 0
 
-            while (inputStream.read(chunk).also { bytesRead = it } != -1) {
-                if (bytesRead == 0) {
-                    zeroReadCount += 1
-                    if (zeroReadCount >= 100) {
-                        Logger.w("ImagePicker", "Aborting read due to repeated zero-byte reads: $uri")
-                        return null
+                while (totalRead < expectedSize) {
+                    val bytesRead = inputStream.read(output, totalRead, expectedSize - totalRead)
+                    if (bytesRead == -1) break
+                    if (bytesRead == 0) {
+                        zeroReadCount += 1
+                        if (zeroReadCount >= 100) {
+                            Logger.w("ImagePicker", "Aborting read due to repeated zero-byte reads: $uri")
+                            return null
+                        }
+                        continue
                     }
-                    continue
+                    zeroReadCount = 0
+                    totalRead += bytesRead
                 }
-                zeroReadCount = 0
-                totalRead += bytesRead
 
-                // FIX: 読み込み中にサイズ超過をチェック
-                if (totalRead > maxFileSize) {
-                    Logger.w("ImagePicker", "Image file exceeded size limit during read: ${totalRead / 1024}KB")
+                if (totalRead == expectedSize && inputStream.read() != -1) {
+                    Logger.w("ImagePicker", "Image file exceeded declared size during read: $uri")
                     return null
                 }
 
-                buffer.write(chunk, 0, bytesRead)
-            }
+                if (totalRead == expectedSize) output else output.copyOf(totalRead)
+            } else {
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(8192)
+                var bytesRead: Int
+                var totalRead = 0L
+                var zeroReadCount = 0
 
-            buffer.toByteArray()
+                while (inputStream.read(chunk).also { bytesRead = it } != -1) {
+                    if (bytesRead == 0) {
+                        zeroReadCount += 1
+                        if (zeroReadCount >= 100) {
+                            Logger.w("ImagePicker", "Aborting read due to repeated zero-byte reads: $uri")
+                            return null
+                        }
+                        continue
+                    }
+                    zeroReadCount = 0
+                    totalRead += bytesRead
+
+                    // FIX: 読み込み中にサイズ超過をチェック
+                    if (totalRead > maxFileSize) {
+                        Logger.w("ImagePicker", "Image file exceeded size limit during read: ${totalRead / 1024}KB")
+                        return null
+                    }
+
+                    buffer.write(chunk, 0, bytesRead)
+                }
+
+                buffer.toByteArray()
+            }
         } ?: run {
             Logger.w("ImagePicker", "Failed to open InputStream for URI: $uri")
             return null

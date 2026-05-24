@@ -30,6 +30,7 @@ internal fun rememberFutachaNavigationRuntimeState(
     fileSystem: FileSystem?,
     cookieRepository: CookieRepository?,
     autoSavedThreadRepository: SavedThreadRepository?,
+    shouldUseLightweightMode: Boolean = false,
     coroutineScope: CoroutineScope
 ): FutachaNavigationRuntimeState {
     val assemblyContext = remember(
@@ -41,6 +42,7 @@ internal fun rememberFutachaNavigationRuntimeState(
         fileSystem,
         cookieRepository,
         autoSavedThreadRepository,
+        shouldUseLightweightMode,
         navigationState
     ) {
         buildFutachaDestinationAssemblyContext(
@@ -52,7 +54,8 @@ internal fun rememberFutachaNavigationRuntimeState(
             fileSystem = fileSystem,
             cookieRepository = cookieRepository,
             autoSavedThreadRepository = autoSavedThreadRepository,
-            navigationState = navigationState
+            navigationState = navigationState,
+            shouldUseLightweightMode = shouldUseLightweightMode
         )
     }
     val resolvedDestinationContent = remember(

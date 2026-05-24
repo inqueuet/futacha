@@ -449,6 +449,7 @@ private fun CatalogScreenContent(
             catalogGridColumns = catalogGridColumns,
             catalogGridState = catalogGridState,
             catalogListState = catalogListState,
+            resolveCatalogHeadMetadata = args.resolveCatalogHeadMetadata,
             overlayState = overlayState,
             overlayBindings = overlayBindings,
             createThreadDraft = createThreadDraft,

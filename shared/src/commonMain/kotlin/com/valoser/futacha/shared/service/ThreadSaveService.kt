@@ -68,7 +68,7 @@ class ThreadSaveService(
         private const val THREAD_HTML_FETCH_TIMEOUT_MILLIS = 30_000L
         private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 120_000L
         private const val WRITE_TIMEOUT_MILLIS = 60_000L
-        private const val STREAM_READ_BUFFER_BYTES = 64 * 1024
+        private const val STREAM_READ_BUFFER_BYTES = 512 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val MAX_PARALLEL_DOWNLOADS = 1
