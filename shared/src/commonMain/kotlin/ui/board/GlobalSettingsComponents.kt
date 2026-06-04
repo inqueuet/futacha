@@ -500,7 +500,7 @@ private fun GlobalSettingsAiControls(
         modifier = Modifier.fillMaxWidth()
     )
     ListItem(
-        headlineContent = { Text("AIアプリ操作") },
+        headlineContent = { Text("AIアプリ操作（アルファ版）") },
         supportingContent = {
             Text(
                 text = aiCommandSettingDescription(aiAvailability, isAiCommandEnabled),
@@ -535,7 +535,7 @@ private fun GlobalSettingsAiControls(
         modifier = Modifier.fillMaxWidth()
     )
     ListItem(
-        headlineContent = { Text("荒らし非表示モード") },
+        headlineContent = { Text("荒らし非表示モード（アルファ版）") },
         supportingContent = {
             Text(
                 text = aiPostFilterSettingDescription(aiAvailability),
