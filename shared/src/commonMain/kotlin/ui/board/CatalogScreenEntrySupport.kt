@@ -4,6 +4,7 @@ import androidx.compose.ui.Modifier
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.repo.BoardRepository
 import io.ktor.client.HttpClient
 
@@ -16,6 +17,8 @@ internal data class CatalogScreenContentArgs(
     override val screenContext: ResolvedScreenContext,
     val dependencies: CatalogScreenResolvedDependencies,
     val resolveCatalogHeadMetadata: Boolean,
+    val aiCommand: FutachaAiCommand?,
+    val onAiCommandConsumed: (FutachaAiCommand) -> Unit,
     val modifier: Modifier
 ) : ScreenContextOwner
 
@@ -46,6 +49,8 @@ internal fun assembleCatalogScreenContentArgs(
     screenContext: ResolvedScreenContext,
     dependencies: CatalogScreenResolvedDependencies,
     resolveCatalogHeadMetadata: Boolean = true,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ): CatalogScreenContentArgs {
     return CatalogScreenContentArgs(
@@ -55,6 +60,8 @@ internal fun assembleCatalogScreenContentArgs(
         screenContext = screenContext,
         dependencies = dependencies,
         resolveCatalogHeadMetadata = resolveCatalogHeadMetadata,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -65,6 +72,8 @@ internal fun buildCatalogScreenContentArgsFromContract(
     onBack: () -> Unit,
     onThreadSelected: (CatalogItem) -> Unit,
     dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ): CatalogScreenContentArgs {
     return assembleCatalogScreenContentArgs(
@@ -76,6 +85,8 @@ internal fun buildCatalogScreenContentArgsFromContract(
             dependencies = dependencies
         ),
         resolveCatalogHeadMetadata = dependencies.resolveCatalogHeadMetadata,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -99,6 +110,8 @@ internal fun buildCatalogScreenContentArgs(
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier,
     httpClient: HttpClient? = dependencies.httpClient
 ): CatalogScreenContentArgs {
@@ -125,6 +138,8 @@ internal fun buildCatalogScreenContentArgs(
             fileSystem = fileSystem,
             httpClient = httpClient
         ),
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }

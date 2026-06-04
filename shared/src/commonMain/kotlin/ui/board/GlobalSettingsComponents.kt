@@ -22,7 +22,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PrivacyTip
-import androidx.compose.material.icons.rounded.WatchLater
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -48,6 +48,7 @@ import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.ai.AiAvailability
 
 internal data class GlobalSettingsEntry(
     val label: String,
@@ -129,6 +130,13 @@ internal fun GlobalSettingsScaffold(
                     onAdsEnabledChanged = bindings.behavior.onAdsEnabledChanged,
                     isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
                     onLightweightModeChanged = bindings.behavior.onLightweightModeChanged,
+                    isThreadSummaryModeEnabled = bindings.behavior.isThreadSummaryModeEnabled,
+                    onThreadSummaryModeChanged = bindings.behavior.onThreadSummaryModeChanged,
+                    isAiPostFilterEnabled = bindings.behavior.isAiPostFilterEnabled,
+                    onAiPostFilterChanged = bindings.behavior.onAiPostFilterChanged,
+                    isAiCommandEnabled = bindings.behavior.isAiCommandEnabled,
+                    onAiCommandChanged = bindings.behavior.onAiCommandChanged,
+                    aiAvailability = bindings.behavior.aiAvailability,
                     threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,
                     onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged,
                     themeMode = bindings.behavior.themeMode,
@@ -232,6 +240,13 @@ internal fun GlobalSettingsBehaviorSection(
     onAdsEnabledChanged: (Boolean) -> Unit,
     isLightweightModeEnabled: Boolean,
     onLightweightModeChanged: (Boolean) -> Unit,
+    isThreadSummaryModeEnabled: Boolean,
+    onThreadSummaryModeChanged: (Boolean) -> Unit,
+    isAiPostFilterEnabled: Boolean,
+    onAiPostFilterChanged: (Boolean) -> Unit,
+    isAiCommandEnabled: Boolean,
+    onAiCommandChanged: (Boolean) -> Unit,
+    aiAvailability: AiAvailability,
     threadGalleryTapAction: ThreadGalleryTapAction,
     onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit,
     themeMode: ThemeMode,
@@ -338,6 +353,16 @@ internal fun GlobalSettingsBehaviorSection(
             )
         }
         HorizontalDivider()
+        GlobalSettingsAiControls(
+            aiAvailability = aiAvailability,
+            isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
+            onThreadSummaryModeChanged = onThreadSummaryModeChanged,
+            isAiPostFilterEnabled = isAiPostFilterEnabled,
+            onAiPostFilterChanged = onAiPostFilterChanged,
+            isAiCommandEnabled = isAiCommandEnabled,
+            onAiCommandChanged = onAiCommandChanged
+        )
+        HorizontalDivider()
         ListItem(
             headlineContent = { Text("バックグラウンド更新") },
             supportingContent = {
@@ -416,6 +441,103 @@ internal fun GlobalSettingsBehaviorSection(
             onClick = { onThreadGalleryTapActionChanged(ThreadGalleryTapAction.JumpToPost) }
         )
     }
+}
+
+@Composable
+private fun GlobalSettingsAiControls(
+    aiAvailability: AiAvailability,
+    isThreadSummaryModeEnabled: Boolean,
+    onThreadSummaryModeChanged: (Boolean) -> Unit,
+    isAiPostFilterEnabled: Boolean,
+    onAiPostFilterChanged: (Boolean) -> Unit,
+    isAiCommandEnabled: Boolean,
+    onAiCommandChanged: (Boolean) -> Unit
+) {
+    val summaryEnabled = isThreadSummaryFeatureAvailable(aiAvailability)
+    val postFilterEnabled = isAiPostFilterFeatureAvailable(aiAvailability)
+    ListItem(
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Rounded.Psychology,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        headlineContent = { Text("端末AI") },
+        supportingContent = {
+            Text(
+                text = aiAvailability.unavailableReason
+                    ?: "${aiAvailability.providerLabel} を使って端末内で処理します。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+    ListItem(
+        headlineContent = { Text("端末内処理") },
+        supportingContent = {
+            Text(
+                text = aiLocalProcessingDescription(aiAvailability.providerLabel),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+    ListItem(
+        headlineContent = { Text("AIアプリ操作") },
+        supportingContent = {
+            Text(
+                text = aiCommandSettingDescription(aiAvailability, isAiCommandEnabled),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            Switch(
+                checked = isAiCommandEnabled,
+                onCheckedChange = onAiCommandChanged
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+    ListItem(
+        headlineContent = { Text("スレ要約モード") },
+        supportingContent = {
+            Text(
+                text = threadSummarySettingDescription(aiAvailability),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            Switch(
+                checked = isThreadSummaryModeEnabled && summaryEnabled,
+                enabled = summaryEnabled,
+                onCheckedChange = onThreadSummaryModeChanged
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+    ListItem(
+        headlineContent = { Text("荒らし非表示モード") },
+        supportingContent = {
+            Text(
+                text = aiPostFilterSettingDescription(aiAvailability),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            Switch(
+                checked = isAiPostFilterEnabled && postFilterEnabled,
+                enabled = postFilterEnabled,
+                onCheckedChange = onAiPostFilterChanged
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 @Composable

@@ -152,7 +152,8 @@ internal data class ThreadScreenHostContentInputs(
     val onMediaLongPress: ((Post, String, MediaType) -> Unit)?,
     val onUrlClick: (String) -> Unit,
     val onRefresh: () -> Unit,
-    val isRefreshing: Boolean
+    val isRefreshing: Boolean,
+    val preferencesState: ScreenPreferencesState
 )
 
 internal data class ThreadScreenHostOverlayInputs(
@@ -255,7 +256,8 @@ internal fun buildThreadScreenHostBindingsBundle(
             onMediaLongPress = contentInputs.onMediaLongPress,
             onUrlClick = contentInputs.onUrlClick,
             onRefresh = contentInputs.onRefresh,
-            isRefreshing = contentInputs.isRefreshing
+            isRefreshing = contentInputs.isRefreshing,
+            preferencesState = contentInputs.preferencesState
         ),
         overlayBindings = ThreadScreenOverlayHostBindings(
             postOverlayState = overlayInputs.postOverlayState,
@@ -365,7 +367,8 @@ internal fun buildThreadScreenHostBindingsBundle(
             onMediaLongPress = inputs.onMediaLongPress,
             onUrlClick = inputs.onUrlClick,
             onRefresh = inputs.onRefresh,
-            isRefreshing = inputs.isRefreshing
+            isRefreshing = inputs.isRefreshing,
+            preferencesState = inputs.preferencesState
         ),
         overlayInputs = ThreadScreenHostOverlayInputs(
             postOverlayState = inputs.postOverlayState,

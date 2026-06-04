@@ -21,7 +21,8 @@ internal fun GlobalSettingsScreen(
     onOpenCookieManager: (() -> Unit)? = null,
     historyEntries: List<ThreadHistoryEntry>,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
-    autoSavedThreadRepository: SavedThreadRepository? = null
+    autoSavedThreadRepository: SavedThreadRepository? = null,
+    openFileManagerPickerRequest: Int = 0
 ) {
     val runtime = rememberGlobalSettingsScreenRuntime(
         onBack = onBack,
@@ -30,7 +31,8 @@ internal fun GlobalSettingsScreen(
         onOpenCookieManager = onOpenCookieManager,
         historyEntries = historyEntries,
         fileSystem = fileSystem,
-        autoSavedThreadRepository = autoSavedThreadRepository
+        autoSavedThreadRepository = autoSavedThreadRepository,
+        openFileManagerPickerRequest = openFileManagerPickerRequest
     )
 
     PlatformBackHandler(onBack = onBack)

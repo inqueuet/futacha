@@ -19,6 +19,9 @@ private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val ADS_ENABLED_KEY = "ads_enabled"
 private const val POSTING_NOTICE_KEY = "has_shown_posting_notice"
 private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
+private const val THREAD_SUMMARY_MODE_KEY = "thread_summary_mode_enabled"
+private const val AI_POST_FILTER_KEY = "ai_post_filter_enabled"
+private const val AI_COMMAND_KEY = "ai_command_enabled"
 private const val MANUAL_SAVE_DIRECTORY_KEY = "manual_save_directory"
 private const val ATTACHMENT_PICKER_PREF_KEY = "attachment_picker_preference"
 private const val SAVE_DIRECTORY_SELECTION_KEY = "save_directory_selection"
@@ -62,6 +65,9 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     )
     private val postingNoticeState = MutableStateFlow(readBooleanState(POSTING_NOTICE_KEY))
     private val lightweightModeState = MutableStateFlow(readBooleanState(LIGHTWEIGHT_MODE_KEY))
+    private val threadSummaryModeState = MutableStateFlow(readBooleanState(THREAD_SUMMARY_MODE_KEY))
+    private val aiPostFilterState = MutableStateFlow(readBooleanState(AI_POST_FILTER_KEY))
+    private val aiCommandState = MutableStateFlow(readBooleanState(AI_COMMAND_KEY))
     private val manualSaveDirectoryState = MutableStateFlow(
         sanitizeManualSaveDirectoryValue(readStringState(MANUAL_SAVE_DIRECTORY_KEY))
     )
@@ -93,6 +99,9 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val adsEnabled: Flow<Boolean> = adsEnabledState
     override val hasShownPostingNotice: Flow<Boolean> = postingNoticeState
     override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
+    override val threadSummaryModeEnabled: Flow<Boolean> = threadSummaryModeState
+    override val aiPostFilterEnabled: Flow<Boolean> = aiPostFilterState
+    override val aiCommandEnabled: Flow<Boolean> = aiCommandState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
@@ -420,6 +429,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
         updateBooleanState(LIGHTWEIGHT_MODE_KEY, enabled, lightweightModeState)
+    }
+
+    override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) {
+        updateBooleanState(THREAD_SUMMARY_MODE_KEY, enabled, threadSummaryModeState)
+    }
+
+    override suspend fun updateAiPostFilterEnabled(enabled: Boolean) {
+        updateBooleanState(AI_POST_FILTER_KEY, enabled, aiPostFilterState)
+    }
+
+    override suspend fun updateAiCommandEnabled(enabled: Boolean) {
+        updateBooleanState(AI_COMMAND_KEY, enabled, aiCommandState)
     }
 
     override suspend fun updateManualSaveDirectory(directory: String) {

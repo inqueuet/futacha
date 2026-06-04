@@ -35,10 +35,14 @@ internal fun buildThreadPostDerivedData(posts: List<Post>): ThreadPostDerivedDat
 
 internal fun countThreadContentItemsBeforePosts(
     page: ThreadPage?,
-    embeddedHtml: List<EmbeddedHtmlContent>
+    embeddedHtml: List<EmbeddedHtmlContent>,
+    hasSummary: Boolean = false
 ): Int {
     if (page == null) return 0
     var count = 0
+    if (hasSummary) {
+        count += 1
+    }
     if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
         count += 1
     }
@@ -51,9 +55,10 @@ internal fun countThreadContentItemsBeforePosts(
 internal fun resolveThreadLazyListIndexForPost(
     postIndex: Int,
     page: ThreadPage?,
-    embeddedHtml: List<EmbeddedHtmlContent>
+    embeddedHtml: List<EmbeddedHtmlContent>,
+    hasSummary: Boolean = false
 ): Int {
-    return (countThreadContentItemsBeforePosts(page, embeddedHtml) + postIndex).coerceAtLeast(0)
+    return (countThreadContentItemsBeforePosts(page, embeddedHtml, hasSummary) + postIndex).coerceAtLeast(0)
 }
 
 internal data class ThreadPostListFingerprint(
@@ -89,16 +94,17 @@ internal fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFi
     }
     var rollingHash = 1_469_598_103_934_665_603L
     posts.forEach { post ->
-        val idHash = post.id.hashCode().toLong()
-        val posterHash = post.posterId?.hashCode()?.toLong() ?: 0L
-        val quotedCount = post.quoteReferences.size.toLong()
-        val referencedCount = post.referencedCount.toLong()
-        val deletedFlag = if (post.isDeleted) 1L else 0L
-        rollingHash = (rollingHash * 1_099_511_628_211L) xor idHash
-        rollingHash = (rollingHash * 1_099_511_628_211L) xor posterHash
-        rollingHash = (rollingHash * 1_099_511_628_211L) xor quotedCount
-        rollingHash = (rollingHash * 1_099_511_628_211L) xor referencedCount
-        rollingHash = (rollingHash * 1_099_511_628_211L) xor deletedFlag
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.id)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.author)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.subject)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.posterId)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.messageHtml)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.imageUrl)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.thumbnailUrl)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.saidaneLabel)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.quoteReferences.size)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.referencedCount)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, if (post.isDeleted) 1 else 0)
     }
     return ThreadPostListFingerprint(
         size = posts.size,
@@ -106,6 +112,14 @@ internal fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFi
         lastPostId = posts.last().id,
         rollingHash = rollingHash
     )
+}
+
+private fun mixThreadPostFingerprintHash(current: Long, value: String?): Long {
+    return (current * 1_099_511_628_211L) xor (value?.hashCode()?.toLong() ?: 0L)
+}
+
+private fun mixThreadPostFingerprintHash(current: Long, value: Int): Long {
+    return (current * 1_099_511_628_211L) xor value.toLong()
 }
 
 internal fun buildPostsByPosterId(posts: List<Post>): Map<String, List<Post>> {

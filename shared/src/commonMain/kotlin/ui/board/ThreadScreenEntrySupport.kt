@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.ui.Modifier
+import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
@@ -20,6 +21,8 @@ internal data class ThreadScreenContentArgs(
     override val screenContext: ResolvedScreenContext,
     val dependencies: ThreadScreenResolvedDependencies,
     val onRegisteredThreadUrlClick: (String) -> Boolean,
+    val aiCommand: FutachaAiCommand?,
+    val onAiCommandConsumed: (FutachaAiCommand) -> Unit,
     val modifier: Modifier
 ) : ScreenContextOwner
 
@@ -55,6 +58,8 @@ internal fun assembleThreadScreenContentArgs(
     screenContext: ResolvedScreenContext,
     dependencies: ThreadScreenResolvedDependencies,
     onRegisteredThreadUrlClick: (String) -> Boolean,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ): ThreadScreenContentArgs {
     return ThreadScreenContentArgs(
@@ -69,6 +74,8 @@ internal fun assembleThreadScreenContentArgs(
         screenContext = screenContext,
         dependencies = dependencies,
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -85,6 +92,8 @@ internal fun buildThreadScreenContentArgsFromContract(
     threadUrlOverride: String? = null,
     dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ): ThreadScreenContentArgs {
     return assembleThreadScreenContentArgs(
@@ -101,6 +110,8 @@ internal fun buildThreadScreenContentArgsFromContract(
             dependencies = dependencies
         ),
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -131,6 +142,8 @@ internal fun buildThreadScreenContentArgs(
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ): ThreadScreenContentArgs {
     return buildThreadScreenContentArgsFromContract(
@@ -162,6 +175,8 @@ internal fun buildThreadScreenContentArgs(
             autoSavedThreadRepository = autoSavedThreadRepository
         ),
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }

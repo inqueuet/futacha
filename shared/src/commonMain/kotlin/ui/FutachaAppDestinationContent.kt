@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.ui.board.BoardManagementScreen
 import com.valoser.futacha.shared.ui.board.CatalogScreen
@@ -46,7 +47,9 @@ internal fun FutachaSavedThreadsDestination(
 
 @Composable
 internal fun FutachaBoardManagementDestination(
-    props: FutachaBoardManagementDestinationProps
+    props: FutachaBoardManagementDestinationProps,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {}
 ) {
     BoardManagementScreen(
         boards = props.boards,
@@ -56,7 +59,9 @@ internal fun FutachaBoardManagementDestination(
         onMenuAction = props.onMenuAction,
         onBoardDeleted = props.onBoardDeleted,
         onBoardsReordered = props.onBoardsReordered,
-        dependencies = props.dependencies
+        dependencies = props.dependencies,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed
     )
 }
 
@@ -86,7 +91,9 @@ internal fun FutachaMissingBoardDestination(
 @Composable
 internal fun FutachaCatalogDestination(
     props: FutachaCatalogDestinationProps,
-    saveableStateHolder: SaveableStateHolder
+    saveableStateHolder: SaveableStateHolder,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {}
 ) {
     saveableStateHolder.SaveableStateProvider(props.saveableStateKey) {
         CatalogScreen(
@@ -106,6 +113,8 @@ internal fun FutachaCatalogDestination(
                 )
             },
             dependencies = props.dependencies,
+            aiCommand = aiCommand,
+            onAiCommandConsumed = onAiCommandConsumed,
         )
     }
 }
@@ -113,7 +122,9 @@ internal fun FutachaCatalogDestination(
 @OptIn(ExperimentalTime::class)
 @Composable
 internal fun FutachaThreadDestination(
-    props: FutachaThreadDestinationProps
+    props: FutachaThreadDestinationProps,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {}
 ) {
     LaunchedEffect(props.threadId, props.board.id) {
         recordFutachaVisitedThread(
@@ -137,6 +148,8 @@ internal fun FutachaThreadDestination(
         onScrollPositionPersistImmediately = props.onScrollPositionPersistImmediately,
         threadUrlOverride = props.threadUrlOverride,
         dependencies = props.dependencies,
-        onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick
+        onRegisteredThreadUrlClick = props.onRegisteredThreadUrlClick,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed
     )
 }

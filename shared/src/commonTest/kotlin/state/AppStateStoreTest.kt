@@ -165,15 +165,27 @@ class AppStateStoreTest {
 
         store.setBackgroundRefreshEnabled(true)
         store.setHasShownPostingNotice(true)
+        store.setThreadSummaryModeEnabled(true)
+        store.setAiPostFilterEnabled(true)
+        store.setAiCommandEnabled(true)
 
         storage.failBackgroundRefreshUpdate = true
         storage.failPostingNoticeUpdate = true
+        storage.failThreadSummaryModeUpdate = true
+        storage.failAiPostFilterUpdate = true
+        storage.failAiCommandUpdate = true
 
         store.setBackgroundRefreshEnabled(false)
         store.setHasShownPostingNotice(false)
+        store.setThreadSummaryModeEnabled(false)
+        store.setAiPostFilterEnabled(false)
+        store.setAiCommandEnabled(false)
 
         assertEquals(true, store.isBackgroundRefreshEnabled.first())
         assertEquals(true, store.hasShownPostingNotice.first())
+        assertEquals(true, store.isThreadSummaryModeEnabled.first())
+        assertEquals(true, store.isAiPostFilterEnabled.first())
+        assertEquals(true, store.isAiCommandEnabled.first())
     }
 
     @Test
@@ -432,6 +444,9 @@ internal class FakePlatformStateStorage : BaseInMemoryPlatformStateStorage() {
     var failHistoryUpdate = false
     var failBackgroundRefreshUpdate = false
     var failPostingNoticeUpdate = false
+    var failThreadSummaryModeUpdate = false
+    var failAiPostFilterUpdate = false
+    var failAiCommandUpdate = false
     var failCatalogModeUpdate = false
     var failSelfPostIdentifiersUpdate = false
     var failPreferredFileManagerUpdate = false
@@ -454,6 +469,21 @@ internal class FakePlatformStateStorage : BaseInMemoryPlatformStateStorage() {
     override suspend fun updateHasShownPostingNotice(shown: Boolean) {
         if (failPostingNoticeUpdate) error("posting notice write failed")
         super.updateHasShownPostingNotice(shown)
+    }
+
+    override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) {
+        if (failThreadSummaryModeUpdate) error("thread summary mode write failed")
+        super.updateThreadSummaryModeEnabled(enabled)
+    }
+
+    override suspend fun updateAiPostFilterEnabled(enabled: Boolean) {
+        if (failAiPostFilterUpdate) error("AI post filter write failed")
+        super.updateAiPostFilterEnabled(enabled)
+    }
+
+    override suspend fun updateAiCommandEnabled(enabled: Boolean) {
+        if (failAiCommandUpdate) error("AI command write failed")
+        super.updateAiCommandEnabled(enabled)
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {

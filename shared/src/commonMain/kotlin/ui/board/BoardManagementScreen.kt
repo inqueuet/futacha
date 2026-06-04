@@ -2,9 +2,12 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -23,7 +26,9 @@ fun BoardManagementScreen(
     modifier: Modifier = Modifier,
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
-    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies()
+    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies(),
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {}
 ) {
     BoardManagementScreenContent(
         args = buildBoardManagementScreenContentArgsFromContract(
@@ -36,6 +41,9 @@ fun BoardManagementScreen(
             onBoardDeleted = onBoardDeleted,
             onBoardsReordered = onBoardsReordered,
             dependencies = dependencies
+        ).copy(
+            aiCommand = aiCommand,
+            onAiCommandConsumed = onAiCommandConsumed
         )
     )
 }
@@ -62,6 +70,8 @@ fun BoardManagementScreen(
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
     autoSavedThreadRepository: SavedThreadRepository? = dependencies.autoSavedThreadRepository,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
 ) {
     BoardManagementScreen(
         boards = boards,
@@ -81,6 +91,8 @@ fun BoardManagementScreen(
         modifier = modifier,
         onBoardDeleted = onBoardDeleted,
         onBoardsReordered = onBoardsReordered,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         dependencies = dependencies.withOverrides(
             cookieRepository = cookieRepository,
             fileSystem = fileSystem,
@@ -170,6 +182,30 @@ private fun BoardManagementScreenContent(
     val lifecycleBindings = wiringBundle.lifecycleBindings
     val scaffoldBindings = wiringBundle.scaffoldBindings
     val overlayBindings = wiringBundle.overlayBindings
+    LaunchedEffect(args.aiCommand) {
+        val command = args.aiCommand ?: return@LaunchedEffect
+        var didConsume = true
+        when (command.action) {
+            FutachaAiAction.OpenHistoryDrawer -> {
+                drawerState.open()
+            }
+            FutachaAiAction.OpenGlobalSettings,
+            FutachaAiAction.OpenFileManagerSettings -> {
+                overlayState = openBoardManagementGlobalSettings(overlayState)
+            }
+            FutachaAiAction.OpenCookieManagement -> {
+                if (cookieRepository != null) {
+                    overlayState = openBoardManagementCookieManagement(overlayState)
+                }
+            }
+            else -> {
+                didConsume = false
+            }
+        }
+        if (didConsume) {
+            args.onAiCommandConsumed(command)
+        }
+    }
 
     PlatformBackHandler(enabled = lifecycleBindings.backAction != BoardManagementBackAction.NONE) {
         lifecycleBindings.onBack()

@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.ui.Modifier
+import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 
@@ -13,6 +14,8 @@ internal data class BoardManagementScreenContentArgs(
     val onBoardsReordered: (List<BoardSummary>) -> Unit,
     override val screenContext: ResolvedScreenContext,
     val dependencies: ResolvedScreenServiceDependencies,
+    val aiCommand: FutachaAiCommand?,
+    val onAiCommandConsumed: (FutachaAiCommand) -> Unit,
     val modifier: Modifier
 ) : ScreenContextOwner
 
@@ -39,6 +42,8 @@ internal fun assembleBoardManagementScreenContentArgs(
     onBoardsReordered: (List<BoardSummary>) -> Unit,
     screenContext: ResolvedScreenContext,
     dependencies: ResolvedScreenServiceDependencies,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ): BoardManagementScreenContentArgs {
     return BoardManagementScreenContentArgs(
@@ -50,6 +55,8 @@ internal fun assembleBoardManagementScreenContentArgs(
         onBoardsReordered = onBoardsReordered,
         screenContext = screenContext,
         dependencies = dependencies,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -63,7 +70,9 @@ internal fun buildBoardManagementScreenContentArgsFromContract(
     modifier: Modifier = Modifier,
     onBoardDeleted: (BoardSummary) -> Unit = {},
     onBoardsReordered: (List<BoardSummary>) -> Unit = {},
-    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies()
+    dependencies: BoardManagementScreenDependencies = BoardManagementScreenDependencies(),
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {}
 ): BoardManagementScreenContentArgs {
     return assembleBoardManagementScreenContentArgs(
         boards = boards,
@@ -76,6 +85,8 @@ internal fun buildBoardManagementScreenContentArgsFromContract(
         dependencies = resolveBoardManagementScreenDependencies(
             dependencies = dependencies
         ),
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -99,7 +110,9 @@ internal fun buildBoardManagementScreenContentArgs(
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
-    autoSavedThreadRepository: com.valoser.futacha.shared.repository.SavedThreadRepository? = dependencies.autoSavedThreadRepository
+    autoSavedThreadRepository: com.valoser.futacha.shared.repository.SavedThreadRepository? = dependencies.autoSavedThreadRepository,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {}
 ): BoardManagementScreenContentArgs {
     return buildBoardManagementScreenContentArgsFromContract(
         boards = boards,
@@ -123,6 +136,8 @@ internal fun buildBoardManagementScreenContentArgs(
             cookieRepository = cookieRepository,
             fileSystem = fileSystem,
             autoSavedThreadRepository = autoSavedThreadRepository
-        )
+        ),
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed
     )
 }

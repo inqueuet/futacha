@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -35,6 +36,9 @@ import kotlinx.coroutines.withContext
 internal fun ThreadContent(
     page: ThreadPage,
     embeddedHtml: List<EmbeddedHtmlContent>,
+    summaryState: ThreadSummaryUiState?,
+    aiHiddenPostIds: Set<String> = emptySet(),
+    aiHiddenPostReasons: Map<String, String> = emptyMap(),
     listState: LazyListState,
     saidaneOverrides: Map<String, String>,
     selfPostIdentifiers: Set<String> = emptySet(),
@@ -62,6 +66,7 @@ internal fun ThreadContent(
     val referencedByMap = derivedPostData.referencedByMap
     val postsByPosterId = derivedPostData.postsByPosterId
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
+    val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
         listState = listState,
         isRefreshing = isRefreshing,
@@ -96,6 +101,14 @@ internal fun ThreadContent(
                     bottom = 24.dp
                 )
             ) {
+                summaryState?.let { state ->
+                    item(key = "thread-summary") {
+                        ThreadSummaryCard(
+                            state = state,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
                 if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
                     item(key = "thread-embedded-html-header") {
                         EmbeddedHtmlSection(
@@ -110,11 +123,24 @@ internal fun ThreadContent(
                         ThreadNoticeCard(message = notice)
                     }
                 }
+                if (aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }) {
+                    item(key = "thread-ai-hidden-posts-summary") {
+                        AiHiddenPostsSummaryCard(
+                            onRevealAll = {
+                                revealedAiHiddenPostIds.addAll(
+                                    aiHiddenPostIds.filter { it !in revealedAiHiddenPostIds }
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
                 itemsIndexed(
                     items = page.posts,
                     key = { _, post -> post.id }
                 ) { index, post ->
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
+                    val isAiHidden = post.id in aiHiddenPostIds && post.id !in revealedAiHiddenPostIds
                     val normalizedPosterId = normalizePosterIdValue(post.posterId)
                     val postCardCallbacks = buildThreadScreenPostCardCallbacks(
                         post = post,
@@ -130,25 +156,34 @@ internal fun ThreadContent(
                         onMediaLongPress = onMediaLongPress,
                         onPostLongPress = onPostLongPress
                     )
-                    ThreadPostCard(
-                        post = post,
-                        isOp = index == 0,
-                        isSelfPost = isSelfPost,
-                        posterIdLabel = posterIdLabels[post.id],
-                        posterIdValue = normalizedPosterId,
-                        saidaneLabelOverride = saidaneOverrides[post.id],
-                        highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
-                        onQuoteClick = postCardCallbacks.onQuoteClick,
-                        onUrlClick = onUrlClick,
-                        onQuoteRequested = postCardCallbacks.onQuoteRequested,
-                        onPosterIdClick = postCardCallbacks.onPosterIdClick,
-                        onReferencedByClick = postCardCallbacks.onReferencedByClick,
-                        onSaidaneClick = postCardCallbacks.onSaidaneClick,
-                        onMediaClick = postCardCallbacks.onMediaClick,
-                        onMediaLongPress = postCardCallbacks.onMediaLongPress,
-                        onLongPress = postCardCallbacks.onLongPress,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (isAiHidden) {
+                        AiHiddenPostPlaceholder(
+                            postId = post.id,
+                            reason = aiHiddenPostReasons[post.id],
+                            onReveal = { revealedAiHiddenPostIds.add(post.id) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        ThreadPostCard(
+                            post = post,
+                            isOp = index == 0,
+                            isSelfPost = isSelfPost,
+                            posterIdLabel = posterIdLabels[post.id],
+                            posterIdValue = normalizedPosterId,
+                            saidaneLabelOverride = saidaneOverrides[post.id],
+                            highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
+                            onQuoteClick = postCardCallbacks.onQuoteClick,
+                            onUrlClick = onUrlClick,
+                            onQuoteRequested = postCardCallbacks.onQuoteRequested,
+                            onPosterIdClick = postCardCallbacks.onPosterIdClick,
+                            onReferencedByClick = postCardCallbacks.onReferencedByClick,
+                            onSaidaneClick = postCardCallbacks.onSaidaneClick,
+                            onMediaClick = postCardCallbacks.onMediaClick,
+                            onMediaLongPress = postCardCallbacks.onMediaLongPress,
+                            onLongPress = postCardCallbacks.onLongPress,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     if (index != page.posts.lastIndex) {
                         Box(
                             modifier = Modifier

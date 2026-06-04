@@ -38,6 +38,9 @@ private class AndroidPlatformStateStorage(
     private val adsEnabledKey = booleanPreferencesKey("ads_enabled")
     private val postingNoticeKey = booleanPreferencesKey("has_shown_posting_notice")
     private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
+    private val threadSummaryModeKey = booleanPreferencesKey("thread_summary_mode_enabled")
+    private val aiPostFilterKey = booleanPreferencesKey("ai_post_filter_enabled")
+    private val aiCommandKey = booleanPreferencesKey("ai_command_enabled")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val gridColumnsKey = stringPreferencesKey("catalog_grid_columns")
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
@@ -119,6 +122,15 @@ private class AndroidPlatformStateStorage(
 
     override val lightweightModeEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
+
+    override val threadSummaryModeEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[threadSummaryModeKey] ?: false }
+
+    override val aiPostFilterEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[aiPostFilterKey] ?: false }
+
+    override val aiCommandEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[aiCommandKey] ?: false }
 
     override val manualSaveDirectory: Flow<String> =
         safeData.map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
@@ -365,6 +377,33 @@ private class AndroidPlatformStateStorage(
             enabled,
             "lightweight mode",
             "Failed to save lightweight mode state"
+        )
+    }
+
+    override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            threadSummaryModeKey,
+            enabled,
+            "thread summary mode",
+            "Failed to save thread summary mode state"
+        )
+    }
+
+    override suspend fun updateAiPostFilterEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            aiPostFilterKey,
+            enabled,
+            "AI post filter",
+            "Failed to save AI post filter state"
+        )
+    }
+
+    override suspend fun updateAiCommandEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            aiCommandKey,
+            enabled,
+            "AI command",
+            "Failed to save AI command state"
         )
     }
 

@@ -1,6 +1,9 @@
 package com.valoser.futacha.shared.ui
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -16,6 +19,12 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import coil3.compose.LocalPlatformContext
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ai.FutachaAiCommandBridge
+import com.valoser.futacha.shared.ai.FutachaAiCommandOutcome
+import com.valoser.futacha.shared.ai.FutachaAiConfirmationRequest
+import com.valoser.futacha.shared.ai.parseFutachaAiDeepLink
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -24,6 +33,7 @@ import com.valoser.futacha.shared.state.AppStateSeedDefaults
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
+import com.valoser.futacha.shared.ui.board.GlobalSettingsScreen
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
@@ -32,6 +42,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import com.valoser.futacha.shared.version.UpdateInfo
 import com.valoser.futacha.shared.version.VersionChecker
+import kotlinx.coroutines.launch
 import kotlin.time.ExperimentalTime
 
 private const val TAG = "FutachaApp"
@@ -46,7 +57,9 @@ fun FutachaApp(
     httpClient: io.ktor.client.HttpClient? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
     cookieRepository: CookieRepository? = null,
-    autoSavedThreadRepository: SavedThreadRepository? = null
+    autoSavedThreadRepository: SavedThreadRepository? = null,
+    platformAiDeepLink: String? = null,
+    onPlatformAiDeepLinkConsumed: (String) -> Unit = {}
 ) {
     val platformContext = LocalPlatformContext.current
     val devicePerformanceProfile = remember(platformContext) {
@@ -57,7 +70,8 @@ fun FutachaApp(
         boardList = boardList,
         history = history,
         versionChecker = versionChecker,
-        fileSystem = fileSystem
+        fileSystem = fileSystem,
+        platformContext = platformContext
     )
     FutachaTheme(
         themeMode = observedRuntimeState.themeMode,
@@ -183,6 +197,127 @@ fun FutachaApp(
                     coroutineScope = coroutineScope
                 )
                 val resolvedDestinationContent = navigationRuntimeState.resolvedDestinationContent
+                var pendingAiConfirmation by remember { mutableStateOf<FutachaAiConfirmationRequest?>(null) }
+                var pendingAiScreenCommand by remember { mutableStateOf<FutachaAiCommand?>(null) }
+                var aiResultMessage by remember { mutableStateOf<String?>(null) }
+                var isAiGlobalSettingsVisible by remember { mutableStateOf(false) }
+                var aiFileManagerPickerRequest by remember { mutableStateOf(0) }
+                val onAiScreenCommandConsumed: (FutachaAiCommand) -> Unit = { consumedCommand ->
+                    if (pendingAiScreenCommand == consumedCommand) {
+                        pendingAiScreenCommand = null
+                    }
+                }
+
+                suspend fun handleAiOutcome(
+                    outcome: FutachaAiCommandOutcome,
+                    suppressResultDialog: Boolean = false
+                ) {
+                    when (outcome) {
+                        is FutachaAiCommandOutcome.Completed -> {
+                            if (!suppressResultDialog) {
+                                aiResultMessage = outcome.message
+                            }
+                        }
+                        is FutachaAiCommandOutcome.Failed -> {
+                            aiResultMessage = outcome.message
+                        }
+                        is FutachaAiCommandOutcome.NeedsConfirmation -> {
+                            pendingAiConfirmation = outcome.request
+                        }
+                        is FutachaAiCommandOutcome.NeedsForeground -> {
+                            if (!suppressResultDialog) {
+                                aiResultMessage = outcome.message
+                            }
+                        }
+                    }
+                }
+
+                LaunchedEffect(
+                    platformAiDeepLink,
+                    stateStore,
+                    persistedBoards,
+                    persistedHistory,
+                    navigationState,
+                    historyRefresher,
+                    observedRuntimeState.activeSavedThreadsRepository,
+                    observedRuntimeState.appVersion
+                ) {
+                    val rawDeepLink = platformAiDeepLink?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+                    val command = parseFutachaAiDeepLink(rawDeepLink, source = "platform")
+                    onPlatformAiDeepLinkConsumed(rawDeepLink)
+                    if (command == null) {
+                        aiResultMessage = "AI操作のURLを解釈できませんでした"
+                        return@LaunchedEffect
+                    }
+                    val outcome = executeFutachaAiCommand(
+                        command = command,
+                        inputs = FutachaAiRouterInputs(
+                            stateStore = stateStore,
+                            boards = persistedBoards,
+                            history = persistedHistory,
+                            navigationState = navigationState,
+                            updateNavigationState = updateNavigationState,
+                            historyRefresher = historyRefresher,
+                            savedThreadRepository = observedRuntimeState.activeSavedThreadsRepository,
+                            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                            isCookieManagementAvailable = cookieRepository != null,
+                            appVersion = observedRuntimeState.appVersion,
+                            isAiCommandEnabled = observedRuntimeState.isAiCommandEnabled
+                        )
+                    )
+                    if (shouldOpenAiGlobalSettings(command, outcome)) {
+                        isAiGlobalSettingsVisible = true
+                        if (shouldRequestAiFileManagerPicker(command, outcome)) {
+                            aiFileManagerPickerRequest += 1
+                        }
+                    }
+                    val shouldForward = shouldForwardAiCommandToScreen(command, outcome)
+                    if (shouldForward) {
+                        pendingAiScreenCommand = command
+                    }
+                    handleAiOutcome(outcome, suppressResultDialog = shouldForward)
+                }
+
+                LaunchedEffect(
+                    stateStore,
+                    persistedBoards,
+                    persistedHistory,
+                    navigationState,
+                    historyRefresher,
+                    observedRuntimeState.activeSavedThreadsRepository,
+                    observedRuntimeState.appVersion
+                ) {
+                    FutachaAiCommandBridge.commands.collect { command ->
+                        val outcome = executeFutachaAiCommand(
+                            command = command,
+                            inputs = FutachaAiRouterInputs(
+                                stateStore = stateStore,
+                                boards = persistedBoards,
+                                history = persistedHistory,
+                                navigationState = navigationState,
+                                updateNavigationState = updateNavigationState,
+                                historyRefresher = historyRefresher,
+                                savedThreadRepository = observedRuntimeState.activeSavedThreadsRepository,
+                                autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                                isCookieManagementAvailable = cookieRepository != null,
+                                appVersion = observedRuntimeState.appVersion,
+                                isAiCommandEnabled = observedRuntimeState.isAiCommandEnabled
+                            )
+                        )
+                        if (shouldOpenAiGlobalSettings(command, outcome)) {
+                            isAiGlobalSettingsVisible = true
+                            if (shouldRequestAiFileManagerPicker(command, outcome)) {
+                                aiFileManagerPickerRequest += 1
+                            }
+                        }
+                        val shouldForward = shouldForwardAiCommandToScreen(command, outcome)
+                        if (shouldForward) {
+                            pendingAiScreenCommand = command
+                        }
+                        handleAiOutcome(outcome, suppressResultDialog = shouldForward)
+                    }
+                }
+
                 LaunchedEffect(
                     resolvedDestinationContent.adSyncLabel,
                     resolvedDestinationContent.isAdBannerVisible
@@ -203,7 +338,11 @@ fun FutachaApp(
                     }
 
                     is FutachaResolvedDestinationContent.BoardManagement -> {
-                        FutachaBoardManagementDestination(content.props)
+                        FutachaBoardManagementDestination(
+                            props = content.props,
+                            aiCommand = pendingAiScreenCommand,
+                            onAiCommandConsumed = onAiScreenCommandConsumed
+                        )
                     }
 
                     is FutachaResolvedDestinationContent.MissingBoard -> {
@@ -218,17 +357,165 @@ fun FutachaApp(
                     is FutachaResolvedDestinationContent.Catalog -> {
                         FutachaCatalogDestination(
                             props = content.props,
-                            saveableStateHolder = saveableStateHolder
+                            saveableStateHolder = saveableStateHolder,
+                            aiCommand = pendingAiScreenCommand,
+                            onAiCommandConsumed = onAiScreenCommandConsumed
                         )
                     }
 
                     is FutachaResolvedDestinationContent.Thread -> {
                         FutachaThreadDestination(
-                            props = content.props
+                            props = content.props,
+                            aiCommand = pendingAiScreenCommand,
+                            onAiCommandConsumed = onAiScreenCommandConsumed
                         )
                     }
+                }
+
+                pendingAiConfirmation?.let { request ->
+                    fun dismissAiConfirmation() {
+                        pendingAiConfirmation = null
+                        aiResultMessage = "AI操作をキャンセルしました"
+                    }
+                    AlertDialog(
+                        onDismissRequest = ::dismissAiConfirmation,
+                        title = { Text(request.title) },
+                        text = { Text(request.message) },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    val confirmedRequest = request
+                                    pendingAiConfirmation = null
+                                    coroutineScope.launch {
+                                        val outcome = executeFutachaAiCommand(
+                                            command = confirmedRequest.command,
+                                            inputs = FutachaAiRouterInputs(
+                                                stateStore = stateStore,
+                                                boards = persistedBoards,
+                                                history = persistedHistory,
+                                                navigationState = navigationState,
+                                                updateNavigationState = updateNavigationState,
+                                                historyRefresher = historyRefresher,
+                                                savedThreadRepository = observedRuntimeState.activeSavedThreadsRepository,
+                                                autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                                                isCookieManagementAvailable = cookieRepository != null,
+                                                appVersion = observedRuntimeState.appVersion,
+                                                isAiCommandEnabled = observedRuntimeState.isAiCommandEnabled
+                                            ),
+                                            confirmed = true
+                                        )
+                                        val shouldForward = shouldForwardAiCommandToScreen(
+                                            confirmedRequest.command,
+                                            outcome
+                                        )
+                                        if (shouldForward) {
+                                            pendingAiScreenCommand = confirmedRequest.command
+                                        }
+                                        handleAiOutcome(outcome, suppressResultDialog = shouldForward)
+                                    }
+                                }
+                            ) {
+                                Text(request.confirmLabel)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = ::dismissAiConfirmation) {
+                                Text(request.dismissLabel)
+                            }
+                        }
+                    )
+                }
+
+                aiResultMessage?.let { message ->
+                    AlertDialog(
+                        onDismissRequest = { aiResultMessage = null },
+                        title = { Text("AI操作") },
+                        text = { Text(message) },
+                        confirmButton = {
+                            TextButton(onClick = { aiResultMessage = null }) {
+                                Text("OK")
+                            }
+                        }
+                    )
+                }
+
+                if (isAiGlobalSettingsVisible) {
+                    GlobalSettingsScreen(
+                        onBack = { isAiGlobalSettingsVisible = false },
+                        preferencesState = screenBindings.screenPreferencesState,
+                        preferencesCallbacks = screenBindings.screenPreferencesCallbacks,
+                        historyEntries = persistedHistory,
+                        fileSystem = fileSystem,
+                        autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                        openFileManagerPickerRequest = aiFileManagerPickerRequest
+                    )
                 }
             }
         }
     }
+}
+
+internal fun shouldForwardAiCommandToScreen(
+    command: FutachaAiCommand,
+    outcome: FutachaAiCommandOutcome
+): Boolean {
+    if (outcome is FutachaAiCommandOutcome.Failed ||
+        outcome is FutachaAiCommandOutcome.NeedsConfirmation
+    ) {
+        return false
+    }
+    return when (command.action) {
+        FutachaAiAction.RefreshCurrentBoard,
+        FutachaAiAction.RefreshCatalog,
+        FutachaAiAction.OpenHistoryDrawer,
+        FutachaAiAction.RefreshCurrentThread,
+        FutachaAiAction.ScrollThreadToTop,
+        FutachaAiAction.ScrollThreadToBottom,
+        FutachaAiAction.ScrollCatalogToTop,
+        FutachaAiAction.StartCatalogSearch,
+        FutachaAiAction.SearchCatalog,
+        FutachaAiAction.StartThreadSearch,
+        FutachaAiAction.SearchThread,
+        FutachaAiAction.NextSearchResult,
+        FutachaAiAction.PreviousSearchResult,
+        FutachaAiAction.OpenGallery,
+        FutachaAiAction.OpenCatalogSettings,
+        FutachaAiAction.OpenThreadSettings,
+        FutachaAiAction.OpenCookieManagement,
+        FutachaAiAction.OpenCatalogDisplaySettings,
+        FutachaAiAction.OpenNgManagement,
+        FutachaAiAction.OpenWatchWords,
+        FutachaAiAction.OpenBoardExternally,
+        FutachaAiAction.OpenThreadExternally,
+        FutachaAiAction.SaveCurrentThread,
+        FutachaAiAction.SaveThread,
+        FutachaAiAction.DraftReply,
+        FutachaAiAction.DraftThread -> true
+        else -> false
+    }
+}
+
+internal fun shouldOpenAiGlobalSettings(
+    command: FutachaAiCommand,
+    outcome: FutachaAiCommandOutcome
+): Boolean {
+    if (outcome is FutachaAiCommandOutcome.Failed ||
+        outcome is FutachaAiCommandOutcome.NeedsConfirmation
+    ) {
+        return false
+    }
+    return when (command.action) {
+        FutachaAiAction.OpenGlobalSettings,
+        FutachaAiAction.OpenVersionInfo,
+        FutachaAiAction.OpenFileManagerSettings -> true
+        else -> false
+    }
+}
+
+internal fun shouldRequestAiFileManagerPicker(
+    command: FutachaAiCommand,
+    outcome: FutachaAiCommandOutcome
+): Boolean {
+    return command.action == FutachaAiAction.OpenFileManagerSettings &&
+        shouldOpenAiGlobalSettings(command, outcome)
 }

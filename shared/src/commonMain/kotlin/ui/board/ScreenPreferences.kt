@@ -13,12 +13,20 @@ import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.ai.AiAvailability
 
 data class ScreenPreferencesState(
     val appVersion: String,
     val isBackgroundRefreshEnabled: Boolean = false,
     val isAdsEnabled: Boolean = true,
     val isLightweightModeEnabled: Boolean = false,
+    val isThreadSummaryModeEnabled: Boolean = false,
+    val isAiPostFilterEnabled: Boolean = false,
+    val isAiCommandEnabled: Boolean = false,
+    val aiAvailability: AiAvailability = AiAvailability(
+        isAvailable = false,
+        unavailableReason = "端末AIを確認中です。"
+    ),
     val manualSaveDirectory: String = DEFAULT_MANUAL_SAVE_ROOT,
     val manualSaveLocation: SaveLocation? = null,
     val resolvedManualSaveDirectory: String? = null,
@@ -39,6 +47,9 @@ data class ScreenPreferencesCallbacks(
     val onBackgroundRefreshChanged: (Boolean) -> Unit = {},
     val onAdsEnabledChanged: (Boolean) -> Unit = {},
     val onLightweightModeChanged: (Boolean) -> Unit = {},
+    val onThreadSummaryModeChanged: (Boolean) -> Unit = {},
+    val onAiPostFilterChanged: (Boolean) -> Unit = {},
+    val onAiCommandChanged: (Boolean) -> Unit = {},
     val onManualSaveDirectoryChanged: (String) -> Unit = {},
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},

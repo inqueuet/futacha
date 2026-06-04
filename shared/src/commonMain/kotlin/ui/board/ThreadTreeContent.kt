@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -91,6 +92,9 @@ internal fun buildThreadTreeNodes(posts: List<Post>): List<ThreadTreeNode> {
 internal fun ThreadTreeContent(
     page: ThreadPage,
     embeddedHtml: List<EmbeddedHtmlContent>,
+    summaryState: ThreadSummaryUiState?,
+    aiHiddenPostIds: Set<String> = emptySet(),
+    aiHiddenPostReasons: Map<String, String> = emptyMap(),
     listState: LazyListState,
     saidaneOverrides: Map<String, String>,
     selfPostIdentifiers: Set<String> = emptySet(),
@@ -126,6 +130,7 @@ internal fun ThreadTreeContent(
     val referencedByMap = derivedPostData.referencedByMap
     val postsByPosterId = derivedPostData.postsByPosterId
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
+    val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
         listState = listState,
         isRefreshing = isRefreshing,
@@ -157,6 +162,14 @@ internal fun ThreadTreeContent(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
             ) {
+                summaryState?.let { state ->
+                    item(key = "thread-tree-summary") {
+                        ThreadSummaryCard(
+                            state = state,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
                 if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
                     item(key = "thread-tree-embedded-html-header") {
                         EmbeddedHtmlSection(
@@ -171,12 +184,25 @@ internal fun ThreadTreeContent(
                         ThreadNoticeCard(message = notice)
                     }
                 }
+                if (aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }) {
+                    item(key = "thread-tree-ai-hidden-posts-summary") {
+                        AiHiddenPostsSummaryCard(
+                            onRevealAll = {
+                                revealedAiHiddenPostIds.addAll(
+                                    aiHiddenPostIds.filter { it !in revealedAiHiddenPostIds }
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
                 itemsIndexed(
                     items = treeNodes,
                     key = { _, node -> "tree-${node.post.id}" }
                 ) { index, node ->
                     val post = node.post
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
+                    val isAiHidden = post.id in aiHiddenPostIds && post.id !in revealedAiHiddenPostIds
                     val normalizedPosterId = normalizePosterIdValue(post.posterId)
                     val postCardCallbacks = buildThreadScreenPostCardCallbacks(
                         post = post,
@@ -193,27 +219,38 @@ internal fun ThreadTreeContent(
                         onPostLongPress = onPostLongPress
                     )
                     val indent = (node.depth * 18).coerceAtMost(108).dp
-                    ThreadPostCard(
-                        post = post,
-                        isOp = post.id == page.posts.firstOrNull()?.id,
-                        isSelfPost = isSelfPost,
-                        posterIdLabel = posterIdLabels[post.id],
-                        posterIdValue = normalizedPosterId,
-                        saidaneLabelOverride = saidaneOverrides[post.id],
-                        highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
-                        onQuoteClick = postCardCallbacks.onQuoteClick,
-                        onUrlClick = onUrlClick,
-                        onQuoteRequested = postCardCallbacks.onQuoteRequested,
-                        onPosterIdClick = postCardCallbacks.onPosterIdClick,
-                        onReferencedByClick = postCardCallbacks.onReferencedByClick,
-                        onSaidaneClick = postCardCallbacks.onSaidaneClick,
-                        onMediaClick = postCardCallbacks.onMediaClick,
-                        onMediaLongPress = postCardCallbacks.onMediaLongPress,
-                        onLongPress = postCardCallbacks.onLongPress,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = indent)
-                    )
+                    if (isAiHidden) {
+                        AiHiddenPostPlaceholder(
+                            postId = post.id,
+                            reason = aiHiddenPostReasons[post.id],
+                            onReveal = { revealedAiHiddenPostIds.add(post.id) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = indent)
+                        )
+                    } else {
+                        ThreadPostCard(
+                            post = post,
+                            isOp = post.id == page.posts.firstOrNull()?.id,
+                            isSelfPost = isSelfPost,
+                            posterIdLabel = posterIdLabels[post.id],
+                            posterIdValue = normalizedPosterId,
+                            saidaneLabelOverride = saidaneOverrides[post.id],
+                            highlightRanges = searchHighlightRanges[post.id] ?: emptyList(),
+                            onQuoteClick = postCardCallbacks.onQuoteClick,
+                            onUrlClick = onUrlClick,
+                            onQuoteRequested = postCardCallbacks.onQuoteRequested,
+                            onPosterIdClick = postCardCallbacks.onPosterIdClick,
+                            onReferencedByClick = postCardCallbacks.onReferencedByClick,
+                            onSaidaneClick = postCardCallbacks.onSaidaneClick,
+                            onMediaClick = postCardCallbacks.onMediaClick,
+                            onMediaLongPress = postCardCallbacks.onMediaLongPress,
+                            onLongPress = postCardCallbacks.onLongPress,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = indent)
+                        )
+                    }
                     if (index != treeNodes.lastIndex) {
                         Box(
                             modifier = Modifier

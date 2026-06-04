@@ -100,6 +100,18 @@ internal class AppStatePreferenceOperations(
         setSimple(enabled, storage::updateLightweightModeEnabled, "lightweight mode state")
     }
 
+    suspend fun setThreadSummaryModeEnabled(enabled: Boolean) {
+        setSimple(enabled, storage::updateThreadSummaryModeEnabled, "thread summary mode state")
+    }
+
+    suspend fun setAiPostFilterEnabled(enabled: Boolean) {
+        setSimple(enabled, storage::updateAiPostFilterEnabled, "AI post filter state")
+    }
+
+    suspend fun setAiCommandEnabled(enabled: Boolean) {
+        setSimple(enabled, storage::updateAiCommandEnabled, "AI command state")
+    }
+
     suspend fun setManualSaveDirectory(directory: String) {
         val sanitized = sanitizeManualSaveDirectoryValue(directory)
         setSimple(sanitized, storage::updateManualSaveDirectory, "manual save directory")

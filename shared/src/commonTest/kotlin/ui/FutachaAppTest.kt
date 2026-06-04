@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared.ui
 
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ai.FutachaAiCommandOutcome
+import com.valoser.futacha.shared.ai.FutachaAiConfirmationRequest
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
@@ -49,6 +53,154 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class FutachaAppTest {
+    @Test
+    fun aiCommandForwardingOnlyForScreenHandledSuccessfulActions() {
+        assertTrue(
+            shouldForwardAiCommandToScreen(
+                command = FutachaAiCommand(FutachaAiAction.SearchCatalog),
+                outcome = FutachaAiCommandOutcome.NeedsForeground("カタログ検索")
+            )
+        )
+        assertTrue(
+            shouldForwardAiCommandToScreen(
+                command = FutachaAiCommand(FutachaAiAction.DraftReply),
+                outcome = FutachaAiCommandOutcome.NeedsForeground("下書き")
+            )
+        )
+        assertFalse(
+            shouldForwardAiCommandToScreen(
+                command = FutachaAiCommand(FutachaAiAction.OpenGlobalSettings),
+                outcome = FutachaAiCommandOutcome.Completed("設定")
+            )
+        )
+    }
+
+    @Test
+    fun aiCommandForwardingMatchesScreenHandledActionCatalog() {
+        val expectedForwardedActions = setOf(
+            FutachaAiAction.RefreshCurrentBoard,
+            FutachaAiAction.RefreshCatalog,
+            FutachaAiAction.OpenHistoryDrawer,
+            FutachaAiAction.RefreshCurrentThread,
+            FutachaAiAction.ScrollThreadToTop,
+            FutachaAiAction.ScrollThreadToBottom,
+            FutachaAiAction.ScrollCatalogToTop,
+            FutachaAiAction.StartCatalogSearch,
+            FutachaAiAction.SearchCatalog,
+            FutachaAiAction.StartThreadSearch,
+            FutachaAiAction.SearchThread,
+            FutachaAiAction.NextSearchResult,
+            FutachaAiAction.PreviousSearchResult,
+            FutachaAiAction.OpenGallery,
+            FutachaAiAction.OpenCatalogSettings,
+            FutachaAiAction.OpenThreadSettings,
+            FutachaAiAction.OpenCookieManagement,
+            FutachaAiAction.OpenCatalogDisplaySettings,
+            FutachaAiAction.OpenNgManagement,
+            FutachaAiAction.OpenWatchWords,
+            FutachaAiAction.OpenBoardExternally,
+            FutachaAiAction.OpenThreadExternally,
+            FutachaAiAction.SaveCurrentThread,
+            FutachaAiAction.SaveThread,
+            FutachaAiAction.DraftReply,
+            FutachaAiAction.DraftThread
+        )
+
+        val forwardedActions = FutachaAiAction.supportedActions
+            .filter { action ->
+                shouldForwardAiCommandToScreen(
+                    command = FutachaAiCommand(action),
+                    outcome = FutachaAiCommandOutcome.Completed("ok")
+                )
+            }
+            .toSet()
+
+        assertEquals(expectedForwardedActions, forwardedActions)
+    }
+
+    @Test
+    fun aiCommandForwardingSkipsFailedAndUnconfirmedActions() {
+        val command = FutachaAiCommand(FutachaAiAction.SaveCurrentThread)
+
+        assertFalse(
+            shouldForwardAiCommandToScreen(
+                command = command,
+                outcome = FutachaAiCommandOutcome.Failed("失敗")
+            )
+        )
+        assertFalse(
+            shouldForwardAiCommandToScreen(
+                command = command,
+                outcome = FutachaAiCommandOutcome.NeedsConfirmation(
+                    FutachaAiConfirmationRequest(
+                        command = command,
+                        title = "確認",
+                        message = "確認"
+                    )
+                )
+            )
+        )
+    }
+
+    @Test
+    fun aiGlobalSettingsOpeningOnlyForSuccessfulSettingsActions() {
+        val settings = FutachaAiCommand(FutachaAiAction.OpenGlobalSettings)
+        val version = FutachaAiCommand(FutachaAiAction.OpenVersionInfo)
+        val fileManager = FutachaAiCommand(FutachaAiAction.OpenFileManagerSettings)
+        val search = FutachaAiCommand(FutachaAiAction.SearchCatalog)
+
+        assertTrue(shouldOpenAiGlobalSettings(settings, FutachaAiCommandOutcome.Completed("設定")))
+        assertTrue(shouldOpenAiGlobalSettings(version, FutachaAiCommandOutcome.Completed("バージョン")))
+        assertTrue(shouldOpenAiGlobalSettings(fileManager, FutachaAiCommandOutcome.Completed("ファイラー")))
+        assertFalse(shouldOpenAiGlobalSettings(search, FutachaAiCommandOutcome.NeedsForeground("検索")))
+        assertFalse(shouldOpenAiGlobalSettings(settings, FutachaAiCommandOutcome.Failed("失敗")))
+    }
+
+    @Test
+    fun aiGlobalSettingsOpeningMatchesSettingsActionCatalog() {
+        val expectedSettingsActions = setOf(
+            FutachaAiAction.OpenGlobalSettings,
+            FutachaAiAction.OpenVersionInfo,
+            FutachaAiAction.OpenFileManagerSettings
+        )
+
+        val settingsActions = FutachaAiAction.supportedActions
+            .filter { action ->
+                shouldOpenAiGlobalSettings(
+                    command = FutachaAiCommand(action),
+                    outcome = FutachaAiCommandOutcome.Completed("ok")
+                )
+            }
+            .toSet()
+
+        assertEquals(expectedSettingsActions, settingsActions)
+    }
+
+    @Test
+    fun aiFileManagerPickerRequestOnlyForSuccessfulFileManagerSettingsAction() {
+        val fileManager = FutachaAiCommand(FutachaAiAction.OpenFileManagerSettings)
+        val settings = FutachaAiCommand(FutachaAiAction.OpenGlobalSettings)
+
+        assertTrue(
+            shouldRequestAiFileManagerPicker(
+                fileManager,
+                FutachaAiCommandOutcome.Completed("ファイラー")
+            )
+        )
+        assertFalse(
+            shouldRequestAiFileManagerPicker(
+                settings,
+                FutachaAiCommandOutcome.Completed("設定")
+            )
+        )
+        assertFalse(
+            shouldRequestAiFileManagerPicker(
+                fileManager,
+                FutachaAiCommandOutcome.Failed("失敗")
+            )
+        )
+    }
+
     @Test
     fun futachaMutationCallbackBuilders_launchExpectedActions() = runBlocking {
         var backgroundRefreshEnabled: Boolean? = null

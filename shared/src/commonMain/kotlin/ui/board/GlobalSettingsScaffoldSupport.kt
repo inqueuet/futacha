@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.ai.AiAvailability
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
 internal data class GlobalSettingsBehaviorSectionBindings(
@@ -18,6 +19,16 @@ internal data class GlobalSettingsBehaviorSectionBindings(
     val onAdsEnabledChanged: (Boolean) -> Unit,
     val isLightweightModeEnabled: Boolean,
     val onLightweightModeChanged: (Boolean) -> Unit,
+    val isThreadSummaryModeEnabled: Boolean = false,
+    val onThreadSummaryModeChanged: (Boolean) -> Unit = {},
+    val isAiPostFilterEnabled: Boolean = false,
+    val onAiPostFilterChanged: (Boolean) -> Unit = {},
+    val isAiCommandEnabled: Boolean = false,
+    val onAiCommandChanged: (Boolean) -> Unit = {},
+    val aiAvailability: AiAvailability = AiAvailability(
+        isAvailable = false,
+        unavailableReason = "端末AIを確認中です。"
+    ),
     val threadGalleryTapAction: ThreadGalleryTapAction = ThreadGalleryTapAction.OpenMedia,
     val onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit = {},
     val themeMode: ThemeMode = ThemeMode.System,
@@ -123,6 +134,13 @@ internal fun buildGlobalSettingsBehaviorSectionBindings(
         onAdsEnabledChanged = preferencesCallbacks.onAdsEnabledChanged,
         isLightweightModeEnabled = preferencesState.isLightweightModeEnabled,
         onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged,
+        isThreadSummaryModeEnabled = preferencesState.isThreadSummaryModeEnabled,
+        onThreadSummaryModeChanged = preferencesCallbacks.onThreadSummaryModeChanged,
+        isAiPostFilterEnabled = preferencesState.isAiPostFilterEnabled,
+        onAiPostFilterChanged = preferencesCallbacks.onAiPostFilterChanged,
+        isAiCommandEnabled = preferencesState.isAiCommandEnabled,
+        onAiCommandChanged = preferencesCallbacks.onAiCommandChanged,
+        aiAvailability = preferencesState.aiAvailability,
         threadGalleryTapAction = preferencesState.threadGalleryTapAction,
         onThreadGalleryTapActionChanged = preferencesCallbacks.onThreadGalleryTapActionChanged,
         themeMode = preferencesState.themeMode,

@@ -6,7 +6,11 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.withFrameNanos
+import coil3.compose.LocalPlatformContext
+import com.valoser.futacha.shared.ai.PostModerationInput
+import com.valoser.futacha.shared.ai.PostModerationResult
+import com.valoser.futacha.shared.ai.ThreadSummaryInput
+import com.valoser.futacha.shared.ai.createOnDeviceAiService
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
@@ -36,7 +40,8 @@ internal data class ThreadScreenContentHostBindings(
     val onMediaLongPress: ((Post, String, MediaType) -> Unit)?,
     val onUrlClick: (String) -> Unit,
     val onRefresh: () -> Unit,
-    val isRefreshing: Boolean
+    val isRefreshing: Boolean,
+    val preferencesState: ScreenPreferencesState
 )
 
 @Composable
@@ -71,12 +76,19 @@ internal fun ThreadScreenContentHost(
             }
             val hasNgFilters = threadFilterComputationState.hasNgFilters
             val hasThreadFilters = threadFilterComputationState.hasThreadFilters
+            val shouldShowThreadSummary = isThreadSummaryFeatureEnabled(bindings.preferencesState)
+            val shouldApplyAiPostFilter = isAiPostFilterFeatureEnabled(bindings.preferencesState)
+            val shouldComputeFullPostFingerprint = shouldComputeFullThreadPostFingerprint(
+                shouldComputeForThreadFilters = threadFilterComputationState.shouldComputeFullPostFingerprint,
+                shouldShowThreadSummary = shouldShowThreadSummary,
+                shouldApplyAiPostFilter = shouldApplyAiPostFilter
+            )
             val postsFingerprint by produceState(
                 initialValue = buildLightweightThreadPostListFingerprint(state.page.posts),
                 key1 = state.page.posts,
-                key2 = threadFilterComputationState.shouldComputeFullPostFingerprint
+                key2 = shouldComputeFullPostFingerprint
             ) {
-                value = if (threadFilterComputationState.shouldComputeFullPostFingerprint) {
+                value = if (shouldComputeFullPostFingerprint) {
                     withContext(AppDispatchers.parsing) {
                         buildThreadPostListFingerprint(state.page.posts)
                     }
@@ -168,10 +180,95 @@ internal fun ThreadScreenContentHost(
                     )
                 )
             }
+            val platformContext = LocalPlatformContext.current
+            val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
+            val threadSummaryCache = remember { linkedMapOf<ThreadAiCacheKey, ThreadSummaryUiState.Ready>() }
+            val threadPostModerationCache = remember { linkedMapOf<ThreadAiCacheKey, List<PostModerationResult>>() }
+            val aiSourcePosts = remember(state.page) { resolveThreadAiSourcePosts(state.page) }
+            val aiCacheKey = remember(
+                state.page.threadId,
+                postsFingerprint,
+                bindings.preferencesState.aiAvailability.providerLabel
+            ) {
+                ThreadAiCacheKey(
+                    threadId = state.page.threadId,
+                    postsFingerprint = postsFingerprint,
+                    providerLabel = bindings.preferencesState.aiAvailability.providerLabel
+                )
+            }
+            val summaryState by produceState<ThreadSummaryUiState?>(
+                initialValue = resolveInitialThreadSummaryUiState(shouldShowThreadSummary),
+                key1 = shouldShowThreadSummary,
+                key2 = aiCacheKey
+            ) {
+                if (!shouldShowThreadSummary) {
+                    value = null
+                    return@produceState
+                }
+                threadSummaryCache[aiCacheKey]?.let {
+                    value = it
+                    return@produceState
+                }
+                value = ThreadSummaryUiState.Loading
+                val summaryInput = ThreadSummaryInput(
+                    threadId = state.page.threadId,
+                    title = aiSourcePosts.firstOrNull()?.subject,
+                    posts = aiSourcePosts
+                )
+                value = aiService.summarizeThread(summaryInput).fold(
+                    onSuccess = {
+                        ThreadSummaryUiState.Ready(it).also { readyState ->
+                            putThreadAiCacheEntry(threadSummaryCache, aiCacheKey, readyState)
+                        }
+                    },
+                    onFailure = {
+                        ThreadSummaryUiState.Unavailable(
+                            it.message ?: "スレ要約を生成できませんでした。"
+                        )
+                    }
+                )
+            }
+            val aiPostModerationResults by produceState<List<PostModerationResult>>(
+                initialValue = emptyList(),
+                key1 = shouldApplyAiPostFilter,
+                key2 = aiCacheKey
+            ) {
+                if (!shouldApplyAiPostFilter) {
+                    value = emptyList()
+                    return@produceState
+                }
+                threadPostModerationCache[aiCacheKey]?.let {
+                    value = it
+                    return@produceState
+                }
+                val input = PostModerationInput(
+                    threadId = state.page.threadId,
+                    posts = aiSourcePosts
+                )
+                value = aiService.classifyPosts(input)
+                    .getOrDefault(emptyList())
+                    .also {
+                        putThreadAiCacheEntry(threadPostModerationCache, aiCacheKey, it)
+                    }
+            }
+            val aiHiddenPostState = remember(
+                filteredPage.posts,
+                aiPostModerationResults,
+                bindings.selfPostIdentifierSet
+            ) {
+                resolveAiHiddenPostState(
+                    posts = filteredPage.posts,
+                    moderationResults = aiPostModerationResults,
+                    selfPostIdentifiers = bindings.selfPostIdentifierSet
+                )
+            }
             when (bindings.threadDisplayMode) {
                 ThreadDisplayMode.Flat -> ThreadContent(
                     page = filteredPage,
                     embeddedHtml = state.embeddedHtml,
+                    summaryState = summaryState,
+                    aiHiddenPostIds = aiHiddenPostState.postIds,
+                    aiHiddenPostReasons = aiHiddenPostState.reasons,
                     listState = bindings.lazyListState,
                     saidaneOverrides = bindings.saidaneOverrides,
                     selfPostIdentifiers = bindings.selfPostIdentifierSet,
@@ -190,6 +287,9 @@ internal fun ThreadScreenContentHost(
                 ThreadDisplayMode.Tree -> ThreadTreeContent(
                     page = filteredPage,
                     embeddedHtml = state.embeddedHtml,
+                    summaryState = summaryState,
+                    aiHiddenPostIds = aiHiddenPostState.postIds,
+                    aiHiddenPostReasons = aiHiddenPostState.reasons,
                     listState = bindings.lazyListState,
                     saidaneOverrides = bindings.saidaneOverrides,
                     selfPostIdentifiers = bindings.selfPostIdentifierSet,

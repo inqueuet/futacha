@@ -22,7 +22,7 @@ android {
 
     defaultConfig {
         applicationId = "com.valoser.futacha"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 37
         versionCode = 45
         versionName = "3.9"

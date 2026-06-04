@@ -74,6 +74,14 @@ import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ai.draftCommentParameter
+import com.valoser.futacha.shared.ai.draftEmailParameter
+import com.valoser.futacha.shared.ai.draftNameParameter
+import com.valoser.futacha.shared.ai.draftPasswordParameter
+import com.valoser.futacha.shared.ai.draftSubjectParameter
+import com.valoser.futacha.shared.ai.searchQueryParameter
 import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -108,6 +116,8 @@ fun ThreadScreen(
     threadUrlOverride: String? = null,
     dependencies: ThreadScreenDependencies = ThreadScreenDependencies(),
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     ThreadScreenContent(
@@ -123,6 +133,8 @@ fun ThreadScreen(
             threadUrlOverride = threadUrlOverride,
             dependencies = dependencies,
             onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+            aiCommand = aiCommand,
+            onAiCommandConsumed = onAiCommandConsumed,
             modifier = modifier
         )
     )
@@ -156,6 +168,8 @@ fun ThreadScreen(
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     onRegisteredThreadUrlClick: (String) -> Boolean = { false },
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     ThreadScreen(
@@ -187,6 +201,8 @@ fun ThreadScreen(
             autoSavedThreadRepository = autoSavedThreadRepository
         ),
         onRegisteredThreadUrlClick = onRegisteredThreadUrlClick,
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -666,7 +682,8 @@ private fun ThreadScreenContent(
                         resolveThreadLazyListIndexForPost(
                             postIndex = postIndex,
                             page = currentSuccessState?.page,
-                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty()
+                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty(),
+                            hasSummary = isThreadSummaryFeatureEnabled(preferencesState)
                         )
                     )
                 }
@@ -734,8 +751,84 @@ private fun ThreadScreenContent(
     val openQuoteSelection = postActionHandlers.onOpenQuoteSelection
     val handleNgRegistration = postActionHandlers.onNgRegister
     val performRefresh = interactionUiHandles.performRefresh
+    LaunchedEffect(args.aiCommand) {
+        val command = args.aiCommand ?: return@LaunchedEffect
+        var didConsume = true
+        when (command.action) {
+            FutachaAiAction.RefreshCurrentThread -> {
+                performRefresh()
+            }
+            FutachaAiAction.ScrollThreadToTop -> {
+                handleMenuEntry(ThreadMenuEntryId.ScrollToTop)
+            }
+            FutachaAiAction.ScrollThreadToBottom -> {
+                handleMenuEntry(ThreadMenuEntryId.ScrollToBottom)
+            }
+            FutachaAiAction.StartThreadSearch -> {
+                isSearchActive = true
+            }
+            FutachaAiAction.SearchThread -> {
+                searchQuery = command.searchQueryParameter().orEmpty()
+                currentSearchResultIndex = -1
+                isSearchActive = true
+            }
+            FutachaAiAction.NextSearchResult -> {
+                isSearchActive = true
+                searchNavigationCallbacks.onSearchNext()
+            }
+            FutachaAiAction.PreviousSearchResult -> {
+                isSearchActive = true
+                searchNavigationCallbacks.onSearchPrev()
+            }
+            FutachaAiAction.OpenHistoryDrawer -> {
+                drawerState.open()
+            }
+            FutachaAiAction.OpenGallery -> {
+                handleMenuEntry(ThreadMenuEntryId.Gallery)
+            }
+            FutachaAiAction.OpenThreadSettings -> {
+                handleMenuEntry(ThreadMenuEntryId.Settings)
+            }
+            FutachaAiAction.OpenThreadExternally -> {
+                handleMenuEntry(ThreadMenuEntryId.ExternalApp)
+            }
+            FutachaAiAction.OpenCookieManagement -> {
+                if (cookieRepository != null) {
+                    modalOverlayState = openThreadCookieManagementOverlay(modalOverlayState)
+                }
+            }
+            FutachaAiAction.SaveCurrentThread,
+            FutachaAiAction.SaveThread -> {
+                handleMenuEntry(ThreadMenuEntryId.Save)
+            }
+            FutachaAiAction.DraftReply -> {
+                val currentState = replyDialogBinding.currentState()
+                val currentDraft = currentState.draft
+                replyDialogBinding.setState(
+                    openThreadReplyDialog(
+                        state = currentState.copy(
+                            draft = currentDraft.copy(
+                                name = command.draftNameParameter() ?: currentDraft.name,
+                                email = command.draftEmailParameter() ?: currentDraft.email,
+                                subject = command.draftSubjectParameter() ?: currentDraft.subject,
+                                comment = command.draftCommentParameter() ?: currentDraft.comment,
+                                password = command.draftPasswordParameter() ?: currentDraft.password
+                            )
+                        ),
+                        lastUsedDeleteKey = lastUsedDeleteKey
+                    )
+                )
+            }
+            else -> {
+                didConsume = false
+            }
+        }
+        if (didConsume) {
+            args.onAiCommandConsumed(command)
+        }
+    }
     val uiBindings = interactionUiHandles.uiBindings
-    val scrollToPost = remember(currentSuccessState, lazyListState, coroutineScope) {
+    val scrollToPost = remember(currentSuccessState, lazyListState, coroutineScope, preferencesState) {
         buildThreadPostIndexAction(
             currentPosts = currentSuccessState?.page?.posts.orEmpty(),
             onScrollToPostIndex = { index ->
@@ -744,7 +837,8 @@ private fun ThreadScreenContent(
                         resolveThreadLazyListIndexForPost(
                             postIndex = index,
                             page = currentSuccessState?.page,
-                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty()
+                            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty(),
+                            hasSummary = isThreadSummaryFeatureEnabled(preferencesState)
                         )
                     )
                 }

@@ -40,6 +40,14 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.FutachaAiCommand
+import com.valoser.futacha.shared.ai.draftCommentParameter
+import com.valoser.futacha.shared.ai.draftEmailParameter
+import com.valoser.futacha.shared.ai.draftNameParameter
+import com.valoser.futacha.shared.ai.draftPasswordParameter
+import com.valoser.futacha.shared.ai.draftSubjectParameter
+import com.valoser.futacha.shared.ai.searchQueryParameter
 import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
@@ -70,6 +78,8 @@ fun CatalogScreen(
     onBack: () -> Unit,
     onThreadSelected: (CatalogItem) -> Unit,
     dependencies: CatalogScreenDependencies = CatalogScreenDependencies(),
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     CatalogScreenContent(
@@ -79,6 +89,8 @@ fun CatalogScreen(
             onBack = onBack,
             onThreadSelected = onThreadSelected,
             dependencies = dependencies,
+            aiCommand = aiCommand,
+            onAiCommandConsumed = onAiCommandConsumed,
             modifier = modifier
         )
     )
@@ -105,6 +117,8 @@ fun CatalogScreen(
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks(),
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = dependencies.fileSystem,
+    aiCommand: FutachaAiCommand? = null,
+    onAiCommandConsumed: (FutachaAiCommand) -> Unit = {},
     modifier: Modifier = Modifier,
     httpClient: HttpClient? = dependencies.httpClient
 ) {
@@ -131,6 +145,8 @@ fun CatalogScreen(
             fileSystem = fileSystem,
             httpClient = httpClient
         ),
+        aiCommand = aiCommand,
+        onAiCommandConsumed = onAiCommandConsumed,
         modifier = modifier
     )
 }
@@ -388,6 +404,69 @@ private fun CatalogScreenContent(
     val initialLoadBindings = interactionHandles.initialLoadBindings
     val createThreadBindings = interactionHandles.createThreadBindings
     val historyDrawerCallbacks = interactionHandles.historyDrawerCallbacks
+    LaunchedEffect(args.aiCommand) {
+        val command = args.aiCommand ?: return@LaunchedEffect
+        var didConsume = true
+        when (command.action) {
+            FutachaAiAction.RefreshCurrentBoard,
+            FutachaAiAction.RefreshCatalog -> {
+                performRefresh()
+            }
+            FutachaAiAction.ScrollCatalogToTop -> {
+                mutationBindings.scrollCatalogToTop()
+            }
+            FutachaAiAction.StartCatalogSearch -> {
+                isSearchActive = true
+            }
+            FutachaAiAction.SearchCatalog -> {
+                searchQuery = command.searchQueryParameter().orEmpty()
+                isSearchActive = true
+            }
+            FutachaAiAction.OpenHistoryDrawer -> {
+                drawerState.open()
+            }
+            FutachaAiAction.OpenCatalogSettings -> {
+                overlayState = setCatalogSettingsMenuVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenCatalogDisplaySettings -> {
+                overlayState = setCatalogDisplayStyleDialogVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenNgManagement -> {
+                overlayState = setCatalogNgManagementVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenWatchWords -> {
+                overlayState = setCatalogWatchWordsVisible(overlayState, true)
+            }
+            FutachaAiAction.OpenCookieManagement -> {
+                if (cookieRepository != null) {
+                    overlayState = setCatalogCookieManagementVisible(overlayState, true)
+                }
+            }
+            FutachaAiAction.OpenBoardExternally -> {
+                board?.let { currentBoard ->
+                    screenSetupHandles.urlLauncher(
+                        BoardUrlResolver.resolveCatalogUrl(currentBoard.url, catalogMode)
+                    )
+                }
+            }
+            FutachaAiAction.DraftThread -> {
+                createThreadDraft = createThreadDraft.copy(
+                    name = command.draftNameParameter() ?: createThreadDraft.name,
+                    email = command.draftEmailParameter() ?: createThreadDraft.email,
+                    title = command.draftSubjectParameter() ?: createThreadDraft.title,
+                    comment = command.draftCommentParameter() ?: createThreadDraft.comment,
+                    password = command.draftPasswordParameter() ?: createThreadDraft.password
+                )
+                overlayState = setCatalogCreateThreadDialogVisible(overlayState, true)
+            }
+            else -> {
+                didConsume = false
+            }
+        }
+        if (didConsume) {
+            args.onAiCommandConsumed(command)
+        }
+    }
     val lifecycleBindings = rememberCatalogScreenLifecycleBindings(
         coroutineScope,
         drawerState,

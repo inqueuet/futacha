@@ -17,6 +17,7 @@ import com.valoser.futacha.shared.ui.board.ScreenPreferencesCallbacks
 import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
+import com.valoser.futacha.shared.ai.AiAvailability
 import kotlinx.coroutines.CoroutineScope
 
 internal data class FutachaScreenPreferencesStateInputs(
@@ -24,6 +25,13 @@ internal data class FutachaScreenPreferencesStateInputs(
     val isBackgroundRefreshEnabled: Boolean,
     val isAdsEnabled: Boolean = true,
     val isLightweightModeEnabled: Boolean,
+    val isThreadSummaryModeEnabled: Boolean = false,
+    val isAiPostFilterEnabled: Boolean = false,
+    val isAiCommandEnabled: Boolean = false,
+    val aiAvailability: AiAvailability = AiAvailability(
+        isAvailable = false,
+        unavailableReason = "端末AIを確認中です。"
+    ),
     val manualSaveDirectory: String,
     val manualSaveLocation: SaveLocation,
     val resolvedManualSaveDirectory: String?,
@@ -95,6 +103,10 @@ internal fun buildFutachaScreenPreferencesState(
         isBackgroundRefreshEnabled = inputs.isBackgroundRefreshEnabled,
         isAdsEnabled = inputs.isAdsEnabled,
         isLightweightModeEnabled = inputs.isLightweightModeEnabled,
+        isThreadSummaryModeEnabled = inputs.isThreadSummaryModeEnabled,
+        isAiPostFilterEnabled = inputs.isAiPostFilterEnabled,
+        isAiCommandEnabled = inputs.isAiCommandEnabled,
+        aiAvailability = inputs.aiAvailability,
         manualSaveDirectory = inputs.manualSaveDirectory,
         manualSaveLocation = inputs.manualSaveLocation,
         resolvedManualSaveDirectory = inputs.resolvedManualSaveDirectory,
@@ -119,6 +131,9 @@ internal fun buildFutachaScreenPreferencesCallbacks(
         onBackgroundRefreshChanged = inputs.preferenceMutations.onBackgroundRefreshChanged,
         onAdsEnabledChanged = inputs.preferenceMutations.onAdsEnabledChanged,
         onLightweightModeChanged = inputs.preferenceMutations.onLightweightModeChanged,
+        onThreadSummaryModeChanged = inputs.preferenceMutations.onThreadSummaryModeChanged,
+        onAiPostFilterChanged = inputs.preferenceMutations.onAiPostFilterChanged,
+        onAiCommandChanged = inputs.preferenceMutations.onAiCommandChanged,
         onManualSaveDirectoryChanged = inputs.preferenceMutations.onManualSaveDirectoryChanged,
         onAttachmentPickerPreferenceChanged = inputs.preferenceMutations.onAttachmentPickerPreferenceChanged,
         onSaveDirectorySelectionChanged = inputs.preferenceMutations.onSaveDirectorySelectionChanged,

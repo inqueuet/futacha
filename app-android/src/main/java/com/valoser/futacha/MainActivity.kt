@@ -1,11 +1,15 @@
 package com.valoser.futacha
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.network.PersistentCookieStorage
 import com.valoser.futacha.shared.network.createHttpClient
 import com.valoser.futacha.shared.repository.CookieRepository
@@ -20,8 +24,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private var pendingAiDeepLink by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingAiDeepLink = intent?.futachaAiDeepLinkOrNull()
         val app = application as? FutachaApplication
         enableEdgeToEdge()
         setContent {
@@ -62,8 +69,28 @@ class MainActivity : ComponentActivity() {
                 httpClient = httpClient,
                 fileSystem = fileSystem,
                 cookieRepository = cookieRepository,
-                autoSavedThreadRepository = autoSavedThreadRepository
+                autoSavedThreadRepository = autoSavedThreadRepository,
+                platformAiDeepLink = pendingAiDeepLink,
+                onPlatformAiDeepLinkConsumed = { consumed ->
+                    if (pendingAiDeepLink == consumed) {
+                        pendingAiDeepLink = null
+                    }
+                }
             )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingAiDeepLink = intent.futachaAiDeepLinkOrNull()
+    }
+
+    private fun Intent.futachaAiDeepLinkOrNull(): String? {
+        val uri = data ?: return null
+        if (uri.scheme != "futacha" || uri.host != "ai") {
+            return null
+        }
+        return dataString
     }
 }

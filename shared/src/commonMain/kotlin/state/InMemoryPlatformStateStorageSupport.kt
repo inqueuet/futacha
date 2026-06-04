@@ -15,6 +15,9 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val adsEnabledState = MutableStateFlow(true)
     val postingNoticeState = MutableStateFlow(false)
     val lightweightModeState = MutableStateFlow(false)
+    val threadSummaryModeState = MutableStateFlow(false)
+    val aiPostFilterState = MutableStateFlow(false)
+    val aiCommandState = MutableStateFlow(false)
     val manualSaveDirectoryState = MutableStateFlow(DEFAULT_MANUAL_SAVE_ROOT)
     val attachmentPickerPreferenceState = MutableStateFlow<String?>(null)
     val saveDirectorySelectionState = MutableStateFlow<String?>(null)
@@ -46,6 +49,9 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override val adsEnabled: Flow<Boolean> = adsEnabledState
     override val hasShownPostingNotice: Flow<Boolean> = postingNoticeState
     override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
+    override val threadSummaryModeEnabled: Flow<Boolean> = threadSummaryModeState
+    override val aiPostFilterEnabled: Flow<Boolean> = aiPostFilterState
+    override val aiCommandEnabled: Flow<Boolean> = aiCommandState
     override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
     override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
     override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
@@ -77,6 +83,9 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override suspend fun updateAdsEnabled(enabled: Boolean) { adsEnabledState.value = enabled }
     override suspend fun updateHasShownPostingNotice(shown: Boolean) { postingNoticeState.value = shown }
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) { lightweightModeState.value = enabled }
+    override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) { threadSummaryModeState.value = enabled }
+    override suspend fun updateAiPostFilterEnabled(enabled: Boolean) { aiPostFilterState.value = enabled }
+    override suspend fun updateAiCommandEnabled(enabled: Boolean) { aiCommandState.value = enabled }
     override suspend fun updateManualSaveDirectory(directory: String) { manualSaveDirectoryState.value = directory }
     override suspend fun updateAttachmentPickerPreference(preference: String) { attachmentPickerPreferenceState.value = preference }
     override suspend fun updateSaveDirectorySelection(selection: String) { saveDirectorySelectionState.value = selection }

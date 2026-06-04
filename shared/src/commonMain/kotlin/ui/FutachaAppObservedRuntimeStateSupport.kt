@@ -26,8 +26,12 @@ import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.version.VersionChecker
 import androidx.compose.runtime.remember as composeRemember
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.ai.AiAvailability
+import com.valoser.futacha.shared.ai.createOnDeviceAiService
+import kotlinx.coroutines.delay
 
 private const val FUTACHA_APP_STATE_TAG = "FutachaApp"
+private const val AI_AVAILABILITY_REFRESH_INTERVAL_MILLIS = 60_000L
 
 internal data class FutachaObservedRuntimeState(
     val persistedBoards: List<BoardSummary>,
@@ -36,6 +40,10 @@ internal data class FutachaObservedRuntimeState(
     val catalogNavEntries: List<com.valoser.futacha.shared.model.CatalogNavEntryConfig>,
     val isBackgroundRefreshEnabled: Boolean,
     val isAdsEnabled: Boolean,
+    val isThreadSummaryModeEnabled: Boolean,
+    val isAiPostFilterEnabled: Boolean,
+    val isAiCommandEnabled: Boolean,
+    val aiAvailability: AiAvailability,
     val manualSaveDirectory: String,
     val manualSaveLocation: SaveLocation,
     val activeSavedThreadsRepository: SavedThreadRepository?,
@@ -57,7 +65,8 @@ internal fun rememberFutachaObservedRuntimeState(
     boardList: List<BoardSummary>,
     history: List<ThreadHistoryEntry>,
     versionChecker: VersionChecker?,
-    fileSystem: FileSystem?
+    fileSystem: FileSystem?,
+    platformContext: Any?
 ): FutachaObservedRuntimeState {
     val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
     val persistedHistory by stateStore.history.collectAsState(initial = history)
@@ -65,6 +74,28 @@ internal fun rememberFutachaObservedRuntimeState(
     val catalogNavEntries by stateStore.catalogNavEntries.collectAsState(initial = defaultCatalogNavEntries())
     val isBackgroundRefreshEnabled by stateStore.isBackgroundRefreshEnabled.collectAsState(initial = false)
     val isAdsEnabled by stateStore.isAdsEnabled.collectAsState(initial = true)
+    val isThreadSummaryModeEnabled by stateStore.isThreadSummaryModeEnabled.collectAsState(initial = false)
+    val isAiPostFilterEnabled by stateStore.isAiPostFilterEnabled.collectAsState(initial = false)
+    val isAiCommandEnabled by stateStore.isAiCommandEnabled.collectAsState(initial = false)
+    val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
+    val aiAvailability by produceState(
+        initialValue = AiAvailability(
+            isAvailable = false,
+            unavailableReason = "端末AIを確認中です。"
+        ),
+        key1 = aiService
+    ) {
+        while (true) {
+            value = runCatching { aiService.getAvailability() }
+                .getOrElse { error ->
+                    AiAvailability(
+                        isAvailable = false,
+                        unavailableReason = error.message ?: "端末AIの確認に失敗しました。"
+                    )
+                }
+            delay(AI_AVAILABILITY_REFRESH_INTERVAL_MILLIS)
+        }
+    }
     val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)
     val manualSaveLocation = composeRemember(manualSaveDirectory) {
         SaveLocation.fromString(manualSaveDirectory)
@@ -137,6 +168,10 @@ internal fun rememberFutachaObservedRuntimeState(
         catalogNavEntries,
         isBackgroundRefreshEnabled,
         isAdsEnabled,
+        isThreadSummaryModeEnabled,
+        isAiPostFilterEnabled,
+        isAiCommandEnabled,
+        aiAvailability,
         manualSaveDirectory,
         manualSaveLocation,
         activeSavedThreadsRepository,
@@ -158,6 +193,10 @@ internal fun rememberFutachaObservedRuntimeState(
             catalogNavEntries = catalogNavEntries,
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
             isAdsEnabled = isAdsEnabled,
+            isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
+            isAiPostFilterEnabled = isAiPostFilterEnabled,
+            isAiCommandEnabled = isAiCommandEnabled,
+            aiAvailability = aiAvailability,
             manualSaveDirectory = manualSaveDirectory,
             manualSaveLocation = manualSaveLocation,
             activeSavedThreadsRepository = activeSavedThreadsRepository,

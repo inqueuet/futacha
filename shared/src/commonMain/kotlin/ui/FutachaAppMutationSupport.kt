@@ -18,6 +18,9 @@ internal data class FutachaPreferenceMutationInputs(
     val setBackgroundRefreshEnabled: suspend (Boolean) -> Unit,
     val setAdsEnabled: suspend (Boolean) -> Unit = {},
     val setLightweightModeEnabled: suspend (Boolean) -> Unit,
+    val setThreadSummaryModeEnabled: suspend (Boolean) -> Unit = {},
+    val setAiPostFilterEnabled: suspend (Boolean) -> Unit = {},
+    val setAiCommandEnabled: suspend (Boolean) -> Unit = {},
     val setManualSaveDirectory: suspend (String) -> Unit,
     val setAttachmentPickerPreference: suspend (AttachmentPickerPreference) -> Unit,
     val setSaveDirectorySelection: suspend (SaveDirectorySelection) -> Unit,
@@ -36,6 +39,9 @@ internal data class FutachaPreferenceMutationCallbacks(
     val onBackgroundRefreshChanged: (Boolean) -> Unit,
     val onAdsEnabledChanged: (Boolean) -> Unit,
     val onLightweightModeChanged: (Boolean) -> Unit,
+    val onThreadSummaryModeChanged: (Boolean) -> Unit,
+    val onAiPostFilterChanged: (Boolean) -> Unit,
+    val onAiCommandChanged: (Boolean) -> Unit,
     val onManualSaveDirectoryChanged: (String) -> Unit,
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit,
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
@@ -77,6 +83,21 @@ internal fun buildFutachaPreferenceMutationCallbacks(
         onLightweightModeChanged = { enabled ->
             launchFutachaCallbackMutation(coroutineScope) {
                 inputs.setLightweightModeEnabled(enabled)
+            }
+        },
+        onThreadSummaryModeChanged = { enabled ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setThreadSummaryModeEnabled(enabled)
+            }
+        },
+        onAiPostFilterChanged = { enabled ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setAiPostFilterEnabled(enabled)
+            }
+        },
+        onAiCommandChanged = { enabled ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setAiCommandEnabled(enabled)
             }
         },
         onManualSaveDirectoryChanged = { directory ->

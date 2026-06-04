@@ -109,7 +109,8 @@ internal fun rememberGlobalSettingsScreenRuntime(
     onOpenCookieManager: (() -> Unit)?,
     historyEntries: List<ThreadHistoryEntry>,
     fileSystem: FileSystem?,
-    autoSavedThreadRepository: SavedThreadRepository?
+    autoSavedThreadRepository: SavedThreadRepository?,
+    openFileManagerPickerRequest: Int = 0
 ): GlobalSettingsScreenRuntime {
     val urlLauncher = rememberUrlLauncher()
     val runtimeBundle = rememberGlobalSettingsRuntimeBundle()
@@ -129,6 +130,12 @@ internal fun rememberGlobalSettingsScreenRuntime(
     var manualSaveInput by mutableStateBundle.manualSaveInput
     var localThreadMenuEntries by mutableStateBundle.localThreadMenuEntries
     var localCatalogNavEntries by mutableStateBundle.localCatalogNavEntries
+
+    LaunchedEffect(openFileManagerPickerRequest) {
+        if (openFileManagerPickerRequest > 0) {
+            isFileManagerPickerVisible = true
+        }
+    }
 
     val effectiveAutoSavedRepository = rememberGlobalSettingsAutoSavedRepository(
         fileSystem = fileSystem,
