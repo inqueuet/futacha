@@ -8,6 +8,8 @@ import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.ui.board.ALPHA_AI_COMMAND_ENABLED
+import com.valoser.futacha.shared.ui.board.ALPHA_AI_POST_FILTER_ENABLED
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
@@ -92,12 +94,12 @@ internal fun buildFutachaPreferenceMutationCallbacks(
         },
         onAiPostFilterChanged = { enabled ->
             launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setAiPostFilterEnabled(enabled)
+                inputs.setAiPostFilterEnabled(enabled && ALPHA_AI_POST_FILTER_ENABLED)
             }
         },
         onAiCommandChanged = { enabled ->
             launchFutachaCallbackMutation(coroutineScope) {
-                inputs.setAiCommandEnabled(enabled)
+                inputs.setAiCommandEnabled(enabled && ALPHA_AI_COMMAND_ENABLED)
             }
         },
         onManualSaveDirectoryChanged = { directory ->

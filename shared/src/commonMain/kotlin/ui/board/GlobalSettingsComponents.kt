@@ -510,8 +510,13 @@ private fun GlobalSettingsAiControls(
         },
         trailingContent = {
             Switch(
-                checked = isAiCommandEnabled,
-                onCheckedChange = onAiCommandChanged
+                checked = isAiCommandEnabled && ALPHA_AI_COMMAND_ENABLED,
+                enabled = ALPHA_AI_COMMAND_ENABLED,
+                onCheckedChange = {
+                    if (ALPHA_AI_COMMAND_ENABLED) {
+                        onAiCommandChanged(it)
+                    }
+                }
             )
         },
         modifier = Modifier.fillMaxWidth()
@@ -545,9 +550,13 @@ private fun GlobalSettingsAiControls(
         },
         trailingContent = {
             Switch(
-                checked = isAiPostFilterEnabled && postFilterEnabled,
-                enabled = postFilterEnabled,
-                onCheckedChange = onAiPostFilterChanged
+                checked = isAiPostFilterEnabled && postFilterEnabled && ALPHA_AI_POST_FILTER_ENABLED,
+                enabled = postFilterEnabled && ALPHA_AI_POST_FILTER_ENABLED,
+                onCheckedChange = {
+                    if (ALPHA_AI_POST_FILTER_ENABLED) {
+                        onAiPostFilterChanged(it)
+                    }
+                }
             )
         },
         modifier = Modifier.fillMaxWidth()

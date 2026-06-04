@@ -2,13 +2,17 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.ai.AiAvailability
 
+internal const val ALPHA_AI_COMMAND_ENABLED = false
+internal const val ALPHA_AI_POST_FILTER_ENABLED = false
+
 internal fun isThreadSummaryFeatureEnabled(preferencesState: ScreenPreferencesState): Boolean {
     return preferencesState.isThreadSummaryModeEnabled &&
         isThreadSummaryFeatureAvailable(preferencesState.aiAvailability)
 }
 
 internal fun isAiPostFilterFeatureEnabled(preferencesState: ScreenPreferencesState): Boolean {
-    return preferencesState.isAiPostFilterEnabled &&
+    return ALPHA_AI_POST_FILTER_ENABLED &&
+        preferencesState.isAiPostFilterEnabled &&
         isAiPostFilterFeatureAvailable(preferencesState.aiAvailability)
 }
 
@@ -29,6 +33,9 @@ internal fun threadSummarySettingDescription(aiAvailability: AiAvailability): St
 }
 
 internal fun aiPostFilterSettingDescription(aiAvailability: AiAvailability): String {
+    if (!ALPHA_AI_POST_FILTER_ENABLED) {
+        return "アルファ版のため現在は画面上から有効化できません。"
+    }
     return if (isAiPostFilterFeatureAvailable(aiAvailability)) {
         "AI判定で荒らし候補のレスを折りたたみます。"
     } else {
@@ -45,6 +52,9 @@ internal fun aiCommandSettingDescription(
     aiAvailability: AiAvailability,
     isAiCommandEnabled: Boolean
 ): String {
+    if (!ALPHA_AI_COMMAND_ENABLED) {
+        return "アルファ版のため現在は画面上から有効化できません。"
+    }
     val stateLabel = if (isAiCommandEnabled) "ON" else "OFF"
     return "App Intents / App Functions / deep link からアプリ操作を受け付けます。現在は${stateLabel}です。端末AIの要約・判定とは別の設定です。保存・投稿・削除に関係する操作は実行前に確認します。"
 }

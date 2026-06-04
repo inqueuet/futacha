@@ -23,6 +23,7 @@ import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.buildAddBoardValidationState
 import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
+import com.valoser.futacha.shared.ui.board.ALPHA_AI_POST_FILTER_ENABLED
 import kotlinx.coroutines.flow.first
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -195,6 +196,9 @@ internal suspend fun executeFutachaAiCommand(
             FutachaAiCommandOutcome.Completed("スレ要約モードをOFFにしました")
         }
         FutachaAiAction.EnableAiPostFilter -> {
+            if (!ALPHA_AI_POST_FILTER_ENABLED) {
+                return FutachaAiCommandOutcome.Failed("荒らし非表示モード（アルファ版）は現在有効化できません")
+            }
             inputs.stateStore.setAiPostFilterEnabled(true)
             FutachaAiCommandOutcome.Completed("荒らし非表示モードをONにしました")
         }

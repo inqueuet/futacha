@@ -28,6 +28,8 @@ import androidx.compose.runtime.remember as composeRemember
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.ai.AiAvailability
 import com.valoser.futacha.shared.ai.createOnDeviceAiService
+import com.valoser.futacha.shared.ui.board.ALPHA_AI_COMMAND_ENABLED
+import com.valoser.futacha.shared.ui.board.ALPHA_AI_POST_FILTER_ENABLED
 import kotlinx.coroutines.delay
 
 private const val FUTACHA_APP_STATE_TAG = "FutachaApp"
@@ -197,8 +199,8 @@ internal fun rememberFutachaObservedRuntimeState(
             isBackgroundRefreshEnabled = isBackgroundRefreshEnabled,
             isAdsEnabled = isAdsEnabled,
             isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
-            isAiPostFilterEnabled = isAiPostFilterEnabled,
-            isAiCommandEnabled = isAiCommandEnabled,
+            isAiPostFilterEnabled = isAiPostFilterEnabled && ALPHA_AI_POST_FILTER_ENABLED,
+            isAiCommandEnabled = isAiCommandEnabled && ALPHA_AI_COMMAND_ENABLED,
             aiAvailability = aiAvailability,
             manualSaveDirectory = manualSaveDirectory,
             manualSaveLocation = manualSaveLocation,
