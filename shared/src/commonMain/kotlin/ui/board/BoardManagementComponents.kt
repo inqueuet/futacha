@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -55,10 +56,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.ui.theme.LocalFutachaThemePalette
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
@@ -77,6 +80,16 @@ internal fun AddBoardDialog(
             existingBoards = existingBoards
         )
     }
+    val focusedFieldColor = if (LocalFutachaThemePalette.current == ThemePalette.FutabaClassic) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = focusedFieldColor,
+        focusedLabelColor = focusedFieldColor,
+        cursorColor = focusedFieldColor
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -89,7 +102,8 @@ internal fun AddBoardDialog(
                     label = { Text("板の名前") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    isError = !validationState.hasName && name.isNotEmpty()
+                    isError = !validationState.hasName && name.isNotEmpty(),
+                    colors = textFieldColors
                 )
                 OutlinedTextField(
                     value = url,
@@ -97,7 +111,8 @@ internal fun AddBoardDialog(
                     label = { Text("板のURL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    isError = validationState.hasUrl && (!validationState.isValidUrl || validationState.isDuplicateUrl)
+                    isError = validationState.hasUrl && (!validationState.isValidUrl || validationState.isDuplicateUrl),
+                    colors = textFieldColors
                 )
                 validationState.helperText?.let { message ->
                     Text(
