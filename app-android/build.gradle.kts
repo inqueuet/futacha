@@ -18,12 +18,12 @@ if (hasGoogleServicesConfig) {
 
 android {
     namespace = "com.valoser.futacha"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.valoser.futacha"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 45
         versionName = "3.9"
 

@@ -14,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.unit.dp
@@ -45,9 +44,8 @@ internal actual fun ThreadScreenBannerAd(
     }
 
     val context = LocalContext.current
-    val widthDp = LocalConfiguration.current.screenWidthDp.coerceAtLeast(320)
-    val adSize = remember(context, widthDp) {
-        AdSize.getLargeAnchoredAdaptiveBannerAdSize(context, widthDp)
+    val adSize = remember(context) {
+        AdSize.BANNER
     }
     var isBannerVisible by remember(context, adSize) { mutableStateOf(false) }
     val adView = remember(context, adSize) {

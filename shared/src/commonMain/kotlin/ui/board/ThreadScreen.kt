@@ -525,6 +525,9 @@ private fun ThreadScreenContent(
     PlatformBackHandler {
         runtimeLifecycleBindings.onBackPressed()
     }
+    PlatformBackgroundLifecycleEffect {
+        stopReadAloud()
+    }
 
     val refreshThread = loadBindings.refreshThread
 
