@@ -86,13 +86,16 @@ internal fun rememberFutachaObservedRuntimeState(
         key1 = aiService
     ) {
         while (true) {
-            value = runCatching { aiService.getAvailability() }
-                .getOrElse { error ->
-                    AiAvailability(
-                        isAvailable = false,
-                        unavailableReason = error.message ?: "端末AIの確認に失敗しました。"
-                    )
+            runCatching {
+                aiService.observeAvailability().collect { availability ->
+                    value = availability
                 }
+            }.getOrElse { error ->
+                value = AiAvailability(
+                    isAvailable = false,
+                    unavailableReason = error.message ?: "端末AIの確認に失敗しました。"
+                )
+            }
             delay(AI_AVAILABILITY_REFRESH_INTERVAL_MILLIS)
         }
     }

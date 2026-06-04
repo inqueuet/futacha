@@ -28,6 +28,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -465,12 +466,25 @@ private fun GlobalSettingsAiControls(
         },
         headlineContent = { Text("端末AI") },
         supportingContent = {
-            Text(
-                text = aiAvailability.unavailableReason
-                    ?: "${aiAvailability.providerLabel} を使って端末内で処理します。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = aiAvailability.unavailableReason
+                        ?: "${aiAvailability.providerLabel} を使って端末内で処理します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (aiAvailability.isDownloadInProgress) {
+                    val progress = aiAvailability.downloadProgress
+                    if (progress == null) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
         },
         modifier = Modifier.fillMaxWidth()
     )

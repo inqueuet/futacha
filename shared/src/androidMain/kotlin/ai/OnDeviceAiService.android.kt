@@ -2,12 +2,17 @@ package com.valoser.futacha.shared.ai
 
 import android.content.Context
 import android.os.Build
+import com.google.mlkit.genai.common.DownloadCallback
 import com.google.mlkit.genai.common.FeatureStatus
+import com.google.mlkit.genai.common.GenAiException
 import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.summarization.Summarization
 import com.google.mlkit.genai.summarization.SummarizationRequest
 import com.google.mlkit.genai.summarization.SummarizerOptions
 import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.withContext
 
 private const val AICORE_PACKAGE = "com.google.android.aicore"
@@ -19,7 +24,18 @@ actual fun createOnDeviceAiService(platformContext: Any?): OnDeviceAiService {
 private class AndroidOnDeviceAiService(
     private val context: Context?
 ) : OnDeviceAiService {
+    override fun observeAvailability(): Flow<AiAvailability> = channelFlow {
+        send(checkAvailability(startDownloadIfNeeded = true, progressChannel = this))
+    }
+
     override suspend fun getAvailability(): AiAvailability {
+        return checkAvailability(startDownloadIfNeeded = false, progressChannel = null)
+    }
+
+    private suspend fun checkAvailability(
+        startDownloadIfNeeded: Boolean,
+        progressChannel: SendChannel<AiAvailability>?
+    ): AiAvailability {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return AiAvailability(
                 isAvailable = false,
@@ -71,16 +87,50 @@ private class AndroidOnDeviceAiService(
                         supportsPostModeration = promptStatus == FeatureStatus.AVAILABLE,
                         providerLabel = "Gemini Nano"
                     )
-                    FeatureStatus.DOWNLOADABLE -> AiAvailability(
-                        isAvailable = false,
-                        unavailableReason = "Gemini Nano のモデルを準備中です。しばらくしてから再確認してください。",
-                        providerLabel = "Gemini Nano"
-                    )
-                    FeatureStatus.DOWNLOADING -> AiAvailability(
-                        isAvailable = false,
-                        unavailableReason = "Gemini Nano のモデルをダウンロード中です。完了後に利用できます。",
-                        providerLabel = "Gemini Nano"
-                    )
+                    FeatureStatus.DOWNLOADABLE,
+                    FeatureStatus.DOWNLOADING -> {
+                        if (startDownloadIfNeeded && progressChannel != null) {
+                            downloadSummarizerFeature(
+                                summarizer = summarizer,
+                                progressChannel = progressChannel
+                            )
+                            val updatedSummaryStatus = summarizer.checkFeatureStatus().get()
+                            val updatedPromptStatus = runCatching {
+                                val promptModel = Generation.getClient()
+                                try {
+                                    promptModel.checkStatus()
+                                } finally {
+                                    promptModel.close()
+                                }
+                            }.getOrNull()
+                            if (updatedSummaryStatus == FeatureStatus.AVAILABLE) {
+                                AiAvailability(
+                                    isAvailable = true,
+                                    supportsThreadSummary = true,
+                                    supportsPostModeration = updatedPromptStatus == FeatureStatus.AVAILABLE,
+                                    providerLabel = "Gemini Nano"
+                                )
+                            } else {
+                                AiAvailability(
+                                    isAvailable = false,
+                                    unavailableReason = "Gemini Nano のモデルをダウンロード中です。完了後に利用できます。",
+                                    providerLabel = "Gemini Nano",
+                                    isDownloadInProgress = updatedSummaryStatus == FeatureStatus.DOWNLOADING
+                                )
+                            }
+                        } else {
+                            AiAvailability(
+                                isAvailable = false,
+                                unavailableReason = if (summaryStatus == FeatureStatus.DOWNLOADING) {
+                                    "Gemini Nano のモデルをダウンロード中です。完了後に利用できます。"
+                                } else {
+                                    "Gemini Nano のモデルを準備中です。しばらくしてから再確認してください。"
+                                },
+                                providerLabel = "Gemini Nano",
+                                isDownloadInProgress = summaryStatus == FeatureStatus.DOWNLOADING
+                            )
+                        }
+                    }
                     else -> AiAvailability(
                         isAvailable = false,
                         unavailableReason = "この端末構成では Gemini Nano 要約を利用できません。",
@@ -171,6 +221,86 @@ private class AndroidOnDeviceAiService(
             }
         }
     }
+}
+
+private fun downloadSummarizerFeature(
+    summarizer: com.google.mlkit.genai.summarization.Summarizer,
+    progressChannel: SendChannel<AiAvailability>
+) {
+    var totalBytesExpected: Long? = null
+    val callback = object : DownloadCallback {
+        override fun onDownloadStarted(bytesToDownload: Long) {
+            totalBytesExpected = bytesToDownload
+            progressChannel.trySend(
+                buildGeminiNanoDownloadAvailability(
+                    downloadedBytes = 0L,
+                    downloadTotalBytes = bytesToDownload
+                )
+            )
+        }
+
+        override fun onDownloadProgress(totalBytesDownloaded: Long) {
+            progressChannel.trySend(
+                buildGeminiNanoDownloadAvailability(
+                    downloadedBytes = totalBytesDownloaded,
+                    downloadTotalBytes = totalBytesExpected
+                )
+            )
+        }
+
+        override fun onDownloadCompleted() {
+            progressChannel.trySend(
+                AiAvailability(
+                    isAvailable = false,
+                    unavailableReason = "Gemini Nano のモデルを確認中です。",
+                    providerLabel = "Gemini Nano"
+                )
+            )
+        }
+
+        override fun onDownloadFailed(error: GenAiException) {
+            progressChannel.trySend(
+                AiAvailability(
+                    isAvailable = false,
+                    unavailableReason = error.message ?: "Gemini Nano のモデルダウンロードに失敗しました。",
+                    providerLabel = "Gemini Nano"
+                )
+            )
+        }
+    }
+    summarizer.downloadFeature(callback).get()
+}
+
+private fun buildGeminiNanoDownloadAvailability(
+    downloadedBytes: Long?,
+    downloadTotalBytes: Long?
+): AiAvailability {
+    val progressText = formatGeminiNanoDownloadProgress(downloadedBytes, downloadTotalBytes)
+    return AiAvailability(
+        isAvailable = false,
+        unavailableReason = if (progressText == null) {
+            "Gemini Nano のモデルをダウンロード中です。"
+        } else {
+            "Gemini Nano のモデルをダウンロード中です。$progressText"
+        },
+        providerLabel = "Gemini Nano",
+        isDownloadInProgress = true,
+        downloadedBytes = downloadedBytes,
+        downloadTotalBytes = downloadTotalBytes
+    )
+}
+
+private fun formatGeminiNanoDownloadProgress(
+    downloadedBytes: Long?,
+    downloadTotalBytes: Long?
+): String? {
+    val downloaded = downloadedBytes ?: return null
+    val total = downloadTotalBytes ?: return null
+    if (total <= 0L) return null
+    val percent = ((downloaded.toDouble() / total.toDouble()) * 100.0)
+        .toInt()
+        .coerceIn(0, 100)
+    return "$percent%"
 }
 
 private fun buildSummarizerOptions(context: Context): SummarizerOptions {
