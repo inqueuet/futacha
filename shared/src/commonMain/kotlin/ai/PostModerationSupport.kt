@@ -1,7 +1,7 @@
 package com.valoser.futacha.shared.ai
 
-private const val POST_MODERATION_MAX_POSTS = 40
-private const val POST_MODERATION_MAX_BODY_CHARS = 180
+private const val POST_MODERATION_MAX_POSTS = 24
+private const val POST_MODERATION_MAX_BODY_CHARS = 120
 private const val POST_MODERATION_MAX_REASON_CHARS = 80
 
 private val moderationHtmlBreakRegex = Regex("(?i)<br\\s*/?>|</p>")

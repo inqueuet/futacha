@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ai
 import com.valoser.futacha.shared.model.Post
 
 private const val SUMMARY_MAX_SOURCE_POSTS = 80
+private const val SUMMARY_MAX_SOURCE_CHARS = 6_000
 private const val SUMMARY_MAX_BULLETS = 4
 private const val SUMMARY_MAX_BULLET_CHARS = 72
 
@@ -55,7 +56,7 @@ fun buildThreadSummarySourceText(input: ThreadSummaryInput): String {
         .filter { it.length >= 4 }
         .distinctBy { it.lowercase() }
         .joinToString(separator = "\n")
-        .take(12_000)
+        .take(SUMMARY_MAX_SOURCE_CHARS)
         .trim()
 }
 

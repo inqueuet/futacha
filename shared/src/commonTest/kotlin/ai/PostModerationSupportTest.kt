@@ -21,9 +21,9 @@ class PostModerationSupportTest {
         )
         val lines = source.lines()
 
-        assertEquals(40, lines.size)
+        assertEquals(24, lines.size)
         assertEquals("1\t本文1 test value", lines.first())
-        assertEquals("40\t本文40 test value", lines.last())
+        assertEquals("24\t本文24 test value", lines.last())
         assertFalse(source.contains("<b>"))
         assertFalse(source.contains("<br>"))
     }

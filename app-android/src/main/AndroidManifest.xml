@@ -122,6 +122,11 @@
             </intent-filter>
         </service>
 
+        <service
+            android:name="com.valoser.futacha.shared.ai.AndroidAiWorkerService"
+            android:exported="false"
+            android:process=":ai" />
+
     </application>
 
 </manifest>
