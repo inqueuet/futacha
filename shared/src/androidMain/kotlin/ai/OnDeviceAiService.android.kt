@@ -25,6 +25,7 @@ import com.google.mlkit.genai.summarization.Summarization
 import com.google.mlkit.genai.summarization.SummarizationRequest
 import com.google.mlkit.genai.summarization.SummarizerOptions
 import com.google.mlkit.genai.summarization.Summarizer
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.channels.SendChannel
@@ -49,7 +50,7 @@ private const val AI_STATUS_TIMEOUT_MILLIS = 10_000L
 private const val AI_SUMMARY_INFERENCE_TIMEOUT_MILLIS = 35_000L
 private const val AI_POST_MODERATION_TIMEOUT_MILLIS = 20_000L
 private const val AI_REMOTE_REQUEST_TIMEOUT_MILLIS = 45_000L
-private const val AI_REMOTE_AVAILABILITY_TIMEOUT_MILLIS = 20_000L
+private const val AI_REMOTE_AVAILABILITY_TIMEOUT_MILLIS = 90_000L
 private const val AI_REMOTE_DOWNLOAD_TIMEOUT_MILLIS = 15 * 60 * 1_000L
 
 private const val MSG_SUMMARIZE_THREAD = 1
@@ -96,20 +97,50 @@ private class AndroidOnDeviceAiService(
 ) : OnDeviceAiService {
     override fun observeAvailability(): Flow<AiAvailability> = channelFlow {
         val appContext = context?.applicationContext
-        val availability = appContext?.let {
-            requestRemoteAvailability(
-                context = it,
-                startDownloadIfNeeded = true,
-                progressChannel = this
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            send(
+                AiAvailability(
+                    isAvailable = false,
+                    unavailableReason = "Gemini Nano 要約には Android 8.0 以降が必要です。",
+                    providerLabel = "Gemini Nano"
+                )
             )
+            return@channelFlow
+        }
+        if (appContext == null) {
+            send(
+                AiAvailability(
+                    isAvailable = false,
+                    unavailableReason = "Android Context がないため端末AIを確認できません。",
+                    providerLabel = "Gemini Nano"
+                )
+            )
+            return@channelFlow
         }
         send(
-            availability ?: AiAvailability(
+            AiAvailability(
                 isAvailable = false,
-                unavailableReason = "Gemini Nano の準備プロセスを起動できませんでした。",
+                unavailableReason = "Gemini Nano の状態を確認中です。",
                 providerLabel = "Gemini Nano"
             )
         )
+
+        val availability = requestRemoteAvailability(
+            context = appContext,
+            startDownloadIfNeeded = true,
+            progressChannel = this
+        )
+        if (availability == null) {
+            send(
+                AiAvailability(
+                    isAvailable = false,
+                    unavailableReason = "Gemini Nano のモデル準備がタイムアウトしました。",
+                    providerLabel = "Gemini Nano"
+                )
+            )
+            return@channelFlow
+        }
+        send(availability)
     }
 
     override suspend fun getAvailability(): AiAvailability {
@@ -131,7 +162,7 @@ private class AndroidOnDeviceAiService(
             progressChannel = null
         ) ?: AiAvailability(
             isAvailable = false,
-            unavailableReason = "Gemini Nano の準備プロセスを起動できませんでした。",
+            unavailableReason = "Gemini Nano の状態確認がタイムアウトしました。",
             providerLabel = "Gemini Nano"
         )
     }
@@ -169,6 +200,14 @@ class AndroidAiWorkerService : Service() {
                     val requestId = message.data.getInt(KEY_REQUEST_ID)
                     val startDownloadIfNeeded = message.data.getBoolean(KEY_START_DOWNLOAD)
                     serviceScope.launch {
+                        sendReply(
+                            replyTo,
+                            AiAvailability(
+                                isAvailable = false,
+                                unavailableReason = "Gemini Nano / AICore を起動中です。",
+                                providerLabel = "Gemini Nano"
+                            ).toAvailabilityBundle(requestId, isFinal = false)
+                        )
                         val result = performAvailabilityCheck(
                             appContext = applicationContext,
                             startDownloadIfNeeded = startDownloadIfNeeded,
@@ -204,6 +243,11 @@ class AndroidAiWorkerService : Service() {
             }
         }
     )
+
+    override fun onCreate() {
+        super.onCreate()
+        MlKitContext.initializeIfNeeded(applicationContext)
+    }
 
     override fun onBind(intent: Intent?): IBinder = incomingMessenger.binder
 
@@ -275,7 +319,6 @@ private suspend fun requestRemoteAvailability(
     ) ?: return null
     return response.toAiAvailability()
 }
-
 private suspend fun requestRemotePostModeration(
     context: Context,
     input: PostModerationInput

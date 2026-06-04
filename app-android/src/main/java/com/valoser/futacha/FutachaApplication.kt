@@ -1,6 +1,8 @@
 package com.valoser.futacha
 
 import android.app.Application
+import android.app.ActivityManager
+import android.os.Build
 import androidx.work.WorkManager
 import com.valoser.futacha.shared.network.HttpBoardApi
 import com.valoser.futacha.shared.network.createHttpClient
@@ -53,6 +55,9 @@ class FutachaApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        if (isAiWorkerProcess()) {
+            return
+        }
         initializeVersionCheckerContext(applicationContext)
         appStateStore = createAppStateStore(applicationContext)
         fileSystem = createFileSystem(applicationContext)
@@ -146,7 +151,27 @@ class FutachaApplication : Application() {
         applicationScope.cancel()
         // httpClient will be closed automatically when scope is cancelled
         // Avoid runBlocking to prevent ANR
-        boardRepository.closeAsync()
+        if (::boardRepository.isInitialized) {
+            boardRepository.closeAsync()
+        }
         super.onTerminate()
+    }
+
+    private fun isAiWorkerProcess(): Boolean {
+        val processName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            getProcessName()
+        } else {
+            currentProcessNameCompat()
+        }
+        return processName == "$packageName:ai"
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentProcessNameCompat(): String? {
+        val currentPid = android.os.Process.myPid()
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager ?: return null
+        return activityManager.runningAppProcesses
+            ?.firstOrNull { it.pid == currentPid }
+            ?.processName
     }
 }
