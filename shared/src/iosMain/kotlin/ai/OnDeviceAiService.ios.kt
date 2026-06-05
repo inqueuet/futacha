@@ -9,7 +9,6 @@ private const val APPLE_INTELLIGENCE_AVAILABLE_KEY = "futacha_apple_intelligence
 private const val APPLE_INTELLIGENCE_REASON_KEY = "futacha_apple_intelligence_unavailable_reason"
 private const val SUMMARY_NOTIFICATION_NAME = "futacha.appleIntelligence.summary.requested"
 private const val SUMMARY_REQUEST_ID_KEY = "futacha_apple_intelligence_summary_request_id"
-private const val SUMMARY_REQUEST_TITLE_KEY = "futacha_apple_intelligence_summary_request_title"
 private const val SUMMARY_REQUEST_TEXT_KEY = "futacha_apple_intelligence_summary_request_text"
 private const val SUMMARY_RESPONSE_ID_KEY = "futacha_apple_intelligence_summary_response_id"
 private const val SUMMARY_RESPONSE_TEXT_KEY = "futacha_apple_intelligence_summary_response_text"
@@ -54,10 +53,7 @@ private class IosOnDeviceAiService : OnDeviceAiService {
         if (sourceText.isBlank()) {
             return Result.success(buildExtractiveThreadSummary(input, providerLabel = "Apple Intelligence"))
         }
-        val generatedText = requestFoundationModelsSummary(
-            title = input.title.orEmpty(),
-            sourceText = sourceText
-        ).getOrElse {
+        val generatedText = requestFoundationModelsSummary(sourceText).getOrElse {
             return Result.success(buildExtractiveThreadSummary(input, providerLabel = "Apple Intelligence"))
         }
         return Result.success(
@@ -90,17 +86,13 @@ private class IosOnDeviceAiService : OnDeviceAiService {
     }
 }
 
-private suspend fun requestFoundationModelsSummary(
-    title: String,
-    sourceText: String
-): Result<String> {
+private suspend fun requestFoundationModelsSummary(sourceText: String): Result<String> {
     val defaults = NSUserDefaults.standardUserDefaults()
     val requestId = NSUUID().UUIDString()
     defaults.removeObjectForKey(SUMMARY_RESPONSE_ID_KEY)
     defaults.removeObjectForKey(SUMMARY_RESPONSE_TEXT_KEY)
     defaults.removeObjectForKey(SUMMARY_RESPONSE_ERROR_KEY)
     defaults.setObject(requestId, forKey = SUMMARY_REQUEST_ID_KEY)
-    defaults.setObject(title, forKey = SUMMARY_REQUEST_TITLE_KEY)
     defaults.setObject(sourceText, forKey = SUMMARY_REQUEST_TEXT_KEY)
     NSNotificationCenter.defaultCenter.postNotificationName(SUMMARY_NOTIFICATION_NAME, `object` = null)
 
@@ -158,7 +150,6 @@ private suspend fun requestFoundationModelsPostModeration(sourceText: String): R
 
 private fun clearSummaryBridgeKeys(defaults: NSUserDefaults) {
     defaults.removeObjectForKey(SUMMARY_REQUEST_ID_KEY)
-    defaults.removeObjectForKey(SUMMARY_REQUEST_TITLE_KEY)
     defaults.removeObjectForKey(SUMMARY_REQUEST_TEXT_KEY)
     defaults.removeObjectForKey(SUMMARY_RESPONSE_ID_KEY)
     defaults.removeObjectForKey(SUMMARY_RESPONSE_TEXT_KEY)

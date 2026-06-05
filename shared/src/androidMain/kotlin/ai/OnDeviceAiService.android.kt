@@ -85,6 +85,8 @@ private const val KEY_AVAILABILITY_TOTAL = "availability_total"
 private const val AI_IPC_SUMMARY_MAX_POSTS = 80
 private const val AI_IPC_MODERATION_MAX_POSTS = 24
 private const val AI_IPC_MAX_MESSAGE_CHARS = 500
+private const val AI_IPC_SUMMARY_MAX_MESSAGE_CHARS = 10_000
+private const val AI_IPC_SUMMARY_MAX_TOTAL_MESSAGE_CHARS = 10_000
 
 private val aiRequestIds = AtomicInteger(1)
 
@@ -274,7 +276,11 @@ private suspend fun requestRemoteThreadSummary(
         putInt(KEY_REQUEST_ID, aiRequestIds.getAndIncrement())
         putString(KEY_THREAD_ID, input.threadId)
         putString(KEY_THREAD_TITLE, input.title)
-        putPosts(input.posts.take(AI_IPC_SUMMARY_MAX_POSTS))
+        putPosts(
+            posts = input.posts.take(AI_IPC_SUMMARY_MAX_POSTS),
+            maxMessageChars = AI_IPC_SUMMARY_MAX_MESSAGE_CHARS,
+            maxTotalMessageChars = AI_IPC_SUMMARY_MAX_TOTAL_MESSAGE_CHARS
+        )
     }
     val response = requestRemoteAi(
         context = context,
@@ -437,12 +443,24 @@ private suspend fun requestRemoteAi(
     }
 }
 
-private fun Bundle.putPosts(posts: List<Post>) {
+private fun Bundle.putPosts(
+    posts: List<Post>,
+    maxMessageChars: Int = AI_IPC_MAX_MESSAGE_CHARS,
+    maxTotalMessageChars: Int = posts.size * maxMessageChars
+) {
+    var remainingChars = maxTotalMessageChars.coerceAtLeast(0)
     putStringArrayList(KEY_POST_IDS, ArrayList(posts.map { it.id }))
     putStringArrayList(KEY_POST_SUBJECTS, ArrayList(posts.map { it.subject.orEmpty() }))
     putStringArrayList(
         KEY_POST_MESSAGES,
-        ArrayList(posts.map { it.messageHtml.take(AI_IPC_MAX_MESSAGE_CHARS) })
+        ArrayList(
+            posts.map { post ->
+                val limit = minOf(maxMessageChars, remainingChars)
+                val message = post.messageHtml.take(limit)
+                remainingChars = (remainingChars - message.length).coerceAtLeast(0)
+                message
+            }
+        )
     )
 }
 

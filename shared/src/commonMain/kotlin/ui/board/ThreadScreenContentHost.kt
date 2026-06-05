@@ -210,9 +210,10 @@ internal fun ThreadScreenContentHost(
                     return@produceState
                 }
                 value = ThreadSummaryUiState.Loading
+                delay(120L)
                 val summaryInput = ThreadSummaryInput(
                     threadId = state.page.threadId,
-                    title = aiSourcePosts.firstOrNull()?.subject,
+                    title = null,
                     posts = aiSourcePosts
                 )
                 value = aiService.summarizeThread(summaryInput).fold(

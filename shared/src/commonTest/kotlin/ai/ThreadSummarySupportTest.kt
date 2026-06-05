@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ai
 import com.valoser.futacha.shared.model.Post
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ThreadSummarySupportTest {
     @Test
@@ -79,6 +80,71 @@ class ThreadSummarySupportTest {
         )
 
         assertEquals("本文です\n続きです", source)
+    }
+
+    @Test
+    fun buildThreadSummarySourceTextUsesOnlyPostBody() {
+        val source = buildThreadSummarySourceText(
+            input = ThreadSummaryInput(
+                threadId = "100",
+                title = "スレタイは含めない",
+                posts = listOf(
+                    Post(
+                        id = "1",
+                        author = "投稿者名",
+                        subject = "レス件名は含めない",
+                        timestamp = "2026/06/05",
+                        messageHtml = "本文だけを読む&#12290;",
+                        imageUrl = null,
+                        thumbnailUrl = null
+                    )
+                )
+            )
+        )
+
+        assertEquals("本文だけを読む。", source)
+    }
+
+    @Test
+    fun buildThreadSummarySourceTextKeepsUpToTenThousandCharacters() {
+        val source = buildThreadSummarySourceText(
+            input = ThreadSummaryInput(
+                threadId = "100",
+                title = null,
+                posts = listOf(
+                    Post(
+                        id = "1",
+                        author = null,
+                        subject = null,
+                        timestamp = "",
+                        messageHtml = "あ".repeat(10_500),
+                        imageUrl = null,
+                        thumbnailUrl = null
+                    )
+                )
+            )
+        )
+
+        assertEquals(10_000, source.length)
+    }
+
+    @Test
+    fun parseGeneratedThreadSummaryLimitsVisibleSummaryToOneThousandCharacters() {
+        val summary = parseGeneratedThreadSummary(
+            input = input(title = "見出し"),
+            generatedText = listOf(
+                "生成見出し",
+                "あ".repeat(500),
+                "い".repeat(500),
+                "う".repeat(500),
+                "え".repeat(500)
+            ).joinToString(separator = "\n"),
+            providerLabel = "端末AI",
+            generatedTextHasHeadline = true
+        )
+
+        val visibleSummaryLength = summary.headline.length + summary.bullets.sumOf { it.length }
+        assertTrue(visibleSummaryLength <= 1_000)
     }
 
     private fun input(title: String?): ThreadSummaryInput {

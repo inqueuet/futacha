@@ -6,14 +6,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.ai.ThreadSummary
+import kotlinx.coroutines.delay
 
 internal sealed interface ThreadSummaryUiState {
     data object Loading : ThreadSummaryUiState
@@ -35,18 +42,47 @@ internal fun ThreadSummaryCard(
     ) {
         when (state) {
             ThreadSummaryUiState.Loading -> {
-                Row(
+                val statusMessages = remember {
+                    listOf(
+                        "レス本文を読み取り中",
+                        "要点を抽出中",
+                        "要約を整形中"
+                    )
+                }
+                var statusIndex by remember { mutableStateOf(0) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        delay(1_200L)
+                        statusIndex = (statusIndex + 1) % statusMessages.size
+                    }
+                }
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    CircularProgressIndicator()
-                    Text(
-                        text = "スレ要約を生成中",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator()
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "スレ要約を生成中",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = statusMessages[statusIndex],
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
             }
             is ThreadSummaryUiState.Ready -> {

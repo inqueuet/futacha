@@ -91,14 +91,13 @@ final class FutachaAppleIntelligenceBridge: NSObject {
         guard let requestId = defaults.string(forKey: summaryRequestIdKey), !requestId.isEmpty else {
             return
         }
-        let title = defaults.string(forKey: summaryRequestTitleKey) ?? ""
+        defaults.removeObject(forKey: summaryRequestTitleKey)
         let sourceText = defaults.string(forKey: summaryRequestTextKey) ?? ""
         defaults.removeObject(forKey: summaryRequestIdKey)
-        defaults.removeObject(forKey: summaryRequestTitleKey)
         defaults.removeObject(forKey: summaryRequestTextKey)
         Task {
             do {
-                let summary = try await generateThreadSummary(title: title, sourceText: sourceText)
+                let summary = try await generateThreadSummary(sourceText: sourceText)
                 defaults.set(requestId, forKey: summaryResponseIdKey)
                 defaults.set(summary, forKey: summaryResponseTextKey)
                 defaults.removeObject(forKey: summaryResponseErrorKey)
@@ -132,7 +131,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
         }
     }
 
-    private static func generateThreadSummary(title: String, sourceText: String) async throws -> String {
+    private static func generateThreadSummary(sourceText: String) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             let model = SystemLanguageModel.default
@@ -148,21 +147,19 @@ final class FutachaAppleIntelligenceBridge: NSObject {
                 instructions: """
                 あなたは日本語掲示板スレッドを端末内で要約するアシスタントです。
                 個人情報や攻撃的表現を増幅せず、投稿内容から読み取れる要点だけを短くまとめてください。
-                出力は1行目を短い見出し、続く行を最大4個の箇条書きにしてください。
+                出力は1行目を短い見出し、続く行を最大4個の箇条書きにしてください。全体で1000字以内にしてください。
                 """
             )
             let prompt = """
-            スレタイ: \(title.isEmpty ? "なし" : title)
-
             投稿本文:
-            \(sourceText.prefix(12_000))
+            \(sourceText.prefix(10_000))
             """
             let response = try await session.respond(
                 to: prompt,
                 options: GenerationOptions(
                     sampling: .greedy,
                     temperature: 0.2,
-                    maximumResponseTokens: 320
+                    maximumResponseTokens: 700
                 )
             )
             return response.content
