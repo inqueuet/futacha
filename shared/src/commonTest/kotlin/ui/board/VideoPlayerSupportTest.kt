@@ -17,11 +17,17 @@ class VideoPlayerSupportTest {
         assertFalse(ready.isBuffering)
         assertFalse(ready.showsError)
         assertFalse(ready.showsCloseButton)
+        assertFalse(ready.showsControlPanel)
+
+        val readyTouched = resolveVideoPreviewChromeState(VideoPlayerState.Ready, controlsVisible = true)
+        assertTrue(readyTouched.showsCloseButton)
+        assertTrue(readyTouched.showsControlPanel)
 
         val error = resolveVideoPreviewChromeState(VideoPlayerState.Error)
         assertFalse(error.isBuffering)
         assertTrue(error.showsError)
         assertTrue(error.showsCloseButton)
+        assertTrue(error.showsControlPanel)
     }
 
     @Test
@@ -40,6 +46,8 @@ class VideoPlayerSupportTest {
         assertTrue("&y=2" in html)
         assertFalse("autoplay" in html)
         assertFalse("video<1>" in html)
+        assertTrue("controls_visible" in html)
+        assertTrue("controls_hidden" in html)
     }
 
     @Test

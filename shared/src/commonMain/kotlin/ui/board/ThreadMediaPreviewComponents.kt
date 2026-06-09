@@ -88,6 +88,7 @@ internal fun ThreadMediaPreviewDialogFrame(
     onNavigatePrevious: () -> Unit,
     isSwipeNavigationEnabled: Boolean = true,
     isTapNavigationEnabled: Boolean = true,
+    isNavigationOverlayVisible: Boolean = true,
     navigationOverlayPadding: PaddingValues = PaddingValues(horizontal = 8.dp),
     swipeNavigationPadding: PaddingValues = PaddingValues(),
     containerModifier: Modifier = Modifier,
@@ -175,7 +176,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .then(containerModifier)
         ) {
             content(previewSize)
-            if (isTapNavigationEnabled) {
+            if (isNavigationOverlayVisible && isTapNavigationEnabled) {
                 ThreadMediaPreviewNavigationOverlay(
                     navigationKey = navigationKey,
                     onNavigateNext = onNavigateNext,

@@ -31,16 +31,21 @@ actual fun PlatformVideoPlayer(
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
     onVideoSizeKnown: (width: Int, height: Int) -> Unit,
+    areControlsVisible: Boolean,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
     volume: Float,
     isMuted: Boolean
 ) {
     val currentCallback = rememberUpdatedState(onStateChanged).value
     val currentSizeCallback = rememberUpdatedState(onVideoSizeKnown).value
+    val currentControlsCallback = rememberUpdatedState(onControlsVisibilityChanged).value
     WebVideoPlayer(
         videoUrl = videoUrl,
         modifier = modifier,
         onStateChanged = { currentCallback(it) },
         onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
+        areControlsVisible = areControlsVisible,
+        onControlsVisibilityChanged = { currentControlsCallback(it) },
         volume = volume,
         isMuted = isMuted
     )
@@ -53,6 +58,8 @@ private fun WebVideoPlayer(
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
     onVideoSizeKnown: (width: Int, height: Int) -> Unit,
+    areControlsVisible: Boolean,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
     volume: Float,
     isMuted: Boolean
 ) {
@@ -61,6 +68,7 @@ private fun WebVideoPlayer(
     SideEffect {
         delegate.onStateChanged = onStateChanged
         delegate.onVideoSizeKnown = onVideoSizeKnown
+        delegate.onControlsVisibilityChanged = onControlsVisibilityChanged
     }
     LaunchedEffect(videoUrl) {
         onStateChanged(VideoPlayerState.Buffering)
@@ -95,8 +103,9 @@ private fun WebVideoPlayer(
             } else {
                 val mutedFlag = if (isMuted) "true" else "false"
                 val volumeValue = normalizeVideoPlayerVolume(volume, isMuted)
+                val controlsFlag = if (areControlsVisible) "true" else "false"
                 view.evaluateJavaScript(
-                    "var v=document.querySelector('video'); if(v){ v.muted=$mutedFlag; v.volume=$volumeValue; }",
+                    "var v=document.querySelector('video'); if(v){ v.muted=$mutedFlag; v.volume=$volumeValue; v.controls=$controlsFlag; }",
                     completionHandler = null
                 )
             }
@@ -108,6 +117,7 @@ private fun WebVideoPlayer(
 private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProtocol, WKScriptMessageHandlerProtocol {
     var onStateChanged: ((VideoPlayerState) -> Unit)? = null
     var onVideoSizeKnown: ((Int, Int) -> Unit)? = null
+    var onControlsVisibilityChanged: ((Boolean) -> Unit)? = null
 
     override fun userContentController(
         userContentController: WKUserContentController,
@@ -119,6 +129,8 @@ private class WebVideoNavigationDelegate : NSObject(), WKNavigationDelegateProto
             message == "ready" -> onStateChanged?.invoke(VideoPlayerState.Ready)
             message == "idle" -> onStateChanged?.invoke(VideoPlayerState.Idle)
             message == "error" -> onStateChanged?.invoke(VideoPlayerState.Error)
+            message == "controls_visible" -> onControlsVisibilityChanged?.invoke(true)
+            message == "controls_hidden" -> onControlsVisibilityChanged?.invoke(false)
             message.startsWith("size:") -> {
                 val parts = message.removePrefix("size:").split(',')
                 if (parts.size != 2) return

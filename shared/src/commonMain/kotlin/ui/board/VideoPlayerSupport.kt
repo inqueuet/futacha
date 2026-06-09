@@ -3,7 +3,8 @@ package com.valoser.futacha.shared.ui.board
 internal data class VideoPreviewChromeState(
     val isBuffering: Boolean,
     val showsError: Boolean,
-    val showsCloseButton: Boolean
+    val showsCloseButton: Boolean,
+    val showsControlPanel: Boolean
 )
 
 internal fun resolveReadyVideoPlayerState(isPlaying: Boolean): VideoPlayerState =
@@ -14,14 +15,18 @@ internal fun normalizeVideoPlayerVolume(
     isMuted: Boolean
 ): Float = if (isMuted) 0f else volume.coerceIn(0f, 1f)
 
-internal fun resolveVideoPreviewChromeState(playbackState: VideoPlayerState): VideoPreviewChromeState {
+internal fun resolveVideoPreviewChromeState(
+    playbackState: VideoPlayerState,
+    controlsVisible: Boolean = playbackState != VideoPlayerState.Ready
+): VideoPreviewChromeState {
     val isBuffering = playbackState == VideoPlayerState.Buffering
     val showsError = playbackState == VideoPlayerState.Error
-    val showsCloseButton = playbackState != VideoPlayerState.Ready
+    val showsPlaybackChrome = playbackState != VideoPlayerState.Ready || controlsVisible
     return VideoPreviewChromeState(
         isBuffering = isBuffering,
         showsError = showsError,
-        showsCloseButton = showsCloseButton
+        showsCloseButton = showsPlaybackChrome,
+        showsControlPanel = showsPlaybackChrome
     )
 }
 
@@ -58,16 +63,26 @@ internal fun buildEmbeddedVideoHtml(videoUrl: String): String {
                 } catch(e) {}
             }
             if (!v) { post('error'); return; }
+            function showControls(){
+                v.controls = true;
+                post('controls_visible');
+            }
+            function hideControls(){
+                v.controls = false;
+                post('controls_hidden');
+            }
             v.addEventListener('loadedmetadata', function(){
                 post('size:' + (v.videoWidth || 0) + ',' + (v.videoHeight || 0));
                 post('idle');
             });
             v.addEventListener('waiting', function(){ post('buffering'); });
             v.addEventListener('stalled', function(){ post('buffering'); });
-            v.addEventListener('playing', function(){ post('ready'); });
-            v.addEventListener('pause', function(){ post('idle'); });
+            v.addEventListener('playing', function(){ hideControls(); post('ready'); });
+            v.addEventListener('pause', function(){ showControls(); post('idle'); });
             v.addEventListener('ended', function(){ post('idle'); });
             v.addEventListener('error', function(){ post('error'); });
+            v.addEventListener('touchstart', showControls, { passive: true });
+            v.addEventListener('click', showControls);
         })();
         </script>
         </body>

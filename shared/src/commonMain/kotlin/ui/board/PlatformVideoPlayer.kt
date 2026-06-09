@@ -16,6 +16,8 @@ expect fun PlatformVideoPlayer(
     modifier: Modifier = Modifier,
     onStateChanged: (VideoPlayerState) -> Unit = {},
     onVideoSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },
+    areControlsVisible: Boolean = true,
+    onControlsVisibilityChanged: (Boolean) -> Unit = {},
     volume: Float = 1f,
     isMuted: Boolean = false
 )

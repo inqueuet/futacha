@@ -10,6 +10,8 @@ actual fun PlatformVideoPlayer(
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
     onVideoSizeKnown: (width: Int, height: Int) -> Unit,
+    areControlsVisible: Boolean,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
     volume: Float,
     isMuted: Boolean
 ) {
