@@ -100,6 +100,7 @@ class FutachaApplication : Application() {
             fileSystem = fileSystem,
             scope = applicationScope
         )
+        watchSyncManager.start()
 
         applicationScope.launch {
             // Initialize WorkManager off the Application.onCreate() critical path.

@@ -12,6 +12,8 @@ import com.valoser.futacha.shared.watch.WatchCommand
 import com.valoser.futacha.shared.watch.WatchCommandType
 import com.valoser.futacha.shared.watch.WatchThreadSummary
 import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class PhoneCommandClient(
     private val context: Context
@@ -109,17 +111,26 @@ class PhoneCommandClient(
     ) {
         Wearable.getNodeClient(context.applicationContext).connectedNodes
             .addOnSuccessListener { nodes ->
-                val node = nodes.firstOrNull()
-                if (node == null) {
+                val targetNodes = nodes.filter { it.isNearby }.ifEmpty { nodes }
+                if (targetNodes.isEmpty()) {
                     fallback()
                     return@addOnSuccessListener
                 }
-                Wearable.getMessageClient(context.applicationContext)
-                    .sendMessage(node.id, path, payload)
-                    .addOnFailureListener {
-                        Log.w(TAG, "sendMessage failed for $path; falling back to DataItem", it)
-                        fallback()
-                    }
+                val remaining = AtomicInteger(targetNodes.size)
+                val delivered = AtomicBoolean(false)
+                targetNodes.forEach { node ->
+                    Wearable.getMessageClient(context.applicationContext)
+                        .sendMessage(node.id, path, payload)
+                        .addOnSuccessListener {
+                            delivered.set(true)
+                        }
+                        .addOnFailureListener {
+                            Log.w(TAG, "sendMessage failed for $path to ${node.displayName}", it)
+                            if (remaining.decrementAndGet() == 0 && !delivered.get()) {
+                                fallback()
+                            }
+                        }
+                }
             }
             .addOnFailureListener {
                 Log.w(TAG, "Failed to resolve connected nodes for $path; falling back to DataItem", it)

@@ -1,7 +1,15 @@
 package com.valoser.futacha.wear.sync
 
 import android.content.Context
+import android.net.Uri
+import android.util.Log
+import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.DataClient
+import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.Wearable
 import com.valoser.futacha.shared.watch.WatchSnapshot
+import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
+import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
 import com.valoser.futacha.wear.tile.FutachaTileService
 import androidx.wear.tiles.TileService
 import kotlinx.coroutines.CoroutineScope
@@ -15,11 +23,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import java.util.concurrent.TimeUnit
 
 object WatchSnapshotStore {
     private const val PREFS_NAME = "futacha_watch_snapshot"
     private const val SNAPSHOT_JSON_KEY = "snapshot_json"
     private const val SNAPSHOT_PAYLOAD_MAX_BYTES = 128 * 1024
+    private const val DATA_LAYER_LOAD_TIMEOUT_MILLIS = 3_000L
 
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
@@ -33,6 +43,15 @@ object WatchSnapshotStore {
     suspend fun loadPersisted(context: Context) {
         if (snapshotState.value != null) return
         snapshotState.value = load(context)
+    }
+
+    fun loadDataLayerSnapshotAsync(context: Context) {
+        val appContext = context.applicationContext
+        storeScope.launch {
+            loadLatestDataLayerSnapshot(appContext)?.let { snapshot ->
+                save(appContext, snapshot)
+            }
+        }
     }
 
     suspend fun getSnapshot(context: Context): WatchSnapshot? {
@@ -100,7 +119,51 @@ object WatchSnapshotStore {
         return decodeSnapshot(encoded)
     }
 
+    private suspend fun loadLatestDataLayerSnapshot(context: Context): WatchSnapshot? {
+        val uri = Uri.Builder()
+            .scheme("wear")
+            .path(WATCH_SNAPSHOT_PATH)
+            .build()
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val buffer = Tasks.await(
+                    Wearable.getDataClient(context.applicationContext)
+                        .getDataItems(uri, DataClient.FILTER_LITERAL),
+                    DATA_LAYER_LOAD_TIMEOUT_MILLIS,
+                    TimeUnit.MILLISECONDS
+                )
+                try {
+                    var latestSnapshot: WatchSnapshot? = null
+                    buffer.forEach { item ->
+                        val rawDataSize = item.data?.size ?: 0
+                        if (rawDataSize > 0 && rawDataSize <= SNAPSHOT_PAYLOAD_MAX_BYTES) {
+                            val encoded = DataMapItem.fromDataItem(item)
+                                .dataMap
+                                .getString(WATCH_SNAPSHOT_KEY)
+                                ?.takeIf(::isValidSnapshotPayload)
+                            val snapshot = encoded?.let { decodeSnapshot(it) }
+                            if (
+                                snapshot != null &&
+                                (latestSnapshot == null ||
+                                    snapshot.generatedAtMillis > latestSnapshot.generatedAtMillis)
+                            ) {
+                                latestSnapshot = snapshot
+                            }
+                        }
+                    }
+                    latestSnapshot
+                } finally {
+                    buffer.release()
+                }
+            }.onFailure {
+                Log.w(TAG, "Failed to load snapshot from Data Layer", it)
+            }.getOrNull()
+        }
+    }
+
     private fun isValidSnapshotPayload(encoded: String): Boolean {
         return encoded.isNotBlank() && encoded.encodeToByteArray().size <= SNAPSHOT_PAYLOAD_MAX_BYTES
     }
+
+    private const val TAG = "WatchSnapshotStore"
 }

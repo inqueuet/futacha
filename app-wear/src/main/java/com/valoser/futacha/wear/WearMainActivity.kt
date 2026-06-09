@@ -67,6 +67,7 @@ private fun FutachaWearApp() {
 
     LaunchedEffect(context) {
         WatchSnapshotStore.loadPersisted(context.applicationContext)
+        WatchSnapshotStore.loadDataLayerSnapshotAsync(context.applicationContext)
         commandClient.requestSnapshot()
     }
 

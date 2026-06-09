@@ -335,13 +335,37 @@ class WatchSyncManager(
             dataMap.putLong("generatedAtMillis", snapshot.generatedAtMillis)
         }.asPutDataRequest().setUrgent()
 
-        Wearable.getDataClient(context.applicationContext)
+        val sentDataItem = (Wearable.getDataClient(context.applicationContext)
             .putDataItem(request)
+            .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS) != null)
+        val sentMessage = sendSnapshotMessage(encoded)
+        if (!sentMessage && !sentDataItem) {
+            removePendingSnapshotAck(ackId)
+        }
+    }
+
+    private suspend fun sendSnapshotMessage(encoded: String): Boolean {
+        val appContext = context.applicationContext
+        val connectedNodes = Wearable.getNodeClient(appContext)
+            .connectedNodes
             .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS)
-            ?: run {
-                removePendingSnapshotAck(ackId)
-                return
+            .orEmpty()
+        val nodes = connectedNodes
+            .filter { it.isNearby }
+            .ifEmpty { connectedNodes }
+        if (nodes.isEmpty()) return false
+
+        val payload = encoded.encodeToByteArray()
+        var sent = false
+        nodes.forEach { node ->
+            val messageId = Wearable.getMessageClient(appContext)
+                .sendMessage(node.id, WATCH_SNAPSHOT_PATH, payload)
+                .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS)
+            if (messageId != null) {
+                sent = true
             }
+        }
+        return sent
     }
 
     private suspend fun registerPendingSnapshotAck(ackId: String, snapshot: WatchSnapshot) {
