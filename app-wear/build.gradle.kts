@@ -1,4 +1,26 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun signingProperty(name: String): String? =
+    localProperties.getProperty(name)
+        ?: providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+
+val releaseSigningStoreFile = signingProperty("FUTACHA_RELEASE_STORE_FILE")?.let { rootProject.file(it) }
+val releaseSigningStorePassword = signingProperty("FUTACHA_RELEASE_STORE_PASSWORD")
+val releaseSigningKeyAlias = signingProperty("FUTACHA_RELEASE_KEY_ALIAS")
+val releaseSigningKeyPassword = signingProperty("FUTACHA_RELEASE_KEY_PASSWORD")
+val hasReleaseSigningConfig = releaseSigningStoreFile != null &&
+    !releaseSigningStorePassword.isNullOrBlank() &&
+    !releaseSigningKeyAlias.isNullOrBlank() &&
+    !releaseSigningKeyPassword.isNullOrBlank()
 
 plugins {
     alias(libs.plugins.android.application)
@@ -14,13 +36,27 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 47
-        versionName = "4.1"
+        versionCode = 2_099_999_991
+        versionName = "1.0"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            create("release") {
+                storeFile = releaseSigningStoreFile
+                storePassword = releaseSigningStorePassword
+                keyAlias = releaseSigningKeyAlias
+                keyPassword = releaseSigningKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -56,6 +92,7 @@ dependencies {
     implementation(libs.androidx.wear.protolayout.material)
     implementation(libs.androidx.wear.protolayout.expression)
     implementation(libs.play.services.wearable)
+    implementation(libs.guava)
     implementation(libs.kotlinx.serialization.json)
 
     debugImplementation(libs.androidx.wear.compose.ui.tooling)

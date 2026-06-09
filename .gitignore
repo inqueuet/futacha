@@ -30,6 +30,7 @@ local.properties
 ### Misc ###
 *.keystore
 *.jks
+/futacha
 
 ### Claude ###
 .claude
