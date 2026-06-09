@@ -294,15 +294,14 @@ internal fun ThreadAutoSaveLaunchEffect(
     onStartAutoSave: (ThreadPage) -> Unit
 ) {
     val currentOnStartAutoSave = rememberUpdatedState(onStartAutoSave)
+    val latestPageForAutoSave = rememberUpdatedState(currentPageForAutoSave)
     LaunchedEffect(
         threadId,
-        currentPageForAutoSave,
         isShowingOfflineCopy,
         httpClient,
         fileSystem,
         autoSaveEffectState.availability
     ) {
-        val page = currentPageForAutoSave ?: return@LaunchedEffect
         if (autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingDependencies ||
             autoSaveEffectState.availability == ThreadAutoSaveAvailability.OfflineCopy ||
             autoSaveEffectState.availability == ThreadAutoSaveAvailability.ThreadMismatch
@@ -310,7 +309,9 @@ internal fun ThreadAutoSaveLaunchEffect(
             return@LaunchedEffect
         }
         while (isActive) {
-            currentOnStartAutoSave.value(page)
+            latestPageForAutoSave.value?.let { page ->
+                currentOnStartAutoSave.value(page)
+            }
             delay(AUTO_SAVE_INTERVAL_MS)
         }
     }

@@ -23,6 +23,7 @@ data class ScreenPreferencesState(
     val isThreadSummaryModeEnabled: Boolean = false,
     val isAiPostFilterEnabled: Boolean = false,
     val isAiCommandEnabled: Boolean = false,
+    val isAppLockEnabled: Boolean = false,
     val aiAvailability: AiAvailability = AiAvailability(
         isAvailable = false,
         unavailableReason = "端末AIを確認中です。"
@@ -50,6 +51,8 @@ data class ScreenPreferencesCallbacks(
     val onThreadSummaryModeChanged: (Boolean) -> Unit = {},
     val onAiPostFilterChanged: (Boolean) -> Unit = {},
     val onAiCommandChanged: (Boolean) -> Unit = {},
+    val onAppLockPasswordChanged: (String) -> Unit = {},
+    val onAppLockCleared: () -> Unit = {},
     val onManualSaveDirectoryChanged: (String) -> Unit = {},
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit = {},
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit = {},

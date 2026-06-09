@@ -12,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -35,6 +36,7 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
 import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.ui.board.GlobalSettingsScreen
+import com.valoser.futacha.shared.ui.board.PlatformBackgroundLifecycleEffect
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
@@ -48,6 +50,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.ExperimentalTime
 
 private const val TAG = "FutachaApp"
+private const val APP_LOCK_HASH_LOADING = "__futacha_app_lock_loading__"
 
 @OptIn(ExperimentalTime::class)
 @Composable
@@ -66,6 +69,44 @@ fun FutachaApp(
     val platformContext = LocalPlatformContext.current
     val devicePerformanceProfile = remember(platformContext) {
         detectDevicePerformanceProfile(platformContext)
+    }
+    val startupAppLockHash by produceState<String?>(
+        initialValue = APP_LOCK_HASH_LOADING,
+        key1 = stateStore
+    ) {
+        stateStore.appLockPasswordHash.collect { storedHash ->
+            value = storedHash
+        }
+    }
+    var isUnlockedForSession by remember { mutableStateOf(false) }
+    LaunchedEffect(startupAppLockHash) {
+        if (startupAppLockHash == null) {
+            isUnlockedForSession = true
+        }
+    }
+    if (startupAppLockHash == APP_LOCK_HASH_LOADING) {
+        FutachaTheme {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                FutachaAppLockLoadingScreen()
+            }
+        }
+        return
+    }
+    if (startupAppLockHash != null && !isUnlockedForSession) {
+        FutachaTheme {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                FutachaAppLockScreen(
+                    passwordHash = startupAppLockHash.orEmpty(),
+                    onUnlocked = { isUnlockedForSession = true }
+                )
+            }
+        }
+        return
+    }
+    if (startupAppLockHash != null) {
+        PlatformBackgroundLifecycleEffect {
+            isUnlockedForSession = false
+        }
     }
     val observedRuntimeState = rememberFutachaObservedRuntimeState(
         stateStore = stateStore,

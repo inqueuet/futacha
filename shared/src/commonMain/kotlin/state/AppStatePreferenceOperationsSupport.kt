@@ -112,6 +112,15 @@ internal class AppStatePreferenceOperations(
         setSimple(enabled, storage::updateAiCommandEnabled, "AI command state")
     }
 
+    suspend fun setAppLockPassword(password: String) {
+        val hash = buildAppLockPasswordHash(password)
+        setSimple(hash, storage::updateAppLockPasswordHash, "app lock password")
+    }
+
+    suspend fun clearAppLockPassword() {
+        setSimple("", storage::updateAppLockPasswordHash, "app lock password")
+    }
+
     suspend fun setManualSaveDirectory(directory: String) {
         val sanitized = sanitizeManualSaveDirectoryValue(directory)
         setSimple(sanitized, storage::updateManualSaveDirectory, "manual save directory")

@@ -28,6 +28,7 @@ internal data class FutachaScreenPreferencesStateInputs(
     val isThreadSummaryModeEnabled: Boolean = false,
     val isAiPostFilterEnabled: Boolean = false,
     val isAiCommandEnabled: Boolean = false,
+    val isAppLockEnabled: Boolean = false,
     val aiAvailability: AiAvailability = AiAvailability(
         isAvailable = false,
         unavailableReason = "端末AIを確認中です。"
@@ -106,6 +107,7 @@ internal fun buildFutachaScreenPreferencesState(
         isThreadSummaryModeEnabled = inputs.isThreadSummaryModeEnabled,
         isAiPostFilterEnabled = inputs.isAiPostFilterEnabled,
         isAiCommandEnabled = inputs.isAiCommandEnabled,
+        isAppLockEnabled = inputs.isAppLockEnabled,
         aiAvailability = inputs.aiAvailability,
         manualSaveDirectory = inputs.manualSaveDirectory,
         manualSaveLocation = inputs.manualSaveLocation,
@@ -134,6 +136,8 @@ internal fun buildFutachaScreenPreferencesCallbacks(
         onThreadSummaryModeChanged = inputs.preferenceMutations.onThreadSummaryModeChanged,
         onAiPostFilterChanged = inputs.preferenceMutations.onAiPostFilterChanged,
         onAiCommandChanged = inputs.preferenceMutations.onAiCommandChanged,
+        onAppLockPasswordChanged = inputs.preferenceMutations.onAppLockPasswordChanged,
+        onAppLockCleared = inputs.preferenceMutations.onAppLockCleared,
         onManualSaveDirectoryChanged = inputs.preferenceMutations.onManualSaveDirectoryChanged,
         onAttachmentPickerPreferenceChanged = inputs.preferenceMutations.onAttachmentPickerPreferenceChanged,
         onSaveDirectorySelectionChanged = inputs.preferenceMutations.onSaveDirectorySelectionChanged,

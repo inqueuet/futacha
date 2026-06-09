@@ -34,6 +34,7 @@ internal data class AppStatePreferenceFlows(
     val themePalette: Flow<ThemePalette>,
     val appIconVariant: Flow<AppIconVariant>,
     val threadDisplayMode: Flow<ThreadDisplayMode>,
+    val appLockPasswordHash: Flow<String?>,
     val lastUsedDeleteKey: Flow<String>,
     val catalogModes: Flow<Map<String, CatalogMode>>,
     val catalogDisplayStyle: Flow<CatalogDisplayStyle>,
@@ -101,6 +102,9 @@ internal fun buildAppStatePreferenceFlows(
             .distinctUntilChanged(),
         threadDisplayMode = storage.threadDisplayMode
             .map { raw -> decodeThreadDisplayModeValue(raw) }
+            .distinctUntilChanged(),
+        appLockPasswordHash = storage.appLockPasswordHash
+            .map { raw -> sanitizeAppLockPasswordHash(raw) }
             .distinctUntilChanged(),
         lastUsedDeleteKey = storage.lastUsedDeleteKey
             .map { raw -> raw?.take(8).orEmpty() }

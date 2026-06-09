@@ -21,10 +21,13 @@ import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var pendingAiDeepLink by mutableStateOf<String?>(null)
+    private val localResourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,7 +60,7 @@ class MainActivity : ComponentActivity() {
             DisposableEffect(app, httpClient) {
                 onDispose {
                     if (app == null) {
-                        CoroutineScope(Dispatchers.IO).launch {
+                        localResourceScope.launch {
                             runCatching { httpClient.close() }
                         }
                     }
@@ -78,6 +81,11 @@ class MainActivity : ComponentActivity() {
                 }
             )
         }
+    }
+
+    override fun onDestroy() {
+        localResourceScope.cancel()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

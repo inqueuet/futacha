@@ -41,6 +41,7 @@ private class AndroidPlatformStateStorage(
     private val threadSummaryModeKey = booleanPreferencesKey("thread_summary_mode_enabled")
     private val aiPostFilterKey = booleanPreferencesKey("ai_post_filter_enabled")
     private val aiCommandKey = booleanPreferencesKey("ai_command_enabled")
+    private val appLockPasswordHashKey = stringPreferencesKey("app_lock_password_hash")
     private val displayStyleKey = stringPreferencesKey("catalog_display_style")
     private val gridColumnsKey = stringPreferencesKey("catalog_grid_columns")
     private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
@@ -131,6 +132,9 @@ private class AndroidPlatformStateStorage(
 
     override val aiCommandEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[aiCommandKey] ?: false }
+
+    override val appLockPasswordHash: Flow<String?> =
+        safeData.map { prefs -> prefs[appLockPasswordHashKey] }
 
     override val manualSaveDirectory: Flow<String> =
         safeData.map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
@@ -404,6 +408,15 @@ private class AndroidPlatformStateStorage(
             enabled,
             "AI command",
             "Failed to save AI command state"
+        )
+    }
+
+    override suspend fun updateAppLockPasswordHash(value: String) {
+        updateStringPreference(
+            appLockPasswordHashKey,
+            value,
+            "app lock password",
+            "Failed to save app lock password"
         )
     }
 

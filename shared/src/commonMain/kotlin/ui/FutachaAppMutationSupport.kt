@@ -23,6 +23,8 @@ internal data class FutachaPreferenceMutationInputs(
     val setThreadSummaryModeEnabled: suspend (Boolean) -> Unit = {},
     val setAiPostFilterEnabled: suspend (Boolean) -> Unit = {},
     val setAiCommandEnabled: suspend (Boolean) -> Unit = {},
+    val setAppLockPassword: suspend (String) -> Unit = {},
+    val clearAppLockPassword: suspend () -> Unit = {},
     val setManualSaveDirectory: suspend (String) -> Unit,
     val setAttachmentPickerPreference: suspend (AttachmentPickerPreference) -> Unit,
     val setSaveDirectorySelection: suspend (SaveDirectorySelection) -> Unit,
@@ -44,6 +46,8 @@ internal data class FutachaPreferenceMutationCallbacks(
     val onThreadSummaryModeChanged: (Boolean) -> Unit,
     val onAiPostFilterChanged: (Boolean) -> Unit,
     val onAiCommandChanged: (Boolean) -> Unit,
+    val onAppLockPasswordChanged: (String) -> Unit,
+    val onAppLockCleared: () -> Unit,
     val onManualSaveDirectoryChanged: (String) -> Unit,
     val onAttachmentPickerPreferenceChanged: (AttachmentPickerPreference) -> Unit,
     val onSaveDirectorySelectionChanged: (SaveDirectorySelection) -> Unit,
@@ -100,6 +104,16 @@ internal fun buildFutachaPreferenceMutationCallbacks(
         onAiCommandChanged = { enabled ->
             launchFutachaCallbackMutation(coroutineScope) {
                 inputs.setAiCommandEnabled(enabled && ALPHA_AI_COMMAND_ENABLED)
+            }
+        },
+        onAppLockPasswordChanged = { password ->
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.setAppLockPassword(password)
+            }
+        },
+        onAppLockCleared = {
+            launchFutachaCallbackMutation(coroutineScope) {
+                inputs.clearAppLockPassword()
             }
         },
         onManualSaveDirectoryChanged = { directory ->

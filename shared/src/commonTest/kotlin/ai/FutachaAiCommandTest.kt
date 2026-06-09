@@ -24,12 +24,13 @@ class FutachaAiCommandTest {
         val confirm = describeFutachaAiCommandReception("save_current_thread")
 
         assertNotNull(safe)
-        assertEquals("accepted", safe.status)
+        assertEquals("queued", safe.status)
         assertFalse(safe.requiresConfirmation)
         assertEquals("open_board", safe.actionId)
+        assertTrue(safe.message.contains("キュー"))
 
         assertNotNull(confirm)
-        assertEquals("needs_confirmation", confirm.status)
+        assertEquals("queued_needs_confirmation", confirm.status)
         assertTrue(confirm.requiresConfirmation)
         assertEquals("save_current_thread", confirm.actionId)
         assertTrue(confirm.message.contains("スレ保存"))

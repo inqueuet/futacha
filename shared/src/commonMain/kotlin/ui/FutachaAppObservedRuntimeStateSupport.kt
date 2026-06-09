@@ -45,6 +45,7 @@ internal data class FutachaObservedRuntimeState(
     val isThreadSummaryModeEnabled: Boolean,
     val isAiPostFilterEnabled: Boolean,
     val isAiCommandEnabled: Boolean,
+    val appLockPasswordHash: String?,
     val aiAvailability: AiAvailability,
     val manualSaveDirectory: String,
     val manualSaveLocation: SaveLocation,
@@ -79,6 +80,7 @@ internal fun rememberFutachaObservedRuntimeState(
     val isThreadSummaryModeEnabled by stateStore.isThreadSummaryModeEnabled.collectAsState(initial = false)
     val isAiPostFilterEnabled by stateStore.isAiPostFilterEnabled.collectAsState(initial = false)
     val isAiCommandEnabled by stateStore.isAiCommandEnabled.collectAsState(initial = false)
+    val appLockPasswordHash by stateStore.appLockPasswordHash.collectAsState(initial = null)
     val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
     val shouldContinuouslyRefreshAiAvailability = isThreadSummaryModeEnabled || isAiPostFilterEnabled
     val aiAvailability by produceState(
@@ -181,6 +183,7 @@ internal fun rememberFutachaObservedRuntimeState(
         isThreadSummaryModeEnabled,
         isAiPostFilterEnabled,
         isAiCommandEnabled,
+        appLockPasswordHash,
         aiAvailability,
         manualSaveDirectory,
         manualSaveLocation,
@@ -206,6 +209,7 @@ internal fun rememberFutachaObservedRuntimeState(
             isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
             isAiPostFilterEnabled = isAiPostFilterEnabled && ALPHA_AI_POST_FILTER_ENABLED,
             isAiCommandEnabled = isAiCommandEnabled && ALPHA_AI_COMMAND_ENABLED,
+            appLockPasswordHash = appLockPasswordHash,
             aiAvailability = aiAvailability,
             manualSaveDirectory = manualSaveDirectory,
             manualSaveLocation = manualSaveLocation,

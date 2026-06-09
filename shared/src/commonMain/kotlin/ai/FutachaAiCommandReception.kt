@@ -16,11 +16,11 @@ fun describeFutachaAiCommandReception(actionId: String?): FutachaAiCommandRecept
         actionId = action.id,
         actionLabel = action.label,
         risk = action.risk,
-        status = if (requiresConfirmation) "needs_confirmation" else "accepted",
+        status = if (requiresConfirmation) "queued_needs_confirmation" else "queued",
         message = if (requiresConfirmation) {
             "「${action.label}」を受け付けました。${action.confirmationReason()}、アプリ内で確認してから実行します。"
         } else {
-            "「${action.label}」を受け付けました。"
+            "「${action.label}」をキューに追加しました。アプリ側で順番に実行します。"
         },
         requiresConfirmation = requiresConfirmation
     )

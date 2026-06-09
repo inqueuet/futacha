@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,11 +19,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -31,25 +34,35 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.ai.AiAvailability
 import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
-import com.valoser.futacha.shared.ai.AiAvailability
+import com.valoser.futacha.shared.state.APP_LOCK_PASSWORD_MIN_LENGTH
+import com.valoser.futacha.shared.state.isValidAppLockPassword
 
 internal data class GlobalSettingsEntry(
     val label: String,
@@ -137,6 +150,9 @@ internal fun GlobalSettingsScaffold(
                     onAiPostFilterChanged = bindings.behavior.onAiPostFilterChanged,
                     isAiCommandEnabled = bindings.behavior.isAiCommandEnabled,
                     onAiCommandChanged = bindings.behavior.onAiCommandChanged,
+                    isAppLockEnabled = bindings.behavior.isAppLockEnabled,
+                    onAppLockPasswordChanged = bindings.behavior.onAppLockPasswordChanged,
+                    onAppLockCleared = bindings.behavior.onAppLockCleared,
                     aiAvailability = bindings.behavior.aiAvailability,
                     threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,
                     onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged,
@@ -247,6 +263,9 @@ internal fun GlobalSettingsBehaviorSection(
     onAiPostFilterChanged: (Boolean) -> Unit,
     isAiCommandEnabled: Boolean,
     onAiCommandChanged: (Boolean) -> Unit,
+    isAppLockEnabled: Boolean,
+    onAppLockPasswordChanged: (String) -> Unit,
+    onAppLockCleared: () -> Unit,
     aiAvailability: AiAvailability,
     threadGalleryTapAction: ThreadGalleryTapAction,
     onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit,
@@ -364,6 +383,12 @@ internal fun GlobalSettingsBehaviorSection(
             onAiCommandChanged = onAiCommandChanged
         )
         HorizontalDivider()
+        GlobalSettingsAppLockControls(
+            isAppLockEnabled = isAppLockEnabled,
+            onAppLockPasswordChanged = onAppLockPasswordChanged,
+            onAppLockCleared = onAppLockCleared
+        )
+        HorizontalDivider()
         ListItem(
             headlineContent = { Text("バックグラウンド更新") },
             supportingContent = {
@@ -441,6 +466,109 @@ internal fun GlobalSettingsBehaviorSection(
             selected = threadGalleryTapAction == ThreadGalleryTapAction.JumpToPost,
             onClick = { onThreadGalleryTapActionChanged(ThreadGalleryTapAction.JumpToPost) }
         )
+    }
+}
+
+@Composable
+private fun GlobalSettingsAppLockControls(
+    isAppLockEnabled: Boolean,
+    onAppLockPasswordChanged: (String) -> Unit,
+    onAppLockCleared: () -> Unit
+) {
+    var password by rememberSaveable(isAppLockEnabled) { mutableStateOf("") }
+    var confirmation by rememberSaveable(isAppLockEnabled) { mutableStateOf("") }
+    var errorMessage by rememberSaveable(isAppLockEnabled) { mutableStateOf<String?>(null) }
+    val actionLabel = if (isAppLockEnabled) "変更" else "有効にする"
+
+    fun submitPassword() {
+        when {
+            !isValidAppLockPassword(password) -> {
+                errorMessage = "${APP_LOCK_PASSWORD_MIN_LENGTH}文字以上で入力してください。"
+            }
+            password != confirmation -> {
+                errorMessage = "確認用パスワードが一致しません。"
+            }
+            else -> {
+                onAppLockPasswordChanged(password)
+                password = ""
+                confirmation = ""
+                errorMessage = null
+            }
+        }
+    }
+
+    ListItem(
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Rounded.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        headlineContent = { Text("起動ロック") },
+        supportingContent = {
+            Text(
+                text = if (isAppLockEnabled) {
+                    "有効です。アプリ起動時にパスワードを要求します。"
+                } else {
+                    "無効です。パスワードを設定すると起動時にロックします。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            if (isAppLockEnabled) {
+                TextButton(
+                    onClick = {
+                        onAppLockCleared()
+                        password = ""
+                        confirmation = ""
+                        errorMessage = null
+                    }
+                ) {
+                    Text("解除")
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = password,
+        onValueChange = {
+            password = it
+            errorMessage = null
+        },
+        label = { Text(if (isAppLockEnabled) "新しいパスワード" else "パスワード") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = confirmation,
+        onValueChange = {
+            confirmation = it
+            errorMessage = null
+        },
+        label = { Text("確認") },
+        singleLine = true,
+        isError = errorMessage != null,
+        supportingText = errorMessage?.let { message -> { Text(message) } },
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+        modifier = Modifier.fillMaxWidth()
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Button(
+            onClick = ::submitPassword,
+            enabled = password.isNotEmpty() || confirmation.isNotEmpty()
+        ) {
+            Text(actionLabel)
+        }
     }
 }
 

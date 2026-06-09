@@ -25,6 +25,9 @@ internal data class GlobalSettingsBehaviorSectionBindings(
     val onAiPostFilterChanged: (Boolean) -> Unit = {},
     val isAiCommandEnabled: Boolean = false,
     val onAiCommandChanged: (Boolean) -> Unit = {},
+    val isAppLockEnabled: Boolean = false,
+    val onAppLockPasswordChanged: (String) -> Unit = {},
+    val onAppLockCleared: () -> Unit = {},
     val aiAvailability: AiAvailability = AiAvailability(
         isAvailable = false,
         unavailableReason = "端末AIを確認中です。"
@@ -140,6 +143,9 @@ internal fun buildGlobalSettingsBehaviorSectionBindings(
         onAiPostFilterChanged = preferencesCallbacks.onAiPostFilterChanged,
         isAiCommandEnabled = preferencesState.isAiCommandEnabled,
         onAiCommandChanged = preferencesCallbacks.onAiCommandChanged,
+        isAppLockEnabled = preferencesState.isAppLockEnabled,
+        onAppLockPasswordChanged = preferencesCallbacks.onAppLockPasswordChanged,
+        onAppLockCleared = preferencesCallbacks.onAppLockCleared,
         aiAvailability = preferencesState.aiAvailability,
         threadGalleryTapAction = preferencesState.threadGalleryTapAction,
         onThreadGalleryTapActionChanged = preferencesCallbacks.onThreadGalleryTapActionChanged,

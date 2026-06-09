@@ -169,6 +169,7 @@ class AppStateStore internal constructor(
     val isThreadSummaryModeEnabled: Flow<Boolean> = storage.threadSummaryModeEnabled
     val isAiPostFilterEnabled: Flow<Boolean> = storage.aiPostFilterEnabled
     val isAiCommandEnabled: Flow<Boolean> = storage.aiCommandEnabled
+    val appLockPasswordHash: Flow<String?> = preferenceFlows.appLockPasswordHash
 
     /**
      * Manual save directory as string (legacy support).
@@ -252,6 +253,12 @@ class AppStateStore internal constructor(
 
     suspend fun setAiCommandEnabled(enabled: Boolean) =
         preferenceOperations.setAiCommandEnabled(enabled)
+
+    suspend fun setAppLockPassword(password: String) =
+        preferenceOperations.setAppLockPassword(password)
+
+    suspend fun clearAppLockPassword() =
+        preferenceOperations.clearAppLockPassword()
 
     suspend fun setManualSaveDirectory(directory: String) =
         preferenceOperations.setManualSaveDirectory(directory)
@@ -435,6 +442,7 @@ internal interface PlatformStateStorage {
     val threadSummaryModeEnabled: Flow<Boolean>
     val aiPostFilterEnabled: Flow<Boolean>
     val aiCommandEnabled: Flow<Boolean>
+    val appLockPasswordHash: Flow<String?>
     val manualSaveDirectory: Flow<String>
     val attachmentPickerPreference: Flow<String?>
     val saveDirectorySelection: Flow<String?>
@@ -469,6 +477,7 @@ internal interface PlatformStateStorage {
     suspend fun updateThreadSummaryModeEnabled(enabled: Boolean)
     suspend fun updateAiPostFilterEnabled(enabled: Boolean)
     suspend fun updateAiCommandEnabled(enabled: Boolean)
+    suspend fun updateAppLockPasswordHash(value: String)
     suspend fun updateManualSaveDirectory(directory: String)
     suspend fun updateAttachmentPickerPreference(preference: String)
     suspend fun updateSaveDirectorySelection(selection: String)
