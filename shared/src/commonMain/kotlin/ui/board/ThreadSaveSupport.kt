@@ -111,11 +111,11 @@ internal fun resolveThreadAutoSaveCompletionState(
 internal fun buildThreadSaveBusyMessage(): String = "保存処理を実行中です…"
 
 internal fun buildThreadSaveLocationRequiredMessage(): String {
-    return "保存先が未選択です。設定からフォルダを選択してください。"
+    return "保存先が未設定のため保存できません。保存先フォルダを選択してください。"
 }
 
 internal fun buildThreadSaveDefaultAndroidDirectoryMessage(): String {
-    return "Android のデフォルト保存先はアプリ専用領域に解決されて見失いやすいため、このままでは保存しません。設定で保存先を変更してください。"
+    return "保存先がまだ設定されていません。Android のデフォルト保存先は見つけにくいアプリ専用領域になるため、保存前にフォルダを選択してください。"
 }
 
 internal fun buildThreadSaveUnavailableMessage(): String = "保存機能が利用できません"

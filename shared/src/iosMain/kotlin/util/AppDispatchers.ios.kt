@@ -1,7 +1,9 @@
 package com.valoser.futacha.shared.util
 
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.newFixedThreadPoolContext
 
+@OptIn(DelicateCoroutinesApi::class)
 actual val platformIoDispatcher: CoroutineDispatcher =
-    Dispatchers.Default.limitedParallelism(4)
+    newFixedThreadPoolContext(4, "FutachaIo")

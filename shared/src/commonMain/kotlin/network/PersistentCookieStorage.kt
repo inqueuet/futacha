@@ -2,6 +2,7 @@
 
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.plugins.cookies.CookiesStorage
@@ -325,9 +326,11 @@ class PersistentCookieStorage(
         isLoaded = true
     }
 
-    private fun encodeSnapshotLocked(): String {
+    private suspend fun encodeSnapshotLocked(): String {
         val payload = StoredCookieFile(cookies = cookies.values.toList())
-        return json.encodeToString(payload)
+        return withContext(AppDispatchers.parsing) {
+            json.encodeToString(payload)
+        }
     }
 
     private suspend fun persistSnapshot(content: String) {

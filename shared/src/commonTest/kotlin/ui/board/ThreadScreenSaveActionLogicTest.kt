@@ -463,7 +463,7 @@ class ThreadScreenSaveActionLogicTest {
     @Test
     fun threadSaveAndReadAloudMessages_matchUiCopy() {
         assertEquals("保存処理を実行中です…", buildThreadSaveBusyMessage())
-        assertEquals("保存先が未選択です。設定からフォルダを選択してください。", buildThreadSaveLocationRequiredMessage())
+        assertEquals("保存先が未設定のため保存できません。保存先フォルダを選択してください。", buildThreadSaveLocationRequiredMessage())
         assertEquals("保存機能が利用できません", buildThreadSaveUnavailableMessage())
         assertEquals("スレッドの読み込みが完了していません", buildThreadSaveNotReadyMessage())
         assertEquals("保存先の権限が失われました。フォルダを再選択してください。", buildThreadSavePermissionLostMessage())

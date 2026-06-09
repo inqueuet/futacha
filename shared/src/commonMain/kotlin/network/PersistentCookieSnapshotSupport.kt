@@ -1,7 +1,9 @@
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
@@ -27,7 +29,7 @@ internal suspend fun readPersistentCookieFileContent(
     return fileSystem.readString(path).getOrNull()
 }
 
-internal fun decodePersistentCookieSnapshotOrNull(
+internal suspend fun decodePersistentCookieSnapshotOrNull(
     json: Json,
     content: String,
     path: String,
@@ -35,7 +37,9 @@ internal fun decodePersistentCookieSnapshotOrNull(
     logTag: String
 ): PersistentCookieSnapshotLoadResult? {
     return try {
-        val parsed = json.decodeFromString<StoredCookieFile>(content)
+        val parsed = withContext(AppDispatchers.parsing) {
+            json.decodeFromString<StoredCookieFile>(content)
+        }
         PersistentCookieSnapshotLoadResult(
             cookies = parsed.cookies,
             restoredFromBackup = isBackup

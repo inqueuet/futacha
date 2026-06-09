@@ -182,7 +182,7 @@ class PersistentCookieSupportTest {
     }
 
     @Test
-    fun transactionCoordinator_commitAndRollbackFollowTransactionState() {
+    fun transactionCoordinator_commitAndRollbackFollowTransactionState() = kotlinx.coroutines.runBlocking {
         val coordinator = PersistentCookieTransactionCoordinator<String, String>("PersistentCookieSupportTest")
         val snapshot = linkedMapOf("a" to "1")
         val transactionId = coordinator.begin(snapshot)

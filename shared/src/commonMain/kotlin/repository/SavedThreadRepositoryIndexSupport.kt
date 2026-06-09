@@ -1,7 +1,9 @@
 package com.valoser.futacha.shared.repository
 
 import com.valoser.futacha.shared.model.SavedThreadIndex
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlin.time.Clock
@@ -37,7 +39,9 @@ internal suspend fun SavedThreadRepository.readSavedThreadIndexUnlocked(): Saved
             throw IllegalStateException("Failed to read saved thread index at '$path': ${error.message}", error)
         }
         return try {
-            json.decodeFromString<SavedThreadIndex>(jsonString)
+            withContext(AppDispatchers.parsing) {
+                json.decodeFromString<SavedThreadIndex>(jsonString)
+            }
         } catch (e: SerializationException) {
             markCorruption(path, e, isBackup)
             null
@@ -52,7 +56,9 @@ internal suspend fun SavedThreadRepository.readSavedThreadIndexUnlocked(): Saved
             throw IllegalStateException("Failed to read saved thread index at '$relativePath': ${error.message}", error)
         }
         return try {
-            json.decodeFromString<SavedThreadIndex>(jsonString)
+            withContext(AppDispatchers.parsing) {
+                json.decodeFromString<SavedThreadIndex>(jsonString)
+            }
         } catch (e: SerializationException) {
             markCorruption(relativePath, e, isBackup)
             null
@@ -142,7 +148,9 @@ internal suspend fun SavedThreadRepository.saveSavedThreadIndexUnlocked(index: S
     }
 
     ensureSavedThreadBaseDirectoryPreparedUnlocked()
-    val jsonString = json.encodeToString(index)
+    val jsonString = withContext(AppDispatchers.parsing) {
+        json.encodeToString(index)
+    }
     val tempPath = "$indexRelativePath.tmp"
     val backupPath = "$indexRelativePath.backup"
     runCatching {

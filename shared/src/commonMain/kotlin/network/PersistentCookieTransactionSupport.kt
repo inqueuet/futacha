@@ -20,17 +20,17 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
         return transactionSnapshot == null || !isInActiveTransaction
     }
 
-    fun commit(transactionId: Long?, encodeSnapshot: () -> String): String? {
+    suspend fun commit(transactionId: Long?, encodeSnapshot: suspend () -> String): String? {
         if (activeTransactionId != transactionId) return null
         val savePayload = encodeSnapshot()
         clear()
         return savePayload
     }
 
-    fun rollback(
+    suspend fun rollback(
         transactionId: Long?,
         restoreSnapshot: (Map<K, V>) -> Unit,
-        encodeSnapshot: () -> String
+        encodeSnapshot: suspend () -> String
     ): String? {
         if (activeTransactionId != transactionId) return null
         val savePayload = transactionSnapshot?.let { snapshot ->
