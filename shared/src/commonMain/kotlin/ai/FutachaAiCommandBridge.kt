@@ -1,16 +1,26 @@
 package com.valoser.futacha.shared.ai
 
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 
 object FutachaAiCommandBridge {
-    private val commandChannel = Channel<FutachaAiCommand>(capacity = 32)
+    private const val TAG = "FutachaAiCommandBridge"
+    private const val COMMAND_BUFFER_CAPACITY = 128
+    private val commandChannel = Channel<FutachaAiCommand>(capacity = COMMAND_BUFFER_CAPACITY)
 
     val commands: Flow<FutachaAiCommand> = commandChannel.receiveAsFlow()
 
     fun enqueue(command: FutachaAiCommand): Boolean {
-        return commandChannel.trySend(command).isSuccess
+        val result = commandChannel.trySend(command)
+        if (result.isFailure) {
+            Logger.w(
+                TAG,
+                "Dropped AI command because buffer is full or closed: action=${command.action.id}, source=${command.source}"
+            )
+        }
+        return result.isSuccess
     }
 
     fun enqueueIntentCommand(

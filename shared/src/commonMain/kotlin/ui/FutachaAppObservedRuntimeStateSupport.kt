@@ -80,25 +80,30 @@ internal fun rememberFutachaObservedRuntimeState(
     val isAiPostFilterEnabled by stateStore.isAiPostFilterEnabled.collectAsState(initial = false)
     val isAiCommandEnabled by stateStore.isAiCommandEnabled.collectAsState(initial = false)
     val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
+    val shouldContinuouslyRefreshAiAvailability = isThreadSummaryModeEnabled || isAiPostFilterEnabled
     val aiAvailability by produceState(
         initialValue = AiAvailability(
             isAvailable = false,
             unavailableReason = "端末AIを確認中です。"
         ),
-        key1 = aiService
+        key1 = aiService,
+        key2 = shouldContinuouslyRefreshAiAvailability
     ) {
-        while (true) {
+        suspend fun refreshAvailability() {
             runCatching {
-                aiService.observeAvailability().collect { availability ->
-                    value = availability
-                }
+                value = aiService.getAvailability()
             }.getOrElse { error ->
                 value = AiAvailability(
                     isAvailable = false,
                     unavailableReason = error.message ?: "端末AIの確認に失敗しました。"
                 )
             }
+        }
+
+        refreshAvailability()
+        while (shouldContinuouslyRefreshAiAvailability) {
             delay(AI_AVAILABILITY_REFRESH_INTERVAL_MILLIS)
+            refreshAvailability()
         }
     }
     val manualSaveDirectory by stateStore.manualSaveDirectory.collectAsState(initial = DEFAULT_MANUAL_SAVE_ROOT)

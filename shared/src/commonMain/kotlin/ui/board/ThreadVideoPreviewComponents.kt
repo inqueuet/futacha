@@ -34,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -56,14 +58,29 @@ internal fun VideoPreviewDialog(
     var isMuted by remember { mutableStateOf(false) }
     var volume by remember { mutableFloatStateOf(0.9f) }
     var videoSize by remember { mutableStateOf<IntSize?>(null) }
+    var controlPanelHeightPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
     val urlLauncher = rememberUrlLauncher()
+    val navigationBottomPadding = with(density) {
+        if (controlPanelHeightPx > 0) {
+            controlPanelHeightPx.toDp() + 48.dp
+        } else {
+            180.dp
+        }
+    }
 
     ThreadMediaPreviewDialogFrame(
         navigationKey = entry.url,
         onDismiss = onDismiss,
         onNavigateNext = onNavigateNext,
         onNavigatePrevious = onNavigatePrevious,
-        navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp, bottom = 160.dp)
+        navigationOverlayPadding = PaddingValues(
+            start = 8.dp,
+            top = 72.dp,
+            end = 8.dp,
+            bottom = navigationBottomPadding
+        ),
+        swipeNavigationPadding = PaddingValues(bottom = navigationBottomPadding)
     ) { previewSize ->
         val videoContentModifier by remember(previewSize, videoSize) {
             derivedStateOf {
@@ -140,6 +157,7 @@ internal fun VideoPreviewDialog(
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 16.dp, vertical = 20.dp)
                     .fillMaxWidth()
+                    .onSizeChanged { controlPanelHeightPx = it.height }
             ) {
                 Column(
                     modifier = Modifier

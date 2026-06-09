@@ -23,6 +23,7 @@ import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
 import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
 import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -153,7 +155,9 @@ class AppStateStore internal constructor(
             if (stored == null) {
                 emptyList()
             } else {
-                decodeAppStateHistory(stored, json, TAG)
+                withContext(AppDispatchers.parsing) {
+                    decodeAppStateHistory(stored, json, TAG)
+                }
             }
         }
 

@@ -1,8 +1,12 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ThreadMediaPreviewStateSupportTest {
     private val entries = listOf(
@@ -89,6 +93,32 @@ class ThreadMediaPreviewStateSupportTest {
                 totalDx = -72f,
                 totalDy = 90f,
                 thresholdPx = 56f
+            )
+        )
+    }
+
+    @Test
+    fun swipe_navigation_start_bounds_exclude_padded_controls_area() {
+        val containerSize = IntSize(width = 400, height = 800)
+
+        assertTrue(
+            isSwipeNavigationStartWithinBounds(
+                position = Offset(200f, 500f),
+                containerSize = containerSize,
+                startPaddingPx = 0f,
+                topPaddingPx = 0f,
+                endPaddingPx = 0f,
+                bottomPaddingPx = 220f
+            )
+        )
+        assertFalse(
+            isSwipeNavigationStartWithinBounds(
+                position = Offset(200f, 700f),
+                containerSize = containerSize,
+                startPaddingPx = 0f,
+                topPaddingPx = 0f,
+                endPaddingPx = 0f,
+                bottomPaddingPx = 220f
             )
         )
     }

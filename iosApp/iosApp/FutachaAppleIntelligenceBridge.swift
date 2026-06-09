@@ -13,6 +13,8 @@ final class FutachaAppleIntelligenceBridge: NSObject {
     private static let availabilityKey = "futacha_apple_intelligence_available"
     private static let reasonKey = "futacha_apple_intelligence_unavailable_reason"
     private static let summaryNotificationName = Notification.Name("futacha.appleIntelligence.summary.requested")
+    private static let summaryResponseNotificationName = Notification.Name("futacha.appleIntelligence.summary.completed")
+    private static let summaryCancelNotificationName = Notification.Name("futacha.appleIntelligence.summary.cancelled")
     private static let summaryRequestIdKey = "futacha_apple_intelligence_summary_request_id"
     private static let summaryRequestTitleKey = "futacha_apple_intelligence_summary_request_title"
     private static let summaryRequestTextKey = "futacha_apple_intelligence_summary_request_text"
@@ -20,22 +22,54 @@ final class FutachaAppleIntelligenceBridge: NSObject {
     private static let summaryResponseTextKey = "futacha_apple_intelligence_summary_response_text"
     private static let summaryResponseErrorKey = "futacha_apple_intelligence_summary_response_error"
     private static let moderationNotificationName = Notification.Name("futacha.appleIntelligence.postModeration.requested")
+    private static let moderationResponseNotificationName = Notification.Name("futacha.appleIntelligence.postModeration.completed")
+    private static let moderationCancelNotificationName = Notification.Name("futacha.appleIntelligence.postModeration.cancelled")
     private static let moderationRequestIdKey = "futacha_apple_intelligence_moderation_request_id"
     private static let moderationRequestTextKey = "futacha_apple_intelligence_moderation_request_text"
     private static let moderationResponseIdKey = "futacha_apple_intelligence_moderation_response_id"
     private static let moderationResponseTextKey = "futacha_apple_intelligence_moderation_response_text"
     private static let moderationResponseErrorKey = "futacha_apple_intelligence_moderation_response_error"
     private static var summaryObserver: NSObjectProtocol?
+    private static var summaryCancelObserver: NSObjectProtocol?
     private static var moderationObserver: NSObjectProtocol?
+    private static var moderationCancelObserver: NSObjectProtocol?
     private static var appActiveObserver: NSObjectProtocol?
+    private static let activeTaskLock = NSLock()
+    private static var activeTasks: [String: Task<Void, Never>] = [:]
+    private static var availabilityRefreshTask: Task<Void, Never>?
+    private static var availabilityRefreshGeneration = 0
+    private static var activeSummaryRequestId: String?
+    private static var activeModerationRequestId: String?
+    private static let modelResponseTimeoutNanoseconds: UInt64 = 45_000_000_000
 
     static func refreshAvailability() {
         UserDefaults.standard.set(isThreadSummaryAvailable().boolValue, forKey: availabilityKey)
         UserDefaults.standard.set(unavailableReason() as String, forKey: reasonKey)
     }
 
+    static func refreshAvailabilityAsync() {
+        var taskToCancel: Task<Void, Never>?
+        activeTaskLock.lock()
+        availabilityRefreshGeneration += 1
+        let generation = availabilityRefreshGeneration
+        taskToCancel = availabilityRefreshTask
+        let task = Task {
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            refreshAvailability()
+            activeTaskLock.lock()
+            if availabilityRefreshGeneration == generation {
+                availabilityRefreshTask = nil
+            }
+            activeTaskLock.unlock()
+        }
+        availabilityRefreshTask = task
+        activeTaskLock.unlock()
+        taskToCancel?.cancel()
+    }
+
     static func installAiBridge() {
-        refreshAvailability()
+        refreshAvailabilityAsync()
         if summaryObserver != nil {
             return
         }
@@ -43,15 +77,29 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             forName: summaryNotificationName,
             object: nil,
             queue: nil
-        ) { _ in
-            handleSummaryRequest()
+        ) { notification in
+            handleSummaryRequest(notification)
+        }
+        summaryCancelObserver = NotificationCenter.default.addObserver(
+            forName: summaryCancelNotificationName,
+            object: nil,
+            queue: nil
+        ) { notification in
+            cancelAiTask(requestId: notification.userInfo?[summaryRequestIdKey] as? String)
         }
         moderationObserver = NotificationCenter.default.addObserver(
             forName: moderationNotificationName,
             object: nil,
             queue: nil
-        ) { _ in
-            handleModerationRequest()
+        ) { notification in
+            handleModerationRequest(notification)
+        }
+        moderationCancelObserver = NotificationCenter.default.addObserver(
+            forName: moderationCancelNotificationName,
+            object: nil,
+            queue: nil
+        ) { notification in
+            cancelAiTask(requestId: notification.userInfo?[moderationRequestIdKey] as? String)
         }
         #if canImport(UIKit)
         appActiveObserver = NotificationCenter.default.addObserver(
@@ -59,7 +107,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             object: nil,
             queue: nil
         ) { _ in
-            refreshAvailability()
+            refreshAvailabilityAsync()
         }
         #endif
     }
@@ -86,49 +134,154 @@ final class FutachaAppleIntelligenceBridge: NSObject {
         #endif
     }
 
-    private static func handleSummaryRequest() {
-        let defaults = UserDefaults.standard
-        guard let requestId = defaults.string(forKey: summaryRequestIdKey), !requestId.isEmpty else {
+    private static func handleSummaryRequest(_ notification: Notification) {
+        guard let requestId = notification.userInfo?[summaryRequestIdKey] as? String, !requestId.isEmpty else {
             return
         }
-        defaults.removeObject(forKey: summaryRequestTitleKey)
-        let sourceText = defaults.string(forKey: summaryRequestTextKey) ?? ""
-        defaults.removeObject(forKey: summaryRequestIdKey)
-        defaults.removeObject(forKey: summaryRequestTextKey)
-        Task {
+        let sourceText = notification.userInfo?[summaryRequestTextKey] as? String ?? ""
+        let task = Task {
+            defer { removeAiTask(requestId: requestId) }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
             do {
                 let summary = try await generateThreadSummary(sourceText: sourceText)
-                defaults.set(requestId, forKey: summaryResponseIdKey)
-                defaults.set(summary, forKey: summaryResponseTextKey)
-                defaults.removeObject(forKey: summaryResponseErrorKey)
+                guard !Task.isCancelled else { return }
+                postAiResponse(
+                    name: summaryResponseNotificationName,
+                    requestId: requestId,
+                    requestIdKey: summaryResponseIdKey,
+                    text: summary,
+                    textKey: summaryResponseTextKey,
+                    error: nil,
+                    errorKey: summaryResponseErrorKey
+                )
             } catch {
-                defaults.set(requestId, forKey: summaryResponseIdKey)
-                defaults.removeObject(forKey: summaryResponseTextKey)
-                defaults.set(error.localizedDescription, forKey: summaryResponseErrorKey)
+                guard !Task.isCancelled else { return }
+                postAiResponse(
+                    name: summaryResponseNotificationName,
+                    requestId: requestId,
+                    requestIdKey: summaryResponseIdKey,
+                    text: nil,
+                    textKey: summaryResponseTextKey,
+                    error: error.localizedDescription,
+                    errorKey: summaryResponseErrorKey
+                )
             }
         }
+        storeAiTask(requestId: requestId, task: task, kind: .summary)
     }
 
-    private static func handleModerationRequest() {
-        let defaults = UserDefaults.standard
-        guard let requestId = defaults.string(forKey: moderationRequestIdKey), !requestId.isEmpty else {
+    private static func handleModerationRequest(_ notification: Notification) {
+        guard let requestId = notification.userInfo?[moderationRequestIdKey] as? String, !requestId.isEmpty else {
             return
         }
-        let sourceText = defaults.string(forKey: moderationRequestTextKey) ?? ""
-        defaults.removeObject(forKey: moderationRequestIdKey)
-        defaults.removeObject(forKey: moderationRequestTextKey)
-        Task {
+        let sourceText = notification.userInfo?[moderationRequestTextKey] as? String ?? ""
+        let task = Task {
+            defer { removeAiTask(requestId: requestId) }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
             do {
                 let response = try await generatePostModeration(sourceText: sourceText)
-                defaults.set(requestId, forKey: moderationResponseIdKey)
-                defaults.set(response, forKey: moderationResponseTextKey)
-                defaults.removeObject(forKey: moderationResponseErrorKey)
+                guard !Task.isCancelled else { return }
+                postAiResponse(
+                    name: moderationResponseNotificationName,
+                    requestId: requestId,
+                    requestIdKey: moderationResponseIdKey,
+                    text: response,
+                    textKey: moderationResponseTextKey,
+                    error: nil,
+                    errorKey: moderationResponseErrorKey
+                )
             } catch {
-                defaults.set(requestId, forKey: moderationResponseIdKey)
-                defaults.removeObject(forKey: moderationResponseTextKey)
-                defaults.set(error.localizedDescription, forKey: moderationResponseErrorKey)
+                guard !Task.isCancelled else { return }
+                postAiResponse(
+                    name: moderationResponseNotificationName,
+                    requestId: requestId,
+                    requestIdKey: moderationResponseIdKey,
+                    text: nil,
+                    textKey: moderationResponseTextKey,
+                    error: error.localizedDescription,
+                    errorKey: moderationResponseErrorKey
+                )
             }
         }
+        storeAiTask(requestId: requestId, task: task, kind: .moderation)
+    }
+
+    private enum AiTaskKind {
+        case summary
+        case moderation
+    }
+
+    private static func storeAiTask(requestId: String, task: Task<Void, Never>, kind: AiTaskKind) {
+        var tasksToCancel: [Task<Void, Never>] = []
+        activeTaskLock.lock()
+        switch kind {
+        case .summary:
+            if let previousRequestId = activeSummaryRequestId, previousRequestId != requestId,
+               let previousTask = activeTasks.removeValue(forKey: previousRequestId) {
+                tasksToCancel.append(previousTask)
+            }
+            activeSummaryRequestId = requestId
+        case .moderation:
+            if let previousRequestId = activeModerationRequestId, previousRequestId != requestId,
+               let previousTask = activeTasks.removeValue(forKey: previousRequestId) {
+                tasksToCancel.append(previousTask)
+            }
+            activeModerationRequestId = requestId
+        }
+        if let replacedTask = activeTasks.updateValue(task, forKey: requestId) {
+            tasksToCancel.append(replacedTask)
+        }
+        activeTaskLock.unlock()
+        tasksToCancel.forEach { $0.cancel() }
+    }
+
+    private static func removeAiTask(requestId: String) {
+        activeTaskLock.lock()
+        activeTasks.removeValue(forKey: requestId)
+        if activeSummaryRequestId == requestId {
+            activeSummaryRequestId = nil
+        }
+        if activeModerationRequestId == requestId {
+            activeModerationRequestId = nil
+        }
+        activeTaskLock.unlock()
+    }
+
+    private static func cancelAiTask(requestId: String?) {
+        guard let requestId, !requestId.isEmpty else {
+            return
+        }
+        activeTaskLock.lock()
+        let task = activeTasks.removeValue(forKey: requestId)
+        if activeSummaryRequestId == requestId {
+            activeSummaryRequestId = nil
+        }
+        if activeModerationRequestId == requestId {
+            activeModerationRequestId = nil
+        }
+        activeTaskLock.unlock()
+        task?.cancel()
+    }
+
+    private static func postAiResponse(
+        name: Notification.Name,
+        requestId: String,
+        requestIdKey: String,
+        text: String?,
+        textKey: String,
+        error: String?,
+        errorKey: String
+    ) {
+        var userInfo: [String: String] = [requestIdKey: requestId]
+        if let text {
+            userInfo[textKey] = text
+        }
+        if let error {
+            userInfo[errorKey] = error
+        }
+        NotificationCenter.default.post(name: name, object: nil, userInfo: userInfo)
     }
 
     private static func generateThreadSummary(sourceText: String) async throws -> String {
@@ -154,14 +307,16 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             投稿本文:
             \(sourceText.prefix(10_000))
             """
-            let response = try await session.respond(
-                to: prompt,
-                options: GenerationOptions(
-                    sampling: .greedy,
-                    temperature: 0.2,
-                    maximumResponseTokens: 700
+            let response = try await withModelResponseTimeout {
+                try await session.respond(
+                    to: prompt,
+                    options: GenerationOptions(
+                        sampling: .greedy,
+                        temperature: 0.2,
+                        maximumResponseTokens: 700
+                    )
                 )
-            )
+            }
             return response.content
         }
         throw NSError(
@@ -193,7 +348,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
                 model: model,
                 instructions: """
                 あなたは日本語掲示板スレッドの投稿を端末内で分類するアシスタントです。
-                明確な荒らし、スパム、連投、脅迫、嫌がらせ、無関係な破壊的投稿だけを非表示候補にしてください。
+                明確な荒らし、スパム、連投、脅迫、嫌がらせ、個人や集団への攻撃的な内容、無関係な破壊的投稿だけを非表示候補にしてください。
                 通常の反対意見、冗談、批判、短文、引用、荒い口調だけでは非表示にしないでください。
                 先頭投稿は非表示候補にしないでください。不確かな場合は空文字を返してください。非表示候補は最大8件までにしてください。
                 非表示候補がない場合は空文字を返してください。
@@ -204,14 +359,16 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             投稿一覧:
             \(sourceText.prefix(10_000))
             """
-            let response = try await session.respond(
-                to: prompt,
-                options: GenerationOptions(
-                    sampling: .greedy,
-                    temperature: 0.0,
-                    maximumResponseTokens: 420
+            let response = try await withModelResponseTimeout {
+                try await session.respond(
+                    to: prompt,
+                    options: GenerationOptions(
+                        sampling: .greedy,
+                        temperature: 0.0,
+                        maximumResponseTokens: 420
+                    )
                 )
-            )
+            }
             return response.content
         }
         throw NSError(
@@ -226,6 +383,48 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             userInfo: [NSLocalizedDescriptionKey: "このXcode/SDKでは Foundation Models framework を利用できません。"]
         )
         #endif
+    }
+
+    private static func withModelResponseTimeout<T>(
+        operation: @escaping () async throws -> T
+    ) async throws -> T {
+        let operationTask = Task {
+            try await operation()
+        }
+        let timeoutTask = Task<T, Error> {
+            try await Task.sleep(nanoseconds: modelResponseTimeoutNanoseconds)
+            throw NSError(
+                domain: "FutachaAppleIntelligenceBridge",
+                code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "Apple Intelligence request timed out."]
+            )
+        }
+        return try await withTaskCancellationHandler {
+            defer {
+                operationTask.cancel()
+                timeoutTask.cancel()
+            }
+            return try await withThrowingTaskGroup(of: T.self) { group in
+                group.addTask {
+                    try await operationTask.value
+                }
+                group.addTask {
+                    try await timeoutTask.value
+                }
+                guard let value = try await group.next() else {
+                    throw NSError(
+                        domain: "FutachaAppleIntelligenceBridge",
+                        code: 11,
+                        userInfo: [NSLocalizedDescriptionKey: "Apple Intelligence request was cancelled."]
+                    )
+                }
+                group.cancelAll()
+                return value
+            }
+        } onCancel: {
+            operationTask.cancel()
+            timeoutTask.cancel()
+        }
     }
 
     private static func reasonForUnavailableModel() -> NSString {

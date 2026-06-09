@@ -1,9 +1,11 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 internal fun buildAppStateBoardsFlow(
@@ -17,7 +19,9 @@ internal fun buildAppStateBoardsFlow(
             if (stored == null) {
                 emptyList()
             } else {
-                decodeAppStateBoards(stored, json, tag)
+                withContext(AppDispatchers.parsing) {
+                    decodeAppStateBoards(stored, json, tag)
+                }
             }
         }
 }

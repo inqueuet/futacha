@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         FutachaAppleIntelligenceBridge.installAiBridge()
         registerIosBackgroundRefreshTaskIfAvailable()
+        #if canImport(WatchConnectivity)
+        FutachaWatchConnectivityManager.shared.start()
+        #endif
         if let _ = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") {
             FirebaseApp.configure()
         }
@@ -26,12 +29,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct iOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onAppear {
+                    retryPendingFutachaAiDeepLinks()
+                }
                 .onOpenURL { url in
-                    submitFutachaAiDeepLink(url.absoluteString)
+                    if !submitFutachaAiDeepLink(url.absoluteString) {
+                        NSLog("Failed to enqueue Futacha AI deep link: %@", url.absoluteString)
+                    }
+                }
+                .onChange(of: scenePhase) { phase in
+                    if phase == .active {
+                        retryPendingFutachaAiDeepLinks()
+                    }
                 }
         }
     }
@@ -39,7 +53,109 @@ struct iOSApp: App {
 
 @discardableResult
 private func submitFutachaAiDeepLink(_ raw: String) -> Bool {
-    FutachaAiCommandBridge.shared.enqueueDeepLink(raw: raw, source: "ios")
+    FutachaAiDeepLinkSubmitter.shared.submit(raw)
+}
+
+private func retryPendingFutachaAiDeepLinks() {
+    FutachaAiDeepLinkSubmitter.shared.retryPendingSoon()
+}
+
+private struct PendingFutachaAiDeepLink {
+    let raw: String
+    var attempts: Int
+}
+
+private final class FutachaAiDeepLinkSubmitter {
+    static let shared = FutachaAiDeepLinkSubmitter()
+
+    private let maxPendingCount = 16
+    private let maxRetryAttempts = 6
+    private let retryDelaySeconds: TimeInterval = 0.75
+    private var pending: [PendingFutachaAiDeepLink] = []
+    private var retryWorkItem: DispatchWorkItem?
+
+    private init() {}
+
+    @discardableResult
+    func submit(_ raw: String) -> Bool {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                _ = self?.submit(raw)
+            }
+            return true
+        }
+
+        if FutachaAiCommandBridge.shared.enqueueDeepLink(raw: raw, source: "ios") {
+            return true
+        }
+
+        guard shouldRetry(raw) else {
+            return false
+        }
+        enqueuePending(raw)
+        scheduleRetry()
+        return true
+    }
+
+    func retryPendingSoon() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.retryPendingSoon()
+            }
+            return
+        }
+        scheduleRetry(delay: 0.1)
+    }
+
+    private func shouldRetry(_ raw: String) -> Bool {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("futacha://ai")
+    }
+
+    private func enqueuePending(_ raw: String) {
+        if pending.contains(where: { $0.raw == raw }) {
+            return
+        }
+        if pending.count >= maxPendingCount {
+            pending.removeFirst()
+        }
+        pending.append(PendingFutachaAiDeepLink(raw: raw, attempts: 0))
+    }
+
+    private func scheduleRetry(delay: TimeInterval? = nil) {
+        guard retryWorkItem == nil, !pending.isEmpty else {
+            return
+        }
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.flushPending()
+        }
+        retryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + (delay ?? retryDelaySeconds), execute: workItem)
+    }
+
+    private func flushPending() {
+        retryWorkItem = nil
+        guard !pending.isEmpty else {
+            return
+        }
+
+        var remaining: [PendingFutachaAiDeepLink] = []
+        for item in pending {
+            if FutachaAiCommandBridge.shared.enqueueDeepLink(raw: item.raw, source: "ios-retry") {
+                continue
+            }
+            var next = item
+            next.attempts += 1
+            if next.attempts < maxRetryAttempts {
+                remaining.append(next)
+            } else {
+                NSLog("Dropped pending Futacha AI deep link after retries: %@", item.raw)
+            }
+        }
+        pending = remaining
+        scheduleRetry()
+    }
 }
 
 @discardableResult
@@ -87,6 +203,11 @@ enum FutachaAppActionID: String, AppEnum {
     case refreshCurrentThread = "refresh_current_thread"
     case threadTop = "thread_top"
     case threadBottom = "thread_bottom"
+    case threadReadAloudStart = "thread_read_aloud_start"
+    case threadReadAloudPause = "thread_read_aloud_pause"
+    case threadReadAloudStop = "thread_read_aloud_stop"
+    case threadReadAloudNext = "thread_read_aloud_next"
+    case threadReadAloudPrevious = "thread_read_aloud_previous"
     case catalogTop = "catalog_top"
     case startCatalogSearch = "start_catalog_search"
     case searchCatalog = "search_catalog"
@@ -145,6 +266,11 @@ enum FutachaAppActionID: String, AppEnum {
         .refreshCurrentThread: "現在のスレを更新",
         .threadTop: "スレの先頭へ移動",
         .threadBottom: "スレの末尾へ移動",
+        .threadReadAloudStart: "スレ読み上げを開始",
+        .threadReadAloudPause: "スレ読み上げを一時停止",
+        .threadReadAloudStop: "スレ読み上げを停止",
+        .threadReadAloudNext: "次の読み上げ位置へ移動",
+        .threadReadAloudPrevious: "前の読み上げ位置へ移動",
         .catalogTop: "カタログの先頭へ移動",
         .startCatalogSearch: "カタログ検索を開始",
         .searchCatalog: "カタログで検索",
@@ -163,8 +289,8 @@ enum FutachaAppActionID: String, AppEnum {
         .backgroundRefreshOff: "バックグラウンド更新OFF",
         .threadSummaryOn: "スレ要約モードON",
         .threadSummaryOff: "スレ要約モードOFF",
-        .aiPostFilterOn: "荒らし非表示モードON",
-        .aiPostFilterOff: "荒らし非表示モードOFF",
+        .aiPostFilterOn: "荒らし非表示ON",
+        .aiPostFilterOff: "荒らし非表示OFF",
         .openCatalogDisplay: "カタログ表示設定を開く",
         .setCatalogMode: "カタログモードを変更",
         .openNgManagement: "NG管理を開く",

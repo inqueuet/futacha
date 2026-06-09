@@ -34,7 +34,9 @@ internal fun rememberFutachaBindingsRuntimeState(
     val refreshHistoryEntries: suspend () -> Unit = {
         historyRefresher.refresh(
             boardsSnapshot = persistedBoards,
-            historySnapshot = persistedHistory
+            historySnapshot = persistedHistory,
+            autoSaveBudgetMillis = 0L,
+            maxAutoSavesPerRun = 0
         )
     }
     val preferenceMutations = buildFutachaPreferenceMutationCallbacks(

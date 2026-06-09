@@ -34,6 +34,9 @@ kotlin {
         iosArm64(),
         iosSimulatorArm64()
     ).forEach {
+        it.compilerOptions {
+            freeCompilerArgs.add("-Xklib-duplicated-unique-name-strategy=allow-first-with-warning")
+        }
         it.binaries.framework {
             baseName = "shared"
             isStatic = false

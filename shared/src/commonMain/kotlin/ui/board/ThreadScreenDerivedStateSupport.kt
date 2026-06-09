@@ -18,7 +18,8 @@ internal fun buildThreadScreenDerivedUiState(
     initialReplyCount: Int?,
     threadTitle: String?,
     isReadAloudControlsVisible: Boolean,
-    readAloudStatus: ReadAloudStatus
+    readAloudStatus: ReadAloudStatus,
+    shouldPrepareReadAloudForCommand: Boolean = false
 ): ThreadScreenDerivedUiState {
     val successState = currentState as? ThreadUiState.Success
     val currentPage = successState?.page
@@ -37,6 +38,7 @@ internal fun buildThreadScreenDerivedUiState(
         }
     }.ifBlank { null }
     val shouldPrepareReadAloudSegments = isReadAloudControlsVisible ||
+        shouldPrepareReadAloudForCommand ||
         readAloudStatus is ReadAloudStatus.Speaking ||
         readAloudStatus is ReadAloudStatus.Paused
     return ThreadScreenDerivedUiState(

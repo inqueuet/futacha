@@ -96,6 +96,9 @@ import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.isAndroid
 import com.valoser.futacha.shared.util.resolveThreadTitle
+import com.valoser.futacha.shared.watch.WatchReadAloudPlaybackState
+import com.valoser.futacha.shared.watch.WatchReadAloudStatus
+import com.valoser.futacha.shared.watch.WatchReadAloudStatusStore
 import kotlinx.coroutines.*
 import kotlin.time.Clock
 import kotlin.math.abs
@@ -554,12 +557,19 @@ private fun ThreadScreenContent(
     var isSearchActive by searchStateRefs.isSearchActive
     var searchQuery by searchStateRefs.searchQuery
     var currentSearchResultIndex by searchStateRefs.currentSearchResultIndex
+    val shouldPrepareReadAloudForAiCommand = when (args.aiCommand?.action) {
+        FutachaAiAction.StartThreadReadAloud,
+        FutachaAiAction.NextThreadReadAloud,
+        FutachaAiAction.PreviousThreadReadAloud -> true
+        else -> false
+    }
     val derivedRuntimeState = rememberThreadScreenDerivedRuntimeState(
         currentState,
         initialReplyCount,
         threadTitle,
         sheetOverlayState.isReadAloudControlsVisible,
         readAloudStatus,
+        shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForAiCommand,
         lazyListState,
         isSearchActive,
         searchQuery
@@ -612,6 +622,54 @@ private fun ThreadScreenContent(
         currentReadAloudIndex = currentReadAloudIndex,
         onCurrentReadAloudIndexChanged = { currentReadAloudIndex = it }
     )
+    LaunchedEffect(
+        board.id,
+        effectiveBoardUrl,
+        threadId,
+        readAloudStatus,
+        currentReadAloudIndex,
+        readAloudSegments.size
+    ) {
+        val playbackState = when (readAloudStatus) {
+            is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
+            is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
+            ReadAloudStatus.Idle -> null
+        }
+        if (playbackState == null) {
+            WatchReadAloudStatusStore.clearIfMatches(
+                boardId = board.id,
+                boardUrl = effectiveBoardUrl,
+                threadId = threadId
+            )
+            return@LaunchedEffect
+        }
+        val segment = when (val status = readAloudStatus) {
+            is ReadAloudStatus.Speaking -> status.segment
+            is ReadAloudStatus.Paused -> status.segment
+            ReadAloudStatus.Idle -> null
+        }
+        WatchReadAloudStatusStore.update(
+            WatchReadAloudStatus(
+                boardId = board.id,
+                boardUrl = effectiveBoardUrl,
+                threadId = threadId,
+                state = playbackState,
+                postId = segment?.postId,
+                currentIndex = currentReadAloudIndex.coerceAtLeast(0),
+                totalPosts = readAloudSegments.size,
+                updatedAtMillis = Clock.System.now().toEpochMilliseconds()
+            )
+        )
+    }
+    DisposableEffect(board.id, effectiveBoardUrl, threadId) {
+        onDispose {
+            WatchReadAloudStatusStore.clearIfMatches(
+                boardId = board.id,
+                boardUrl = effectiveBoardUrl,
+                threadId = threadId
+            )
+        }
+    }
 
     val density = LocalDensity.current
     val backSwipeMetrics = rememberThreadBackSwipeMetrics(density)
@@ -751,7 +809,7 @@ private fun ThreadScreenContent(
     val openQuoteSelection = postActionHandlers.onOpenQuoteSelection
     val handleNgRegistration = postActionHandlers.onNgRegister
     val performRefresh = interactionUiHandles.performRefresh
-    LaunchedEffect(args.aiCommand) {
+    LaunchedEffect(args.aiCommand, readAloudSegments.size) {
         val command = args.aiCommand ?: return@LaunchedEffect
         var didConsume = true
         when (command.action) {
@@ -763,6 +821,32 @@ private fun ThreadScreenContent(
             }
             FutachaAiAction.ScrollThreadToBottom -> {
                 handleMenuEntry(ThreadMenuEntryId.ScrollToBottom)
+            }
+            FutachaAiAction.StartThreadReadAloud -> {
+                if (readAloudSegments.isEmpty()) return@LaunchedEffect
+                sheetOverlayState = openThreadReadAloudOverlay(sheetOverlayState)
+                startReadAloud()
+            }
+            FutachaAiAction.PauseThreadReadAloud -> {
+                pauseReadAloud()
+            }
+            FutachaAiAction.StopThreadReadAloud -> {
+                stopReadAloud()
+                showMessage(buildReadAloudStoppedMessage())
+            }
+            FutachaAiAction.NextThreadReadAloud -> {
+                if (readAloudSegments.isEmpty()) return@LaunchedEffect
+                seekReadAloudToIndex(
+                    (currentReadAloudIndex + 1).coerceAtMost(readAloudSegments.lastIndex),
+                    true
+                )
+            }
+            FutachaAiAction.PreviousThreadReadAloud -> {
+                if (readAloudSegments.isEmpty()) return@LaunchedEffect
+                seekReadAloudToIndex(
+                    (currentReadAloudIndex - 1).coerceAtLeast(0),
+                    true
+                )
             }
             FutachaAiAction.StartThreadSearch -> {
                 isSearchActive = true

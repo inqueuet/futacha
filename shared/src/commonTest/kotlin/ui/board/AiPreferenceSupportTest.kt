@@ -105,7 +105,7 @@ class AiPreferenceSupportTest {
             threadSummarySettingDescription(available)
         )
         assertEquals(
-            "AI判定で荒らし候補のレスを折りたたみます。",
+            "対応端末では画面から有効化できます。AI判定で荒らし候補や攻撃的なレスを折りたたみます。",
             aiPostFilterSettingDescription(available)
         )
     }

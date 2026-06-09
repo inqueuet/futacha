@@ -31,6 +31,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -42,6 +43,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -56,6 +58,7 @@ private const val AI_REMOTE_DOWNLOAD_TIMEOUT_MILLIS = 15 * 60 * 1_000L
 private const val MSG_SUMMARIZE_THREAD = 1
 private const val MSG_CLASSIFY_POSTS = 2
 private const val MSG_CHECK_AVAILABILITY = 3
+private const val MSG_CANCEL_REQUEST = 4
 private const val KEY_REQUEST_ID = "request_id"
 private const val KEY_RESPONSE_FINAL = "response_final"
 private const val KEY_START_DOWNLOAD = "start_download"
@@ -129,7 +132,7 @@ private class AndroidOnDeviceAiService(
 
         val availability = requestRemoteAvailability(
             context = appContext,
-            startDownloadIfNeeded = true,
+            startDownloadIfNeeded = false,
             progressChannel = this
         )
         if (availability == null) {
@@ -194,6 +197,7 @@ private class AndroidOnDeviceAiService(
 
 class AndroidAiWorkerService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val requestJobs = ConcurrentHashMap<Int, Job>()
     private val incomingMessenger = Messenger(
         Handler(Looper.getMainLooper()) { message ->
             when (message.what) {
@@ -201,7 +205,7 @@ class AndroidAiWorkerService : Service() {
                     val replyTo = message.replyTo
                     val requestId = message.data.getInt(KEY_REQUEST_ID)
                     val startDownloadIfNeeded = message.data.getBoolean(KEY_START_DOWNLOAD)
-                    serviceScope.launch {
+                    launchRequest(requestId) {
                         sendReply(
                             replyTo,
                             AiAvailability(
@@ -225,7 +229,7 @@ class AndroidAiWorkerService : Service() {
                     val request = message.data.toThreadSummaryInput()
                     val replyTo = message.replyTo
                     val requestId = message.data.getInt(KEY_REQUEST_ID)
-                    serviceScope.launch {
+                    launchRequest(requestId) {
                         val result = performLocalThreadSummary(applicationContext, request)
                         sendReply(replyTo, result.toSummaryBundle(requestId))
                     }
@@ -235,10 +239,14 @@ class AndroidAiWorkerService : Service() {
                     val request = message.data.toPostModerationInput()
                     val replyTo = message.replyTo
                     val requestId = message.data.getInt(KEY_REQUEST_ID)
-                    serviceScope.launch {
+                    launchRequest(requestId) {
                         val result = performLocalPostModeration(request)
                         sendReply(replyTo, result.toModerationBundle(requestId))
                     }
+                    true
+                }
+                MSG_CANCEL_REQUEST -> {
+                    cancelRequest(message.data.getInt(KEY_REQUEST_ID))
                     true
                 }
                 else -> false
@@ -254,8 +262,29 @@ class AndroidAiWorkerService : Service() {
     override fun onBind(intent: Intent?): IBinder = incomingMessenger.binder
 
     override fun onDestroy() {
+        requestJobs.values.forEach { it.cancel() }
+        requestJobs.clear()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private fun launchRequest(requestId: Int, block: suspend () -> Unit) {
+        requestJobs.remove(requestId)?.cancel()
+        val job = serviceScope.launch {
+            try {
+                block()
+            } finally {
+                requestJobs.remove(requestId)
+            }
+        }
+        requestJobs[requestId] = job
+        if (job.isCompleted) {
+            requestJobs.remove(requestId, job)
+        }
+    }
+
+    private fun cancelRequest(requestId: Int) {
+        requestJobs.remove(requestId)?.cancel()
     }
 
     private fun sendReply(replyTo: Messenger?, bundle: Bundle) {
@@ -373,6 +402,19 @@ private suspend fun requestRemoteAi(
             val appContext = context.applicationContext
             val completed = AtomicBoolean(false)
             var connection: ServiceConnection? = null
+            var remoteMessenger: Messenger? = null
+            val requestId = data.getInt(KEY_REQUEST_ID)
+
+            fun sendCancelToWorker() {
+                val cancel = Message.obtain(null, MSG_CANCEL_REQUEST).apply {
+                    this.data = Bundle().apply {
+                        putInt(KEY_REQUEST_ID, requestId)
+                    }
+                }
+                runCatching {
+                    remoteMessenger?.send(cancel)
+                }
+            }
 
             fun finish(bundle: Bundle?) {
                 if (!completed.compareAndSet(false, true)) return
@@ -382,11 +424,13 @@ private suspend fun requestRemoteAi(
                 continuation.resume(bundle)
             }
 
-            val requestId = data.getInt(KEY_REQUEST_ID)
             val replyMessenger = Messenger(
                 Handler(Looper.getMainLooper()) { message ->
                     if (message.data.getInt(KEY_REQUEST_ID) != requestId) {
                         return@Handler false
+                    }
+                    if (completed.get()) {
+                        return@Handler true
                     }
                     if (!message.data.getBoolean(KEY_RESPONSE_FINAL, true)) {
                         onProgress?.invoke(message.data)
@@ -399,7 +443,12 @@ private suspend fun requestRemoteAi(
 
             connection = object : ServiceConnection {
                 override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                    if (completed.get()) {
+                        runCatching { appContext.unbindService(this) }
+                        return
+                    }
                     val remote = Messenger(service)
+                    remoteMessenger = remote
                     val request = Message.obtain(null, what).apply {
                         this.data = data
                         replyTo = replyMessenger
@@ -426,9 +475,8 @@ private suspend fun requestRemoteAi(
 
             continuation.invokeOnCancellation {
                 if (completed.compareAndSet(false, true)) {
-                    connection?.let {
-                        runCatching { appContext.unbindService(it) }
-                    }
+                    sendCancelToWorker()
+                    runCatching { appContext.unbindService(connection) }
                 }
             }
 
@@ -802,10 +850,10 @@ private suspend fun <T> ListenableFuture<T>.awaitOrNull(timeoutMillis: Long): T?
     }
 }
 
-private fun downloadSummarizerFeature(
+private suspend fun downloadSummarizerFeature(
     summarizer: Summarizer,
     onProgress: (AiAvailability) -> Unit
-) {
+): Boolean {
     var totalBytesExpected: Long? = null
     val callback = object : DownloadCallback {
         override fun onDownloadStarted(bytesToDownload: Long) {
@@ -849,7 +897,7 @@ private fun downloadSummarizerFeature(
             )
         }
     }
-    summarizer.downloadFeature(callback).get()
+    return summarizer.downloadFeature(callback).awaitOrNull(AI_REMOTE_DOWNLOAD_TIMEOUT_MILLIS) != null
 }
 
 private suspend fun checkPromptStatus(): Int? {
@@ -972,8 +1020,8 @@ private fun buildSummarizerOptions(context: Context): SummarizerOptions {
 private fun buildPostModerationPrompt(posts: String): String {
     return """
         You are a local moderation assistant for a Japanese imageboard thread.
-        Hide only posts that are clearly disruptive spam, harassment, repeated flooding, threats, or unrelated vandalism.
-        Do not hide ordinary disagreement, jokes, criticism, short replies, or quoted text.
+        Hide only posts that are clearly disruptive spam, harassment, repeated flooding, threats, aggressive attacks or abusive content targeting a person or group, or unrelated vandalism.
+        Do not hide ordinary disagreement, jokes, criticism, short replies, quoted text, or rough tone alone.
         Do not hide the opening post. Prefer hiding no posts when uncertain. Return at most 8 hidden posts.
         Return one line per hidden post only.
         Format exactly: postId<TAB>HIDE<TAB>short Japanese reason

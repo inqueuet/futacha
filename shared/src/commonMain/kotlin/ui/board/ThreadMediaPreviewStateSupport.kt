@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntSize
 import kotlin.math.abs
 
 internal data class ThreadMediaPreviewState(
@@ -156,4 +158,21 @@ internal fun resolveSwipeNavigationAction(
     } else {
         SwipeNavigationAction.Previous
     }
+}
+
+internal fun isSwipeNavigationStartWithinBounds(
+    position: Offset,
+    containerSize: IntSize,
+    startPaddingPx: Float,
+    topPaddingPx: Float,
+    endPaddingPx: Float,
+    bottomPaddingPx: Float
+): Boolean {
+    if (containerSize.width <= 0 || containerSize.height <= 0) return false
+    val left = startPaddingPx.coerceAtLeast(0f)
+    val top = topPaddingPx.coerceAtLeast(0f)
+    val right = containerSize.width - endPaddingPx.coerceAtLeast(0f)
+    val bottom = containerSize.height - bottomPaddingPx.coerceAtLeast(0f)
+    if (left >= right || top >= bottom) return false
+    return position.x in left..right && position.y in top..bottom
 }

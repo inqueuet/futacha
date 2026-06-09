@@ -2,8 +2,8 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.ai.AiAvailability
 
-internal const val ALPHA_AI_COMMAND_ENABLED = false
-internal const val ALPHA_AI_POST_FILTER_ENABLED = false
+internal const val ALPHA_AI_COMMAND_ENABLED = true
+internal const val ALPHA_AI_POST_FILTER_ENABLED = true
 
 internal fun isThreadSummaryFeatureEnabled(preferencesState: ScreenPreferencesState): Boolean {
     return preferencesState.isThreadSummaryModeEnabled &&
@@ -37,14 +37,14 @@ internal fun aiPostFilterSettingDescription(aiAvailability: AiAvailability): Str
         return "アルファ版のため現在は画面上から有効化できません。"
     }
     return if (isAiPostFilterFeatureAvailable(aiAvailability)) {
-        "AI判定で荒らし候補のレスを折りたたみます。"
+        "対応端末では画面から有効化できます。AI判定で荒らし候補や攻撃的なレスを折りたたみます。"
     } else {
         aiAvailability.unavailableReason ?: "誤判定対策を含めた判定モデル接続後に有効化されます。"
     }
 }
 
 internal fun aiLocalProcessingDescription(providerLabel: String): String {
-    return "$providerLabel はスレ本文を端末内で処理します。要約・荒らし候補判定のために本文を外部サーバーへ送信しません。"
+    return "$providerLabel はスレ本文を端末内で処理します。要約・荒らし候補や攻撃的内容の判定のために本文を外部サーバーへ送信しません。"
 }
 
 @Suppress("UNUSED_PARAMETER")

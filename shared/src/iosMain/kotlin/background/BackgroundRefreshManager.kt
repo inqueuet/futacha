@@ -9,6 +9,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.valoser.futacha.shared.util.AppDispatchers
 import platform.BackgroundTasks.BGProcessingTaskRequest
 import platform.BackgroundTasks.BGTask
 import platform.BackgroundTasks.BGTaskScheduler
@@ -151,7 +153,9 @@ object BackgroundRefreshManager {
                     return@launch
                 }
                 NSLog("BGTask execution started")
-                block()
+                withContext(AppDispatchers.io) {
+                    block()
+                }
                 NSLog("BGTask execution finished successfully")
                 completeTask(true)
             } catch (e: CancellationException) {

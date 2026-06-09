@@ -540,7 +540,7 @@ private fun GlobalSettingsAiControls(
         modifier = Modifier.fillMaxWidth()
     )
     ListItem(
-        headlineContent = { Text("荒らし非表示モード（アルファ版）") },
+        headlineContent = { Text("荒らし非表示（アルファ版）") },
         supportingContent = {
             Text(
                 text = aiPostFilterSettingDescription(aiAvailability),

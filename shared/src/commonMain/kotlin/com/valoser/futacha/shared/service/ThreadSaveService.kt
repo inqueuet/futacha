@@ -21,6 +21,7 @@ import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import kotlin.random.Random
 
 /**
  * 元HTML保存や外部リソース削除のオプション
@@ -66,7 +67,6 @@ class ThreadSaveService(
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
         private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
         private const val THREAD_HTML_FETCH_TIMEOUT_MILLIS = 30_000L
-        private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 120_000L
         private const val WRITE_TIMEOUT_MILLIS = 60_000L
         private const val STREAM_READ_BUFFER_BYTES = 512 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
@@ -93,24 +93,20 @@ class ThreadSaveService(
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
-        val storageId = buildThreadStorageId(boardId, threadId)
+        val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
+        val storageId = buildThreadSaveGenerationStorageId(
+            boardId = boardId,
+            threadId = threadId,
+            savedAtEpochMillis = savedAtTimestamp,
+            nonce = Random.nextInt(0, Int.MAX_VALUE).toString(36)
+        )
         val storageTarget = buildThreadSaveStorageTarget(
             saveLocation = baseSaveLocation,
             baseDirectory = baseDirectory,
             storageId = storageId
         )
-        val storageLockKey = buildThreadStorageLockKey(
-            storageId = storageId,
-            baseDirectory = baseDirectory,
-            baseSaveLocation = baseSaveLocation
-        )
-        val saveResult = ThreadStorageLockRegistry.withStorageLockOrNull(
-            storageId = storageLockKey,
-            waitTimeoutMillis = STORAGE_LOCK_WAIT_TIMEOUT_MILLIS
-        ) {
-            try {
-                Result.success(run {
-                val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
+        try {
+            Result.success(run {
                 val startedAtMillis = savedAtTimestamp
                 // 準備フェーズ
                 updateProgress(SavePhase.PREPARING, 0, 1, "ディレクトリ作成中...")
@@ -126,168 +122,164 @@ class ThreadSaveService(
                     )
                 )
 
-            // ダウンロードフェーズ
-            var rawHtmlRelativePath: String? = null
-            val mediaPlan = buildThreadSaveMediaDownloadPlan(
-                posts = posts,
-                maxMediaItems = MAX_MEDIA_ITEMS
-            )
-
-            // FIX: メディア数が異常に多い場合は警告
-            if (mediaPlan.totalMediaCount > MAX_MEDIA_ITEMS) {
-                Logger.w(
-                    "ThreadSaveService",
-                    "Thread has ${mediaPlan.totalMediaCount} media items (max: $MAX_MEDIA_ITEMS), some may be skipped"
+                // ダウンロードフェーズ
+                var rawHtmlRelativePath: String? = null
+                val mediaPlan = buildThreadSaveMediaDownloadPlan(
+                    posts = posts,
+                    maxMediaItems = MAX_MEDIA_ITEMS
                 )
-            }
 
-            val mediaDownloadResult = executeThreadSaveMediaDownloadPlan(
-                plan = mediaPlan,
-                opPostId = opPostId,
-                chunkSize = 50,
-                maxParallelDownloads = MAX_PARALLEL_DOWNLOADS,
-                maxRetries = MAX_RETRIES,
-                retryDelayMillis = RETRY_DELAY_MS,
-                logTag = "ThreadSaveService",
-                createUrlToPathMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
-                createMediaKeyToFileInfoMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
-                updateProgress = { current, total ->
-                    updateProgress(
-                        SavePhase.DOWNLOADING,
-                        current,
-                        total,
-                        "メディアダウンロード中... ($current/$total)"
-                    )
-                },
-                downloadMedia = { mediaItem ->
-                    downloadAndSaveMedia(
-                        url = mediaItem.url,
-                        storageTarget = storageTarget,
-                        boardPath = boardPath,
-                        requestType = mediaItem.requestType,
-                        postId = mediaItem.postId,
-                        startedAtMillis = startedAtMillis
-                    )
-                },
-                enforceBudget = { totalSizeBytes ->
-                    enforceBudget(totalSizeBytes, startedAtMillis)
-                }
-            )
-            val urlToPathMap = mediaDownloadResult.urlToPathMap
-            val mediaKeyToFileInfoMap = mediaDownloadResult.mediaKeyToFileInfoMap
-            val mediaCounts = mediaDownloadResult.mediaCounts
-            var totalSize = mediaDownloadResult.totalSizeBytes
-            val downloadFailureCount = mediaDownloadResult.downloadFailureCount
-            val totalMediaCount = mediaPlan.totalMediaCount
-
-            val rawHtmlWriteResult = saveThreadRawHtmlIfEnabled(
-                enabled = rawHtmlOptions.enable,
-                fileSystem = fileSystem,
-                target = storageTarget,
-                threadId = threadId,
-                fetchOriginalHtml = { fetchThreadHtml(boardUrl, threadId) },
-                rewriteHtml = { originalHtml ->
-                    rewriteOriginalHtml(
-                        html = originalHtml,
-                        boardPath = boardPath,
-                        urlToPathMap = urlToPathMap,
-                        stripExternalResources = rawHtmlOptions.stripExternalResources
-                    )
-                },
-                measureAbsolutePathSize = fileSystem::getFileSize,
-                logWarning = { message ->
-                    Logger.w("ThreadSaveService", message)
-                }
-            )
-            rawHtmlRelativePath = rawHtmlWriteResult.relativePath
-            totalSize += rawHtmlWriteResult.sizeBytes
-
-            // 変換フェーズ
-            updateProgress(SavePhase.CONVERTING, 0, posts.size, "HTML変換中...")
-            val savedPosts = buildThreadSaveSavedPosts(
-                posts = posts,
-                mediaKeyToFileInfoMap = mediaKeyToFileInfoMap,
-                urlToPathMap = urlToPathMap,
-                updateProgress = { current, total ->
-                    updateProgress(
-                        SavePhase.CONVERTING,
-                        current,
-                        total,
-                        "投稿変換中... ($current/$total)"
+                // FIX: メディア数が異常に多い場合は警告
+                if (mediaPlan.totalMediaCount > MAX_MEDIA_ITEMS) {
+                    Logger.w(
+                        "ThreadSaveService",
+                        "Thread has ${mediaPlan.totalMediaCount} media items (max: $MAX_MEDIA_ITEMS), some may be skipped"
                     )
                 }
-            )
 
-            // 完了フェーズ
-            updateProgress(SavePhase.FINALIZING, 0, 1, "完了処理中...")
+                val mediaDownloadResult = executeThreadSaveMediaDownloadPlan(
+                    plan = mediaPlan,
+                    opPostId = opPostId,
+                    chunkSize = 50,
+                    maxParallelDownloads = MAX_PARALLEL_DOWNLOADS,
+                    maxRetries = MAX_RETRIES,
+                    retryDelayMillis = RETRY_DELAY_MS,
+                    logTag = "ThreadSaveService",
+                    createUrlToPathMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
+                    createMediaKeyToFileInfoMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
+                    updateProgress = { current, total ->
+                        updateProgress(
+                            SavePhase.DOWNLOADING,
+                            current,
+                            total,
+                            "メディアダウンロード中... ($current/$total)"
+                        )
+                    },
+                    downloadMedia = { mediaItem ->
+                        downloadAndSaveMedia(
+                            url = mediaItem.url,
+                            storageTarget = storageTarget,
+                            boardPath = boardPath,
+                            requestType = mediaItem.requestType,
+                            postId = mediaItem.postId,
+                            startedAtMillis = startedAtMillis
+                        )
+                    },
+                    enforceBudget = { totalSizeBytes ->
+                        enforceBudget(totalSizeBytes, startedAtMillis)
+                    }
+                )
+                val urlToPathMap = mediaDownloadResult.urlToPathMap
+                val mediaKeyToFileInfoMap = mediaDownloadResult.mediaKeyToFileInfoMap
+                val mediaCounts = mediaDownloadResult.mediaCounts
+                var totalSize = mediaDownloadResult.totalSizeBytes
+                val downloadFailureCount = mediaDownloadResult.downloadFailureCount
+                val totalMediaCount = mediaPlan.totalMediaCount
 
-            updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
+                val rawHtmlWriteResult = saveThreadRawHtmlIfEnabled(
+                    enabled = rawHtmlOptions.enable,
+                    fileSystem = fileSystem,
+                    target = storageTarget,
+                    threadId = threadId,
+                    fetchOriginalHtml = { fetchThreadHtml(boardUrl, threadId) },
+                    rewriteHtml = { originalHtml ->
+                        rewriteOriginalHtml(
+                            html = originalHtml,
+                            boardPath = boardPath,
+                            urlToPathMap = urlToPathMap,
+                            stripExternalResources = rawHtmlOptions.stripExternalResources
+                        )
+                    },
+                    measureAbsolutePathSize = fileSystem::getFileSize,
+                    logWarning = { message ->
+                        Logger.w("ThreadSaveService", message)
+                    }
+                )
+                rawHtmlRelativePath = rawHtmlWriteResult.relativePath
+                totalSize += rawHtmlWriteResult.sizeBytes
 
-            // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
-            val metadataSize = writeThreadSaveMetadataIfEnabled(
-                writeMetadata = writeMetadata,
-                fileSystem = fileSystem,
-                target = storageTarget,
-                request = ThreadSaveMetadataWriteRequest(
+                // 変換フェーズ
+                updateProgress(SavePhase.CONVERTING, 0, posts.size, "HTML変換中...")
+                val savedPosts = buildThreadSaveSavedPosts(
+                    posts = posts,
+                    mediaKeyToFileInfoMap = mediaKeyToFileInfoMap,
+                    urlToPathMap = urlToPathMap,
+                    updateProgress = { current, total ->
+                        updateProgress(
+                            SavePhase.CONVERTING,
+                            current,
+                            total,
+                            "投稿変換中... ($current/$total)"
+                        )
+                    }
+                )
+
+                // 完了フェーズ
+                updateProgress(SavePhase.FINALIZING, 0, 1, "完了処理中...")
+
+                updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
+
+                // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
+                val metadataSize = writeThreadSaveMetadataIfEnabled(
+                    writeMetadata = writeMetadata,
+                    fileSystem = fileSystem,
+                    target = storageTarget,
+                    request = ThreadSaveMetadataWriteRequest(
+                        threadId = threadId,
+                        boardId = boardId,
+                        boardName = boardName,
+                        boardUrl = boardUrl,
+                        title = title,
+                        storageId = storageId,
+                        savedAtTimestamp = savedAtTimestamp,
+                        expiresAtLabel = expiresAtLabel,
+                        savedPosts = savedPosts,
+                        rawHtmlRelativePath = rawHtmlRelativePath,
+                        strippedExternalResources = rawHtmlOptions.stripExternalResources,
+                        baseTotalSize = totalSize
+                    ),
+                    encodeMetadata = json::encodeToString
+                )
+                val finalTotalSize = totalSize + metadataSize
+                enforceBudget(finalTotalSize, startedAtMillis)
+
+                buildThreadSaveSavedThread(
                     threadId = threadId,
                     boardId = boardId,
                     boardName = boardName,
-                    boardUrl = boardUrl,
                     title = title,
                     storageId = storageId,
+                    thumbnailPath = mediaCounts.thumbnailPath,
                     savedAtTimestamp = savedAtTimestamp,
-                    expiresAtLabel = expiresAtLabel,
-                    savedPosts = savedPosts,
-                    rawHtmlRelativePath = rawHtmlRelativePath,
-                    strippedExternalResources = rawHtmlOptions.stripExternalResources,
-                    baseTotalSize = totalSize
-                ),
-                encodeMetadata = json::encodeToString
-            )
-            val finalTotalSize = totalSize + metadataSize
-            enforceBudget(finalTotalSize, startedAtMillis)
-
-                    buildThreadSaveSavedThread(
-                threadId = threadId,
-                boardId = boardId,
-                boardName = boardName,
-                title = title,
-                storageId = storageId,
-                thumbnailPath = mediaCounts.thumbnailPath,
-                savedAtTimestamp = savedAtTimestamp,
-                postCount = posts.size,
-                imageCount = mediaCounts.imageCount,
-                videoCount = mediaCounts.videoCount,
-                totalSize = finalTotalSize,
-                downloadFailureCount = downloadFailureCount,
-                totalMediaCount = totalMediaCount
+                    postCount = posts.size,
+                    imageCount = mediaCounts.imageCount,
+                    videoCount = mediaCounts.videoCount,
+                    totalSize = finalTotalSize,
+                    downloadFailureCount = downloadFailureCount,
+                    totalMediaCount = totalMediaCount
                 )
             })
-            } catch (e: CancellationException) {
-                runCatching {
-                    cleanupThreadSaveFailedOutput(
-                        fileSystem = fileSystem,
-                        target = storageTarget
-                    )
-                }.onFailure { cleanupError ->
-                    Logger.w("ThreadSaveService", "Failed to cleanup canceled save for $storageId: ${cleanupError.message}")
-                }
-                throw e
-            } catch (t: Throwable) {
-                runCatching {
-                    cleanupThreadSaveFailedOutput(
-                        fileSystem = fileSystem,
-                        target = storageTarget
-                    )
-                }.onFailure { cleanupError ->
-                    Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
-                }
-                Result.failure(t)
+        } catch (e: CancellationException) {
+            runCatching {
+                cleanupThreadSaveFailedOutput(
+                    fileSystem = fileSystem,
+                    target = storageTarget
+                )
+            }.onFailure { cleanupError ->
+                Logger.w("ThreadSaveService", "Failed to cleanup canceled save for $storageId: ${cleanupError.message}")
             }
+            throw e
+        } catch (t: Throwable) {
+            runCatching {
+                cleanupThreadSaveFailedOutput(
+                    fileSystem = fileSystem,
+                    target = storageTarget
+                )
+            }.onFailure { cleanupError ->
+                Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
+            }
+            Result.failure(t)
         }
-        saveResult ?: Result.failure(
-            IllegalStateException("保存処理が混雑しています。しばらく待ってから再試行してください。")
-        )
     }
 
     /**

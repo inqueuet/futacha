@@ -178,7 +178,7 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
-    fun getThreadHtmlPath_returnsResolvedAbsolutePathForPathStorage() {
+    fun getThreadHtmlPath_returnsResolvedAbsolutePathForPathStorage() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
         val storageId = buildThreadStorageId("b", "123")
@@ -189,7 +189,7 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
-    fun getThreadHtmlPath_returnsRelativePathForTreeUriStorage() {
+    fun getThreadHtmlPath_returnsRelativePathForTreeUriStorage() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(
             fileSystem = fileSystem,
@@ -201,6 +201,24 @@ class SavedThreadRepositoryTest {
         val path = repository.getThreadHtmlPath("123", "b")
 
         assertEquals("$storageId/123.htm", path)
+    }
+
+    @Test
+    fun getThreadHtmlPath_prefersLatestIndexedStorageId() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val indexed = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = "b__123_generation",
+            savedAt = 300L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(indexed).getOrThrow()
+
+        val path = repository.getThreadHtmlPath("123", "b")
+
+        assertEquals("/virtual/saved_threads/b__123_generation/123.htm", path)
     }
 
     @Test

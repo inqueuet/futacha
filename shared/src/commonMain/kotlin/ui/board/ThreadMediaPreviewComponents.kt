@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -88,11 +89,26 @@ internal fun ThreadMediaPreviewDialogFrame(
     isSwipeNavigationEnabled: Boolean = true,
     isTapNavigationEnabled: Boolean = true,
     navigationOverlayPadding: PaddingValues = PaddingValues(horizontal = 8.dp),
+    swipeNavigationPadding: PaddingValues = PaddingValues(),
     containerModifier: Modifier = Modifier,
     content: @Composable BoxScope.(IntSize) -> Unit
 ) {
     var previewSize by remember { mutableStateOf(IntSize.Zero) }
     val swipeThresholdPx = rememberSwipeNavigationThresholdPx()
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val swipeStartPaddingPx = remember(density, layoutDirection, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateLeftPadding(layoutDirection).toPx() }
+    }
+    val swipeTopPaddingPx = remember(density, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateTopPadding().toPx() }
+    }
+    val swipeEndPaddingPx = remember(density, layoutDirection, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateRightPadding(layoutDirection).toPx() }
+    }
+    val swipeBottomPaddingPx = remember(density, swipeNavigationPadding) {
+        with(density) { swipeNavigationPadding.calculateBottomPadding().toPx() }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -114,6 +130,17 @@ internal fun ThreadMediaPreviewDialogFrame(
                             requireUnconsumed = false,
                             pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
                         )
+                        if (!isSwipeNavigationStartWithinBounds(
+                                position = down.position,
+                                containerSize = previewSize,
+                                startPaddingPx = swipeStartPaddingPx,
+                                topPaddingPx = swipeTopPaddingPx,
+                                endPaddingPx = swipeEndPaddingPx,
+                                bottomPaddingPx = swipeBottomPaddingPx
+                            )
+                        ) {
+                            return@awaitEachGesture
+                        }
                         val pointerId = down.id
                         var totalDx = 0f
                         var totalDy = 0f

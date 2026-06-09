@@ -103,6 +103,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     threadTitle: String?,
     isReadAloudControlsVisible: Boolean,
     readAloudStatus: ReadAloudStatus,
+    shouldPrepareReadAloudForCommand: Boolean = false,
     lazyListState: LazyListState,
     isSearchActive: Boolean,
     searchQuery: String
@@ -112,14 +113,16 @@ internal fun rememberThreadScreenDerivedRuntimeState(
         initialReplyCount,
         threadTitle,
         isReadAloudControlsVisible,
-        readAloudStatus
+        readAloudStatus,
+        shouldPrepareReadAloudForCommand
     ) {
         buildThreadScreenDerivedUiState(
             currentState = currentState,
             initialReplyCount = initialReplyCount,
             threadTitle = threadTitle,
             isReadAloudControlsVisible = isReadAloudControlsVisible,
-            readAloudStatus = readAloudStatus
+            readAloudStatus = readAloudStatus,
+            shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForCommand
         )
     }
     val currentPage = derivedUiState.currentPage
@@ -190,19 +193,14 @@ internal fun rememberThreadScreenDerivedRuntimeState(
         }
     }
     val postHighlightRanges = remember(
-        derivedUiState,
         isSearchActive,
-        searchMatches,
-        readAloudSegments,
-        lazyListState.firstVisibleItemIndex
+        searchMatches
     ) {
-        buildThreadScreenDerivedRuntimeSnapshot(
-            derivedUiState = derivedUiState,
-            isSearchActive = isSearchActive,
-            searchMatches = searchMatches,
-            readAloudSegments = readAloudSegments,
-            firstVisibleItemIndex = lazyListState.firstVisibleItemIndex
-        ).postHighlightRanges
+        if (isSearchActive) {
+            searchMatches.associate { it.postId to it.highlightRanges }
+        } else {
+            emptyMap()
+        }
     }
     return ThreadScreenDerivedRuntimeState(
         derivedUiState = derivedUiState,

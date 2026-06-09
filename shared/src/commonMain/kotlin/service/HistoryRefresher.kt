@@ -13,12 +13,15 @@ import io.ktor.client.HttpClient
 import com.valoser.futacha.shared.network.NetworkException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -44,6 +47,7 @@ private const val ERROR_STAGE_ARCHIVE_LOOKUP = "archive_lookup"
 private const val ERROR_STAGE_THREAD_REFRESH = "thread_refresh"
 private const val ERROR_STAGE_REFRESH_ABORT = "refresh_abort"
 private const val ERROR_STAGE_REFRESH_FATAL = "refresh_fatal"
+private const val AUTO_SAVE_DRAIN_TIMEOUT_MILLIS = 5_000L
 private const val THREAD_REFRESH_EARLY_ABORT_MIN_ATTEMPTS = 25
 private const val THREAD_REFRESH_EARLY_ABORT_MIN_FAILURES = 20
 private const val THREAD_REFRESH_EARLY_ABORT_FAILURE_RATE = 0.9f
@@ -106,7 +110,8 @@ class HistoryRefresher(
         boardsSnapshot: List<BoardSummary>? = null,
         historySnapshot: List<ThreadHistoryEntry>? = null,
         autoSaveBudgetMillis: Long? = null,
-        maxThreadsPerRun: Int? = null
+        maxThreadsPerRun: Int? = null,
+        maxAutoSavesPerRun: Int? = null
     ) = withContext(dispatcher) {
         val locked = processRefreshMutex.tryLock()
         if (!locked) {
@@ -116,6 +121,7 @@ class HistoryRefresher(
         var totalThreadsInRun = 0
         var publishedDetailedError = false
         var flushOnExit: (suspend (Boolean) -> Boolean)? = null
+        var autoSaveParentJob: Job? = null
         try {
             val boards = boardsSnapshot ?: withTimeoutOrNull(STATE_SNAPSHOT_READ_TIMEOUT_MILLIS) {
                 stateStore.boards.first()
@@ -125,6 +131,8 @@ class HistoryRefresher(
             } ?: throw IllegalStateException("Timed out while reading history snapshot")
             val refreshStartedAt = Clock.System.now().toEpochMilliseconds()
             val autoSaveDeadline = autoSaveBudgetMillis?.let { refreshStartedAt + it }
+            val effectiveMaxAutoSavesPerRefresh =
+                maxAutoSavesPerRun ?: maxAutoSavesPerRefresh
             if (fullHistory.isEmpty()) return@withContext
             val history = selectHistoryWindow(fullHistory, maxThreadsPerRun)
             totalThreadsInRun = history.size
@@ -148,7 +156,9 @@ class HistoryRefresher(
             val effectiveMaxConcurrency = maxConcurrency.coerceAtLeast(1)
             val semaphore = Semaphore(effectiveMaxConcurrency)
             val autoSaveSemaphore = Semaphore(autoSaveMaxConcurrency.coerceAtLeast(1))
-            val autoSaveScope = CoroutineScope(coroutineContext)
+            val scopedAutoSaveJob = SupervisorJob(coroutineContext[Job])
+            autoSaveParentJob = scopedAutoSaveJob
+            val autoSaveScope = CoroutineScope(coroutineContext + scopedAutoSaveJob)
             val autoSaveService = if (
                 httpClient != null &&
                 fileSystem != null &&
@@ -206,7 +216,7 @@ class HistoryRefresher(
                 fetchTimeoutMillis = effectiveThreadFetchTimeoutMillis,
                 autoSaveThreadTimeoutMillis = AUTO_SAVE_THREAD_TIMEOUT_MILLIS,
                 autoSaveDeadline = autoSaveDeadline,
-                maxAutoSavesPerRefresh = maxAutoSavesPerRefresh,
+                maxAutoSavesPerRefresh = effectiveMaxAutoSavesPerRefresh,
                 threadRefreshAbortThreshold = threadRefreshAbortThreshold,
                 archiveLookupAbortThreshold = archiveLookupAbortThreshold,
                 stats = stats,
@@ -244,6 +254,28 @@ class HistoryRefresher(
                     }
                     batchStart = batchEndExclusive
                     yield()
+                }
+            }
+
+            val autoSaveChildren = scopedAutoSaveJob.children.toList()
+            if (autoSaveChildren.isNotEmpty()) {
+                val drainTimeoutMillis = autoSaveDeadline
+                    ?.let { deadline -> deadline - Clock.System.now().toEpochMilliseconds() }
+                    ?.coerceAtLeast(0L)
+                    ?: AUTO_SAVE_DRAIN_TIMEOUT_MILLIS
+                val drained = if (drainTimeoutMillis > 0L) {
+                    withTimeoutOrNull(drainTimeoutMillis) {
+                        autoSaveChildren.joinAll()
+                        true
+                    } ?: false
+                } else {
+                    false
+                }
+                if (!drained) {
+                    Logger.w(
+                        HISTORY_REFRESH_TAG,
+                        "Cancelling ${autoSaveChildren.size} unfinished auto-save job(s) after refresh drain timeout"
+                    )
                 }
             }
 
@@ -326,6 +358,7 @@ class HistoryRefresher(
             Logger.e(HISTORY_REFRESH_TAG, "History refresh aborted by fatal error", error)
             throw error
         } finally {
+            autoSaveParentJob?.cancel()
             if (locked) {
                 processRefreshMutex.unlock()
             }

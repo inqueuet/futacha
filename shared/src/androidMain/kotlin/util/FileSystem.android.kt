@@ -150,13 +150,17 @@ class AndroidFileSystem(
                         val nextTotal = totalWritten + length
                         validateFileSize(nextTotal, "file")
                         if (length > 0) {
-                            output.write(bytes, offset, length)
+                            runInterruptible {
+                                output.write(bytes, offset, length)
+                            }
                             totalWritten = nextTotal
                         }
                     }
                 }
                 block(sink)
-                output.flush()
+                runInterruptible {
+                    output.flush()
+                }
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -494,9 +498,20 @@ class AndroidFileSystem(
                         createDirectories = true
                     )
                     val file = findOrCreateTreeFile(parentDir, fileName)
-                    context.contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
-                        output.write(bytes)
+                    val output = runInterruptible {
+                        context.contentResolver.openOutputStream(file.uri, "wt")
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                    try {
+                        runInterruptible {
+                            output.write(bytes)
+                            output.flush()
+                        }
+                    } finally {
+                        try {
+                            runInterruptible { output.close() }
+                        } catch (_: Throwable) {
+                        }
+                    }
                 }
             }
             is SaveLocation.Bookmark -> {
@@ -526,9 +541,20 @@ class AndroidFileSystem(
                         createDirectories = true
                     )
                     val file = findOrCreateTreeFile(parentDir, fileName)
-                    context.contentResolver.openOutputStream(file.uri, "wa")?.use { output ->
-                        output.write(bytes)
+                    val output = runInterruptible {
+                        context.contentResolver.openOutputStream(file.uri, "wa")
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                    try {
+                        runInterruptible {
+                            output.write(bytes)
+                            output.flush()
+                        }
+                    } finally {
+                        try {
+                            runInterruptible { output.close() }
+                        } catch (_: Throwable) {
+                        }
+                    }
                 }
             }
             is SaveLocation.Bookmark -> {
@@ -561,7 +587,10 @@ class AndroidFileSystem(
                             createDirectories = true
                         )
                         val file = findOrCreateTreeFile(parentDir, fileName)
-                        context.contentResolver.openOutputStream(file.uri, "wt")?.use { output ->
+                        val output = runInterruptible {
+                            context.contentResolver.openOutputStream(file.uri, "wt")
+                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        try {
                             var totalWritten = 0L
                             val sink = object : FileWriteSink {
                                 override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
@@ -572,14 +601,23 @@ class AndroidFileSystem(
                                     val nextTotal = totalWritten + length
                                     validateFileSize(nextTotal, "file")
                                     if (length > 0) {
-                                        output.write(bytes, offset, length)
+                                        runInterruptible {
+                                            output.write(bytes, offset, length)
+                                        }
                                         totalWritten = nextTotal
                                     }
                                 }
                             }
                             block(sink)
-                            output.flush()
-                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                            runInterruptible {
+                                output.flush()
+                            }
+                        } finally {
+                            try {
+                                runInterruptible { output.close() }
+                            } catch (_: Throwable) {
+                            }
+                        }
                     }
                     result
                 } catch (e: CancellationException) {
@@ -769,17 +807,20 @@ class AndroidFileSystem(
         val now = System.currentTimeMillis()
         val maxAgeMs = 60 * 60 * 1000L // 1時間
 
-        // FIX: 複数のディレクトリを検索対象に追加
+        // Limit cleanup to app-owned roots. Never scan user-selected or public roots directly.
         val searchDirs = buildList {
             add(context.cacheDir)
-            add(context.filesDir)
-            // 外部ストレージが利用可能な場合のみ追加
+            runCatching {
+                add(File(getPrivateAppDataDirectory()))
+            }.onFailure { e ->
+                Logger.w("AndroidFileSystem", "Failed to access private app directory for cleanup: ${e.message}")
+            }
             if (isExternalStorageWritable()) {
                 runCatching {
                     add(File(getPublicDocumentsDirectory()))
                     add(File(getPublicDownloadsDirectory()))
                 }.onFailure { e ->
-                    Logger.w("AndroidFileSystem", "Failed to access public directories for cleanup: ${e.message}")
+                    Logger.w("AndroidFileSystem", "Failed to access app-scoped external directories for cleanup: ${e.message}")
                 }
             }
         }

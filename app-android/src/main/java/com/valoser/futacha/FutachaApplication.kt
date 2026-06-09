@@ -50,6 +50,8 @@ class FutachaApplication : Application() {
         private set
     lateinit var cookieRepository: CookieRepository
         private set
+    lateinit var watchSyncManager: WatchSyncManager
+        private set
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -88,7 +90,15 @@ class FutachaApplication : Application() {
             autoSavedThreadRepository = autoSavedThreadRepository,
             httpClient = httpClient,
             fileSystem = fileSystem,
-            maxConcurrency = 2
+            maxConcurrency = 1
+        )
+        watchSyncManager = WatchSyncManager(
+            context = applicationContext,
+            stateStore = appStateStore,
+            historyRefresher = historyRefresher,
+            autoSavedThreadRepository = autoSavedThreadRepository,
+            fileSystem = fileSystem,
+            scope = applicationScope
         )
 
         // Initialize WorkManager for background refresh

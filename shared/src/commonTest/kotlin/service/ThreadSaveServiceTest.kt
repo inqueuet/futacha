@@ -32,7 +32,6 @@ class ThreadSaveServiceTest {
             httpClient = createClient(),
             fileSystem = fileSystem
         )
-        val storageId = buildThreadStorageId("b", "123")
 
         val saved = service.saveThread(
             threadId = "123",
@@ -46,6 +45,7 @@ class ThreadSaveServiceTest {
             writeMetadata = true
         ).getOrThrow()
 
+        val storageId = requireNotNull(saved.storageId)
         val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
         val rawHtml = fileSystem.readString("manual/$storageId/123.htm").getOrThrow()
 
@@ -75,9 +75,8 @@ class ThreadSaveServiceTest {
             httpClient = createClient(),
             fileSystem = fileSystem
         )
-        val storageId = buildThreadStorageId("b", "456")
 
-        service.saveThread(
+        val saved = service.saveThread(
             threadId = "456",
             boardId = "b",
             boardName = "may/b",
@@ -90,6 +89,7 @@ class ThreadSaveServiceTest {
             rawHtmlOptions = RawHtmlSaveOptions(enable = false, stripExternalResources = false)
         ).getOrThrow()
 
+        val storageId = requireNotNull(saved.storageId)
         val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
 
         assertNull(metadata.rawHtmlPath)
@@ -103,7 +103,6 @@ class ThreadSaveServiceTest {
             httpClient = createPartialFailureClient(),
             fileSystem = fileSystem
         )
-        val storageId = buildThreadStorageId("b", "789")
 
         val saved = service.saveThread(
             threadId = "789",
@@ -124,6 +123,7 @@ class ThreadSaveServiceTest {
             writeMetadata = true
         ).getOrThrow()
 
+        val storageId = requireNotNull(saved.storageId)
         val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
         val firstPost = metadata.posts[0]
         val secondPost = metadata.posts[1]
@@ -150,7 +150,6 @@ class ThreadSaveServiceTest {
             httpClient = createRawHtmlFailingClient(),
             fileSystem = fileSystem
         )
-        val storageId = buildThreadStorageId("b", "999")
 
         val saved = service.saveThread(
             threadId = "999",
@@ -164,6 +163,7 @@ class ThreadSaveServiceTest {
             writeMetadata = true
         ).getOrThrow()
 
+        val storageId = requireNotNull(saved.storageId)
         val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
 
         assertEquals(SaveStatus.COMPLETED, saved.status)

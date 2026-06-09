@@ -25,8 +25,14 @@ import com.valoser.futacha.shared.ui.board.buildAddBoardValidationState
 import com.valoser.futacha.shared.ui.board.createCustomBoardSummary
 import com.valoser.futacha.shared.ui.board.ALPHA_AI_POST_FILTER_ENABLED
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+
+private const val AI_HISTORY_REFRESH_TIMEOUT_MILLIS = 60_000L
+private const val AI_HISTORY_REFRESH_MAX_THREADS = 12
+private const val AI_HISTORY_REFRESH_AUTO_SAVE_BUDGET_MILLIS = 10_000L
+private const val AI_HISTORY_REFRESH_MAX_AUTO_SAVES = 1
 
 internal data class FutachaAiRouterInputs(
     val stateStore: AppStateStore,
@@ -84,10 +90,16 @@ internal suspend fun executeFutachaAiCommand(
         FutachaAiAction.RefreshHistory -> {
             val refresher = inputs.historyRefresher
                 ?: return FutachaAiCommandOutcome.Failed("履歴更新サービスを利用できません")
-            refresher.refresh(
-                boardsSnapshot = inputs.boards,
-                historySnapshot = inputs.history
-            )
+            withTimeoutOrNull(AI_HISTORY_REFRESH_TIMEOUT_MILLIS) {
+                refresher.refresh(
+                    boardsSnapshot = inputs.boards,
+                    historySnapshot = inputs.history,
+                    autoSaveBudgetMillis = AI_HISTORY_REFRESH_AUTO_SAVE_BUDGET_MILLIS,
+                    maxThreadsPerRun = AI_HISTORY_REFRESH_MAX_THREADS,
+                    maxAutoSavesPerRun = AI_HISTORY_REFRESH_MAX_AUTO_SAVES
+                )
+                true
+            } ?: return FutachaAiCommandOutcome.Failed("履歴更新がタイムアウトしました。更新対象を絞って再試行してください")
             FutachaAiCommandOutcome.Completed("履歴を更新しました")
         }
         FutachaAiAction.OpenThread,
@@ -107,6 +119,11 @@ internal suspend fun executeFutachaAiCommand(
         FutachaAiAction.RefreshCurrentThread,
         FutachaAiAction.ScrollThreadToTop,
         FutachaAiAction.ScrollThreadToBottom,
+        FutachaAiAction.StartThreadReadAloud,
+        FutachaAiAction.PauseThreadReadAloud,
+        FutachaAiAction.StopThreadReadAloud,
+        FutachaAiAction.NextThreadReadAloud,
+        FutachaAiAction.PreviousThreadReadAloud,
         FutachaAiAction.StartThreadSearch,
         FutachaAiAction.NextSearchResult,
         FutachaAiAction.PreviousSearchResult,
@@ -197,14 +214,14 @@ internal suspend fun executeFutachaAiCommand(
         }
         FutachaAiAction.EnableAiPostFilter -> {
             if (!ALPHA_AI_POST_FILTER_ENABLED) {
-                return FutachaAiCommandOutcome.Failed("荒らし非表示モード（アルファ版）は現在有効化できません")
+                return FutachaAiCommandOutcome.Failed("荒らし非表示（アルファ版）は現在有効化できません")
             }
             inputs.stateStore.setAiPostFilterEnabled(true)
-            FutachaAiCommandOutcome.Completed("荒らし非表示モードをONにしました")
+            FutachaAiCommandOutcome.Completed("荒らし非表示をONにしました")
         }
         FutachaAiAction.DisableAiPostFilter -> {
             inputs.stateStore.setAiPostFilterEnabled(false)
-            FutachaAiCommandOutcome.Completed("荒らし非表示モードをOFFにしました")
+            FutachaAiCommandOutcome.Completed("荒らし非表示をOFFにしました")
         }
         FutachaAiAction.SetCatalogMode -> {
             val board = currentOrRequestedBoard(command, inputs) ?: return missingBoardOutcome(command)
@@ -274,7 +291,12 @@ internal suspend fun executeFutachaAiCommand(
                     FutachaAiCommandOutcome.Failed("削除する保存済みスレを特定できませんでした")
                 }
                 is FutachaSavedThreadResolveResult.Found -> {
-                    repository.deleteThread(target.thread.threadId, target.thread.boardId).getOrThrow()
+                    repository.deleteThread(target.thread.threadId, target.thread.boardId)
+                        .getOrElse { error ->
+                            return FutachaAiCommandOutcome.Failed(
+                                "保存済みスレ ${target.thread.threadId} を削除できませんでした: ${error.toAiErrorText()}"
+                            )
+                        }
                     FutachaAiCommandOutcome.Completed("保存済みスレ ${target.thread.threadId} を削除しました")
                 }
             }
@@ -282,7 +304,12 @@ internal suspend fun executeFutachaAiCommand(
         FutachaAiAction.ClearSavedThreads -> {
             val repository = inputs.savedThreadRepository
                 ?: return FutachaAiCommandOutcome.Failed("保存済みスレのリポジトリを利用できません")
-            repository.deleteAllThreads().getOrThrow()
+            repository.deleteAllThreads()
+                .getOrElse { error ->
+                    return FutachaAiCommandOutcome.Failed(
+                        "保存済みスレを全削除できませんでした: ${error.toAiErrorText()}"
+                    )
+                }
             FutachaAiCommandOutcome.Completed("保存済みスレを全削除しました")
         }
         FutachaAiAction.AddBoard -> {
@@ -580,6 +607,10 @@ private fun List<String>.appendDistinct(value: String): List<String> {
 
 private fun String.withLeadingSeparator(): String {
     return if (isBlank()) "" else " ($this)"
+}
+
+private fun Throwable.toAiErrorText(): String {
+    return message?.takeIf { it.isNotBlank() } ?: "不明なエラー"
 }
 
 private fun FutachaAiCommand.copyWithThreadId(threadId: String): FutachaAiCommand {

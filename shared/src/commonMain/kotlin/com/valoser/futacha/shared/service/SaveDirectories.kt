@@ -115,6 +115,17 @@ fun buildThreadStorageId(boardId: String?, threadId: String): String {
     return "${base}_$pairHash"
 }
 
+fun buildThreadSaveGenerationStorageId(
+    boardId: String?,
+    threadId: String,
+    savedAtEpochMillis: Long,
+    nonce: String
+): String {
+    val baseStorageId = buildThreadStorageId(boardId, threadId)
+    val safeNonce = sanitizeStorageSegment(nonce).ifBlank { "run" }
+    return "${baseStorageId}_s${savedAtEpochMillis}_$safeNonce"
+}
+
 internal fun buildLegacyThreadStorageId(boardId: String?, threadId: String): String {
     val safeThread = sanitizeLegacyStorageSegment(threadId).ifBlank { "thread" }
     val safeBoard = sanitizeLegacyStorageSegment(boardId.orEmpty())

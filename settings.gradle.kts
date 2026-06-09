@@ -23,4 +23,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "futacha"
 include(":app-android")
+include(":app-wear")
 include(":shared")

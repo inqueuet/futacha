@@ -83,10 +83,10 @@ class HistoryRefreshWorker(
         private const val TAG = "HistoryRefreshWorker"
         const val UNIQUE_WORK_NAME = "history_refresh_periodic"
         private const val UNIQUE_ONE_TIME_NAME = "history_refresh_once"
-        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(9)
-        private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.MINUTES.toMillis(3)
+        private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(6)
+        private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.SECONDS.toMillis(90)
         private const val INTERVAL_MINUTES = 15L
-        private const val MAX_THREADS_PER_RUN = 120
+        private const val MAX_THREADS_PER_RUN = 60
         private const val MAX_SETTING_READ_RETRIES = 3
         private const val MAX_TIMEOUT_RETRIES = 2
         private const val MAX_RETRY_ATTEMPTS = 3

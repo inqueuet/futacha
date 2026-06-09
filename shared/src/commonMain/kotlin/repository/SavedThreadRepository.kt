@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.service.buildThreadStorageLockKey
+import com.valoser.futacha.shared.service.ThreadStorageLockRegistry
 import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
@@ -13,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlinx.serialization.json.Json
@@ -30,7 +32,7 @@ class SavedThreadRepository(
         val totalSize: Long
     )
 
-    // FIX: メモリリーク防止 - 静的レジストリではなく、インスタンス毎のMutexを使用
+    // Instance mutex protects local state; ThreadStorageLockRegistry serializes index writes across repository instances.
     private val indexMutex = Mutex()
     private val mutationMutex = Mutex()
     internal val deleteMutex = Mutex()
@@ -75,11 +77,18 @@ class SavedThreadRepository(
      */
     suspend fun addThreadToIndex(thread: SavedThread): Result<Unit> = runSuspendCatchingNonCancellation {
         var lastException: Throwable? = null
+        val replacedStorageIds = linkedSetOf<String>()
         repeat(3) { attempt ->
             try {
                 mutationMutex.withLock {
                     withIndexLock {
                         this@SavedThreadRepository.mutateIndexThreadsUnlocked { threads ->
+                            val newStorageId = resolveSavedThreadStorageId(thread)
+                            replacedStorageIds.clear()
+                            threads
+                                .filter { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
+                                .mapTo(replacedStorageIds) { resolveSavedThreadStorageId(it) }
+                            replacedStorageIds.remove(newStorageId)
                             threads
                                 .filterNot { isSameSavedThreadIdentity(it, thread.threadId, thread.boardId) }
                                 .plus(thread)
@@ -87,6 +96,7 @@ class SavedThreadRepository(
                         }
                     }
                 }
+                cleanupReplacedSavedThreadStorage(replacedStorageIds)
                 return@runSuspendCatchingNonCancellation
             } catch (e: Throwable) {
                 if (e is CancellationException) throw e
@@ -267,13 +277,40 @@ class SavedThreadRepository(
     /**
      * スレッドHTMLパスを取得
      */
-    fun getThreadHtmlPath(threadId: String, boardId: String? = null): String {
-        val storageId = resolveSavedThreadStorageId(threadId = threadId, boardId = boardId)
+    suspend fun getThreadHtmlPath(threadId: String, boardId: String? = null): String {
+        val storageId = withIndexLock {
+            readSavedThreadIndexUnlocked()
+                .threads
+                .asSequence()
+                .filter { isSameSavedThreadIdentity(it, threadId, boardId) }
+                .sortedByDescending { it.savedAt }
+                .map { resolveSavedThreadStorageId(it) }
+                .firstOrNull()
+        } ?: resolveSavedThreadStorageId(threadId = threadId, boardId = boardId)
         val relativePath = "$storageId/$threadId.htm"
         return if (useSaveLocationApi) {
             relativePath
         } else {
             fileSystem.resolveAbsolutePath(buildStoragePath(relativePath))
+        }
+    }
+
+    private suspend fun cleanupReplacedSavedThreadStorage(storageIds: Set<String>) {
+        storageIds.forEach { storageId ->
+            val cleanupResult = withTimeoutOrNull(15_000L) {
+                ThreadStorageLockRegistry.withStorageLock(storageLockKey(storageId)) {
+                    deletePath(storageId)
+                }
+            }
+            val error = cleanupResult?.exceptionOrNull()
+            if (cleanupResult == null) {
+                Logger.w("SavedThreadRepository", "Timed out cleaning replaced saved thread storage: $storageId")
+            } else if (error != null && !isPathAlreadyDeleted(error)) {
+                Logger.w(
+                    "SavedThreadRepository",
+                    "Failed to clean replaced saved thread storage $storageId: ${error.message}"
+                )
+            }
         }
     }
 
@@ -293,8 +330,10 @@ class SavedThreadRepository(
     }
 
     internal suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(AppDispatchers.io) {
-        indexMutex.withLock {
-            block()
+        ThreadStorageLockRegistry.withStorageLock(storageLockKey(indexRelativePath)) {
+            indexMutex.withLock {
+                block()
+            }
         }
     }
     internal fun storageLockKey(relativePath: String): String {

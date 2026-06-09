@@ -15,6 +15,7 @@ import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.FutachaAiCommandBridge
 import com.valoser.futacha.shared.ai.describeFutachaAiCommandReception
 import com.valoser.futacha.shared.ai.sanitizeFutachaAiCommandParameters
+import com.valoser.futacha.shared.util.Logger
 
 @TargetApi(36)
 class FutachaAppFunctionService : AppFunctionService() {
@@ -75,7 +76,11 @@ class FutachaAppFunctionService : AppFunctionService() {
 
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        startActivity(intent)
+        runCatching {
+            startActivity(intent)
+        }.onFailure { error ->
+            Logger.w(TAG, "Failed to open MainActivity for AppFunction command: ${error.message}")
+        }
 
         val result = GenericDocument.Builder<GenericDocument.Builder<*>>(
             "futacha",
@@ -114,5 +119,9 @@ class FutachaAppFunctionService : AppFunctionService() {
                 ?: getPropertyDoubleArray(key)?.firstOrNull()?.toString()
                 ?: getPropertyBooleanArray(key)?.firstOrNull()?.toString()
         }.getOrNull()?.trim()
+    }
+
+    private companion object {
+        private const val TAG = "FutachaAppFunctionService"
     }
 }
