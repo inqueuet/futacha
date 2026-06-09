@@ -17,7 +17,7 @@ kotlin {
 
     android {
         namespace = "com.valoser.futacha.shared"
-        compileSdk = 37
+        compileSdk = 36
         minSdk = 26
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)

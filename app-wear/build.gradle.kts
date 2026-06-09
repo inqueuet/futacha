@@ -30,13 +30,13 @@ plugins {
 
 android {
     namespace = "com.valoser.futacha.wear"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.valoser.futacha"
         minSdk = 26
-        targetSdk = 37
-        versionCode = 2_099_999_991
+        targetSdk = 36
+        versionCode = 100_000_001
         versionName = "1.0"
     }
 
