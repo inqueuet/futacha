@@ -169,6 +169,27 @@ class HistoryRefreshSupportTest {
     }
 
     @Test
+    fun selectHistoryRefreshWindow_skipsIneligibleEntriesWithoutConsumingLimit() {
+        val history = listOf(
+            historyEntry(threadId = "1"),
+            historyEntry(threadId = "2", isAutoRefreshDisabled = true),
+            historyEntry(threadId = "3"),
+            historyEntry(threadId = "4"),
+            historyEntry(threadId = "5")
+        )
+
+        val selection = selectHistoryRefreshWindow(
+            history = history,
+            maxThreadsPerRun = 3,
+            cursor = 1,
+            isEligible = { !it.isAutoRefreshDisabled }
+        )
+
+        assertEquals(listOf("3", "4", "5"), selection.entries.map { it.threadId })
+        assertEquals(0, selection.nextCursor)
+    }
+
+    @Test
     fun historyRefreshError_helpers_detectAbortAndNotFound() {
         assertTrue(
             isHistoryRefreshAbortSignal(
@@ -210,7 +231,10 @@ class HistoryRefreshSupportTest {
         assertEquals(6, error.stageCounts["archive_lookup"])
     }
 
-    private fun historyEntry(threadId: String): ThreadHistoryEntry {
+    private fun historyEntry(
+        threadId: String,
+        isAutoRefreshDisabled: Boolean = false
+    ): ThreadHistoryEntry {
         return ThreadHistoryEntry(
             threadId = threadId,
             boardId = "b",
@@ -219,7 +243,8 @@ class HistoryRefreshSupportTest {
             boardName = "board",
             boardUrl = "https://may.2chan.net/b/res/$threadId.htm",
             lastVisitedEpochMillis = 1L,
-            replyCount = 1
+            replyCount = 1,
+            isAutoRefreshDisabled = isAutoRefreshDisabled
         )
     }
 }

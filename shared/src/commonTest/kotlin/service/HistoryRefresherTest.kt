@@ -91,7 +91,9 @@ class HistoryRefresherTest {
         refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
 
         assertEquals(1, repository.getThreadCalls)
-        assertEquals(entry, store.history.first().single())
+        val updated = store.history.first().single()
+        assertEquals(entry.threadId, updated.threadId)
+        assertTrue(updated.isAutoRefreshDisabled)
     }
 
     @Test
@@ -131,6 +133,7 @@ class HistoryRefresherTest {
         assertEquals("archive-thumb", updated.titleImageUrl)
         assertEquals("archive-board", updated.boardName)
         assertEquals("https://may.2chan.net/b", updated.boardUrl)
+        assertTrue(updated.isAutoRefreshDisabled)
         assertEquals(1, repository.getThreadCalls)
         assertEquals(1, repository.getThreadByUrlCalls)
     }

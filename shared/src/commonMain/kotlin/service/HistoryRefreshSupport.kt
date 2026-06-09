@@ -124,6 +124,9 @@ internal fun resolveHistoryRefreshEntry(
 ): HistoryRefreshResolvedEntry? {
     val board = resolveHistoryBoardForEntry(entry, boardById, boardByBaseUrl)
     val key = buildHistoryRefreshKey(entry, boardById, boardByBaseUrl)
+    if (entry.isAutoRefreshDisabled) {
+        return null
+    }
     if (isHistoryThreadSkipped(skipThreadIds, key, nowMillis, skipThreadTtlMillis)) {
         return null
     }
@@ -250,7 +253,8 @@ internal class HistoryRefreshRunProcessor(
                 titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
                 boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
                 replyCount = page.posts.size,
-                hasAutoSave = entry.hasAutoSave
+                hasAutoSave = entry.hasAutoSave,
+                isAutoRefreshDisabled = false
             )
             updates.put(key, updatedEntry)
 
@@ -362,7 +366,8 @@ internal suspend fun bestEffortHistoryRefreshFlushOnAbort(
 internal fun selectHistoryRefreshWindow(
     history: List<ThreadHistoryEntry>,
     maxThreadsPerRun: Int?,
-    cursor: Int
+    cursor: Int,
+    isEligible: (ThreadHistoryEntry) -> Boolean = { true }
 ): HistoryRefreshWindowSelection {
     if (history.isEmpty()) {
         return HistoryRefreshWindowSelection(entries = emptyList(), nextCursor = 0)
@@ -370,20 +375,26 @@ internal fun selectHistoryRefreshWindow(
 
     val limit = maxThreadsPerRun?.coerceAtLeast(1) ?: history.size
     if (limit >= history.size) {
-        return HistoryRefreshWindowSelection(entries = history, nextCursor = cursor)
+        return HistoryRefreshWindowSelection(
+            entries = history.filter(isEligible),
+            nextCursor = cursor
+        )
     }
 
     val size = history.size
     val start = ((cursor % size) + size) % size
-    val endExclusive = start + limit
-    val nextCursor = endExclusive % size
-    val entries = if (endExclusive <= size) {
-        history.subList(start, endExclusive)
-    } else {
-        buildList(limit) {
-            addAll(history.subList(start, size))
-            addAll(history.subList(0, endExclusive - size))
+    var scanned = 0
+    val entries = buildList(limit) {
+        var index = start
+        while (scanned < size && this.size < limit) {
+            val entry = history[index]
+            if (isEligible(entry)) {
+                add(entry)
+            }
+            scanned += 1
+            index = (index + 1) % size
         }
     }
+    val nextCursor = (start + scanned) % size
     return HistoryRefreshWindowSelection(entries = entries, nextCursor = nextCursor)
 }

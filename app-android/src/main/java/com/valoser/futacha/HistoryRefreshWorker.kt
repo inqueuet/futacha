@@ -52,7 +52,8 @@ class HistoryRefreshWorker(
             withTimeout(REFRESH_TIMEOUT_MILLIS) {
                 app.historyRefresher.refresh(
                     autoSaveBudgetMillis = AUTO_SAVE_BUDGET_MILLIS,
-                    maxThreadsPerRun = MAX_THREADS_PER_RUN
+                    maxThreadsPerRun = MAX_THREADS_PER_RUN,
+                    maxAutoSavesPerRun = MAX_AUTO_SAVES_PER_RUN
                 )
             }
             Result.success()
@@ -86,7 +87,9 @@ class HistoryRefreshWorker(
         private val REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(6)
         private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.SECONDS.toMillis(90)
         private const val INTERVAL_MINUTES = 15L
-        private const val MAX_THREADS_PER_RUN = 60
+        private const val MAX_THREADS_PER_RUN = 20
+        // Keep full media auto-save enabled, but cap how many threads can download media per BG run.
+        private const val MAX_AUTO_SAVES_PER_RUN = 2
         private const val MAX_SETTING_READ_RETRIES = 3
         private const val MAX_TIMEOUT_RETRIES = 2
         private const val MAX_RETRY_ATTEMPTS = 3

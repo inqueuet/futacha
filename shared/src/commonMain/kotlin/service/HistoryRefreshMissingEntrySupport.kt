@@ -45,7 +45,11 @@ internal suspend fun handleHistoryRefreshNotFound(
     ) {
         is ArchiveRefreshResult.Success -> {
             dependencies.stats.markSuccess()
-            dependencies.updates.put(key, archiveResult.entry)
+            markHistoryThreadSkipped(dependencies.skipThreadIds, key)
+            dependencies.updates.put(
+                key,
+                archiveResult.entry.copy(isAutoRefreshDisabled = true)
+            )
             return
         }
 
@@ -82,10 +86,14 @@ internal suspend fun handleHistoryRefreshNotFound(
         baseUrl = baseUrl,
         repository = dependencies.autoSavedThreadRepository
     )
+    val updatedEntry = entry.copy(
+        hasAutoSave = entry.hasAutoSave || hasAutoSave,
+        isAutoRefreshDisabled = true
+    )
+    dependencies.updates.put(key, updatedEntry)
     if (hasAutoSave && !entry.hasAutoSave) {
-        dependencies.updates.put(key, entry.copy(hasAutoSave = true))
         Logger.i(dependencies.tag, "Thread ${entry.threadId} not found but has auto-save")
     } else {
-        Logger.i(dependencies.tag, "Skip thread ${entry.threadId} (not found)")
+        Logger.i(dependencies.tag, "Disable auto-refresh for thread ${entry.threadId} (not found)")
     }
 }

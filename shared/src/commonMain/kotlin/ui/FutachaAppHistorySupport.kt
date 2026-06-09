@@ -137,7 +137,9 @@ internal fun buildFutachaVisitedHistoryEntry(
         lastVisitedEpochMillis = currentTimeMillis,
         replyCount = context.replyCount,
         lastReadItemIndex = existingEntry?.lastReadItemIndex ?: 0,
-        lastReadItemOffset = existingEntry?.lastReadItemOffset ?: 0
+        lastReadItemOffset = existingEntry?.lastReadItemOffset ?: 0,
+        hasAutoSave = existingEntry?.hasAutoSave ?: false,
+        isAutoRefreshDisabled = false
     )
 }
 

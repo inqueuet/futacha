@@ -59,8 +59,8 @@ private const val ABORT_FLUSH_TIMEOUT_MILLIS = 5_000L
 
 /**
  * Headless use case to refresh history entries without tying to Compose/UI.
- * Keeps a skip list for threads that returned 404/410 to avoid repeated fetches,
- * but does not delete entries from history.
+ * Marks threads that returned 404/410 as auto-refresh disabled to avoid repeated
+ * fetches, but does not delete entries from history.
  */
 class HistoryRefresher(
     private val stateStore: AppStateStore,
@@ -134,8 +134,6 @@ class HistoryRefresher(
             val effectiveMaxAutoSavesPerRefresh =
                 maxAutoSavesPerRun ?: maxAutoSavesPerRefresh
             if (fullHistory.isEmpty()) return@withContext
-            val history = selectHistoryWindow(fullHistory, maxThreadsPerRun)
-            totalThreadsInRun = history.size
             val boardById = boards.associateBy { it.id }
             val boardByBaseUrl = boards
                 .mapNotNull { board ->
@@ -152,6 +150,15 @@ class HistoryRefresher(
                         (refreshStartedAt - skippedAtMillis) < SKIP_THREAD_TTL_MILLIS
                 }
             }
+            val history = selectHistoryWindow(
+                history = fullHistory,
+                maxThreadsPerRun = maxThreadsPerRun,
+                boardById = boardById,
+                boardByBaseUrl = boardByBaseUrl,
+                nowMillis = refreshStartedAt
+            )
+            totalThreadsInRun = history.size
+            if (history.isEmpty()) return@withContext
 
             val effectiveMaxConcurrency = maxConcurrency.coerceAtLeast(1)
             val semaphore = Semaphore(effectiveMaxConcurrency)
@@ -382,13 +389,23 @@ class HistoryRefresher(
 
     private fun selectHistoryWindow(
         history: List<ThreadHistoryEntry>,
-        maxThreadsPerRun: Int?
+        maxThreadsPerRun: Int?,
+        boardById: Map<String, BoardSummary>,
+        boardByBaseUrl: Map<String, BoardSummary>,
+        nowMillis: Long
     ): List<ThreadHistoryEntry> {
         val selection = selectHistoryRefreshWindow(
             history = history,
             maxThreadsPerRun = maxThreadsPerRun,
             cursor = historyRefreshCursor
-        )
+        ) { entry ->
+            if (entry.isAutoRefreshDisabled) {
+                false
+            } else {
+                val key = buildHistoryRefreshKey(entry, boardById, boardByBaseUrl)
+                !isThreadSkipped(key, nowMillis)
+            }
+        }
         historyRefreshCursor = selection.nextCursor
         return selection.entries
     }

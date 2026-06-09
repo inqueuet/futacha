@@ -31,7 +31,9 @@ internal fun mergeAppStateHistoryEntry(
         } else {
             incoming.lastReadItemOffset
         },
-        hasAutoSave = existing.hasAutoSave || incoming.hasAutoSave
+        hasAutoSave = existing.hasAutoSave || incoming.hasAutoSave,
+        isAutoRefreshDisabled = existing.isAutoRefreshDisabled ||
+            incoming.isAutoRefreshDisabled
     )
 }
 

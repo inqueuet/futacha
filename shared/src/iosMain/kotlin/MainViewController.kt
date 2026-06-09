@@ -97,8 +97,9 @@ private object IosAppGraph {
     }
 }
 
-private const val IOS_BG_MAX_THREADS_PER_RUN = 120
-private const val IOS_BG_AUTO_SAVE_BUDGET_MILLIS = 3 * 60 * 1000L
+private const val IOS_BG_MAX_THREADS_PER_RUN = 40
+private const val IOS_BG_AUTO_SAVE_BUDGET_MILLIS = 90 * 1000L
+private const val IOS_BG_MAX_AUTO_SAVES_PER_RUN = 2
 private const val IOS_BG_REFRESH_TIMEOUT_MILLIS = 9 * 60 * 1000L
 private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
@@ -446,6 +447,7 @@ private suspend fun runIosBackgroundRefresh(
     cookieRepository: CookieRepository?,
     maxThreadsPerRun: Int = IOS_BG_MAX_THREADS_PER_RUN,
     autoSaveBudgetMillis: Long = IOS_BG_AUTO_SAVE_BUDGET_MILLIS,
+    maxAutoSavesPerRun: Int = IOS_BG_MAX_AUTO_SAVES_PER_RUN,
     refreshTimeoutMillis: Long = IOS_BG_REFRESH_TIMEOUT_MILLIS
 ) {
     val sharedClientApi = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
@@ -470,7 +472,8 @@ private suspend fun runIosBackgroundRefresh(
         withTimeout(refreshTimeoutMillis) {
             refresher.refresh(
                 autoSaveBudgetMillis = autoSaveBudgetMillis,
-                maxThreadsPerRun = maxThreadsPerRun
+                maxThreadsPerRun = maxThreadsPerRun,
+                maxAutoSavesPerRun = maxAutoSavesPerRun
             )
         }
         Logger.d("BackgroundRefresh", "Completed iOS background refresh run successfully")

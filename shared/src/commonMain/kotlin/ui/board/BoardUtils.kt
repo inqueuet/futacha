@@ -70,7 +70,8 @@ internal fun buildHistoryEntryFromPageAt(
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
         replyCount = page.posts.size,
-        lastVisitedEpochMillis = timestampMillis
+        lastVisitedEpochMillis = timestampMillis,
+        isAutoRefreshDisabled = false
     ) ?: ThreadHistoryEntry(
         threadId = threadId,
         boardId = board.id,
