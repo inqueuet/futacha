@@ -70,6 +70,8 @@ class MainActivity : ComponentActivity() {
                 stateStore = stateStore,
                 versionChecker = versionChecker,
                 httpClient = httpClient,
+                sharedRepository = app?.boardRepository,
+                sharedHistoryRefresher = app?.historyRefresher,
                 fileSystem = fileSystem,
                 cookieRepository = cookieRepository,
                 autoSavedThreadRepository = autoSavedThreadRepository,

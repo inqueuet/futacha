@@ -29,8 +29,10 @@ import com.valoser.futacha.shared.ai.FutachaAiConfirmationRequest
 import com.valoser.futacha.shared.ai.parseFutachaAiDeepLink
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateSeedDefaults
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.mockBoardSummaries
@@ -60,6 +62,8 @@ fun FutachaApp(
     history: List<ThreadHistoryEntry> = mockThreadHistory,
     versionChecker: VersionChecker? = null,
     httpClient: io.ktor.client.HttpClient? = null,
+    sharedRepository: BoardRepository? = null,
+    sharedHistoryRefresher: HistoryRefresher? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
     cookieRepository: CookieRepository? = null,
     autoSavedThreadRepository: SavedThreadRepository? = null,
@@ -152,6 +156,8 @@ fun FutachaApp(
                 val coreRuntimeState = rememberFutachaCoreRuntimeState(
                     stateStore = stateStore,
                     httpClient = httpClient,
+                    sharedRepository = sharedRepository,
+                    sharedHistoryRefresher = sharedHistoryRefresher,
                     fileSystem = fileSystem,
                     cookieRepository = cookieRepository,
                     autoSavedThreadRepository = autoSavedThreadRepository,

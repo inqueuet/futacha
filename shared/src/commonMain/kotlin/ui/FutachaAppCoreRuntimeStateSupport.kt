@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.repository.CookieRepository
+import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
@@ -20,6 +21,8 @@ internal data class FutachaCoreRuntimeState(
 internal fun rememberFutachaCoreRuntimeState(
     stateStore: AppStateStore,
     httpClient: HttpClient?,
+    sharedRepository: BoardRepository?,
+    sharedHistoryRefresher: HistoryRefresher?,
     fileSystem: FileSystem?,
     cookieRepository: CookieRepository?,
     autoSavedThreadRepository: SavedThreadRepository?,
@@ -27,9 +30,10 @@ internal fun rememberFutachaCoreRuntimeState(
     onRepositoryCloseFailure: (Throwable) -> Unit,
     onHistoryRefresherCloseFailure: (Throwable) -> Unit = {}
 ): FutachaCoreRuntimeState {
-    val repositoryHolder = remember(httpClient, cookieRepository) {
+    val repositoryHolder = remember(sharedRepository, httpClient, cookieRepository) {
         buildFutachaRepositoryHolder(
             FutachaRepositoryHolderInputs(
+                existingRepository = sharedRepository,
                 httpClient = httpClient,
                 cookieRepository = cookieRepository
             )
@@ -45,6 +49,7 @@ internal fun rememberFutachaCoreRuntimeState(
     }
     val historyRefresher = remember(
         repositoryHolder.repository,
+        sharedHistoryRefresher,
         effectiveAutoSavedThreadRepository,
         httpClient,
         fileSystem,
@@ -52,6 +57,7 @@ internal fun rememberFutachaCoreRuntimeState(
     ) {
         buildFutachaHistoryRefresher(
             FutachaHistoryRefresherInputs(
+                existingHistoryRefresher = sharedHistoryRefresher,
                 stateStore = stateStore,
                 repository = repositoryHolder.repository,
                 autoSavedThreadRepository = effectiveAutoSavedThreadRepository,

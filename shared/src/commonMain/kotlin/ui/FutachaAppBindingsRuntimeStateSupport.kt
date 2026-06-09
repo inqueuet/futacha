@@ -11,8 +11,11 @@ import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withTimeout
 
 private const val FUTACHA_APP_BINDINGS_TAG = "FutachaApp"
+private const val UI_HISTORY_REFRESH_TIMEOUT_MILLIS = 120_000L
+private const val UI_HISTORY_REFRESH_MAX_THREADS_PER_RUN = 60
 
 internal data class FutachaBindingsRuntimeState(
     val screenBindings: FutachaScreenBindingsBundle
@@ -32,12 +35,15 @@ internal fun rememberFutachaBindingsRuntimeState(
     updateNavigationState: (FutachaNavigationState) -> Unit
 ): FutachaBindingsRuntimeState {
     val refreshHistoryEntries: suspend () -> Unit = {
-        historyRefresher.refresh(
-            boardsSnapshot = persistedBoards,
-            historySnapshot = persistedHistory,
-            autoSaveBudgetMillis = 0L,
-            maxAutoSavesPerRun = 0
-        )
+        withTimeout(UI_HISTORY_REFRESH_TIMEOUT_MILLIS) {
+            historyRefresher.refresh(
+                boardsSnapshot = persistedBoards,
+                historySnapshot = persistedHistory,
+                autoSaveBudgetMillis = 0L,
+                maxThreadsPerRun = UI_HISTORY_REFRESH_MAX_THREADS_PER_RUN,
+                maxAutoSavesPerRun = 0
+            )
+        }
     }
     val preferenceMutations = buildFutachaPreferenceMutationCallbacks(
         coroutineScope = coroutineScope,

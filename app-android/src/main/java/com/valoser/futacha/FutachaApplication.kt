@@ -101,9 +101,9 @@ class FutachaApplication : Application() {
             scope = applicationScope
         )
 
-        // Initialize WorkManager for background refresh
-        val workManager = WorkManager.getInstance(applicationContext)
         applicationScope.launch {
+            // Initialize WorkManager off the Application.onCreate() critical path.
+            val workManager = WorkManager.getInstance(applicationContext)
             var hasObservedBackgroundToggle = false
             try {
                 appStateStore.isBackgroundRefreshEnabled

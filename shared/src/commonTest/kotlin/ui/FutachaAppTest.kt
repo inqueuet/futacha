@@ -437,13 +437,25 @@ class FutachaAppTest {
                 createOwnedRepository = { error("should not create owned repository") }
             )
         )
+        val existingRepositoryHolder = buildFutachaRepositoryHolder(
+            FutachaRepositoryHolderInputs(
+                existingRepository = sharedRepository,
+                httpClient = null,
+                cookieRepository = null,
+                createSharedRepository = { _, _ -> error("should not create shared repository") },
+                createOwnedRepository = { error("should not create owned repository") }
+            )
+        )
 
         assertTrue(sharedHolder.ownsRepository)
         assertSame(ownedRepository, sharedHolder.repository)
         assertFalse(explicitSharedHolder.ownsRepository)
         assertSame(sharedRepository, explicitSharedHolder.repository)
+        assertFalse(existingRepositoryHolder.ownsRepository)
+        assertSame(sharedRepository, existingRepositoryHolder.repository)
 
         closeOwnedFutachaRepository(explicitSharedHolder) { error("unexpected: $it") }
+        closeOwnedFutachaRepository(existingRepositoryHolder) { error("unexpected: $it") }
         closeOwnedFutachaRepository(sharedHolder) { error("unexpected: $it") }
 
         assertEquals(0, sharedRepository.closeAsyncCalls)

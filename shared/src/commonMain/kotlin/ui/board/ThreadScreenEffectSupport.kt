@@ -302,7 +302,8 @@ internal fun ThreadAutoSaveLaunchEffect(
         fileSystem,
         autoSaveEffectState.availability
     ) {
-        if (autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingDependencies ||
+        if (autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingPage ||
+            autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingDependencies ||
             autoSaveEffectState.availability == ThreadAutoSaveAvailability.OfflineCopy ||
             autoSaveEffectState.availability == ThreadAutoSaveAvailability.ThreadMismatch
         ) {

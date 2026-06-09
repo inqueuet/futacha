@@ -19,6 +19,7 @@ internal data class RepositoryHolder(
 )
 
 internal data class FutachaRepositoryHolderInputs(
+    val existingRepository: BoardRepository? = null,
     val httpClient: HttpClient?,
     val cookieRepository: com.valoser.futacha.shared.repository.CookieRepository?,
     val createSharedRepository: (HttpClient, com.valoser.futacha.shared.repository.CookieRepository?) -> BoardRepository =
@@ -32,6 +33,7 @@ internal data class FutachaAutoSavedThreadRepositoryInputs(
 )
 
 internal data class FutachaHistoryRefresherInputs(
+    val existingHistoryRefresher: HistoryRefresher? = null,
     val stateStore: AppStateStore,
     val repository: BoardRepository,
     val autoSavedThreadRepository: SavedThreadRepository?,
@@ -43,7 +45,12 @@ internal data class FutachaHistoryRefresherInputs(
 internal fun buildFutachaRepositoryHolder(
     inputs: FutachaRepositoryHolderInputs
 ): RepositoryHolder {
-    return if (inputs.httpClient != null) {
+    return if (inputs.existingRepository != null) {
+        RepositoryHolder(
+            repository = inputs.existingRepository,
+            ownsRepository = false
+        )
+    } else if (inputs.httpClient != null) {
         RepositoryHolder(
             repository = inputs.createSharedRepository(inputs.httpClient, inputs.cookieRepository),
             ownsRepository = false
@@ -67,6 +74,7 @@ internal fun buildFutachaAutoSavedThreadRepository(
 internal fun buildFutachaHistoryRefresher(
     inputs: FutachaHistoryRefresherInputs
 ): HistoryRefresher {
+    inputs.existingHistoryRefresher?.let { return it }
     return HistoryRefresher(
         stateStore = inputs.stateStore,
         repository = inputs.repository,
