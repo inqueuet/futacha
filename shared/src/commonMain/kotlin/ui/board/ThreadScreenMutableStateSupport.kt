@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.ImageData
@@ -21,6 +22,7 @@ internal data class ThreadScreenMutableStateDefaults(
     val isManualSaveInProgress: Boolean = false,
     val isSingleMediaSaveInProgress: Boolean = false,
     val lastAutoSaveTimestamp: Long = 0L,
+    val lastAutoSavePosts: List<Post>? = null,
     val isShowingOfflineCopy: Boolean = false,
     val actionInProgress: Boolean = false,
     val lastBusyActionNoticeAtMillis: Long = 0L,
@@ -75,6 +77,7 @@ internal data class ThreadScreenMutableStateBundle(
     val isManualSaveInProgress: MutableState<Boolean>,
     val isSingleMediaSaveInProgress: MutableState<Boolean>,
     val lastAutoSaveTimestamp: MutableState<Long>,
+    val lastAutoSavePosts: MutableState<List<Post>?>,
     val isShowingOfflineCopy: MutableState<Boolean>,
     val actionInProgress: MutableState<Boolean>,
     val lastBusyActionNoticeAtMillis: MutableState<Long>,
@@ -125,6 +128,7 @@ internal data class ThreadScreenSaveJobMutableStateRefs(
     val isManualSaveInProgress: MutableState<Boolean>,
     val isSingleMediaSaveInProgress: MutableState<Boolean>,
     val lastAutoSaveTimestamp: MutableState<Long>,
+    val lastAutoSavePosts: MutableState<List<Post>?>,
     val isShowingOfflineCopy: MutableState<Boolean>,
     val saveProgress: MutableState<SaveProgress?>
 )
@@ -199,6 +203,7 @@ internal fun resolveThreadScreenMutableStateRefs(
             isManualSaveInProgress = bundle.isManualSaveInProgress,
             isSingleMediaSaveInProgress = bundle.isSingleMediaSaveInProgress,
             lastAutoSaveTimestamp = bundle.lastAutoSaveTimestamp,
+            lastAutoSavePosts = bundle.lastAutoSavePosts,
             isShowingOfflineCopy = bundle.isShowingOfflineCopy,
             saveProgress = bundle.saveProgress
         ),
@@ -264,6 +269,7 @@ internal fun rememberThreadScreenMutableStateBundle(
         isManualSaveInProgress = remember { mutableStateOf(defaults.isManualSaveInProgress) },
         isSingleMediaSaveInProgress = remember { mutableStateOf(defaults.isSingleMediaSaveInProgress) },
         lastAutoSaveTimestamp = rememberSaveable(threadId) { mutableStateOf(defaults.lastAutoSaveTimestamp) },
+        lastAutoSavePosts = remember(threadId) { mutableStateOf(defaults.lastAutoSavePosts) },
         isShowingOfflineCopy = rememberSaveable(threadId) { mutableStateOf(defaults.isShowingOfflineCopy) },
         actionInProgress = remember { mutableStateOf(defaults.actionInProgress) },
         lastBusyActionNoticeAtMillis = remember { mutableStateOf(defaults.lastBusyActionNoticeAtMillis) },

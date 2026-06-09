@@ -281,6 +281,7 @@ private fun ThreadScreenContent(
     var isManualSaveInProgress by saveJobStateRefs.isManualSaveInProgress
     var isSingleMediaSaveInProgress by saveJobStateRefs.isSingleMediaSaveInProgress
     val lastAutoSaveTimestamp = saveJobStateRefs.lastAutoSaveTimestamp
+    val lastAutoSavePosts = saveJobStateRefs.lastAutoSavePosts
     var isShowingOfflineCopy by saveJobStateRefs.isShowingOfflineCopy
     val drawerState = runtimeHandles.drawerState
     val isDrawerOpen by runtimeHandles.isDrawerOpen
@@ -431,6 +432,8 @@ private fun ThreadScreenContent(
             setAutoSaveJob = { autoSaveJob = it },
             currentLastAutoSaveTimestampMillis = { lastAutoSaveTimestamp.value },
             setLastAutoSaveTimestampMillis = { lastAutoSaveTimestamp.value = it },
+            currentLastAutoSavePosts = { lastAutoSavePosts.value },
+            setLastAutoSavePosts = { lastAutoSavePosts.value = it },
             currentIsShowingOfflineCopy = { isShowingOfflineCopy },
             currentManualSaveJob = { manualSaveJob },
             setManualSaveJob = { manualSaveJob = it },

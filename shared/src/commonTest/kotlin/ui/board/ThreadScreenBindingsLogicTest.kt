@@ -814,6 +814,9 @@ class ThreadScreenBindingsLogicTest {
         )
         var autoSaveJob: Job? = null
         var lastAutoSaveTimestamp = 0L
+        var lastAutoSavePosts: List<Post>? = null
+        var nowMillis = 100_000L
+        var autoSaveRunCount = 0
         val indexedThreads = mutableListOf<SavedThread>()
         val page = ThreadPage(
             threadId = "123",
@@ -840,6 +843,8 @@ class ThreadScreenBindingsLogicTest {
                 setAutoSaveJob = { autoSaveJob = it },
                 currentLastAutoSaveTimestampMillis = { lastAutoSaveTimestamp },
                 setLastAutoSaveTimestampMillis = { lastAutoSaveTimestamp = it },
+                currentLastAutoSavePosts = { lastAutoSavePosts },
+                setLastAutoSavePosts = { lastAutoSavePosts = it },
                 currentIsShowingOfflineCopy = { false }
             ),
             dependencies = ThreadScreenAutoSaveDependencies(
@@ -856,12 +861,14 @@ class ThreadScreenBindingsLogicTest {
                     description = "desc"
                 ),
                 effectiveBoardUrl = "https://example.com/test",
-                currentTimeMillis = { 100_000L },
+                currentTimeMillis = { nowMillis },
                 buildSaveRuntime = { _, _ ->
                     buildThreadSaveRuntime(ThreadSaveService(HttpClient(), fileSystem))
                 },
                 performAutoSave = { config, _ ->
+                    autoSaveRunCount += 1
                     assertEquals("123", config.threadId)
+                    nowMillis = 100_200L
                     ThreadAutoSaveRunResult(
                         completionState = ThreadAutoSaveCompletionState(
                             nextTimestampMillis = 200L,
@@ -880,9 +887,16 @@ class ThreadScreenBindingsLogicTest {
         bindings.startAutoSave(page)
         autoSaveJob?.join()
 
-        assertEquals(200L, lastAutoSaveTimestamp)
+        assertEquals(100_200L, lastAutoSaveTimestamp)
+        assertEquals(page.posts, lastAutoSavePosts)
         assertEquals(listOf(savedThread), indexedThreads)
         assertNull(autoSaveJob)
+
+        nowMillis = 200_200L
+        bindings.startAutoSave(page)
+
+        assertEquals(1, autoSaveRunCount)
+        assertEquals(listOf(savedThread), indexedThreads)
     }
 
     @Test

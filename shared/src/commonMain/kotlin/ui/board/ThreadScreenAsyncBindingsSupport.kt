@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
@@ -89,6 +90,8 @@ internal data class ThreadScreenAsyncRuntimeInputs(
     val setAutoSaveJob: (kotlinx.coroutines.Job?) -> Unit,
     val currentLastAutoSaveTimestampMillis: () -> Long,
     val setLastAutoSaveTimestampMillis: (Long) -> Unit,
+    val currentLastAutoSavePosts: () -> List<Post>? = { null },
+    val setLastAutoSavePosts: (List<Post>?) -> Unit = {},
     val currentIsShowingOfflineCopy: () -> Boolean,
     val currentManualSaveJob: () -> kotlinx.coroutines.Job?,
     val setManualSaveJob: (kotlinx.coroutines.Job?) -> Unit,
@@ -157,6 +160,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
         setAutoSaveJob = inputs.setAutoSaveJob,
         currentLastAutoSaveTimestampMillis = inputs.currentLastAutoSaveTimestampMillis,
         setLastAutoSaveTimestampMillis = inputs.setLastAutoSaveTimestampMillis,
+        currentLastAutoSavePosts = inputs.currentLastAutoSavePosts,
+        setLastAutoSavePosts = inputs.setLastAutoSavePosts,
         currentIsShowingOfflineCopy = inputs.currentIsShowingOfflineCopy,
         currentManualSaveJob = inputs.currentManualSaveJob,
         setManualSaveJob = inputs.setManualSaveJob,
@@ -191,6 +196,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
     setAutoSaveJob: (kotlinx.coroutines.Job?) -> Unit,
     currentLastAutoSaveTimestampMillis: () -> Long,
     setLastAutoSaveTimestampMillis: (Long) -> Unit,
+    currentLastAutoSavePosts: () -> List<Post>? = { null },
+    setLastAutoSavePosts: (List<Post>?) -> Unit = {},
     currentIsShowingOfflineCopy: () -> Boolean,
     currentManualSaveJob: () -> kotlinx.coroutines.Job?,
     setManualSaveJob: (kotlinx.coroutines.Job?) -> Unit,
@@ -224,6 +231,8 @@ internal fun buildThreadScreenAsyncRuntimeBindingsBundle(
             setAutoSaveJob = setAutoSaveJob,
             currentLastAutoSaveTimestampMillis = currentLastAutoSaveTimestampMillis,
             setLastAutoSaveTimestampMillis = setLastAutoSaveTimestampMillis,
+            currentLastAutoSavePosts = currentLastAutoSavePosts,
+            setLastAutoSavePosts = setLastAutoSavePosts,
             currentIsShowingOfflineCopy = currentIsShowingOfflineCopy
         ),
         manualSaveStateBindings = ThreadScreenManualSaveStateBindings(

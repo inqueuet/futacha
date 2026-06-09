@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.ThreadSaveService
@@ -24,6 +25,8 @@ internal data class ThreadScreenAutoSaveStateBindings(
     val setAutoSaveJob: (Job?) -> Unit,
     val currentLastAutoSaveTimestampMillis: () -> Long,
     val setLastAutoSaveTimestampMillis: (Long) -> Unit,
+    val currentLastAutoSavePosts: () -> List<Post>? = { null },
+    val setLastAutoSavePosts: (List<Post>?) -> Unit = {},
     val currentIsShowingOfflineCopy: () -> Boolean
 )
 
@@ -352,6 +355,10 @@ internal fun buildThreadScreenAutoSaveBindings(
             val client = dependencies.httpClient ?: return@start
             val localFileSystem = dependencies.fileSystem ?: return@start
             val now = dependencies.currentTimeMillis()
+            val postsSnapshot = page.posts
+            if (stateBindings.currentLastAutoSavePosts() == postsSnapshot) {
+                return@start
+            }
             if (
                 resolveThreadAutoSaveAvailability(
                     pageThreadId = page.threadId,
@@ -385,20 +392,26 @@ internal fun buildThreadScreenAutoSaveBindings(
                             posts = page.posts,
                             previousTimestampMillis = stateBindings.currentLastAutoSaveTimestampMillis(),
                             attemptStartedAtMillis = attemptStartedAt,
-                            completionTimestampMillis = dependencies.currentTimeMillis()
+                            completionTimestampMillis = attemptStartedAt
                         ),
                         saveRuntime.autoCallbacks
                     )
+                    val completedAt = dependencies.currentTimeMillis()
                     val applyState = buildThreadAutoSaveUiApplyState(
-                        completionState = autoSaveResult.completionState,
+                        completionState = autoSaveResult.completionState.copy(
+                            nextTimestampMillis = completedAt
+                        ),
                         threadId = dependencies.threadId
                     )
                     stateBindings.setLastAutoSaveTimestampMillis(applyState.nextTimestampMillis)
-                    dependencies.indexSavedThread(
+                    val indexResult = dependencies.indexSavedThread(
                         repository,
                         applyState.savedThread,
                         applyState.indexFailureMessage
                     )
+                    if (applyState.savedThread != null && indexResult?.isSuccess != false) {
+                        stateBindings.setLastAutoSavePosts(postsSnapshot.toList())
+                    }
                     if (applyState.failureMessage != null && applyState.failure != null) {
                         dependencies.onFailureLog(applyState.failureMessage, applyState.failure)
                     }
