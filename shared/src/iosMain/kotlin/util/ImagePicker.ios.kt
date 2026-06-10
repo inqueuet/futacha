@@ -46,7 +46,7 @@ import kotlin.concurrent.AtomicReference
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * UIDocumentPicker delegate の保持
@@ -211,12 +211,11 @@ suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null):
 suspend fun pickMediaFromDocuments(
     mimeType: String,
     preferredProviderIdentifier: String? = null
-): ImageData? = suspendCoroutine { continuation ->
-    val rootViewController = getRootViewController()
-    if (rootViewController == null) {
+): ImageData? = suspendCancellableCoroutine { continuation ->
+    if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present document media picker: root view controller is unavailable")
         continuation.resume(null)
-        return@suspendCoroutine
+        return@suspendCancellableCoroutine
     }
     val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
@@ -264,10 +263,7 @@ suspend fun pickMediaFromDocuments(
             directoryURL = preferredUrl
             this.delegate = delegate
         }
-        runCatching {
-            rootViewController.presentViewController(picker, animated = true, completion = null)
-        }.onFailure { error ->
-            Logger.e("ImagePicker.ios", "Failed to present document image picker", error)
+        presentPicker(picker, logLabel = "document media picker") {
             complete(null)
         }
     }
@@ -280,7 +276,7 @@ suspend fun pickVideo(): ImageData? = pickFromPhotoLibrary(
     logLabel = "video"
 )
 
-actual suspend fun pickImage(): ImageData? = suspendCoroutine { continuation ->
+actual suspend fun pickImage(): ImageData? = suspendCancellableCoroutine { continuation ->
     pickFromPhotoLibrary(
         filter = PHPickerFilter.imagesFilter,
         typeIdentifier = "public.image",
@@ -297,8 +293,7 @@ private fun pickFromPhotoLibrary(
     logLabel: String,
     continuation: kotlin.coroutines.Continuation<ImageData?>
 ) {
-    val rootViewController = getRootViewController()
-    if (rootViewController == null) {
+    if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present photo $logLabel picker: root view controller is unavailable")
         continuation.resume(null)
         return
@@ -382,10 +377,7 @@ private fun pickFromPhotoLibrary(
     retainPickerDelegate(delegate)
     picker.delegate = delegate
 
-    runCatching {
-        rootViewController.presentViewController(picker, animated = true, completion = null)
-    }.onFailure { error ->
-        Logger.e("ImagePicker.ios", "Failed to present photo $logLabel picker", error)
+    presentPicker(picker, logLabel = "photo $logLabel picker") {
         complete(null)
     }
 }
@@ -395,7 +387,7 @@ private suspend fun pickFromPhotoLibrary(
     typeIdentifier: String,
     fallbackFileName: String,
     logLabel: String
-): ImageData? = suspendCoroutine { continuation ->
+): ImageData? = suspendCancellableCoroutine { continuation ->
     pickFromPhotoLibrary(
         filter = filter,
         typeIdentifier = typeIdentifier,
@@ -415,12 +407,11 @@ private suspend fun pickFromPhotoLibrary(
  * セキュリティスコープは書き込み可否チェック後に即座に解放されます。
  * 永続アクセスが必要な場合は [pickDirectorySaveLocation] を利用してください。
  */
-actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuation ->
-    val rootViewController = getRootViewController()
-    if (rootViewController == null) {
+actual suspend fun pickDirectoryPath(): String? = suspendCancellableCoroutine { continuation ->
+    if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present directory picker: root view controller is unavailable")
         continuation.resume(null)
-        return@suspendCoroutine
+        return@suspendCancellableCoroutine
     }
     val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
@@ -480,10 +471,7 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
     delegateRef = delegate
     retainPickerDelegate(delegate)
     picker.delegate = delegate
-    runCatching {
-        rootViewController.presentViewController(picker, animated = true, completion = null)
-    }.onFailure { error ->
-        Logger.e("ImagePicker.ios", "Failed to present directory picker", error)
+    presentPicker(picker, logLabel = "directory picker") {
         complete(null)
     }
 }
@@ -495,12 +483,11 @@ actual suspend fun pickDirectoryPath(): String? = suspendCoroutine { continuatio
 actual suspend fun pickDirectorySaveLocation(): SaveLocation? =
     pickDirectorySaveLocation(preferredProviderIdentifier = null)
 
-suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): SaveLocation? = suspendCoroutine { continuation ->
-    val rootViewController = getRootViewController()
-    if (rootViewController == null) {
+suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): SaveLocation? = suspendCancellableCoroutine { continuation ->
+    if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present save-location picker: root view controller is unavailable")
         continuation.resume(null)
-        return@suspendCoroutine
+        return@suspendCancellableCoroutine
     }
     val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
@@ -553,10 +540,7 @@ suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): Sav
             directoryURL = preferredUrl
             this.delegate = delegate
         }
-        runCatching {
-            rootViewController.presentViewController(picker, animated = true, completion = null)
-        }.onFailure { error ->
-            Logger.e("ImagePicker.ios", "Failed to present save-location picker", error)
+        presentPicker(picker, logLabel = "save-location picker") {
             presentIosAlert(
                 title = "フォルダ選択を開けません",
                 message = "Files のフォルダ選択を開始できませんでした。手入力で保存先を指定してください。"
@@ -652,6 +636,53 @@ private fun getRootViewController(): UIViewController? {
     }
     val keyWindow = windows.firstOrNull { it.isKeyWindow() } ?: windows.firstOrNull()
     return keyWindow?.rootViewController
+}
+
+/**
+ * ルートVCがすでに別のモーダルを present 中でも提示できるよう、
+ * presentedViewController チェーンを辿って最前面の VC を返す。
+ */
+private fun getPresenterViewController(): UIViewController? {
+    var presenter = getRootViewController() ?: return null
+    while (true) {
+        val presented = presenter.presentedViewController ?: break
+        if (presented.isBeingDismissed()) break
+        presenter = presented
+    }
+    return presenter
+}
+
+/**
+ * ピッカーを最前面の VC から present し、提示できなかった場合は必ず onPresentFailed を呼ぶ。
+ *
+ * UIKit の presentViewController は「already presenting」等の競合時に例外を投げず
+ * 警告ログだけで静かに失敗する。その場合デリゲートが永遠に呼ばれず、ピッカー待ちの
+ * コルーチンが再開されないため、present 後に実際に提示されたかを検証する。
+ */
+private fun presentPicker(
+    picker: UIViewController,
+    logLabel: String,
+    onPresentFailed: () -> Unit
+) {
+    val presenter = getPresenterViewController()
+    if (presenter == null) {
+        Logger.w("ImagePicker.ios", "Cannot present $logLabel: presenter view controller is unavailable")
+        onPresentFailed()
+        return
+    }
+    runCatching {
+        presenter.presentViewController(picker, animated = true, completion = null)
+    }.onFailure { error ->
+        Logger.e("ImagePicker.ios", "Failed to present $logLabel", error)
+        onPresentFailed()
+        return
+    }
+    dispatch_async(dispatch_get_main_queue()) {
+        if (picker.presentingViewController == null && !picker.isBeingPresented()) {
+            Logger.e("ImagePicker.ios", "Presenting $logLabel silently failed; resuming with null")
+            onPresentFailed()
+        }
+    }
 }
 
 private fun resolveFileSizeBytes(url: NSURL): Long? {
