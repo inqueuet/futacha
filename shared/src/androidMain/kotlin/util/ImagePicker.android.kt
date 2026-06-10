@@ -2,16 +2,27 @@ package com.valoser.futacha.shared.util
 
 import android.content.Context
 import android.net.Uri
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.cancellation.CancellationException
 
-private fun backoffAfterImagePickerZeroRead() {
-    try {
-        Thread.sleep(1L)
-    } catch (e: InterruptedException) {
-        Thread.currentThread().interrupt()
+private const val IMAGE_PICKER_READ_TIMEOUT_MILLIS = 30_000L
+
+suspend fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
+    return withTimeoutOrNull(IMAGE_PICKER_READ_TIMEOUT_MILLIS) {
+        readImageDataFromUriWithinTimeout(context, uri)
+    } ?: run {
+        Logger.w("ImagePicker", "Timed out reading image data from URI: $uri")
+        null
     }
 }
 
-fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
+private suspend fun backoffAfterImagePickerZeroRead() {
+    delay(1L)
+}
+
+private suspend fun readImageDataFromUriWithinTimeout(context: Context, uri: Uri): ImageData? {
     return try {
         // FIX: 画像サイズを事前にチェック
         val fileSize = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -42,7 +53,9 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
                 var zeroReadCount = 0
 
                 while (totalRead < expectedSize) {
-                    val bytesRead = inputStream.read(output, totalRead, expectedSize - totalRead)
+                    val bytesRead = runInterruptible {
+                        inputStream.read(output, totalRead, expectedSize - totalRead)
+                    }
                     if (bytesRead == -1) break
                     if (bytesRead == 0) {
                         zeroReadCount += 1
@@ -65,7 +78,7 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
                 var totalRead = 0L
                 var zeroReadCount = 0
 
-                while (inputStream.read(chunk).also { bytesRead = it } != -1) {
+                while (runInterruptible { inputStream.read(chunk) }.also { bytesRead = it } != -1) {
                     if (bytesRead == 0) {
                         zeroReadCount += 1
                         if (zeroReadCount >= 100) {
@@ -111,6 +124,8 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
 
         Logger.d("ImagePicker", "Successfully read image: $fileName (${bytes.size / 1024}KB)")
         ImageData(bytes, fileName)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         // FIX: 適切なログ記録とエラーハンドリング
         when (e) {

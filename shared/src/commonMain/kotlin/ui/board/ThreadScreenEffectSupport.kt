@@ -324,8 +324,8 @@ internal fun ThreadAutoSaveLaunchEffect(
                 }
                 ThreadAutoSaveAvailability.MissingPage -> delay(1_000L)
                 ThreadAutoSaveAvailability.MissingDependencies -> delay(1_000L)
-                ThreadAutoSaveAvailability.OfflineCopy,
-                ThreadAutoSaveAvailability.ThreadMismatch -> return@LaunchedEffect
+                ThreadAutoSaveAvailability.ThreadMismatch -> delay(1_000L)
+                ThreadAutoSaveAvailability.OfflineCopy -> return@LaunchedEffect
             }
         }
     }

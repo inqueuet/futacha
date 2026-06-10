@@ -31,6 +31,11 @@ data class RawHtmlSaveOptions(
     val stripExternalResources: Boolean = true
 )
 
+data class ThreadSaveLimits(
+    val maxMediaItems: Int = ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS,
+    val maxSaveDurationMs: Long = ThreadSaveService.DEFAULT_MAX_SAVE_DURATION_MS
+)
+
 /**
  * スレッド保存サービス
  */
@@ -50,14 +55,14 @@ class ThreadSaveService(
         private const val MAX_FILE_SIZE_BYTES = 8_192_000L
         private const val MAX_THREAD_HTML_BYTES = 5 * 1024 * 1024L
         private const val MAX_TOTAL_SIZE_BYTES = 8L * 1024 * 1024 * 1024 // 約8GBまで
-        private const val MAX_SAVE_DURATION_MS = 5 * 60 * 1000L // 5分上限
+        const val DEFAULT_MAX_SAVE_DURATION_MS = 5 * 60 * 1000L // 5分上限
 
         // サポートされる拡張子
         private val SUPPORTED_IMAGE_EXTENSIONS = setOf("gif", "jpg", "jpeg", "png", "webp")
         private val SUPPORTED_VIDEO_EXTENSIONS = setOf("webm", "mp4")
 
         // FIX: 最大メディア数を制限
-        private const val MAX_MEDIA_ITEMS = 10000
+        const val DEFAULT_MAX_MEDIA_ITEMS = 10000
 
         // リトライ設定
         private const val MAX_RETRIES = 3
@@ -91,8 +96,13 @@ class ThreadSaveService(
         baseSaveLocation: SaveLocation? = null,
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
-        rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions()
+        rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions(),
+        limits: ThreadSaveLimits = ThreadSaveLimits()
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
+        val effectiveLimits = limits.copy(
+            maxMediaItems = limits.maxMediaItems.coerceAtLeast(0),
+            maxSaveDurationMs = limits.maxSaveDurationMs.coerceAtLeast(1L)
+        )
         val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
         val storageId = buildThreadSaveGenerationStorageId(
             boardId = boardId,
@@ -126,14 +136,14 @@ class ThreadSaveService(
                 var rawHtmlRelativePath: String? = null
                 val mediaPlan = buildThreadSaveMediaDownloadPlan(
                     posts = posts,
-                    maxMediaItems = MAX_MEDIA_ITEMS
+                    maxMediaItems = effectiveLimits.maxMediaItems
                 )
 
                 // FIX: メディア数が異常に多い場合は警告
-                if (mediaPlan.totalMediaCount > MAX_MEDIA_ITEMS) {
+                if (mediaPlan.totalMediaCount > effectiveLimits.maxMediaItems) {
                     Logger.w(
                         "ThreadSaveService",
-                        "Thread has ${mediaPlan.totalMediaCount} media items (max: $MAX_MEDIA_ITEMS), some may be skipped"
+                        "Thread has ${mediaPlan.totalMediaCount} media items (max: ${effectiveLimits.maxMediaItems}), some may be skipped"
                     )
                 }
 
@@ -145,8 +155,8 @@ class ThreadSaveService(
                     maxRetries = MAX_RETRIES,
                     retryDelayMillis = RETRY_DELAY_MS,
                     logTag = "ThreadSaveService",
-                    createUrlToPathMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
-                    createMediaKeyToFileInfoMap = { createThreadSaveLruCache(MAX_MEDIA_ITEMS) },
+                    createUrlToPathMap = { createThreadSaveLruCache(effectiveLimits.maxMediaItems) },
+                    createMediaKeyToFileInfoMap = { createThreadSaveLruCache(effectiveLimits.maxMediaItems) },
                     updateProgress = { current, total ->
                         updateProgress(
                             SavePhase.DOWNLOADING,
@@ -162,11 +172,12 @@ class ThreadSaveService(
                             boardPath = boardPath,
                             requestType = mediaItem.requestType,
                             postId = mediaItem.postId,
-                            startedAtMillis = startedAtMillis
+                            startedAtMillis = startedAtMillis,
+                            maxSaveDurationMs = effectiveLimits.maxSaveDurationMs
                         )
                     },
                     enforceBudget = { totalSizeBytes ->
-                        enforceBudget(totalSizeBytes, startedAtMillis)
+                        enforceBudget(totalSizeBytes, startedAtMillis, effectiveLimits.maxSaveDurationMs)
                     }
                 )
                 val urlToPathMap = mediaDownloadResult.urlToPathMap
@@ -174,6 +185,7 @@ class ThreadSaveService(
                 val mediaCounts = mediaDownloadResult.mediaCounts
                 var totalSize = mediaDownloadResult.totalSizeBytes
                 val downloadFailureCount = mediaDownloadResult.downloadFailureCount
+                val skippedMediaCount = mediaDownloadResult.skippedMediaCount
                 val totalMediaCount = mediaPlan.totalMediaCount
 
                 val rawHtmlWriteResult = saveThreadRawHtmlIfEnabled(
@@ -241,7 +253,7 @@ class ThreadSaveService(
                     encodeMetadata = json::encodeToString
                 )
                 val finalTotalSize = totalSize + metadataSize
-                enforceBudget(finalTotalSize, startedAtMillis)
+                enforceBudget(finalTotalSize, startedAtMillis, effectiveLimits.maxSaveDurationMs)
 
                 buildThreadSaveSavedThread(
                     threadId = threadId,
@@ -256,6 +268,7 @@ class ThreadSaveService(
                     videoCount = mediaCounts.videoCount,
                     totalSize = finalTotalSize,
                     downloadFailureCount = downloadFailureCount,
+                    skippedMediaCount = skippedMediaCount,
                     totalMediaCount = totalMediaCount
                 )
             })
@@ -292,7 +305,8 @@ class ThreadSaveService(
         boardPath: String,
         requestType: ThreadSaveMediaRequestType,
         postId: String,
-        startedAtMillis: Long
+        startedAtMillis: Long,
+        maxSaveDurationMs: Long
     ): Result<ThreadSaveLocalFileInfo> {
         return downloadAndStoreThreadSaveMedia(
             httpClient = httpClient,
@@ -307,7 +321,7 @@ class ThreadSaveService(
                 startedAtMillis = startedAtMillis,
                 mediaRequestTimeoutMillis = MEDIA_REQUEST_TIMEOUT_MILLIS,
                 maxFileSizeBytes = MAX_FILE_SIZE_BYTES,
-                maxSaveDurationMs = MAX_SAVE_DURATION_MS,
+                maxSaveDurationMs = maxSaveDurationMs,
                 streamReadBufferBytes = STREAM_READ_BUFFER_BYTES,
                 maxZeroReadRetries = MAX_ZERO_READ_RETRIES,
                 zeroReadBackoffMillis = ZERO_READ_BACKOFF_MILLIS,
@@ -381,13 +395,13 @@ class ThreadSaveService(
     /**
      * 保存処理の総容量/時間を監視し、上限を超えたら例外で中断する
      */
-    private fun enforceBudget(totalSizeBytes: Long, startedAtMillis: Long) {
+    private fun enforceBudget(totalSizeBytes: Long, startedAtMillis: Long, maxSaveDurationMs: Long) {
         enforceThreadSaveBudget(
             totalSizeBytes = totalSizeBytes,
             startedAtMillis = startedAtMillis,
             nowMillis = Clock.System.now().toEpochMilliseconds(),
             maxTotalSizeBytes = MAX_TOTAL_SIZE_BYTES,
-            maxSaveDurationMs = MAX_SAVE_DURATION_MS
+            maxSaveDurationMs = maxSaveDurationMs
         )
     }
 }

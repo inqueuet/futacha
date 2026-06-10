@@ -43,6 +43,7 @@ class ThreadSaveSupportTest {
         val plan = buildThreadSaveMediaDownloadPlan(posts, maxMediaItems = 2)
 
         assertEquals(3, plan.totalMediaCount)
+        assertEquals(1, plan.skippedMediaCount)
         assertEquals(
             listOf(
                 ThreadSaveScheduledMediaItem(
@@ -451,6 +452,7 @@ class ThreadSaveSupportTest {
             videoCount = 1,
             totalSize = 100L,
             downloadFailureCount = 1,
+            skippedMediaCount = 0,
             totalMediaCount = 3
         )
 
@@ -652,9 +654,9 @@ class ThreadSaveSupportTest {
 
     @Test
     fun threadSaveSummaryHelpers_resolveStatusAndSavedPostFlags() {
-        assertEquals(SaveStatus.COMPLETED, resolveThreadSaveStatus(downloadFailureCount = 0, totalMediaCount = 3))
-        assertEquals(SaveStatus.PARTIAL, resolveThreadSaveStatus(downloadFailureCount = 1, totalMediaCount = 3))
-        assertEquals(SaveStatus.FAILED, resolveThreadSaveStatus(downloadFailureCount = 3, totalMediaCount = 3))
+        assertEquals(SaveStatus.COMPLETED, resolveThreadSaveStatus(incompleteMediaCount = 0, totalMediaCount = 3))
+        assertEquals(SaveStatus.PARTIAL, resolveThreadSaveStatus(incompleteMediaCount = 1, totalMediaCount = 3))
+        assertEquals(SaveStatus.FAILED, resolveThreadSaveStatus(incompleteMediaCount = 3, totalMediaCount = 3))
 
         assertTrue(
             resolveThreadSavedPostDownloadSuccess(

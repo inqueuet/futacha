@@ -97,6 +97,47 @@ class ThreadSaveServiceTest {
     }
 
     @Test
+    fun saveThread_marksPartialWhenMediaLimitSkipsItems() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val service = ThreadSaveService(
+            httpClient = createClient(),
+            fileSystem = fileSystem
+        )
+
+        val saved = service.saveThread(
+            threadId = "457",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "limited",
+            expiresAtLabel = null,
+            posts = listOf(
+                samplePost(postId = "1"),
+                samplePost(
+                    postId = "2",
+                    imageUrl = "https://may.2chan.net/b/src/2.jpg",
+                    thumbnailUrl = "https://may.2chan.net/b/thumb/2s.jpg"
+                )
+            ),
+            baseDirectory = "manual",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+            limits = ThreadSaveLimits(maxMediaItems = 1)
+        ).getOrThrow()
+
+        val storageId = requireNotNull(saved.storageId)
+        val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
+
+        assertEquals(SaveStatus.PARTIAL, saved.status)
+        assertEquals("b/thumb/1s.jpg", saved.thumbnailPath)
+        assertEquals(0, saved.imageCount)
+        assertEquals("b/thumb/1s.jpg", metadata.posts[0].localThumbnailPath)
+        assertNull(metadata.posts[0].localImagePath)
+        assertNull(metadata.posts[1].localThumbnailPath)
+        assertNull(metadata.posts[1].localImagePath)
+    }
+
+    @Test
     fun saveThread_marksMetadataPartialWhenSomeMediaFail() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val service = ThreadSaveService(

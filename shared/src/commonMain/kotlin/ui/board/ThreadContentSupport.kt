@@ -68,6 +68,8 @@ internal data class ThreadPostListFingerprint(
     val rollingHash: Long
 )
 
+private const val THREAD_POST_FINGERPRINT_TEXT_SAMPLE_CHARS = 512
+
 internal data class ThreadFilterCacheKey(
     val postsFingerprint: ThreadPostListFingerprint,
     val ngEnabled: Boolean,
@@ -98,7 +100,11 @@ internal fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFi
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.author)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.subject)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.posterId)
-        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.messageHtml)
+        rollingHash = mixThreadPostFingerprintHash(
+            rollingHash,
+            post.messageHtml.take(THREAD_POST_FINGERPRINT_TEXT_SAMPLE_CHARS)
+        )
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.messageHtml.length)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.imageUrl)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.thumbnailUrl)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.saidaneLabel)

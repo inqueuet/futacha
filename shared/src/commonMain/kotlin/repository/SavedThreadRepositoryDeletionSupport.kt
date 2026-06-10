@@ -85,16 +85,22 @@ internal fun buildSavedThreadDeletionErrorMessage(
 internal suspend fun SavedThreadRepository.executeSavedThreadDeleteOperation(
     request: SavedThreadDeleteOperationRequest
 ) {
-    val plan = deleteMutex.withLock {
-        withIndexLock {
-            val currentIndex = readSavedThreadIndexUnlocked()
-            buildSavedThreadDeletePlan(
-                currentIndex = currentIndex,
-                threadsToDelete = request.selectThreadsToDelete(currentIndex),
-                backupIndexPath = request.backupIndexPath,
-                encodeIndex = json::encodeToString
-            )
-        }
+    deleteMutex.withLock {
+        executeSavedThreadDeleteOperationLocked(request)
+    }
+}
+
+private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocked(
+    request: SavedThreadDeleteOperationRequest
+) {
+    val plan = withIndexLock {
+        val currentIndex = readSavedThreadIndexUnlocked()
+        buildSavedThreadDeletePlan(
+            currentIndex = currentIndex,
+            threadsToDelete = request.selectThreadsToDelete(currentIndex),
+            backupIndexPath = request.backupIndexPath,
+            encodeIndex = json::encodeToString
+        )
     } ?: return
     writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
 
@@ -106,21 +112,19 @@ internal suspend fun SavedThreadRepository.executeSavedThreadDeleteOperation(
             storageLockWaitTimeoutMillis = STORAGE_LOCK_WAIT_TIMEOUT_MILLIS
         )
         if (deletionResult.successfullyDeletedStorageIds.isNotEmpty()) {
-            deleteMutex.withLock {
-                withIndexLock {
-                    val updatedIndex = buildUpdatedIndexUnlocked { threads ->
-                        filterThreadsAfterSavedThreadDeletion(
-                            threads = threads,
-                            successfullyDeletedStorageIds = deletionResult.successfullyDeletedStorageIds,
-                            cutoffSavedAtByStorageId = plan.cutoffSavedAtByStorageId
-                        )
-                    }
-                    try {
-                        saveSavedThreadIndexUnlocked(updatedIndex)
-                    } catch (e: Throwable) {
-                        if (e is CancellationException) throw e
-                        throw Exception(request.indexUpdateFailureMessage, e)
-                    }
+            withIndexLock {
+                val updatedIndex = buildUpdatedIndexUnlocked { threads ->
+                    filterThreadsAfterSavedThreadDeletion(
+                        threads = threads,
+                        successfullyDeletedStorageIds = deletionResult.successfullyDeletedStorageIds,
+                        cutoffSavedAtByStorageId = plan.cutoffSavedAtByStorageId
+                    )
+                }
+                try {
+                    saveSavedThreadIndexUnlocked(updatedIndex)
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    throw Exception(request.indexUpdateFailureMessage, e)
                 }
             }
         }

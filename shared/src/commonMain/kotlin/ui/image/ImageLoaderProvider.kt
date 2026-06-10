@@ -59,6 +59,9 @@ fun rememberFutachaImageLoader(
     val fetcherDispatcher: CoroutineDispatcher = remember(cacheConfig.parallelism) {
         AppDispatchers.imageFetch(cacheConfig.parallelism)
     }
+    val decoderDispatcher: CoroutineDispatcher = remember(cacheConfig.parallelism) {
+        AppDispatchers.imageDecode(cacheConfig.parallelism)
+    }
     val memoryCache = remember(cacheConfig) {
         MemoryCache.Builder()
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
@@ -67,14 +70,14 @@ fun rememberFutachaImageLoader(
     val diskCache = remember(platformContext, cacheConfig) {
         createImageDiskCache(platformContext, cacheConfig.diskCacheBytes)
     }
-    return remember(platformContext, fetcherDispatcher, memoryCache, diskCache) {
+    return remember(platformContext, fetcherDispatcher, decoderDispatcher, memoryCache, diskCache) {
         ImageLoader.Builder(platformContext)
             .components {
                 add(FutabaExtensionFallbackInterceptor())
                 addPlatformImageComponents()
             }
             .fetcherCoroutineContext(fetcherDispatcher)
-            .decoderCoroutineContext(fetcherDispatcher)
+            .decoderCoroutineContext(decoderDispatcher)
             .memoryCache { memoryCache }
             .apply {
                 diskCache?.let { cache ->

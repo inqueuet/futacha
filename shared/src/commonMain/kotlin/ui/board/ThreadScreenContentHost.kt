@@ -17,7 +17,11 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.lazy.LazyListState
+
+private const val THREAD_AI_SUMMARY_UI_TIMEOUT_MS = 60_000L
+private const val THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS = 45_000L
 
 internal data class ThreadScreenContentHostBindings(
     val uiState: ThreadUiState,
@@ -118,7 +122,11 @@ internal fun ThreadScreenContentHost(
                 }
             }
             val filteredPage by produceState(
-                initialValue = cachedFilteredPage ?: state.page,
+                initialValue = cachedFilteredPage ?: if (hasNgFilters || hasThreadFilters) {
+                    state.page.copy(posts = emptyList())
+                } else {
+                    state.page
+                },
                 key1 = filterCacheKey
             ) {
                 bindings.threadFilterCache[filterCacheKey]?.let {
@@ -216,7 +224,10 @@ internal fun ThreadScreenContentHost(
                     title = null,
                     posts = aiSourcePosts
                 )
-                value = aiService.summarizeThread(summaryInput).fold(
+                val summaryResult = withTimeoutOrNull(THREAD_AI_SUMMARY_UI_TIMEOUT_MS) {
+                    aiService.summarizeThread(summaryInput)
+                }
+                value = summaryResult?.fold(
                     onSuccess = {
                         ThreadSummaryUiState.Ready(it).also { readyState ->
                             putThreadAiCacheEntry(threadSummaryCache, aiCacheKey, readyState)
@@ -227,7 +238,7 @@ internal fun ThreadScreenContentHost(
                             it.message ?: "スレ要約を生成できませんでした。"
                         )
                     }
-                )
+                ) ?: ThreadSummaryUiState.Unavailable("スレ要約がタイムアウトしました。")
             }
             val aiPostModerationResults by produceState<List<PostModerationResult>>(
                 initialValue = emptyList(),
@@ -246,11 +257,14 @@ internal fun ThreadScreenContentHost(
                     threadId = state.page.threadId,
                     posts = aiSourcePosts
                 )
-                value = aiService.classifyPosts(input)
-                    .getOrDefault(emptyList())
-                    .also {
-                        putThreadAiCacheEntry(threadPostModerationCache, aiCacheKey, it)
-                    }
+                val moderationResult = withTimeoutOrNull(THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS) {
+                    aiService.classifyPosts(input)
+                }
+                val moderation = moderationResult?.getOrDefault(emptyList()).orEmpty()
+                value = moderation
+                if (moderationResult != null) {
+                    putThreadAiCacheEntry(threadPostModerationCache, aiCacheKey, moderation)
+                }
             }
             val aiHiddenPostState = remember(
                 filteredPage.posts,

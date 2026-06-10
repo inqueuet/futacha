@@ -1801,7 +1801,7 @@ class FutachaAppTest {
     }
 
     @Test
-    fun dismissHistoryEntry_preservesStateChangesWhenAutoSavedDeleteFails() = runBlocking {
+    fun dismissHistoryEntry_preservesStoreStateWhenAutoSavedDeleteFails() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val repository = SavedThreadRepository(
             DeleteRecursivelyFailingFileSystem(InMemoryFileSystem()),
@@ -1811,14 +1811,17 @@ class FutachaAppTest {
         store.setHistory(listOf(entry))
         store.addSelfPostIdentifier(threadId = entry.threadId, identifier = "ID:abc", boardId = "img")
         repository.addThreadToIndex(savedThread(boardId = "img")).getOrThrow()
+        var failureCount = 0
         dismissHistoryEntry(
             stateStore = store,
             autoSavedThreadRepository = repository,
-            entry = entry
+            entry = entry,
+            onAutoSavedThreadDeleteFailure = { failureCount += 1 }
         )
 
-        assertEquals(emptyList(), store.history.first())
-        assertEquals(emptyMap(), store.selfPostIdentifiersByThread.first())
+        assertEquals(listOf(entry), store.history.first())
+        assertEquals(mapOf("img::123" to listOf("ID:abc")), store.selfPostIdentifiersByThread.first())
+        assertEquals(1, failureCount)
     }
 
     @Test
@@ -1848,7 +1851,7 @@ class FutachaAppTest {
     }
 
     @Test
-    fun clearHistory_reportsAutoSavedDeleteFailureButStillClearsStoreState() = runBlocking {
+    fun clearHistory_reportsAutoSavedDeleteFailureAndPreservesStoreState() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val repository = SavedThreadRepository(
             DeleteRecursivelyFailingFileSystem(InMemoryFileSystem()),
@@ -1858,14 +1861,17 @@ class FutachaAppTest {
         store.setHistory(listOf(entry))
         store.addSelfPostIdentifier(threadId = "123", identifier = "ID:abc", boardId = "img")
         repository.addThreadToIndex(savedThread(threadId = "123", boardId = "img")).getOrThrow()
+        var failureCount = 0
         clearHistory(
             stateStore = store,
             autoSavedThreadRepository = repository,
-            onSkippedThreadsCleared = {}
+            onSkippedThreadsCleared = {},
+            onAutoSavedThreadDeleteFailure = { failureCount += 1 }
         )
 
-        assertEquals(emptyList(), store.history.first())
-        assertEquals(emptyMap(), store.selfPostIdentifiersByThread.first())
+        assertEquals(listOf(entry), store.history.first())
+        assertEquals(mapOf("img::123" to listOf("ID:abc")), store.selfPostIdentifiersByThread.first())
+        assertEquals(1, failureCount)
     }
 
     private fun board(

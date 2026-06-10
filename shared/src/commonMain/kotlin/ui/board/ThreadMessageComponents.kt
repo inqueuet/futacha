@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
 private const val THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES = 512
+private const val THREAD_MESSAGE_ANNOTATION_CACHE_MAX_BYTES = 2 * 1024 * 1024
 private const val THREAD_MESSAGE_URL_ANNOTATION_MAX_MATCHES = 64
 
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
@@ -44,31 +45,58 @@ private data class UrlMatch(
     val range: IntRange
 )
 
-private class ThreadMessageAnnotationCache(
-    private val maxEntries: Int
-) {
-    private val entries = LinkedHashMap<String, AnnotatedString>()
+private data class ThreadMessageQuoteCacheKey(
+    val text: String,
+    val targetPostIds: List<String>
+)
 
-    fun get(key: String): AnnotatedString? {
+private data class ThreadMessageAnnotationCacheKey(
+    val messageHtml: String,
+    val quoteReferences: List<ThreadMessageQuoteCacheKey>
+)
+
+private class ThreadMessageAnnotationCache(
+    private val maxEntries: Int,
+    private val maxBytes: Int
+) {
+    private val entries = LinkedHashMap<ThreadMessageAnnotationCacheKey, AnnotatedString>()
+    private var estimatedBytes = 0
+
+    fun get(key: ThreadMessageAnnotationCacheKey): AnnotatedString? {
         val value = entries.remove(key) ?: return null
         entries[key] = value
         return value
     }
 
-    fun put(key: String, value: AnnotatedString) {
-        entries.remove(key)
+    fun put(key: ThreadMessageAnnotationCacheKey, value: AnnotatedString) {
+        entries.remove(key)?.let { removed ->
+            estimatedBytes -= estimateEntryBytes(key, removed)
+        }
         entries[key] = value
-        while (entries.size > maxEntries) {
+        estimatedBytes += estimateEntryBytes(key, value)
+        while (entries.size > maxEntries || estimatedBytes > maxBytes) {
             val iterator = entries.entries.iterator()
             if (!iterator.hasNext()) break
-            iterator.next()
+            val removed = iterator.next()
             iterator.remove()
+            estimatedBytes -= estimateEntryBytes(removed.key, removed.value)
         }
+    }
+
+    private fun estimateEntryBytes(
+        key: ThreadMessageAnnotationCacheKey,
+        value: AnnotatedString
+    ): Int {
+        val quoteBytes = key.quoteReferences.sumOf { quote ->
+            quote.text.length + quote.targetPostIds.sumOf { it.length }
+        }
+        return (key.messageHtml.length + value.text.length + quoteBytes) * 2
     }
 }
 
 private val threadMessageAnnotationBaseCache = ThreadMessageAnnotationCache(
-    maxEntries = THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES
+    maxEntries = THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES,
+    maxBytes = THREAD_MESSAGE_ANNOTATION_CACHE_MAX_BYTES
 )
 
 @Composable
@@ -164,15 +192,16 @@ internal fun ThreadMessageText(
 private fun buildThreadMessageAnnotationCacheKey(
     messageHtml: String,
     quoteReferences: List<QuoteReference>
-): String {
-    var hash = 17
-    quoteReferences.forEach { reference ->
-        hash = 31 * hash + reference.text.hashCode()
-        reference.targetPostIds.forEach { targetId ->
-            hash = 31 * hash + targetId.hashCode()
+): ThreadMessageAnnotationCacheKey {
+    return ThreadMessageAnnotationCacheKey(
+        messageHtml = messageHtml,
+        quoteReferences = quoteReferences.map { reference ->
+            ThreadMessageQuoteCacheKey(
+                text = reference.text,
+                targetPostIds = reference.targetPostIds.toList()
+            )
         }
-    }
-    return "${messageHtml.length}:${messageHtml.hashCode()}:${quoteReferences.size}:$hash"
+    )
 }
 
 private fun buildAnnotatedMessageBase(

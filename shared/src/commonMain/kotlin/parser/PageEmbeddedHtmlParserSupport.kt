@@ -70,8 +70,8 @@ internal object PageEmbeddedHtmlParserSupport {
         val grouped = LinkedHashMap<EmbeddedHtmlPlacement, MutableList<EmbeddedHtmlContent>>()
         val seenKeys = LinkedHashSet<String>()
 
-        for ((index, match) in iframeRegex.findAll(normalized).withIndex()) {
-            if (index >= MAX_IFRAME_SCAN_MATCHES) break
+        var candidateIndex = 0
+        for (match in iframeRegex.findAll(normalized)) {
             val iframeTag = match.value
             val rawSrc = match.groupValues.getOrNull(1).orEmpty()
             val src = resolveUrl(rawSrc, resolvedBaseUrl)
@@ -85,6 +85,9 @@ internal object PageEmbeddedHtmlParserSupport {
                 contentEndIndex != null && contentEndIndex >= 0 && match.range.first > contentEndIndex -> EmbeddedHtmlPlacement.Footer
                 else -> continue
             }
+            if (candidateIndex >= MAX_IFRAME_SCAN_MATCHES) break
+            val embedIndex = candidateIndex
+            candidateIndex += 1
             val dedupeKey = "$placement|$src|$width|$height"
             if (!seenKeys.add(dedupeKey)) continue
 
@@ -92,7 +95,7 @@ internal object PageEmbeddedHtmlParserSupport {
             if (currentPlacementItems.size >= MAX_EMBEDS_PER_PLACEMENT) continue
 
             currentPlacementItems += EmbeddedHtmlContent(
-                id = "embed-${placement.name.lowercase()}-$index",
+                id = "embed-${placement.name.lowercase()}-$embedIndex",
                 html = buildEmbeddedIframeHtml(src = src, width = width, height = height),
                 estimatedHeightDp = computeEstimatedHeightDp(width = width, height = height),
                 placement = placement

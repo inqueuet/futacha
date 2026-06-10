@@ -26,7 +26,8 @@ internal data class ThreadSaveScheduledMediaItem(
 
 internal data class ThreadSaveMediaDownloadPlan(
     val scheduledItems: List<ThreadSaveScheduledMediaItem>,
-    val totalMediaCount: Int
+    val totalMediaCount: Int,
+    val skippedMediaCount: Int = (totalMediaCount - scheduledItems.size).coerceAtLeast(0)
 )
 
 internal data class ThreadSaveMediaDownloadBatchResult(
@@ -34,7 +35,8 @@ internal data class ThreadSaveMediaDownloadBatchResult(
     val mediaKeyToFileInfoMap: Map<String, ThreadSaveLocalFileInfo>,
     val mediaCounts: ThreadSaveMediaCounts,
     val totalSizeBytes: Long,
-    val downloadFailureCount: Int
+    val downloadFailureCount: Int,
+    val skippedMediaCount: Int
 )
 
 internal data class ThreadSaveMetadataWriteRequest(
@@ -166,7 +168,8 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
         mediaKeyToFileInfoMap = accumulator.mediaKeyToFileInfoMap,
         mediaCounts = accumulator.mediaCounts,
         totalSizeBytes = accumulator.totalSizeBytes,
-        downloadFailureCount = accumulator.downloadFailureCount
+        downloadFailureCount = accumulator.downloadFailureCount,
+        skippedMediaCount = plan.skippedMediaCount
     )
 }
 
@@ -289,6 +292,7 @@ internal fun buildThreadSaveSavedThread(
     videoCount: Int,
     totalSize: Long,
     downloadFailureCount: Int,
+    skippedMediaCount: Int,
     totalMediaCount: Int
 ): SavedThread {
     return SavedThread(
@@ -303,7 +307,10 @@ internal fun buildThreadSaveSavedThread(
         imageCount = imageCount,
         videoCount = videoCount,
         totalSize = totalSize,
-        status = resolveThreadSaveStatus(downloadFailureCount, totalMediaCount)
+        status = resolveThreadSaveStatus(
+            incompleteMediaCount = downloadFailureCount + skippedMediaCount,
+            totalMediaCount = totalMediaCount
+        )
     )
 }
 

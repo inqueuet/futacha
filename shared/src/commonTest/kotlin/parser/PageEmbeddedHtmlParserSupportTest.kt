@@ -29,7 +29,7 @@ class PageEmbeddedHtmlParserSupportTest {
     }
 
     @Test
-    fun extractThreadEmbeddedHtml_stopsScanningAfterIframeLimit() {
+    fun extractThreadEmbeddedHtml_doesNotCountBodyIframesAgainstScanLimit() {
         val bodyIframes = (0 until 64).joinToString(separator = "\n") { index ->
             """<iframe src="/body-$index" width="360" height="120"></iframe>"""
         }
@@ -50,6 +50,8 @@ class PageEmbeddedHtmlParserSupportTest {
             baseUrl = "https://may.2chan.net/b/"
         )
 
-        assertTrue(embeds.isEmpty())
+        assertEquals(1, embeds.size)
+        assertEquals(EmbeddedHtmlPlacement.Footer, embeds.single().placement)
+        assertTrue(embeds.single().html.contains("https://may.2chan.net/footer-after-limit"))
     }
 }

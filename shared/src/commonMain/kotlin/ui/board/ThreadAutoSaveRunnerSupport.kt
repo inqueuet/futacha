@@ -2,8 +2,13 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.service.RawHtmlSaveOptions
+import com.valoser.futacha.shared.service.ThreadSaveLimits
 import com.valoser.futacha.shared.service.ThreadSaveService
 import kotlinx.coroutines.CancellationException
+
+private const val THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS = 300
+private const val THREAD_AUTO_SAVE_MAX_DURATION_MS = 90_000L
 
 internal data class ThreadAutoSaveRunnerConfig(
     val threadId: String,
@@ -66,7 +71,12 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
                 expiresAtLabel = config.expiresAtLabel,
                 posts = config.posts,
                 baseDirectory = com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY,
-                writeMetadata = true
+                writeMetadata = true,
+                rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+                limits = ThreadSaveLimits(
+                    maxMediaItems = THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS,
+                    maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS
+                )
             )
         }
     )

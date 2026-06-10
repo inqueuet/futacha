@@ -241,15 +241,19 @@ internal suspend fun dismissHistoryEntry(
     onAutoSavedThreadDeleteFailure: (Throwable) -> Unit = {}
 ) {
     val resolvedBoardId = resolveHistoryEntryBoardId(entry)
+    val deleteResult = autoSavedThreadRepository?.deleteThread(
+        threadId = entry.threadId,
+        boardId = resolvedBoardId
+    )
+    if (deleteResult?.isFailure == true) {
+        deleteResult.exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
+        return
+    }
     stateStore.removeSelfPostIdentifiersForThread(
         threadId = entry.threadId,
         boardId = resolvedBoardId
     )
     stateStore.removeHistoryEntry(entry)
-    autoSavedThreadRepository?.deleteThread(
-        threadId = entry.threadId,
-        boardId = resolvedBoardId
-    )?.onFailure(onAutoSavedThreadDeleteFailure)
 }
 
 internal suspend fun clearHistory(
@@ -258,8 +262,12 @@ internal suspend fun clearHistory(
     onSkippedThreadsCleared: () -> Unit,
     onAutoSavedThreadDeleteFailure: (Throwable) -> Unit = {}
 ) {
+    val deleteResult = autoSavedThreadRepository?.deleteAllThreads()
+    if (deleteResult?.isFailure == true) {
+        deleteResult.exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
+        return
+    }
     stateStore.clearSelfPostIdentifiers()
     stateStore.setHistory(emptyList())
     onSkippedThreadsCleared()
-    autoSavedThreadRepository?.deleteAllThreads()?.onFailure(onAutoSavedThreadDeleteFailure)
 }

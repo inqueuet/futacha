@@ -234,12 +234,12 @@ internal fun updateThreadSaveMediaCounts(
 }
 
 internal fun resolveThreadSaveStatus(
-    downloadFailureCount: Int,
+    incompleteMediaCount: Int,
     totalMediaCount: Int
 ): SaveStatus {
     return when {
-        downloadFailureCount <= 0 -> SaveStatus.COMPLETED
-        downloadFailureCount < totalMediaCount -> SaveStatus.PARTIAL
+        incompleteMediaCount <= 0 -> SaveStatus.COMPLETED
+        incompleteMediaCount < totalMediaCount -> SaveStatus.PARTIAL
         else -> SaveStatus.FAILED
     }
 }

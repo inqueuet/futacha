@@ -61,6 +61,13 @@ object AppDispatchers {
      * @param parallelism 並列度（最小1）
      */
     fun imageFetch(parallelism: Int): CoroutineDispatcher {
+        return io.limitedParallelism(parallelism.coerceAtLeast(1))
+    }
+
+    /**
+     * 画像デコード専用Dispatcherファクトリー。
+     */
+    fun imageDecode(parallelism: Int): CoroutineDispatcher {
         return Dispatchers.Default.limitedParallelism(parallelism.coerceAtLeast(1))
     }
 }
