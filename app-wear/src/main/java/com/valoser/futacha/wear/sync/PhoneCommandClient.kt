@@ -1,9 +1,15 @@
 package com.valoser.futacha.wear.sync
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.wear.remote.interactions.RemoteActivityHelper
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import com.valoser.futacha.shared.ai.FutachaAiAction
+import com.valoser.futacha.shared.ai.buildFutachaAiDeepLink
 import com.valoser.futacha.shared.watch.WATCH_COMMAND_KEY
 import com.valoser.futacha.shared.watch.WATCH_COMMAND_PATH
 import com.valoser.futacha.shared.watch.WATCH_REQUEST_SNAPSHOT_PATH
@@ -19,6 +25,9 @@ class PhoneCommandClient(
     private val context: Context
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val appContext = context.applicationContext
+    private val mainExecutor = ContextCompat.getMainExecutor(appContext)
+    private val remoteActivityHelper = RemoteActivityHelper(appContext, mainExecutor)
 
     fun requestSnapshot() {
         sendMessageOrFallback(
@@ -36,12 +45,20 @@ class PhoneCommandClient(
         boardId: String,
         boardUrl: String
     ) {
-        sendCommand(
-            WatchCommand(
-                type = WatchCommandType.SelectBoard,
-                boardId = boardId,
-                boardUrl = boardUrl
-            )
+        val command = WatchCommand(
+            type = WatchCommandType.SelectBoard,
+            boardId = boardId,
+            boardUrl = boardUrl
+        )
+        openDeepLinkOnPhoneOrFallback(
+            deepLink = buildFutachaAiDeepLink(
+                action = FutachaAiAction.OpenBoard,
+                parameters = mapOf(
+                    "boardId" to boardId,
+                    "boardUrl" to boardUrl
+                )
+            ),
+            fallback = { sendCommand(command) }
         )
     }
 
@@ -50,13 +67,22 @@ class PhoneCommandClient(
         boardUrl: String,
         threadId: String
     ) {
-        sendCommand(
-            WatchCommand(
-                type = WatchCommandType.OpenThreadOnPhone,
-                boardId = boardId,
-                boardUrl = boardUrl,
-                threadId = threadId
-            )
+        val command = WatchCommand(
+            type = WatchCommandType.OpenThreadOnPhone,
+            boardId = boardId,
+            boardUrl = boardUrl,
+            threadId = threadId
+        )
+        openDeepLinkOnPhoneOrFallback(
+            deepLink = buildFutachaAiDeepLink(
+                action = FutachaAiAction.OpenThread,
+                parameters = mapOf(
+                    "boardId" to boardId,
+                    "boardUrl" to boardUrl,
+                    "threadId" to threadId
+                )
+            ),
+            fallback = { sendCommand(command) }
         )
     }
 
@@ -101,6 +127,32 @@ class PhoneCommandClient(
             path = WATCH_COMMAND_PATH,
             payload = payload,
             fallback = { putCommandDataItem(encoded) }
+        )
+    }
+
+    private fun openDeepLinkOnPhoneOrFallback(
+        deepLink: String,
+        fallback: () -> Unit
+    ) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+            data = Uri.parse(deepLink)
+        }
+        val future = runCatching {
+            remoteActivityHelper.startRemoteActivity(intent, null)
+        }.getOrElse { error ->
+            Log.w(TAG, "Failed to request remote activity for $deepLink; falling back to DataItem", error)
+            fallback()
+            return
+        }
+        future.addListener(
+            {
+                runCatching { future.get() }.onFailure { error ->
+                    Log.w(TAG, "Remote activity request failed for $deepLink; falling back to DataItem", error)
+                    fallback()
+                }
+            },
+            mainExecutor
         )
     }
 

@@ -29,6 +29,7 @@ firebaseCrashlyticsGradle = "3.0.7"
 workManager = "2.11.2"
 documentfile = "1.1.0"
 wearCompose = "1.5.0"
+wearRemoteInteractions = "1.1.0"
 playServicesWearable = "20.0.1"
 wearTiles = "1.6.0"
 wearProtolayout = "1.4.0"
@@ -86,6 +87,7 @@ androidx-documentfile = { group = "androidx.documentfile", name = "documentfile"
 androidx-wear-compose-foundation = { group = "androidx.wear.compose", name = "compose-foundation", version.ref = "wearCompose" }
 androidx-wear-compose-material3 = { group = "androidx.wear.compose", name = "compose-material3", version.ref = "wearCompose" }
 androidx-wear-compose-ui-tooling = { group = "androidx.wear.compose", name = "compose-ui-tooling", version.ref = "wearCompose" }
+androidx-wear-remote-interactions = { group = "androidx.wear", name = "wear-remote-interactions", version.ref = "wearRemoteInteractions" }
 play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
 guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
 androidx-wear-tiles = { group = "androidx.wear.tiles", name = "tiles", version.ref = "wearTiles" }
