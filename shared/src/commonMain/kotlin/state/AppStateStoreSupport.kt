@@ -82,6 +82,14 @@ internal class AtomicJobMap {
             }
         }
     }
+
+    suspend fun cancelAndClear(): List<Job> {
+        return mutex.withLock {
+            val jobs = map.values.toList()
+            map.clear()
+            jobs
+        }
+    }
 }
 
 /**

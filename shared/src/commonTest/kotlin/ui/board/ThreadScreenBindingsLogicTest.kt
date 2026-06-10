@@ -814,7 +814,7 @@ class ThreadScreenBindingsLogicTest {
         )
         var autoSaveJob: Job? = null
         var lastAutoSaveTimestamp = 0L
-        var lastAutoSavePosts: List<Post>? = null
+        var lastAutoSavePosts: String? = null
         var nowMillis = 100_000L
         var autoSaveRunCount = 0
         val indexedThreads = mutableListOf<SavedThread>()
@@ -888,7 +888,7 @@ class ThreadScreenBindingsLogicTest {
         autoSaveJob?.join()
 
         assertEquals(100_200L, lastAutoSaveTimestamp)
-        assertEquals(page.posts, lastAutoSavePosts)
+        assertEquals(buildThreadAutoSavePostsFingerprint(page.posts), lastAutoSavePosts)
         assertEquals(listOf(savedThread), indexedThreads)
         assertNull(autoSaveJob)
 

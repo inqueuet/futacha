@@ -67,6 +67,8 @@ private const val MAX_ARCHIVE_RESULT_ITEMS = 1_500
 private const val ARCHIVE_READ_BUFFER_BYTES = 8 * 1024
 private const val ARCHIVE_MAX_ZERO_READ_RETRIES = 250
 private const val ARCHIVE_ZERO_READ_BACKOFF_MILLIS = 25L
+private val ARCHIVE_THREAD_RES_ID_REGEX = Regex("""/res/(\d+)\.html?""")
+private val ARCHIVE_THREAD_TRAILING_ID_REGEX = Regex("""(\d+)(?:\.html?)?$""")
 
 object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
     override val descriptor: SerialDescriptor =
@@ -339,9 +341,9 @@ private fun utf8ByteLength(value: String): Long {
 }
 
 private fun extractThreadIdFromUrl(url: String): String? {
-    val primary = Regex("""/res/(\d+)\.html?""").find(url)?.groupValues?.getOrNull(1)
+    val primary = ARCHIVE_THREAD_RES_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
     if (!primary.isNullOrBlank()) return primary
-    return Regex("""(\d+)(?:\.html?)?$""").find(url)?.groupValues?.getOrNull(1)
+    return ARCHIVE_THREAD_TRAILING_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
 }
 
 private fun resolveBaseUrlFromThreadUrl(threadUrl: String): String? {

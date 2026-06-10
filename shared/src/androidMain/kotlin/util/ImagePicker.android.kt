@@ -3,6 +3,14 @@ package com.valoser.futacha.shared.util
 import android.content.Context
 import android.net.Uri
 
+private fun backoffAfterImagePickerZeroRead() {
+    try {
+        Thread.sleep(1L)
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+    }
+}
+
 fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
     return try {
         // FIX: 画像サイズを事前にチェック
@@ -42,15 +50,11 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
                             Logger.w("ImagePicker", "Aborting read due to repeated zero-byte reads: $uri")
                             return null
                         }
+                        backoffAfterImagePickerZeroRead()
                         continue
                     }
                     zeroReadCount = 0
                     totalRead += bytesRead
-                }
-
-                if (totalRead == expectedSize && inputStream.read() != -1) {
-                    Logger.w("ImagePicker", "Image file exceeded declared size during read: $uri")
-                    return null
                 }
 
                 if (totalRead == expectedSize) output else output.copyOf(totalRead)
@@ -68,6 +72,7 @@ fun readImageDataFromUri(context: Context, uri: Uri): ImageData? {
                             Logger.w("ImagePicker", "Aborting read due to repeated zero-byte reads: $uri")
                             return null
                         }
+                        backoffAfterImagePickerZeroRead()
                         continue
                     }
                     zeroReadCount = 0

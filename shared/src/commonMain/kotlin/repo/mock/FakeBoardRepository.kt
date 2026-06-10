@@ -9,6 +9,8 @@ import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 
+private val MOCK_THREAD_URL_ID_REGEX = Regex("""(\d+)(?:\.htm)?$""")
+
 /**
  * Lightweight mock that surfaces deterministic catalog / thread data derived from `/example`.
  *
@@ -46,8 +48,7 @@ class FakeBoardRepository(
 
     override suspend fun getThreadByUrl(threadUrl: String): ThreadPage {
         onAccess()
-        val threadId = Regex("""(\d+)(?:\.htm)?$""")
-            .find(threadUrl)
+        val threadId = MOCK_THREAD_URL_ID_REGEX.find(threadUrl)
             ?.groupValues
             ?.getOrNull(1)
             ?: "0"

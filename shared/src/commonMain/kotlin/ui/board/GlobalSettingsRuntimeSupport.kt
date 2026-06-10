@@ -191,7 +191,6 @@ internal fun rememberGlobalSettingsScreenRuntime(
                 withContext(AppDispatchers.io) {
                     imageLoader.diskCache?.clear()
                     imageLoader.memoryCache?.clear()
-                    Unit
                 }
             },
             clearTemporaryCache = {
@@ -204,7 +203,6 @@ internal fun rememberGlobalSettingsScreenRuntime(
                                     fs.deleteRecursively(pathString).getOrThrow()
                                 }
                         }
-                    Unit
                 }
             },
             refreshAutoSavedStats = {

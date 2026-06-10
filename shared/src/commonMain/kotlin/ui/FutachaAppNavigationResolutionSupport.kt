@@ -5,6 +5,8 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.board.RegisteredThreadNavigation
 
+private val FUTACHA_NAVIGATION_THREAD_URL_REGEX = Regex("""/res/\d+\.html?""", RegexOption.IGNORE_CASE)
+
 internal fun resolveHistoryEntrySelection(
     entry: ThreadHistoryEntry,
     boards: List<BoardSummary>
@@ -29,7 +31,7 @@ internal fun resolveHistoryEntrySelection(
             threadReplies = entry.replyCount,
             threadThumbnailUrl = entry.titleImageUrl,
             threadUrl = entry.boardUrl.takeIf { url ->
-                Regex("""/res/\d+\.html?""", RegexOption.IGNORE_CASE).containsMatchIn(url)
+                FUTACHA_NAVIGATION_THREAD_URL_REGEX.containsMatchIn(url)
             }
         )
     }

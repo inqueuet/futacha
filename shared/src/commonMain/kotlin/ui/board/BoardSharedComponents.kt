@@ -46,6 +46,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.take
 import androidx.compose.runtime.snapshotFlow
 
+private val SAIDANE_LABEL_TRAILING_COUNT_REGEX = Regex("(\\d+)$")
 
 /**
  * Helper function to increment "そうだねx{count}" label
@@ -53,7 +54,7 @@ import androidx.compose.runtime.snapshotFlow
 internal fun incrementSaidaneLabel(current: String?): String {
     val normalized = current?.trim().orEmpty()
     val existing = normalized.takeIf { it.isNotBlank() }?.let {
-        Regex("(\\d+)$").find(it)?.value?.toIntOrNull()
+        SAIDANE_LABEL_TRAILING_COUNT_REGEX.find(it)?.value?.toIntOrNull()
     } ?: 0
     val next = (existing + 1).coerceAtLeast(1)
     return "そうだねx$next"

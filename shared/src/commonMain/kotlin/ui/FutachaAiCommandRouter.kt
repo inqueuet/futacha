@@ -590,12 +590,17 @@ private fun resolveCatalogMode(command: FutachaAiCommand): CatalogMode? {
     }
 }
 
+private val AI_THREAD_HTM_URL_REGEX = Regex("""/res/(\d+)\.htm""")
+private val AI_THREAD_RES_URL_REGEX = Regex("""/res/(\d+)(?:[/?#]|$)""")
+private val AI_THREAD_QUERY_URL_REGEX = Regex("""[?&]thread(?:Id|_id)?=(\d+)""")
+private val AI_THREAD_BOARD_KEY_URL_REGEX = Regex("""https?://[^/]+/([^/?#]+)/?""")
+
 private fun parseThreadFromUrl(url: String): Pair<String?, String>? {
-    val threadId = Regex("""/res/(\d+)\.htm""").find(url)?.groupValues?.getOrNull(1)
-        ?: Regex("""/res/(\d+)(?:[/?#]|$)""").find(url)?.groupValues?.getOrNull(1)
-        ?: Regex("""[?&]thread(?:Id|_id)?=(\d+)""").find(url)?.groupValues?.getOrNull(1)
+    val threadId = AI_THREAD_HTM_URL_REGEX.find(url)?.groupValues?.getOrNull(1)
+        ?: AI_THREAD_RES_URL_REGEX.find(url)?.groupValues?.getOrNull(1)
+        ?: AI_THREAD_QUERY_URL_REGEX.find(url)?.groupValues?.getOrNull(1)
         ?: return null
-    val boardKey = Regex("""https?://[^/]+/([^/?#]+)/?""").find(url)?.groupValues?.getOrNull(1)
+    val boardKey = AI_THREAD_BOARD_KEY_URL_REGEX.find(url)?.groupValues?.getOrNull(1)
     return boardKey to threadId
 }
 

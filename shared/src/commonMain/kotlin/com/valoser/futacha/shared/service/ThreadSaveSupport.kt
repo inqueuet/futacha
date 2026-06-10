@@ -10,13 +10,14 @@ private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>
 private val LINK_HREF_REGEX = Regex("""<a[^>]+href\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
 private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
 private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src="([^"]+)"[^>]*>.*?</script>""")
-private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>""")
+private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>.*?</script>""")
+private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>.*?</iframe>""")
 private val CHARSET_REGEX = Regex("""<meta[^>]+charset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
-private val CONTENT_TYPE_REGEX = Regex(
-    """<meta[^>]+http-equiv\s*=\s*["']?Content-Type["']?[^>]+content\s*=\s*["']?([^"'>\s]+)""",
+private val CONTENT_TYPE_META_REGEX = Regex(
+    """<meta[^>]+http-equiv\s*=\s*["']?Content-Type["']?[^>]*>""",
     RegexOption.IGNORE_CASE
 )
+private val CONTENT_TYPE_CHARSET_REGEX = Regex("""charset\s*=\s*[^"'>;\s]+""", RegexOption.IGNORE_CASE)
 private val SUPPORTED_IMAGE_EXTENSIONS = setOf("gif", "jpg", "jpeg", "png", "webp")
 private val SUPPORTED_VIDEO_EXTENSIONS = setOf("webm", "mp4")
 
@@ -113,8 +114,8 @@ internal fun forceSavedHtmlUtf8Charset(html: String): String {
     var updated = CHARSET_REGEX.replace(html) { matchResult ->
         matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
     }
-    updated = CONTENT_TYPE_REGEX.replace(updated) { matchResult ->
-        matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
+    updated = CONTENT_TYPE_META_REGEX.replace(updated) { matchResult ->
+        CONTENT_TYPE_CHARSET_REGEX.replace(matchResult.value, "charset=UTF-8")
     }
     return updated
 }
@@ -124,10 +125,7 @@ internal fun replaceSavedMediaPaths(
     boardPath: String,
     urlToPathMap: Map<String, String>
 ): String {
-    var updated = html
-    urlToPathMap.forEach { (original, relative) ->
-        updated = updated.replace(original, relative)
-    }
+    var updated = convertSavedThreadHtmlPaths(html, urlToPathMap)
 
     val normalizedBoard = boardPath.trim('/').takeIf { it.isNotEmpty() } ?: return updated
     val escapedBoard = Regex.escape(normalizedBoard)

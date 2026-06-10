@@ -44,8 +44,13 @@ internal class HttpBoardApiThreadSafeLruCache<K, V>(private val maxSize: Int) {
 internal class HttpBoardApiPostingRuntime(maxCacheSize: Int) {
     val cache = HttpBoardApiThreadSafeLruCache<String, HttpBoardApiPostingConfig>(maxCacheSize)
     val locksGuard = Mutex()
-    val locks = mutableMapOf<String, Mutex>()
+    val locks = mutableMapOf<String, HttpBoardApiPostingConfigLockEntry>()
 }
+
+internal data class HttpBoardApiPostingConfigLockEntry(
+    val mutex: Mutex,
+    var holders: Int = 0
+)
 
 internal fun shouldRetryHttpBoardApiRequest(error: Exception): Boolean {
     var current: Throwable? = error

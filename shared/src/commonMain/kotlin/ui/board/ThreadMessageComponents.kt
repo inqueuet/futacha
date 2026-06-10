@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 private const val QUOTE_ANNOTATION_TAG = "quote"
 private const val URL_ANNOTATION_TAG = "url"
 private const val THREAD_MESSAGE_ANNOTATION_CACHE_MAX_ENTRIES = 512
+private const val THREAD_MESSAGE_URL_ANNOTATION_MAX_MATCHES = 64
 
 private val URL_REGEX = Regex("""https?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
 private val SCHEMELESS_URL_REGEX = Regex("""ttps?://[^\s\<\>"'()]+""", RegexOption.IGNORE_CASE)
@@ -171,7 +172,7 @@ private fun buildThreadMessageAnnotationCacheKey(
             hash = 31 * hash + targetId.hashCode()
         }
     }
-    return "${messageHtml.hashCode()}:${quoteReferences.size}:$hash"
+    return "${messageHtml.length}:${messageHtml.hashCode()}:${quoteReferences.size}:$hash"
 }
 
 private fun buildAnnotatedMessageBase(
@@ -205,14 +206,15 @@ private fun buildAnnotatedMessageBase(
         }
     }
     val builtText = built.toString()
-    urlMatches += URL_REGEX.findAll(builtText).map { match ->
+    urlMatches.addThreadMessageUrlMatches(URL_REGEX.findAll(builtText)) { match ->
         UrlMatch(url = match.value, range = match.range)
     }
-    urlMatches += SCHEMELESS_URL_REGEX.findAll(builtText).map { match ->
+    urlMatches.addThreadMessageUrlMatches(SCHEMELESS_URL_REGEX.findAll(builtText)) { match ->
         UrlMatch(url = "h${match.value}", range = match.range)
     }
-    urlMatches += URL_LINK_TEXT_REGEX.findAll(builtText).mapNotNull { match ->
-        val target = match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    urlMatches.addThreadMessageUrlMatches(URL_LINK_TEXT_REGEX.findAll(builtText)) { match ->
+        val target = match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() }
+            ?: return@addThreadMessageUrlMatches null
         val normalized = if (target.startsWith("http")) target else "https://$target"
         UrlMatch(url = normalized, range = match.range)
     }
@@ -234,6 +236,16 @@ private fun buildAnnotatedMessageBase(
         )
     }
     return builder.toAnnotatedString()
+}
+
+private inline fun MutableList<UrlMatch>.addThreadMessageUrlMatches(
+    matches: Sequence<MatchResult>,
+    transform: (MatchResult) -> UrlMatch?
+) {
+    for (match in matches) {
+        if (size >= THREAD_MESSAGE_URL_ANNOTATION_MAX_MATCHES) return
+        transform(match)?.let(::add)
+    }
 }
 
 private fun applyHighlightsToAnnotatedMessage(

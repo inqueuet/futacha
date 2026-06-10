@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 internal object PageEmbeddedHtmlParserSupport {
     private const val DEFAULT_BASE_URL = "https://www.example.com"
     private const val MAX_EMBEDS_PER_PLACEMENT = 3
+    private const val MAX_IFRAME_SCAN_MATCHES = 64
     private const val MIN_IFRAME_WIDTH = 200
     private const val MAX_IFRAME_HEIGHT = 320
     private const val TARGET_DISPLAY_WIDTH_DP = 360f
@@ -69,25 +70,26 @@ internal object PageEmbeddedHtmlParserSupport {
         val grouped = LinkedHashMap<EmbeddedHtmlPlacement, MutableList<EmbeddedHtmlContent>>()
         val seenKeys = LinkedHashSet<String>()
 
-        iframeRegex.findAll(normalized).forEachIndexed { index, match ->
+        for ((index, match) in iframeRegex.findAll(normalized).withIndex()) {
+            if (index >= MAX_IFRAME_SCAN_MATCHES) break
             val iframeTag = match.value
             val rawSrc = match.groupValues.getOrNull(1).orEmpty()
             val src = resolveUrl(rawSrc, resolvedBaseUrl)
-            val width = widthAttrRegex.find(iframeTag)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return@forEachIndexed
-            val height = heightAttrRegex.find(iframeTag)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return@forEachIndexed
-            if (width < MIN_IFRAME_WIDTH || height <= 0 || height > MAX_IFRAME_HEIGHT) return@forEachIndexed
+            val width = widthAttrRegex.find(iframeTag)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: continue
+            val height = heightAttrRegex.find(iframeTag)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: continue
+            if (width < MIN_IFRAME_WIDTH || height <= 0 || height > MAX_IFRAME_HEIGHT) continue
 
             val placement = when {
                 contentStartIndex < 0 -> EmbeddedHtmlPlacement.Footer
                 match.range.first < contentStartIndex -> EmbeddedHtmlPlacement.Header
                 contentEndIndex != null && contentEndIndex >= 0 && match.range.first > contentEndIndex -> EmbeddedHtmlPlacement.Footer
-                else -> return@forEachIndexed
+                else -> continue
             }
             val dedupeKey = "$placement|$src|$width|$height"
-            if (!seenKeys.add(dedupeKey)) return@forEachIndexed
+            if (!seenKeys.add(dedupeKey)) continue
 
             val currentPlacementItems = grouped.getOrPut(placement) { mutableListOf() }
-            if (currentPlacementItems.size >= MAX_EMBEDS_PER_PLACEMENT) return@forEachIndexed
+            if (currentPlacementItems.size >= MAX_EMBEDS_PER_PLACEMENT) continue
 
             currentPlacementItems += EmbeddedHtmlContent(
                 id = "embed-${placement.name.lowercase()}-$index",

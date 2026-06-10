@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.Post
 
+private const val THREAD_SEARCH_MAX_HIGHLIGHT_RANGES_PER_POST = 64
+
 internal fun nextThreadSearchResultIndex(currentIndex: Int, matchCount: Int): Int {
     if (matchCount <= 0) return 0
     return if (currentIndex + 1 >= matchCount) 0 else currentIndex + 1
@@ -138,7 +140,7 @@ internal fun computeHighlightRanges(text: String, normalizedQuery: String): List
     val normalizedText = text.lowercase()
     val ranges = mutableListOf<IntRange>()
     var startIndex = normalizedText.indexOf(normalizedQuery)
-    while (startIndex >= 0) {
+    while (startIndex >= 0 && ranges.size < THREAD_SEARCH_MAX_HIGHLIGHT_RANGES_PER_POST) {
         val endIndex = startIndex + normalizedQuery.length - 1
         ranges.add(startIndex..endIndex)
         startIndex = normalizedText.indexOf(normalizedQuery, startIndex + normalizedQuery.length)

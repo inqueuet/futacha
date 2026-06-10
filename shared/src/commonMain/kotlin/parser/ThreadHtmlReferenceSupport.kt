@@ -96,12 +96,21 @@ internal fun buildThreadReferenceData(
             isContentBlockInvalid = false
         }
 
-        lines.forEach { rawLine ->
+        var lineIndex = 0
+        for (rawLine in lines) {
+            lineIndex += 1
+            if (lineIndex % 16 == 0 &&
+                isThreadReferenceBuildTimedOut(startedAtMillis, config)
+            ) {
+                timedOut = true
+                Logger.w(config.tag, "Reference rebuild timed out while scanning post=${post.id}")
+                break
+            }
             val trimmedLine = rawLine.trimStart()
-            if (trimmedLine.isBlank()) return@forEach
+            if (trimmedLine.isBlank()) continue
             if (!(trimmedLine.startsWith(">") || trimmedLine.startsWith("＞"))) {
                 flushPendingContentBlock()
-                return@forEach
+                continue
             }
 
             val resolution = resolveThreadQuoteTargets(
@@ -122,7 +131,7 @@ internal fun buildThreadReferenceData(
                     )
                     referencedTargets += resolution.targets
                 }
-                return@forEach
+                continue
             }
 
             if (resolution.targets.isEmpty()) {
@@ -133,7 +142,7 @@ internal fun buildThreadReferenceData(
                 } else {
                     flushPendingContentBlock()
                 }
-                return@forEach
+                continue
             }
 
             val currentTargets = pendingContentTargets
@@ -151,6 +160,7 @@ internal fun buildThreadReferenceData(
                 pendingContentTargets = updatedTargets
             }
         }
+        if (timedOut) break
 
         flushPendingContentBlock()
 
@@ -163,7 +173,19 @@ internal fun buildThreadReferenceData(
         }
 
         addPosterIdToThreadReferenceIndex(posterIdIndex, post)
-        addMessageLinesToThreadReferenceIndex(messageLineIndex, post, decodeHtmlEntities, stripTags, config)
+        val indexedMessageLines = addMessageLinesToThreadReferenceIndex(
+            index = messageLineIndex,
+            post = post,
+            decodeHtmlEntities = decodeHtmlEntities,
+            stripTags = stripTags,
+            config = config,
+            startedAtMillis = startedAtMillis
+        )
+        if (!indexedMessageLines) {
+            timedOut = true
+            Logger.w(config.tag, "Reference rebuild timed out while indexing post=${post.id}")
+            break
+        }
         addMediaToThreadReferenceIndex(mediaFileIndex, post, config.mediaFilenameRegex)
     }
 
@@ -184,22 +206,33 @@ private fun addMessageLinesToThreadReferenceIndex(
     post: Post,
     decodeHtmlEntities: (String) -> String,
     stripTags: (String) -> String,
-    config: ThreadReferenceBuildConfig
-) {
-    if (post.messageHtml.isBlank()) return
-    decodeHtmlEntities(stripTags(post.messageHtml))
-        .lines()
-        .forEach { rawLine ->
-            val trimmed = rawLine.trim()
-            if (trimmed.isBlank()) return@forEach
-            val isQuoted = trimmed.startsWith(">") || trimmed.startsWith("＞")
-            val withoutMarkers = trimmed.trimStart { it == '>' || it == '＞' }.trim()
-            if (withoutMarkers.isBlank()) return@forEach
-            val normalized = normalizeThreadQuoteText(withoutMarkers, config.whitespaceRegex)
-            if (normalized.isBlank()) return@forEach
-            val bucket = index.getOrPut(normalized) { ThreadLineTargets() }
-            if (isQuoted) bucket.quoted.add(post.id) else bucket.plain.add(post.id)
+    config: ThreadReferenceBuildConfig,
+    startedAtMillis: Long
+): Boolean {
+    if (post.messageHtml.isBlank()) return true
+    val lines = decodeHtmlEntities(stripTags(post.messageHtml)).lines()
+    for ((lineIndex, rawLine) in lines.withIndex()) {
+        if (lineIndex % 32 == 0 && isThreadReferenceBuildTimedOut(startedAtMillis, config)) {
+            return false
         }
+        val trimmed = rawLine.trim()
+        if (trimmed.isBlank()) continue
+        val isQuoted = trimmed.startsWith(">") || trimmed.startsWith("＞")
+        val withoutMarkers = trimmed.trimStart { it == '>' || it == '＞' }.trim()
+        if (withoutMarkers.isBlank()) continue
+        val normalized = normalizeThreadQuoteText(withoutMarkers, config.whitespaceRegex)
+        if (normalized.isBlank()) continue
+        val bucket = index.getOrPut(normalized) { ThreadLineTargets() }
+        if (isQuoted) bucket.quoted.add(post.id) else bucket.plain.add(post.id)
+    }
+    return true
+}
+
+private fun isThreadReferenceBuildTimedOut(
+    startedAtMillis: Long,
+    config: ThreadReferenceBuildConfig
+): Boolean {
+    return Clock.System.now().toEpochMilliseconds() - startedAtMillis > config.maxReferenceBuildTimeMs
 }
 
 private fun resolveThreadQuoteTargets(

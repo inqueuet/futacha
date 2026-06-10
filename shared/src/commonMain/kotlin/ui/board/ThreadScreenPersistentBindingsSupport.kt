@@ -40,7 +40,6 @@ internal fun rememberThreadScreenPersistentBindings(
             val store = stateStore
             if (store != null) {
                 coroutineScope.launch { store.setLastUsedDeleteKey(sanitized) }
-                Unit
             } else {
                 fallbackDeleteKey = sanitized
             }

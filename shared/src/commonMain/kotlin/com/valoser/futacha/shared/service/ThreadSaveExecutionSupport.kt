@@ -131,6 +131,9 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
         progressTotal = progressTotal,
         logTag = logTag,
         updateProgress = updateProgress,
+        checkBudget = {
+            enforceBudget(accumulator.totalSizeBytes)
+        },
         downloadMedia = downloadMedia
     )
 

@@ -137,20 +137,19 @@ internal fun buildReferencedPostsMap(posts: List<Post>): Map<String, List<Post>>
     if (posts.isEmpty()) return emptyMap()
     val orderIndex = posts.mapIndexed { index, post -> post.id to index }.toMap()
     val referencedBy = mutableMapOf<String, MutableList<Post>>()
+    val seenSourceIdsByTarget = mutableMapOf<String, MutableSet<String>>()
     posts.forEach { source ->
         source.quoteReferences.forEach { reference ->
             reference.targetPostIds.forEach { targetId ->
-                val bucket = referencedBy.getOrPut(targetId) { mutableListOf() }
-                if (bucket.none { it.id == source.id }) {
-                    bucket.add(source)
-                }
+                val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
+                if (!seenSourceIds.add(source.id)) return@forEach
+                referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
             }
         }
     }
     if (referencedBy.isEmpty()) return emptyMap()
     return referencedBy.mapValues { (_, value) ->
         value
-            .distinctBy { it.id }
             .sortedBy { orderIndex[it.id] ?: Int.MAX_VALUE }
     }
 }

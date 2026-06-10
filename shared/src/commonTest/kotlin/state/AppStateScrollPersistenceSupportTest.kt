@@ -61,6 +61,29 @@ class AppStateScrollPersistenceSupportTest {
     }
 
     @Test
+    fun scheduleAppStateHistoryScrollPersistence_cancelsStaleJobsWhenScopeIsInactive() {
+        runBlocking {
+            val mutex = Mutex()
+            val jobMap = AtomicJobMap()
+            val inactiveScope = CoroutineScope(Job().apply { cancel() })
+            val staleJob = Job()
+            jobMap.putAndCancelOld("thread-key", staleJob)
+
+            scheduleAppStateHistoryScrollPersistence(
+                scrollPositionMutex = mutex,
+                currentScope = { inactiveScope },
+                clearScope = {},
+                scrollPositionJobs = jobMap,
+                scrollKey = "thread-key",
+                startDebouncedJob = { _, _ -> Job() },
+                performImmediateUpdate = {}
+            )
+
+            assertTrue(staleJob.isCancelled)
+        }
+    }
+
+    @Test
     fun scheduleAppStateHistoryScrollPersistence_replacesOldJobWhenScopeIsActive() {
         runBlocking {
             val mutex = Mutex()

@@ -3,7 +3,8 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
-import com.valoser.futacha.shared.model.matchesWatchWords
+import com.valoser.futacha.shared.model.matchesNormalizedWatchWords
+import com.valoser.futacha.shared.model.normalizeWatchWords
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -30,9 +31,11 @@ internal fun prioritizeWatchWordMatches(
     mode: CatalogMode,
     watchWords: List<String>
 ): List<CatalogItem> {
-    if (mode == CatalogMode.WatchWords || watchWords.none { it.isNotBlank() }) return items
+    if (mode == CatalogMode.WatchWords) return items
+    val normalizedWatchWords = normalizeWatchWords(watchWords)
+    if (normalizedWatchWords.isEmpty()) return items
     return items.sortedBy { item ->
-        if (item.matchesWatchWords(watchWords)) 0 else 1
+        if (item.matchesNormalizedWatchWords(normalizedWatchWords)) 0 else 1
     }
 }
 

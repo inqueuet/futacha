@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
 
@@ -25,8 +26,8 @@ internal data class ThreadScreenAutoSaveStateBindings(
     val setAutoSaveJob: (Job?) -> Unit,
     val currentLastAutoSaveTimestampMillis: () -> Long,
     val setLastAutoSaveTimestampMillis: (Long) -> Unit,
-    val currentLastAutoSavePosts: () -> List<Post>? = { null },
-    val setLastAutoSavePosts: (List<Post>?) -> Unit = {},
+    val currentLastAutoSavePosts: () -> String? = { null },
+    val setLastAutoSavePosts: (String?) -> Unit = {},
     val currentIsShowingOfflineCopy: () -> Boolean
 )
 
@@ -170,22 +171,27 @@ internal fun buildThreadScreenManualSaveBindings(
                     }
                     val page = currentState.page
                     val resolvedTitle = resolveThreadTitle(page.posts.firstOrNull(), dependencies.threadTitle)
-                    when (
-                        val saveResult = dependencies.performManualSave(
-                            buildThreadManualSaveRunnerConfig(
-                                threadId = dependencies.threadId,
-                                boardId = dependencies.board.id,
-                                boardName = dependencies.board.name,
-                                boardUrl = dependencies.effectiveBoardUrl,
-                                title = resolvedTitle,
-                                expiresAtLabel = page.expiresAtLabel,
-                                posts = page.posts,
-                                baseSaveLocation = dependencies.manualSaveLocation,
-                                baseDirectory = dependencies.manualSaveDirectory
-                            ),
+                    val manualSaveConfig = buildThreadManualSaveRunnerConfig(
+                        threadId = dependencies.threadId,
+                        boardId = dependencies.board.id,
+                        boardName = dependencies.board.name,
+                        boardUrl = dependencies.effectiveBoardUrl,
+                        title = resolvedTitle,
+                        expiresAtLabel = page.expiresAtLabel,
+                        posts = page.posts,
+                        baseSaveLocation = dependencies.manualSaveLocation,
+                        baseDirectory = dependencies.manualSaveDirectory
+                    )
+                    val saveResult = withTimeoutOrNull(THREAD_MANUAL_SAVE_TIMEOUT_MS) {
+                        dependencies.performManualSave(
+                            manualSaveConfig,
                             saveRuntime.manualCallbacks
                         )
-                    ) {
+                    } ?: ThreadManualSaveRunResult.Failure(
+                        error = IllegalStateException("保存がタイムアウトしました"),
+                        isUnexpected = false
+                    )
+                    when (saveResult) {
                         is ThreadManualSaveRunResult.Success,
                         is ThreadManualSaveRunResult.Failure -> when (
                             val outcome = resolveThreadManualSaveUiOutcome(
@@ -356,7 +362,8 @@ internal fun buildThreadScreenAutoSaveBindings(
             val localFileSystem = dependencies.fileSystem ?: return@start
             val now = dependencies.currentTimeMillis()
             val postsSnapshot = page.posts
-            if (stateBindings.currentLastAutoSavePosts() == postsSnapshot) {
+            val postsFingerprint = buildThreadAutoSavePostsFingerprint(postsSnapshot)
+            if (stateBindings.currentLastAutoSavePosts() == postsFingerprint) {
                 return@start
             }
             if (
@@ -410,7 +417,7 @@ internal fun buildThreadScreenAutoSaveBindings(
                         applyState.indexFailureMessage
                     )
                     if (applyState.savedThread != null && indexResult?.isSuccess != false) {
-                        stateBindings.setLastAutoSavePosts(postsSnapshot.toList())
+                        stateBindings.setLastAutoSavePosts(postsFingerprint)
                     }
                     if (applyState.failureMessage != null && applyState.failure != null) {
                         dependencies.onFailureLog(applyState.failureMessage, applyState.failure)

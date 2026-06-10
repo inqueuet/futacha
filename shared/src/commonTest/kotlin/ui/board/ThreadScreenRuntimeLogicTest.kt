@@ -439,7 +439,10 @@ class ThreadScreenRuntimeLogicTest {
                 messageHtml = "body",
                 imageUrl = null,
                 thumbnailUrl = null,
-                quoteReferences = listOf(QuoteReference(text = ">>2", targetPostIds = listOf("2")))
+                quoteReferences = listOf(
+                    QuoteReference(text = ">>2", targetPostIds = listOf("2")),
+                    QuoteReference(text = ">>2 again", targetPostIds = listOf("2"))
+                )
             ),
             Post(
                 id = "2",

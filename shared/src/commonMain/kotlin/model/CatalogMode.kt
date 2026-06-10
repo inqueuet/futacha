@@ -33,12 +33,16 @@ enum class CatalogMode(
 }
 
 internal fun CatalogItem.matchesWatchWords(watchWords: List<String>): Boolean {
-    val titleText = title?.lowercase().orEmpty()
-    if (titleText.isEmpty()) return false
-    return normalizeWatchWords(watchWords).any { titleText.contains(it) }
+    return matchesNormalizedWatchWords(normalizeWatchWords(watchWords))
 }
 
-private fun normalizeWatchWords(watchWords: List<String>): List<String> {
+internal fun CatalogItem.matchesNormalizedWatchWords(normalizedWatchWords: List<String>): Boolean {
+    val titleText = title?.lowercase().orEmpty()
+    if (titleText.isEmpty()) return false
+    return normalizedWatchWords.any { titleText.contains(it) }
+}
+
+internal fun normalizeWatchWords(watchWords: List<String>): List<String> {
     return watchWords
         .mapNotNull { it.trim().takeIf(String::isNotBlank)?.lowercase() }
         .distinct()
@@ -51,9 +55,7 @@ private fun List<CatalogItem>.filterAndSortByWatchWords(
     if (normalizedWords.isEmpty()) return emptyList()
 
     return mapNotNull { item ->
-        val titleText = item.title?.lowercase().orEmpty()
-        if (titleText.isEmpty()) return@mapNotNull null
-        val matchCount = normalizedWords.count { titleText.contains(it) }
+        val matchCount = item.countNormalizedWatchWordMatches(normalizedWords)
         if (matchCount == 0) return@mapNotNull null
         WatchWordMatch(item = item, matchCount = matchCount)
     }.sortedWith(
@@ -67,3 +69,9 @@ private data class WatchWordMatch(
     val item: CatalogItem,
     val matchCount: Int
 )
+
+private fun CatalogItem.countNormalizedWatchWordMatches(normalizedWords: List<String>): Int {
+    val titleText = title?.lowercase().orEmpty()
+    if (titleText.isEmpty()) return 0
+    return normalizedWords.count { titleText.contains(it) }
+}

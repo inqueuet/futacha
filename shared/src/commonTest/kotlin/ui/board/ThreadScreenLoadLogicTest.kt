@@ -564,6 +564,15 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun computeHighlightRanges_capsRangesForPathologicalQueries() {
+        val ranges = computeHighlightRanges("a".repeat(200), "a")
+
+        assertEquals(64, ranges.size)
+        assertEquals(0..0, ranges.first())
+        assertEquals(63..63, ranges.last())
+    }
+
+    @Test
     fun quotePreviewHelpers_resolveTargetsAndRespectScrollingState() {
         val posts = listOf(
             post(id = "1", messageHtml = "one"),
@@ -1081,6 +1090,17 @@ class ThreadScreenLoadLogicTest {
                 minIntervalMillis = 60_000L
             )
         )
+    }
+
+    @Test
+    fun threadAutoSaveAfterThrottle_onlyStartsWhenStillEligible() {
+        assertTrue(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.Ready))
+        assertTrue(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.Throttled))
+        assertFalse(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.MissingPage))
+        assertFalse(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.OfflineCopy))
+        assertFalse(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.ThreadMismatch))
+        assertFalse(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.MissingDependencies))
+        assertFalse(shouldStartThreadAutoSaveAfterThrottle(ThreadAutoSaveAvailability.InProgress))
     }
 
     @Test

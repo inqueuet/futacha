@@ -213,7 +213,7 @@ class HttpBoardApiSupportTest {
 
         val cache = HttpBoardApiThreadSafeLruCache<String, HttpBoardApiPostingConfig>(2)
         val locksGuard = Mutex()
-        val locks = mutableMapOf<String, Mutex>()
+        val locks = mutableMapOf<String, HttpBoardApiPostingConfigLockEntry>()
         var fetchCount = 0
         val first = getOrLoadHttpBoardApiPostingConfig(
             board = "https://may.2chan.net/b/",

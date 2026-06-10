@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.ui.normalizeBoardUrl
 
+private val BOARD_MANAGEMENT_IPV4_REGEX = Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
+
 internal data class AddBoardValidationState(
     val trimmedName: String,
     val trimmedUrl: String,
@@ -42,7 +44,6 @@ internal fun buildAddBoardValidationState(
     val trimmedUrl = url.trim()
     val hasName = trimmedName.isNotEmpty()
     val hasUrl = trimmedUrl.isNotEmpty()
-    val ipv4Regex = Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
     val hasScheme = trimmedUrl.startsWith("http://", ignoreCase = true) ||
         trimmedUrl.startsWith("https://", ignoreCase = true)
     val normalizedInputUrl = runCatching { normalizeBoardUrl(trimmedUrl) }.getOrDefault(trimmedUrl)
@@ -59,7 +60,7 @@ internal fun buildAddBoardValidationState(
             !hostPart.contains(" ") &&
             (hostPart.contains(".") ||
                 hostPart.equals("localhost", ignoreCase = true) ||
-                hostPart.matches(ipv4Regex))
+                hostPart.matches(BOARD_MANAGEMENT_IPV4_REGEX))
     }
     val isDuplicateUrl = hasUrl && isValidUrl &&
         normalizedExistingUrls.any { it.equals(normalizedInputUrl, ignoreCase = true) }

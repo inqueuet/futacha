@@ -313,7 +313,15 @@ internal fun ThreadAutoSaveLaunchEffect(
                     delay(AUTO_SAVE_INTERVAL_MS)
                 }
                 ThreadAutoSaveAvailability.InProgress -> delay(1_000L)
-                ThreadAutoSaveAvailability.Throttled -> delay(AUTO_SAVE_INTERVAL_MS)
+                ThreadAutoSaveAvailability.Throttled -> {
+                    delay(AUTO_SAVE_INTERVAL_MS)
+                    val latestState = latestAutoSaveEffectState.value
+                    if (shouldStartThreadAutoSaveAfterThrottle(latestState.availability)) {
+                        (latestState.page ?: latestPageForAutoSave.value)?.let { targetPage ->
+                            currentOnStartAutoSave.value(targetPage)
+                        }
+                    }
+                }
                 ThreadAutoSaveAvailability.MissingPage -> delay(1_000L)
                 ThreadAutoSaveAvailability.MissingDependencies -> delay(1_000L)
                 ThreadAutoSaveAvailability.OfflineCopy,

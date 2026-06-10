@@ -460,6 +460,8 @@ class WatchSyncManager(
         } ?: return
 
         previousReplyCountsMutex.withLock {
+            val activeKeys = snapshot.threads.mapTo(mutableSetOf()) { it.toPreviousReplyCountKey() }
+            previousReplyCounts.keys.retainAll(activeKeys)
             snapshot.threads.forEach { thread ->
                 previousReplyCounts[thread.toPreviousReplyCountKey()] = thread.replyCount
             }

@@ -62,8 +62,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val booleanReadCache = mutableMapOf<String, Boolean>()
     private val locallyUpdatedKeys = mutableSetOf<String>()
     private val deferredLoadScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val boardsState = MutableStateFlow(readStringState(BOARDS_KEY))
-    private val historyState = MutableStateFlow(readStringState(HISTORY_KEY))
+    private val boardsState = MutableStateFlow<String?>(null)
+    private val historyState = MutableStateFlow<String?>(null)
     private val displayStyleState = MutableStateFlow<String?>(null)
     private val gridColumnsState = MutableStateFlow<String?>(null)
     private val privacyFilterState = MutableStateFlow(false)
@@ -99,10 +99,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val preferredFileManagerLabelState = MutableStateFlow("")
     private val lastUsedDeleteKeyState = MutableStateFlow<String?>(null)
 
-    init {
-        deferredLoadScope.launch {
-            loadDeferredInitialState()
-        }
+    private val deferredLoadJob = deferredLoadScope.launch {
+        loadDeferredInitialState()
     }
 
     override val boardsJson: Flow<String?> = boardsState
@@ -142,6 +140,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     private suspend fun loadDeferredInitialState() {
         val stringValues = mapOf(
+            BOARDS_KEY to readStringState(BOARDS_KEY),
+            HISTORY_KEY to readStringState(HISTORY_KEY),
             CATALOG_DISPLAY_STYLE_KEY to readStringState(CATALOG_DISPLAY_STYLE_KEY),
             CATALOG_GRID_COLUMNS_KEY to readStringState(CATALOG_GRID_COLUMNS_KEY),
             APP_LOCK_PASSWORD_HASH_KEY to readStringState(APP_LOCK_PASSWORD_HASH_KEY),
@@ -179,6 +179,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         )
 
         updateMutex.withLock {
+            applyDeferredStringState(BOARDS_KEY, stringValues, boardsState)
+            applyDeferredStringState(HISTORY_KEY, stringValues, historyState)
             applyDeferredStringState(CATALOG_DISPLAY_STYLE_KEY, stringValues, displayStyleState)
             applyDeferredStringState(CATALOG_GRID_COLUMNS_KEY, stringValues, gridColumnsState)
             applyDeferredBooleanState(PRIVACY_FILTER_KEY, booleanValues, privacyFilterState)
@@ -744,6 +746,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles) {
+        deferredLoadJob.join()
         update { seedFrom(seedBundles) }
         // NSUserDefaults writes are automatically persisted; explicit synchronize is unnecessary.
     }

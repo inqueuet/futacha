@@ -6,7 +6,6 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.ImageData
@@ -22,7 +21,7 @@ internal data class ThreadScreenMutableStateDefaults(
     val isManualSaveInProgress: Boolean = false,
     val isSingleMediaSaveInProgress: Boolean = false,
     val lastAutoSaveTimestamp: Long = 0L,
-    val lastAutoSavePosts: List<Post>? = null,
+    val lastAutoSavePosts: String? = null,
     val isShowingOfflineCopy: Boolean = false,
     val actionInProgress: Boolean = false,
     val lastBusyActionNoticeAtMillis: Long = 0L,
@@ -77,7 +76,7 @@ internal data class ThreadScreenMutableStateBundle(
     val isManualSaveInProgress: MutableState<Boolean>,
     val isSingleMediaSaveInProgress: MutableState<Boolean>,
     val lastAutoSaveTimestamp: MutableState<Long>,
-    val lastAutoSavePosts: MutableState<List<Post>?>,
+    val lastAutoSavePosts: MutableState<String?>,
     val isShowingOfflineCopy: MutableState<Boolean>,
     val actionInProgress: MutableState<Boolean>,
     val lastBusyActionNoticeAtMillis: MutableState<Long>,
@@ -128,7 +127,7 @@ internal data class ThreadScreenSaveJobMutableStateRefs(
     val isManualSaveInProgress: MutableState<Boolean>,
     val isSingleMediaSaveInProgress: MutableState<Boolean>,
     val lastAutoSaveTimestamp: MutableState<Long>,
-    val lastAutoSavePosts: MutableState<List<Post>?>,
+    val lastAutoSavePosts: MutableState<String?>,
     val isShowingOfflineCopy: MutableState<Boolean>,
     val saveProgress: MutableState<SaveProgress?>
 )

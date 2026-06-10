@@ -97,7 +97,7 @@ internal fun matchesSelfFilter(
 
 internal fun parseSaidaneCount(label: String?): Int? {
     val source = label ?: return null
-    return Regex("""\d+""").find(source)?.value?.toIntOrNull()
+    return THREAD_FILTER_SAIDANE_COUNT_REGEX.find(source)?.value?.toIntOrNull()
 }
 
 internal fun sortThreadPosts(
@@ -124,6 +124,7 @@ internal fun matchesKeyword(lowerText: String, subject: String, keywordInput: St
 
 internal val THREAD_FILTER_URL_REGEX =
     Regex("""https?://[^\s"'<>]+|www\.[^\s"'<>]+""", RegexOption.IGNORE_CASE)
+private val THREAD_FILTER_SAIDANE_COUNT_REGEX = Regex("""\d+""")
 
 internal fun matchesNgFilters(
     post: Post,

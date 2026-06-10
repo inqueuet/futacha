@@ -189,7 +189,7 @@ internal object ThreadHtmlParserCore {
                 ?.trim()
             val deletedNotice = extractBetween(normalized, deletedNoticeRegex, brEndRegex)
                 ?.let(::stripTags)
-                ?.replace("\\s+".toRegex(), "")
+                ?.replace(whitespaceRegex, "")
                 ?.trim()
 
             val posts = mutableListOf<Post>()
@@ -378,7 +378,7 @@ internal object ThreadHtmlParserCore {
 
     private fun sanitizeInlineText(block: String, className: String): String? {
         // FIX: キャッシュされたRegexを使用
-        val startRegex = CLASS_REGEX_MAP[className] ?: Regex("<span[^>]*class=(?:['\"])?$className(?:['\"])?[^>]*>", RegexOption.IGNORE_CASE)
+        val startRegex = CLASS_REGEX_MAP[className] ?: return null
         val startMatch = startRegex.find(block) ?: return null
 
         // FIX: 整数オーバーフロー防止 - Int.MAX_VALUE - 1も弾く

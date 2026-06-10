@@ -20,6 +20,7 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
     "管理者によって削除されました"
 )
 private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?://\\S+|\\bttp://\\S+")
+private val READ_ALOUD_WHITESPACE_REGEX = Regex("\\s{2,}")
 
 internal fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
     return posts.mapIndexedNotNull { index, post ->
@@ -36,7 +37,7 @@ internal fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
 
 internal fun stripUrlsForReadAloud(value: String): String {
     val withoutUrls = READ_ALOUD_URL_REGEX.replace(value, "")
-    return withoutUrls.replace(Regex("\\s{2,}"), " ")
+    return withoutUrls.replace(READ_ALOUD_WHITESPACE_REGEX, " ")
 }
 
 internal fun containsDeletionNotice(lines: List<String>): Boolean {

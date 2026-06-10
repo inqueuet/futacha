@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.service.SavedMediaFile
 import com.valoser.futacha.shared.service.SavedMediaType
@@ -69,6 +70,13 @@ internal fun resolveThreadAutoSaveAvailability(
     }
 }
 
+internal fun shouldStartThreadAutoSaveAfterThrottle(
+    availability: ThreadAutoSaveAvailability
+): Boolean {
+    return availability == ThreadAutoSaveAvailability.Ready ||
+        availability == ThreadAutoSaveAvailability.Throttled
+}
+
 internal data class ThreadAutoSaveCompletionState(
     val nextTimestampMillis: Long,
     val savedThread: SavedThread? = null,
@@ -106,6 +114,18 @@ internal fun resolveThreadAutoSaveCompletionState(
             )
         }
     )
+}
+
+internal fun buildThreadAutoSavePostsFingerprint(posts: List<Post>): String {
+    var result = posts.size
+    posts.forEach { post ->
+        result = 31 * result + post.id.hashCode()
+        result = 31 * result + (post.imageUrl?.hashCode() ?: 0)
+        result = 31 * result + (post.thumbnailUrl?.hashCode() ?: 0)
+        result = 31 * result + post.messageHtml.length
+        result = 31 * result + post.messageHtml.hashCode()
+    }
+    return result.toString()
 }
 
 internal fun buildThreadSaveBusyMessage(): String = "保存処理を実行中です…"

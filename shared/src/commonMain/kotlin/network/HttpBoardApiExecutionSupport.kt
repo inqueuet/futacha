@@ -64,31 +64,44 @@ internal suspend fun getOrLoadHttpBoardApiPostingConfig(
     board: String,
     cache: HttpBoardApiThreadSafeLruCache<String, HttpBoardApiPostingConfig>,
     locksGuard: Mutex,
-    locks: MutableMap<String, Mutex>,
+    locks: MutableMap<String, HttpBoardApiPostingConfigLockEntry>,
     fallbackChrencValue: String,
     logTag: String,
     fetchPostingConfig: suspend () -> HttpBoardApiPostingConfig
 ): HttpBoardApiPostingConfig {
     cache.get(board)?.let { return it }
-    val boardLock = locksGuard.withLock {
-        locks.getOrPut(board) { Mutex() }
+    val lockEntry = locksGuard.withLock {
+        locks.getOrPut(board) { HttpBoardApiPostingConfigLockEntry(Mutex()) }
+            .also { it.holders += 1 }
     }
-    return boardLock.withLock {
-        cache.get(board)?.let { return@withLock it }
-        try {
-            val fetched = fetchPostingConfig()
-            if (!fetched.fromFallback) {
-                cache.put(board, fetched)
+    return try {
+        lockEntry.mutex.withLock {
+            cache.get(board)?.let { return@withLock it }
+            try {
+                val fetched = fetchPostingConfig()
+                if (!fetched.fromFallback) {
+                    cache.put(board, fetched)
+                }
+                fetched
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logger.w(
+                    logTag,
+                    "Failed to fetch posting config for board '$board', using non-cached Shift_JIS fallback: ${e.message}"
+                )
+                fallbackHttpBoardApiPostingConfig(fallbackChrencValue)
             }
-            fetched
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Logger.w(
-                logTag,
-                "Failed to fetch posting config for board '$board', using non-cached Shift_JIS fallback: ${e.message}"
-            )
-            fallbackHttpBoardApiPostingConfig(fallbackChrencValue)
+        }
+    } finally {
+        locksGuard.withLock {
+            val current = locks[board]
+            if (current === lockEntry) {
+                current.holders -= 1
+                if (current.holders <= 0 && !current.mutex.isLocked) {
+                    locks.remove(board)
+                }
+            }
         }
     }
 }

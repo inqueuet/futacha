@@ -138,6 +138,7 @@ class ThreadSaveSupportTest {
                 progressTotal = 5,
                 logTag = "ThreadSaveSupportTest",
                 updateProgress = { current, total -> progressUpdates += current to total },
+                checkBudget = {},
                 downloadMedia = {
                     attempts += 1
                     if (attempts == 1) {
@@ -173,6 +174,87 @@ class ThreadSaveSupportTest {
         assertEquals(0, accumulator.downloadFailureCount)
         assertEquals("b/src/2.webm", accumulator.urlToPathMap["https://may.2chan.net/b/src/2.webm"])
         assertEquals(1, accumulator.mediaCounts.videoCount)
+    }
+
+    @Test
+    fun threadSaveMediaDownloadSupport_checksBudgetBeforeRetryDelay() = runBlocking {
+        var attempts = 0
+        var budgetChecks = 0
+        val error = assertFailsWith<IllegalStateException> {
+            executeThreadSaveMediaBatch(
+                itemBatch = listOf(
+                    ThreadSaveScheduledMediaItem(
+                        url = "https://may.2chan.net/b/src/2.webm",
+                        requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                        postId = "101"
+                    )
+                ),
+                firstProgressIndex = 1,
+                execution = ThreadSaveMediaDownloadExecutionContext(
+                    maxRetries = 3,
+                    retryDelayMillis = 10_000L,
+                    progressTotal = 1,
+                    logTag = "ThreadSaveSupportTest",
+                    updateProgress = { _, _ -> },
+                    checkBudget = {
+                        budgetChecks += 1
+                        if (budgetChecks > 1) {
+                            throw IllegalStateException("budget exceeded")
+                        }
+                    },
+                    downloadMedia = {
+                        attempts += 1
+                        Result.failure(IllegalStateException("retry"))
+                    }
+                )
+            )
+        }
+
+        assertEquals("budget exceeded", error.message)
+        assertEquals(1, attempts)
+        assertEquals(2, budgetChecks)
+    }
+
+    @Test
+    fun threadSaveMediaDownloadSupport_convertsDownloadThrowToFailedAttempt() = runBlocking {
+        val results = executeThreadSaveMediaBatch(
+            itemBatch = listOf(
+                ThreadSaveScheduledMediaItem(
+                    url = "https://may.2chan.net/b/src/broken.jpg",
+                    requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                    postId = "101"
+                )
+            ),
+            firstProgressIndex = 1,
+            execution = ThreadSaveMediaDownloadExecutionContext(
+                maxRetries = 1,
+                retryDelayMillis = 0L,
+                progressTotal = 1,
+                logTag = "ThreadSaveSupportTest",
+                updateProgress = { _, _ -> },
+                checkBudget = {},
+                downloadMedia = {
+                    throw IllegalStateException("socket closed")
+                }
+            )
+        )
+        val accumulator = ThreadSaveMediaDownloadAccumulator(
+            urlToPathMap = linkedMapOf(),
+            mediaKeyToFileInfoMap = linkedMapOf()
+        )
+
+        applyThreadSaveMediaBatchResults(
+            results = results,
+            accumulator = accumulator,
+            opPostId = null,
+            enforceBudget = {},
+            logTag = "ThreadSaveSupportTest"
+        )
+
+        assertEquals(1, results.size)
+        assertTrue(results.first().result?.isFailure == true)
+        assertEquals(1, accumulator.downloadFailureCount)
+        assertEquals(0L, accumulator.totalSizeBytes)
     }
 
     @Test
@@ -430,8 +512,46 @@ class ThreadSaveSupportTest {
         assertFalse(rewritten.contains("<iframe"))
         assertTrue(rewritten.contains("""charset="UTF-8""""))
         assertTrue(rewritten.contains("charset=UTF-8"))
+        assertTrue(rewritten.contains("""content="text/html; charset=UTF-8""""))
         assertTrue(rewritten.contains("""src="b/thumb/123.jpg""""))
         assertTrue(rewritten.contains("""href="b/src/456.jpg""""))
+    }
+
+    @Test
+    fun rewriteSavedOriginalHtml_stripsSingleQuotedExternalResources() {
+        val html = """
+            <script src='https://dec.2chan.net/bin/ad.js'></script>
+            <iframe src='https://dec.2chan.net/bin/frame.html'></iframe>
+            <script src='https://example.com/app.js'></script>
+        """.trimIndent()
+
+        val rewritten = rewriteSavedOriginalHtml(
+            html = html,
+            boardPath = "b",
+            urlToPathMap = emptyMap(),
+            stripExternalResources = true
+        )
+
+        assertFalse(rewritten.contains("dec.2chan.net"))
+        assertTrue(rewritten.contains("https://example.com/app.js"))
+    }
+
+    @Test
+    fun rewriteSavedOriginalHtml_rewritesMappedAttributeUrlsWithoutGlobalReplacement() {
+        val html = """
+            <img src="https://other.example/src/123.jpg">
+            <p>https://other.example/src/123.jpg</p>
+        """.trimIndent()
+
+        val rewritten = rewriteSavedOriginalHtml(
+            html = html,
+            boardPath = "b",
+            urlToPathMap = mapOf("https://other.example/src/123.jpg" to "b/src/123.jpg"),
+            stripExternalResources = false
+        )
+
+        assertTrue(rewritten.contains("""<img src="b/src/123.jpg">"""))
+        assertTrue(rewritten.contains("<p>https://other.example/src/123.jpg</p>"))
     }
 
     @Test

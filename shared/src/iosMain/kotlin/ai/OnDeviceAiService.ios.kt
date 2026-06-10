@@ -95,19 +95,15 @@ private class IosOnDeviceAiService : OnDeviceAiService {
             buildPostModerationSourceText(input)
         }
         if (sourceText.isBlank()) {
-            return Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+            return Result.success(emptyList())
         }
         val responseText = requestFoundationModelsPostModeration(sourceText).getOrElse {
-            return Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+            return Result.success(emptyList())
         }
         val detected = withContext(AppDispatchers.parsing) {
             parsePostModerationResponse(responseText)
         }
-        return Result.success(
-            input.posts.map { post ->
-                detected[post.id] ?: PostModerationResult(postId = post.id, shouldHide = false)
-            }
-        )
+        return Result.success(detected.values.toList())
     }
 }
 

@@ -16,6 +16,7 @@ internal suspend fun scheduleAppStateHistoryScrollPersistence(
 ) {
     var runImmediate = false
     var oldJob: Job? = null
+    var staleJobs: List<Job> = emptyList()
     scrollPositionMutex.withLock {
         val scope = currentScope()
         val scopeJob = scope?.coroutineContext?.get(Job)
@@ -23,6 +24,7 @@ internal suspend fun scheduleAppStateHistoryScrollPersistence(
         if (scope == null || isScopeInactive) {
             if (isScopeInactive) {
                 clearScope()
+                staleJobs = scrollPositionJobs.cancelAndClear()
             }
             runImmediate = true
             return@withLock
@@ -36,6 +38,7 @@ internal suspend fun scheduleAppStateHistoryScrollPersistence(
 
         oldJob = scrollPositionJobs.putAndCancelOld(scrollKey, newJob)
     }
+    staleJobs.forEach { it.cancel() }
     oldJob?.cancel()
     if (runImmediate) {
         performImmediateUpdate()

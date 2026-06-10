@@ -192,7 +192,7 @@ private class AndroidOnDeviceAiService(
                 return it
             }
         }
-        return Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+        return Result.success(emptyList())
     }
 }
 
@@ -796,40 +796,34 @@ private suspend fun performLocalPostModeration(
     input: PostModerationInput
 ): Result<List<PostModerationResult>> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || input.posts.isEmpty()) {
-            return Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+            return Result.success(emptyList())
         }
         val sourceText = buildPostModerationSourceText(input)
         if (sourceText.isBlank()) {
-            return Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+            return Result.success(emptyList())
         }
         return withContext(AppDispatchers.io) {
             val promptModel = runCatching {
                 Generation.getClient()
             }.getOrElse {
-                return@withContext Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+                return@withContext Result.success(emptyList())
             }
             try {
                 val status = withTimeoutOrNull(AI_STATUS_TIMEOUT_MILLIS) {
                     promptModel.checkStatus()
                 }
                 if (status != FeatureStatus.AVAILABLE) {
-                    return@withContext Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+                    return@withContext Result.success(emptyList())
                 }
                 val response = withTimeoutOrNull(AI_POST_MODERATION_TIMEOUT_MILLIS) {
                     promptModel.generateContent(buildPostModerationPrompt(sourceText))
-                } ?: return@withContext Result.success(
-                    input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) }
-                )
+                } ?: return@withContext Result.success(emptyList())
                 val responseText = response.candidates.firstOrNull()?.text.orEmpty()
                 val detected = parsePostModerationResponse(responseText)
-                Result.success(
-                    input.posts.map { post ->
-                        detected[post.id] ?: PostModerationResult(postId = post.id, shouldHide = false)
-                    }
-                )
+                Result.success(detected.values.toList())
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
+                Result.success(emptyList())
             } finally {
                 promptModel.close()
             }

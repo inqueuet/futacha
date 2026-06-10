@@ -96,7 +96,6 @@ class SavedThreadRepositoryTest {
         assertEquals(
             listOf(
                 "${buildThreadStorageId("b", "123")}/metadata.json",
-                "${buildThreadStorageId("b", "123")}/metadata.json",
                 "${buildLegacyThreadStorageId("b", "123")}/metadata.json",
                 "123/metadata.json"
             ),

@@ -139,7 +139,7 @@ internal fun resolveSavedThreadMetadataCandidates(
             add(fallbackLegacyStorageId)
         }
         add(fallbackLegacy)
-    }
+    }.distinct()
 }
 
 internal suspend fun SavedThreadRepository.buildUpdatedIndexUnlocked(

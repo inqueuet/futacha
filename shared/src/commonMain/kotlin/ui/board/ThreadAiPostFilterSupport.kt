@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.Post
 private const val AI_HIDDEN_REASON_MAX_CHARS = 80
 private const val AI_HIDDEN_MAX_POSTS = 8
 private const val AI_HIDDEN_MAX_PERCENT = 20
+private val AI_HIDDEN_REASON_WHITESPACE_REGEX = Regex("\\s+")
 
 internal data class AiHiddenPostState(
     val postIds: Set<String> = emptySet(),
@@ -61,7 +62,7 @@ internal fun resolveAiHiddenPostLimit(postCount: Int): Int {
 private fun String.normalizeAiHiddenReason(): String {
     return lineSequence()
         .joinToString(separator = " ") { it.trim() }
-        .replace(Regex("\\s+"), " ")
+        .replace(AI_HIDDEN_REASON_WHITESPACE_REGEX, " ")
         .trim()
         .let { normalized ->
             if (normalized.length <= AI_HIDDEN_REASON_MAX_CHARS) {

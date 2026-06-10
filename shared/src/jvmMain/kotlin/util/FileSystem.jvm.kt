@@ -11,7 +11,6 @@ private class JvmFileSystem : FileSystem {
     override suspend fun createDirectory(path: String): Result<Unit> = runCatching {
         validateFileSystemPath(path)
         File(resolveAbsolutePath(path)).mkdirs()
-        Unit
     }
 
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = runCatching {
@@ -66,24 +65,26 @@ private class JvmFileSystem : FileSystem {
 
     override suspend fun readBytes(path: String): Result<ByteArray> = runCatching {
         validateFileSystemPath(path)
-        File(resolveAbsolutePath(path)).readBytes()
+        val file = File(resolveAbsolutePath(path))
+        validateFileSystemSize(file.length(), "file")
+        file.readBytes()
     }
 
     override suspend fun readString(path: String): Result<String> = runCatching {
         validateFileSystemPath(path)
-        File(resolveAbsolutePath(path)).readText()
+        val file = File(resolveAbsolutePath(path))
+        validateFileSystemSize(file.length(), "file")
+        file.readText()
     }
 
     override suspend fun delete(path: String): Result<Unit> = runCatching {
         validateFileSystemPath(path)
         File(resolveAbsolutePath(path)).delete()
-        Unit
     }
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = runCatching {
         validateFileSystemPath(path)
         File(resolveAbsolutePath(path)).deleteRecursively()
-        Unit
     }
 
     override suspend fun exists(path: String): Boolean =

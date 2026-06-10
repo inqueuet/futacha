@@ -6,6 +6,6 @@ import androidx.compose.runtime.remember
 @Composable
 actual fun rememberUrlLauncher(): (String) -> Unit {
     return remember {
-        { _: String -> Unit }
+        { _: String -> }
     }
 }

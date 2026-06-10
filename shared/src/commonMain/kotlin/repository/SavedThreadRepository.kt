@@ -144,7 +144,9 @@ class SavedThreadRepository(
                     return null
                 }
                 val metadata = runCatching {
-                    json.decodeFromString<SavedThreadMetadata>(jsonString)
+                    withContext(AppDispatchers.parsing) {
+                        json.decodeFromString<SavedThreadMetadata>(jsonString)
+                    }
                 }.getOrElse { error ->
                     lastError = error
                     return null

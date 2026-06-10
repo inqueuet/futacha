@@ -46,6 +46,7 @@ import kotlin.concurrent.AtomicReference
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
@@ -262,6 +263,11 @@ suspend fun pickMediaFromDocuments(
 
     delegateRef = delegate
     retainPickerDelegate(delegate)
+    continuation.invokeOnCancellation {
+        if (resumeGate.tryOpen()) {
+            releasePickerDelegate(delegateRef)
+        }
+    }
     resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
         val picker = UIDocumentPickerViewController(
             forOpeningContentTypes = contentTypes,
@@ -298,7 +304,7 @@ private fun pickFromPhotoLibrary(
     typeIdentifier: String,
     fallbackFileName: String,
     logLabel: String,
-    continuation: kotlin.coroutines.Continuation<ImageData?>
+    continuation: CancellableContinuation<ImageData?>
 ) {
     if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present photo $logLabel picker: root view controller is unavailable")
@@ -382,6 +388,11 @@ private fun pickFromPhotoLibrary(
 
     delegateRef = delegate
     retainPickerDelegate(delegate)
+    continuation.invokeOnCancellation {
+        if (resumeGate.tryOpen()) {
+            releasePickerDelegate(delegateRef)
+        }
+    }
     picker.delegate = delegate
 
     presentPicker(picker, logLabel = "photo $logLabel picker") {
@@ -477,6 +488,11 @@ actual suspend fun pickDirectoryPath(): String? = suspendCancellableCoroutine { 
     }
     delegateRef = delegate
     retainPickerDelegate(delegate)
+    continuation.invokeOnCancellation {
+        if (resumeGate.tryOpen()) {
+            releasePickerDelegate(delegateRef)
+        }
+    }
     picker.delegate = delegate
     presentPicker(picker, logLabel = "directory picker") {
         complete(null)
@@ -539,6 +555,11 @@ suspend fun pickDirectorySaveLocation(preferredProviderIdentifier: String?): Sav
     }
     delegateRef = delegate
     retainPickerDelegate(delegate)
+    continuation.invokeOnCancellation {
+        if (resumeGate.tryOpen()) {
+            releasePickerDelegate(delegateRef)
+        }
+    }
     resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
         val picker = UIDocumentPickerViewController(
             forOpeningContentTypes = listOf<UTType>(UTTypeFolder),

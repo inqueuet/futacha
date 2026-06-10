@@ -143,10 +143,6 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
     zeroReadBackoffMillis: Long,
     responseTotalTimeoutMillis: Long
 ): ByteArray {
-    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-    if (contentLength != null && contentLength > maxBytes) {
-        throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
-    }
     if (maxLines <= 0) {
         return readHttpBoardApiResponseBytesWithLimit(
             response = response,
