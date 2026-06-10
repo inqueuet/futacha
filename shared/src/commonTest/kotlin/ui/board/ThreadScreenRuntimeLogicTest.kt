@@ -163,6 +163,19 @@ class ThreadScreenRuntimeLogicTest {
     }
 
     @Test
+    fun threadScreenRuntimeTimeouts_keepLoadAndSaveBounded() {
+        assertTrue(THREAD_REMOTE_LOAD_TIMEOUT_MS <= 20_000L)
+        assertTrue(ARCHIVE_FALLBACK_TIMEOUT_MS <= 8_000L)
+        assertTrue(OFFLINE_FALLBACK_TIMEOUT_MS <= 5_000L)
+        assertTrue(
+            THREAD_REMOTE_LOAD_TIMEOUT_MS +
+                ARCHIVE_FALLBACK_TIMEOUT_MS +
+                OFFLINE_FALLBACK_TIMEOUT_MS <= 33_000L
+        )
+        assertTrue(THREAD_MANUAL_SAVE_TIMEOUT_MS <= 3 * 60_000L)
+    }
+
+    @Test
     fun threadScreenRuntimeObjectsSupport_buildsLazyListSeedFromHistoryEntry() {
         assertEquals(
             ThreadScreenRuntimeObjectSeed(

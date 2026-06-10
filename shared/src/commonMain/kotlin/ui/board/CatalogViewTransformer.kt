@@ -10,6 +10,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
+
+private const val CATALOG_WATCH_SOURCE_TIMEOUT_MS = 8_000L
 
 internal fun buildVisibleCatalogItems(
     items: List<CatalogItem>,
@@ -102,7 +105,9 @@ internal suspend fun loadCatalogItemsForMode(
             async {
                 fetchSemaphore.withPermit {
                     runCatching {
-                        fetchCatalog(boardUrl, sourceMode)
+                        withTimeoutOrNull(CATALOG_WATCH_SOURCE_TIMEOUT_MS) {
+                            fetchCatalog(boardUrl, sourceMode)
+                        } ?: throw IllegalStateException("Catalog watch source timed out: $sourceMode")
                     }
                 }
             }

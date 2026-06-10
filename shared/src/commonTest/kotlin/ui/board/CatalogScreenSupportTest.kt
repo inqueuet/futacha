@@ -38,6 +38,11 @@ import kotlin.test.assertTrue
 
 class CatalogScreenSupportTest {
     @Test
+    fun catalogLoadTimeout_isBoundedForResponsiveRefresh() {
+        assertTrue(CATALOG_LOAD_TIMEOUT_MS <= 20_000L)
+    }
+
+    @Test
     fun createThreadDraftSaver_roundTripsDraftState() {
         val draft = CreateThreadDraft(
             name = "name",

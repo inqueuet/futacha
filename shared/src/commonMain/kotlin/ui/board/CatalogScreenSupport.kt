@@ -43,7 +43,7 @@ internal sealed interface ArchiveSearchState {
 internal const val DEFAULT_CATALOG_GRID_COLUMNS = 5
 internal const val MIN_CATALOG_GRID_COLUMNS = 2
 internal const val MAX_CATALOG_GRID_COLUMNS = 8
-internal const val CATALOG_LOAD_TIMEOUT_MS = 35_000L
+internal const val CATALOG_LOAD_TIMEOUT_MS = 20_000L
 
 internal fun nextCatalogRequestGeneration(currentGeneration: Long): Long {
     return currentGeneration + 1L

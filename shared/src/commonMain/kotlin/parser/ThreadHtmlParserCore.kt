@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.text.concatToString
 import kotlin.time.ExperimentalTime
 
@@ -161,7 +162,13 @@ internal object ThreadHtmlParserCore {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
 
-        try {
+        withTimeoutOrNull(MAX_PARSE_TIME_MS) {
+            parseThreadWithinBudget(html)
+        } ?: throw ParserException("Thread parse timed out after ${MAX_PARSE_TIME_MS}ms")
+    }
+
+    private suspend fun parseThreadWithinBudget(html: String): ThreadPage {
+        return try {
             val normalized = normalizeLineBreaksIfNeeded(html)
             val canonical = sanitizeCanonicalUrl(
                 canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)

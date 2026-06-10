@@ -78,10 +78,7 @@ class HistoryRefresher(
     class RefreshAlreadyRunningException :
         IllegalStateException("History refresh is already running")
 
-    companion object {
-        private val processRefreshMutex = Mutex()
-    }
-
+    private val refreshMutex = Mutex()
     private val skipThreadIds = MutableStateFlow<Map<HistoryRefreshKey, Long>>(emptyMap())
     private val archiveSearchJson = Json { ignoreUnknownKeys = true }
     private val effectiveThreadFetchTimeoutMillis = threadFetchTimeoutMillis.coerceAtLeast(1_000L)
@@ -113,7 +110,7 @@ class HistoryRefresher(
         maxThreadsPerRun: Int? = null,
         maxAutoSavesPerRun: Int? = null
     ) = withContext(dispatcher) {
-        val locked = processRefreshMutex.tryLock()
+        val locked = refreshMutex.tryLock()
         if (!locked) {
             Logger.w(HISTORY_REFRESH_TAG, "Refresh skipped: another refresh is already running")
             throw RefreshAlreadyRunningException()
@@ -283,6 +280,7 @@ class HistoryRefresher(
                         HISTORY_REFRESH_TAG,
                         "Cancelling ${autoSaveChildren.size} unfinished auto-save job(s) after refresh drain timeout"
                     )
+                    autoSaveChildren.forEach { it.cancel() }
                 }
             }
 
@@ -367,7 +365,7 @@ class HistoryRefresher(
         } finally {
             autoSaveParentJob?.cancel()
             if (locked) {
-                processRefreshMutex.unlock()
+                refreshMutex.unlock()
             }
         }
     }

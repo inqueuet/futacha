@@ -18,11 +18,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.isActive
 
 internal data class ThreadAutoSaveEffectState(
     val availability: ThreadAutoSaveAvailability,
-    val page: ThreadPage? = null
+    val page: ThreadPage? = null,
+    val retryDelayMillis: Long = 0L
 )
 
 internal fun resolveThreadAutoSaveEffectState(
@@ -49,9 +49,19 @@ internal fun resolveThreadAutoSaveEffectState(
         nowMillis = nowMillis,
         minIntervalMillis = minIntervalMillis
     )
+    val retryDelayMillis = if (availability == ThreadAutoSaveAvailability.Throttled) {
+        (minIntervalMillis - (nowMillis - lastAutoSaveTimestampMillis))
+            .coerceIn(1_000L, minIntervalMillis)
+    } else {
+        0L
+    }
     return ThreadAutoSaveEffectState(
         availability = availability,
-        page = page.takeIf { availability == ThreadAutoSaveAvailability.Ready }
+        page = page.takeIf {
+            availability == ThreadAutoSaveAvailability.Ready ||
+                availability == ThreadAutoSaveAvailability.Throttled
+        },
+        retryDelayMillis = retryDelayMillis
     )
 }
 
@@ -300,33 +310,30 @@ internal fun ThreadAutoSaveLaunchEffect(
         threadId,
         isShowingOfflineCopy,
         httpClient,
-        fileSystem
+        fileSystem,
+        autoSaveEffectState
     ) {
-        while (isActive) {
-            when (latestAutoSaveEffectState.value.availability) {
-                ThreadAutoSaveAvailability.Ready -> {
-                    val page = latestAutoSaveEffectState.value.page
-                        ?: latestPageForAutoSave.value
-                    page?.let { targetPage ->
+        when (autoSaveEffectState.availability) {
+            ThreadAutoSaveAvailability.Ready -> {
+                val page = autoSaveEffectState.page ?: latestPageForAutoSave.value
+                page?.let { targetPage ->
+                    currentOnStartAutoSave.value(targetPage)
+                }
+            }
+            ThreadAutoSaveAvailability.Throttled -> {
+                delay(autoSaveEffectState.retryDelayMillis.coerceAtLeast(1_000L))
+                val latestState = latestAutoSaveEffectState.value
+                if (shouldStartThreadAutoSaveAfterThrottle(latestState.availability)) {
+                    (latestState.page ?: latestPageForAutoSave.value)?.let { targetPage ->
                         currentOnStartAutoSave.value(targetPage)
                     }
-                    delay(AUTO_SAVE_INTERVAL_MS)
                 }
-                ThreadAutoSaveAvailability.InProgress -> delay(1_000L)
-                ThreadAutoSaveAvailability.Throttled -> {
-                    delay(AUTO_SAVE_INTERVAL_MS)
-                    val latestState = latestAutoSaveEffectState.value
-                    if (shouldStartThreadAutoSaveAfterThrottle(latestState.availability)) {
-                        (latestState.page ?: latestPageForAutoSave.value)?.let { targetPage ->
-                            currentOnStartAutoSave.value(targetPage)
-                        }
-                    }
-                }
-                ThreadAutoSaveAvailability.MissingPage -> delay(1_000L)
-                ThreadAutoSaveAvailability.MissingDependencies -> delay(1_000L)
-                ThreadAutoSaveAvailability.ThreadMismatch -> delay(1_000L)
-                ThreadAutoSaveAvailability.OfflineCopy -> return@LaunchedEffect
             }
+            ThreadAutoSaveAvailability.InProgress,
+            ThreadAutoSaveAvailability.MissingPage,
+            ThreadAutoSaveAvailability.MissingDependencies,
+            ThreadAutoSaveAvailability.ThreadMismatch,
+            ThreadAutoSaveAvailability.OfflineCopy -> Unit
         }
     }
 }

@@ -54,15 +54,15 @@ class ThreadSaveService(
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes
         private const val MAX_FILE_SIZE_BYTES = 8_192_000L
         private const val MAX_THREAD_HTML_BYTES = 5 * 1024 * 1024L
-        private const val MAX_TOTAL_SIZE_BYTES = 8L * 1024 * 1024 * 1024 // 約8GBまで
-        const val DEFAULT_MAX_SAVE_DURATION_MS = 5 * 60 * 1000L // 5分上限
+        private const val MAX_TOTAL_SIZE_BYTES = 512L * 1024 * 1024 // Keep foreground saves bounded.
+        const val DEFAULT_MAX_SAVE_DURATION_MS = 3 * 60 * 1000L // 3分上限
 
         // サポートされる拡張子
         private val SUPPORTED_IMAGE_EXTENSIONS = setOf("gif", "jpg", "jpeg", "png", "webp")
         private val SUPPORTED_VIDEO_EXTENSIONS = setOf("webm", "mp4")
 
         // FIX: 最大メディア数を制限
-        const val DEFAULT_MAX_MEDIA_ITEMS = 10000
+        const val DEFAULT_MAX_MEDIA_ITEMS = 300
 
         // リトライ設定
         private const val MAX_RETRIES = 3
@@ -76,7 +76,7 @@ class ThreadSaveService(
         private const val STREAM_READ_BUFFER_BYTES = 512 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
-        private const val MAX_PARALLEL_DOWNLOADS = 1
+        private const val MAX_PARALLEL_DOWNLOADS = 2
     }
 
     /**

@@ -72,6 +72,10 @@ class HistoryRefreshWorker(
             throw e
         } catch (t: Exception) {
             Logger.e(TAG, "Background history refresh failed", t)
+            if (hasHistoryFlushFailure(app.historyRefresher.lastRefreshError.value?.stageCounts.orEmpty())) {
+                Logger.e(TAG, "History flush failed; skipping immediate retry to avoid retry churn")
+                return Result.failure()
+            }
             if (shouldRetryBackgroundRefreshFailure(t, runAttemptCount, MAX_RETRY_ATTEMPTS)) {
                 Result.retry()
             } else {
@@ -88,6 +92,7 @@ class HistoryRefreshWorker(
         private val AUTO_SAVE_BUDGET_MILLIS = TimeUnit.SECONDS.toMillis(90)
         private const val INTERVAL_MINUTES = 15L
         private const val MAX_THREADS_PER_RUN = 20
+        private const val HISTORY_FLUSH_STAGE = "history_flush"
         // Keep full media auto-save enabled, but cap how many threads can download media per BG run.
         private const val MAX_AUTO_SAVES_PER_RUN = 2
         private const val MAX_SETTING_READ_RETRIES = 3
@@ -140,5 +145,8 @@ class HistoryRefreshWorker(
             workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
             workManager.cancelUniqueWork(UNIQUE_ONE_TIME_NAME)
         }
+
+        internal fun hasHistoryFlushFailure(stageCounts: Map<String, Int>): Boolean =
+            stageCounts[HISTORY_FLUSH_STAGE]?.let { it > 0 } == true
     }
 }

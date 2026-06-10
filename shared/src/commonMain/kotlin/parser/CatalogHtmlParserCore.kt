@@ -81,9 +81,22 @@ internal object CatalogHtmlParserCore {
             
             var tableStartIndex = normalized.indexOf(tableStartTag, ignoreCase = true)
             var foundTable = false
+            var tableSearchIterations = 0
+            val maxTableSearchIterations = 200
             
             // Look for table with id="cattable"
             while (tableStartIndex != -1) {
+                tableSearchIterations += 1
+                if (tableSearchIterations % 10 == 0) {
+                    ensureActive()
+                }
+                if (tableSearchIterations > maxTableSearchIterations) {
+                    Logger.w(
+                        "CatalogHtmlParserCore",
+                        "Stopped catalog table search after $maxTableSearchIterations iterations"
+                    )
+                    break
+                }
                 val tableTagEnd = normalized.indexOf(">", tableStartIndex)
                 if (tableTagEnd == -1) break
                 

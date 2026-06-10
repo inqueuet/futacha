@@ -224,15 +224,19 @@ class IosFileSystem : FileSystem {
             validatePath(path, "path") // FIX: 入力検証
             coroutineContext.ensureActive()
             val absolutePath = resolveAbsolutePath(path)
+            val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
+            val fileSize = (attributes?.get(NSFileSize) as? NSNumber)?.longValue
+                ?: throw Exception("File not found: $absolutePath")
+            validateFileSize(fileSize, "file") // Read size before loading the file into memory.
+            if (fileSize == 0L) {
+                return@runFsCatching ByteArray(0)
+            }
             val data = NSData.dataWithContentsOfFile(absolutePath)
                 ?: throw Exception("File not found: $absolutePath")
 
             val length = data.length.toLong()
-            validateFileSize(length, "file") // FIX: 読み込み前にサイズチェック
+            validateFileSize(length, "file")
             val lengthInt = length.toInt()
-            if (lengthInt <= 0) {
-                return@runFsCatching ByteArray(0)
-            }
 
             val bytes = ByteArray(lengthInt)
             bytes.usePinned { pinned ->

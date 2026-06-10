@@ -64,4 +64,11 @@ class HistoryRefreshWorkerSupportTest {
             )
         )
     }
+
+    @Test
+    fun hasHistoryFlushFailure_detectsPositiveFlushStageCountOnly() {
+        assertTrue(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("history_flush" to 1)))
+        assertFalse(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("history_flush" to 0)))
+        assertFalse(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("thread_refresh" to 3)))
+    }
 }

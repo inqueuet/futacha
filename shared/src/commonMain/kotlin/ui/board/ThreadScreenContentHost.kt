@@ -16,12 +16,15 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.lazy.LazyListState
 
-private const val THREAD_AI_SUMMARY_UI_TIMEOUT_MS = 60_000L
-private const val THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS = 45_000L
+private const val THREAD_AI_SUMMARY_UI_TIMEOUT_MS = 20_000L
+private const val THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS = 12_000L
+private const val THREAD_AI_SUMMARY_START_DELAY_MS = 120L
 
 internal data class ThreadScreenContentHostBindings(
     val uiState: ThreadUiState,
@@ -190,6 +193,7 @@ internal fun ThreadScreenContentHost(
             }
             val platformContext = LocalPlatformContext.current
             val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
+            val aiInferenceMutex = remember { Mutex() }
             val threadSummaryCache = remember { linkedMapOf<ThreadAiCacheKey, ThreadSummaryUiState.Ready>() }
             val threadPostModerationCache = remember { linkedMapOf<ThreadAiCacheKey, List<PostModerationResult>>() }
             val aiSourcePosts = remember(state.page) { resolveThreadAiSourcePosts(state.page) }
@@ -218,14 +222,16 @@ internal fun ThreadScreenContentHost(
                     return@produceState
                 }
                 value = ThreadSummaryUiState.Loading
-                delay(120L)
+                delay(THREAD_AI_SUMMARY_START_DELAY_MS)
                 val summaryInput = ThreadSummaryInput(
                     threadId = state.page.threadId,
                     title = null,
                     posts = aiSourcePosts
                 )
                 val summaryResult = withTimeoutOrNull(THREAD_AI_SUMMARY_UI_TIMEOUT_MS) {
-                    aiService.summarizeThread(summaryInput)
+                    aiInferenceMutex.withLock {
+                        aiService.summarizeThread(summaryInput)
+                    }
                 }
                 value = summaryResult?.fold(
                     onSuccess = {
@@ -243,9 +249,16 @@ internal fun ThreadScreenContentHost(
             val aiPostModerationResults by produceState<List<PostModerationResult>>(
                 initialValue = emptyList(),
                 key1 = shouldApplyAiPostFilter,
-                key2 = aiCacheKey
+                key2 = aiCacheKey,
+                key3 = summaryState
             ) {
-                if (!shouldApplyAiPostFilter) {
+                if (
+                    shouldDeferAiPostModeration(
+                        shouldApplyAiPostFilter = shouldApplyAiPostFilter,
+                        shouldShowThreadSummary = shouldShowThreadSummary,
+                        summaryState = summaryState
+                    )
+                ) {
                     value = emptyList()
                     return@produceState
                 }
@@ -258,7 +271,9 @@ internal fun ThreadScreenContentHost(
                     posts = aiSourcePosts
                 )
                 val moderationResult = withTimeoutOrNull(THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS) {
-                    aiService.classifyPosts(input)
+                    aiInferenceMutex.withLock {
+                        aiService.classifyPosts(input)
+                    }
                 }
                 val moderation = moderationResult?.getOrDefault(emptyList()).orEmpty()
                 value = moderation
@@ -322,4 +337,13 @@ internal fun ThreadScreenContentHost(
             }
         }
     }
+}
+
+internal fun shouldDeferAiPostModeration(
+    shouldApplyAiPostFilter: Boolean,
+    shouldShowThreadSummary: Boolean,
+    summaryState: ThreadSummaryUiState?
+): Boolean {
+    if (!shouldApplyAiPostFilter) return true
+    return shouldShowThreadSummary && summaryState == ThreadSummaryUiState.Loading
 }

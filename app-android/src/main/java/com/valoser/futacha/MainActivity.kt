@@ -19,16 +19,9 @@ import com.valoser.futacha.shared.state.createAppStateStore
 import com.valoser.futacha.shared.ui.FutachaApp
 import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.version.createVersionChecker
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var pendingAiDeepLink by mutableStateOf<String?>(null)
-    private val localResourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,11 +54,7 @@ class MainActivity : ComponentActivity() {
             DisposableEffect(app, httpClient) {
                 onDispose {
                     if (app == null) {
-                        // onDestroy cancels localResourceScope before the composition is
-                        // disposed; NonCancellable keeps this cleanup job runnable.
-                        localResourceScope.launch(NonCancellable) {
-                            runCatching { httpClient.close() }
-                        }
+                        runCatching { httpClient.close() }
                     }
                 }
             }
@@ -89,7 +78,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        localResourceScope.cancel()
         super.onDestroy()
     }
 

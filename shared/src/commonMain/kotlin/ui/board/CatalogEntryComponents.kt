@@ -37,6 +37,9 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.shouldResolveCatalogThreadTitleFromHead
+import kotlinx.coroutines.withTimeoutOrNull
+
+private const val CATALOG_HEAD_METADATA_TIMEOUT_MS = 3_000L
 
 @Composable
 internal fun CatalogCard(
@@ -230,8 +233,9 @@ private fun rememberCatalogDisplayTitle(
             value = fallbackTitle
             return@produceState
         }
-        value = repository
-            .resolveCatalogDisplayTitle(boardUrl, item)
+        value = withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
+            repository.resolveCatalogDisplayTitle(boardUrl, item)
+        }
             ?.takeIf { it.isNotBlank() }
             ?: fallbackTitle
     }

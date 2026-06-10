@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -81,7 +82,17 @@ class WatchSyncManager(
             try {
                 combine(
                     stateStore.boards,
-                    stateStore.history,
+                    stateStore.history
+                        .map { history ->
+                            WatchHistorySnapshotInput(
+                                history = history,
+                                fingerprint = history.watchSnapshotFingerprint()
+                            )
+                        }
+                        .distinctUntilChanged { previous, next ->
+                            previous.fingerprint == next.fingerprint
+                        }
+                        .map { it.history },
                     stateStore.watchWords,
                     WatchReadAloudStatusStore.status
                 ) { boards, history, watchWords, readAloudStatus ->
@@ -500,6 +511,39 @@ class WatchSyncManager(
         val watchWords: List<String>,
         val readAloudStatus: WatchReadAloudStatus?
     )
+
+    private data class WatchHistorySnapshotInput(
+        val history: List<ThreadHistoryEntry>,
+        val fingerprint: List<WatchHistoryEntryFingerprint>
+    )
+
+    private data class WatchHistoryEntryFingerprint(
+        val threadId: String,
+        val boardId: String,
+        val boardUrl: String,
+        val title: String,
+        val titleImageUrl: String,
+        val boardName: String,
+        val replyCount: Int,
+        val hasAutoSave: Boolean,
+        val isAutoRefreshDisabled: Boolean
+    )
+
+    private fun List<ThreadHistoryEntry>.watchSnapshotFingerprint(): List<WatchHistoryEntryFingerprint> {
+        return map { entry ->
+            WatchHistoryEntryFingerprint(
+                threadId = entry.threadId,
+                boardId = entry.boardId,
+                boardUrl = entry.boardUrl,
+                title = entry.title,
+                titleImageUrl = entry.titleImageUrl,
+                boardName = entry.boardName,
+                replyCount = entry.replyCount,
+                hasAutoSave = entry.hasAutoSave,
+                isAutoRefreshDisabled = entry.isAutoRefreshDisabled
+            )
+        }
+    }
 
     private companion object {
         private const val TAG = "WatchSyncManager"

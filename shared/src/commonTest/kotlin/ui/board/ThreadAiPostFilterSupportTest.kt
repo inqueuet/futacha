@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.Post
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ThreadAiPostFilterSupportTest {
     @Test
@@ -87,6 +88,38 @@ class ThreadAiPostFilterSupportTest {
         assertEquals(1, resolveAiHiddenPostLimit(2))
         assertEquals(4, resolveAiHiddenPostLimit(20))
         assertEquals(8, resolveAiHiddenPostLimit(100))
+    }
+
+    @Test
+    fun shouldDeferAiPostModeration_waitsForSummaryLoadingOnly() {
+        assertTrue(
+            shouldDeferAiPostModeration(
+                shouldApplyAiPostFilter = false,
+                shouldShowThreadSummary = false,
+                summaryState = null
+            )
+        )
+        assertTrue(
+            shouldDeferAiPostModeration(
+                shouldApplyAiPostFilter = true,
+                shouldShowThreadSummary = true,
+                summaryState = ThreadSummaryUiState.Loading
+            )
+        )
+        assertFalse(
+            shouldDeferAiPostModeration(
+                shouldApplyAiPostFilter = true,
+                shouldShowThreadSummary = true,
+                summaryState = ThreadSummaryUiState.Unavailable("timeout")
+            )
+        )
+        assertFalse(
+            shouldDeferAiPostModeration(
+                shouldApplyAiPostFilter = true,
+                shouldShowThreadSummary = false,
+                summaryState = ThreadSummaryUiState.Loading
+            )
+        )
     }
 
     private fun post(id: String): Post {
