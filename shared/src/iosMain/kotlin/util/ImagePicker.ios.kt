@@ -38,9 +38,12 @@ import platform.FileProvider.NSFileProviderDomain
 import platform.FileProvider.NSFileProviderManager
 import platform.darwin.NSObject
 import platform.darwin.DISPATCH_QUEUE_PRIORITY_DEFAULT
+import platform.darwin.DISPATCH_TIME_NOW
+import platform.darwin.dispatch_after
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_global_queue
 import platform.darwin.dispatch_get_main_queue
+import platform.darwin.dispatch_time
 import platform.posix.memcpy
 import kotlin.concurrent.AtomicReference
 import kotlin.io.encoding.Base64
@@ -54,6 +57,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  */
 private val activePickerDelegates = AtomicReference<List<NSObject>>(emptyList())
 private const val DEFAULT_PICKED_VIDEO_FILE_NAME = "video.mov"
+private const val PICKED_MEDIA_LOAD_TIMEOUT_MILLIS = 30_000L
 
 private class ResumeGate {
     private val resumedMarker = Any()
@@ -80,6 +84,22 @@ private fun releasePickerDelegate(delegate: NSObject?) {
 
 private fun isVideoMimeType(mimeType: String): Boolean =
     mimeType.trim().startsWith("video/", ignoreCase = true)
+
+private fun schedulePickedMediaLoadTimeout(
+    logLabel: String,
+    complete: (ImageData?) -> Unit
+) {
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, PICKED_MEDIA_LOAD_TIMEOUT_MILLIS * 1_000_000L),
+        dispatch_get_main_queue()
+    ) {
+        Logger.w(
+            "ImagePicker.ios",
+            "Timed out loading selected $logLabel after ${PICKED_MEDIA_LOAD_TIMEOUT_MILLIS}ms"
+        )
+        complete(null)
+    }
+}
 
 private fun documentContentTypesForMimeType(mimeType: String): List<UTType> {
     return if (isVideoMimeType(mimeType)) {
@@ -243,6 +263,7 @@ suspend fun pickMediaFromDocuments(
                 complete(null)
                 return
             }
+            schedulePickedMediaLoadTimeout(logLabel = if (isVideo) "video" else "image", complete = ::complete)
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
                 val selected = loadPickedMediaFromUrl(
                     url = url,
@@ -338,6 +359,7 @@ private fun pickFromPhotoLibrary(
 
             val result = results.first()
             val itemProvider = result.itemProvider
+            schedulePickedMediaLoadTimeout(logLabel = logLabel, complete = ::complete)
 
             itemProvider.loadFileRepresentationForTypeIdentifier(typeIdentifier) { url, fileError ->
                 if (url != null) {

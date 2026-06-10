@@ -299,7 +299,7 @@ class SingleMediaSaveService(
         // Keep same limit as thread save and board upload cap (8000KB).
         private const val MAX_FILE_SIZE_BYTES = 8_192_000L
         private const val MAX_SAVE_DURATION_MILLIS = 2 * 60 * 1000L
-        private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 120_000L
+        private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 15_000L
         private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
         private const val WRITE_TIMEOUT_MILLIS = 15_000L

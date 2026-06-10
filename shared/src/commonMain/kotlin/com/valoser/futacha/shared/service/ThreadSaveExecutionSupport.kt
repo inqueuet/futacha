@@ -252,7 +252,7 @@ internal suspend fun saveThreadRawHtmlIfEnabled(
     target: ThreadSaveStorageTarget,
     threadId: String,
     fetchOriginalHtml: suspend () -> Result<String>,
-    rewriteHtml: (String) -> String,
+    rewriteHtml: suspend (String) -> String,
     measureAbsolutePathSize: suspend (String) -> Long,
     logWarning: (String) -> Unit
 ): ThreadSaveRawHtmlWriteResult {
@@ -262,7 +262,9 @@ internal suspend fun saveThreadRawHtmlIfEnabled(
 
     return fetchOriginalHtml()
         .mapCatching { originalHtml ->
+            coroutineContext.ensureActive()
             val rewritten = rewriteHtml(originalHtml)
+            coroutineContext.ensureActive()
             val fileName = "$threadId.htm"
             val sizeBytes = writeThreadSaveTextFile(
                 fileSystem = fileSystem,

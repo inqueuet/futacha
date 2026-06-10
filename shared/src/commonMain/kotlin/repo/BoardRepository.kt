@@ -113,6 +113,7 @@ class DefaultBoardRepository(
     // Fix: Use Mutex to prevent race condition when multiple coroutines
     // try to initialize the same board simultaneously
     private val boardInitMutex = Mutex()
+    private val boardInitializationMutexes = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
 
     private val opImageCacheMutex = Mutex()
     private val opImageCache = createDefaultBoardRepositoryOpImageCache(opImageCacheMaxEntries)
@@ -150,6 +151,7 @@ class DefaultBoardRepository(
             initializedBoards = initializedBoards,
             cookieRepository = cookieRepository,
             boardInitMutex = boardInitMutex,
+            boardInitializationMutexes = boardInitializationMutexes,
             fetchCatalogSetup = { api.fetchCatalogSetup(it) }
         )
     }

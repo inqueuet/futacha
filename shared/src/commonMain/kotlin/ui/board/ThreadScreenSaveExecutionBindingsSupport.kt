@@ -261,6 +261,7 @@ internal data class ThreadScreenSingleMediaSaveDependencies(
     val shouldRequireManualSaveDirectoryChange: Boolean,
     val hasStorageDependencies: Boolean,
     val onOpenSaveDirectoryPicker: (() -> Unit)? = null,
+    val saveTimeoutMillis: Long = THREAD_SINGLE_MEDIA_SAVE_TIMEOUT_MS,
     val performSingleMediaSave: suspend (ThreadSingleMediaSaveRunnerConfig, ThreadSingleMediaSaveRunnerCallbacks) -> ThreadSingleMediaSaveRunResult = ::performThreadSingleMediaSave
 )
 
@@ -303,21 +304,27 @@ internal fun buildThreadScreenSingleMediaSaveBindings(
             }
 
             val saveRunnerCallbacks = dependencies.saveRunnerCallbacks ?: return@savePreviewMedia
-            stateBindings.setIsSingleMediaSaveInProgress(true)
             stateBindings.currentSingleMediaSaveJob()?.cancel()
+            stateBindings.setIsSingleMediaSaveInProgress(true)
             val nextJob = coroutineScope.launch(start = CoroutineStart.LAZY) {
+                val runningJob = coroutineContext[Job]
                 try {
                     when (
                         val outcome = resolveThreadSingleMediaSaveUiOutcome(
-                            saveResult = dependencies.performSingleMediaSave(
-                                buildThreadSingleMediaSaveRunnerConfig(
-                                    mediaUrl = entry.url,
-                                    boardId = dependencies.boardId,
-                                    threadId = dependencies.threadId,
-                                    baseSaveLocation = dependencies.manualSaveLocation,
-                                    baseDirectory = dependencies.manualSaveDirectory
-                                ),
-                                saveRunnerCallbacks
+                            saveResult = withTimeoutOrNull(dependencies.saveTimeoutMillis.coerceAtLeast(1L)) {
+                                dependencies.performSingleMediaSave(
+                                    buildThreadSingleMediaSaveRunnerConfig(
+                                        mediaUrl = entry.url,
+                                        boardId = dependencies.boardId,
+                                        threadId = dependencies.threadId,
+                                        baseSaveLocation = dependencies.manualSaveLocation,
+                                        baseDirectory = dependencies.manualSaveDirectory
+                                    ),
+                                    saveRunnerCallbacks
+                                )
+                            } ?: ThreadSingleMediaSaveRunResult.Failure(
+                                error = IllegalStateException("メディア保存がタイムアウトしました"),
+                                isUnexpected = false
                             ),
                             manualSaveDirectory = dependencies.manualSaveDirectory,
                             manualSaveLocation = dependencies.manualSaveLocation,
@@ -334,11 +341,13 @@ internal fun buildThreadScreenSingleMediaSaveBindings(
                 } catch (e: CancellationException) {
                     throw e
                 } finally {
-                    stateBindings.setIsSingleMediaSaveInProgress(false)
+                    if (stateBindings.currentSingleMediaSaveJob() == runningJob) {
+                        stateBindings.setIsSingleMediaSaveInProgress(false)
+                    }
                     stateBindings.setSingleMediaSaveJob(
                         resolveTrackedJobAfterCompletion(
                             trackedJob = stateBindings.currentSingleMediaSaveJob(),
-                            runningJob = coroutineContext[Job]
+                            runningJob = runningJob
                         )
                     )
                 }

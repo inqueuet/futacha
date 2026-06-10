@@ -195,12 +195,14 @@ class ThreadSaveService(
                     threadId = threadId,
                     fetchOriginalHtml = { fetchThreadHtml(boardUrl, threadId) },
                     rewriteHtml = { originalHtml ->
-                        rewriteOriginalHtml(
-                            html = originalHtml,
-                            boardPath = boardPath,
-                            urlToPathMap = urlToPathMap,
-                            stripExternalResources = rawHtmlOptions.stripExternalResources
-                        )
+                        withContext(AppDispatchers.parsing) {
+                            rewriteOriginalHtml(
+                                html = originalHtml,
+                                boardPath = boardPath,
+                                urlToPathMap = urlToPathMap,
+                                stripExternalResources = rawHtmlOptions.stripExternalResources
+                            )
+                        }
                     },
                     measureAbsolutePathSize = fileSystem::getFileSize,
                     logWarning = { message ->

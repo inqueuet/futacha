@@ -3,12 +3,19 @@ package com.valoser.futacha.shared.repo
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal data class DefaultBoardRepositoryOpImageFetchResult(
     val url: String?
+)
+
+internal data class DefaultBoardRepositoryBoardInitLock(
+    val mutex: Mutex,
+    var holders: Int = 0
 )
 
 internal suspend fun initializeDefaultBoardRepositoryCookies(
@@ -17,40 +24,63 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
     initializedBoards: MutableSet<String>,
     cookieRepository: CookieRepository?,
     boardInitMutex: kotlinx.coroutines.sync.Mutex,
+    boardInitializationMutexes: MutableMap<String, DefaultBoardRepositoryBoardInitLock> = mutableMapOf(),
     fetchCatalogSetup: suspend (String) -> Unit
 ) {
-    val shouldInitialize = resolveDefaultBoardRepositoryCookieInitializationState(
-        initializedBoards = initializedBoards,
-        board = board,
-        cookieRepository = cookieRepository,
-        boardInitMutex = boardInitMutex
-    )
-    if (!shouldInitialize) return
-
-    if (hasDefaultBoardRepositoryCookies(cookieRepository, board)) {
-        Logger.d(logTag, "Skipping catalog setup for board $board (existing cookies found)")
-        return
+    val boardInitializationLock = boardInitMutex.withLock {
+        val entry = boardInitializationMutexes.getOrPut(board) {
+            DefaultBoardRepositoryBoardInitLock(Mutex())
+        }
+        entry.holders += 1
+        entry
     }
 
-    var fetchedSetup = false
     try {
-        fetchCatalogSetup(board)
-        fetchedSetup = true
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        Logger.e(logTag, "Failed to initialize cookies for board $board", e)
-    }
+        boardInitializationLock.mutex.withLock {
+            val shouldInitialize = resolveDefaultBoardRepositoryCookieInitializationState(
+                initializedBoards = initializedBoards,
+                board = board,
+                cookieRepository = cookieRepository,
+                boardInitMutex = boardInitMutex
+            )
+            if (!shouldInitialize) return
 
-    val hasCookies = hasDefaultBoardRepositoryCookies(cookieRepository, board)
-    if (fetchedSetup || hasCookies) {
-        markDefaultBoardRepositoryBoardInitialized(
-            initializedBoards = initializedBoards,
-            board = board,
-            boardInitMutex = boardInitMutex
-        )
-    } else {
-        Logger.w(logTag, "Cookie initialization incomplete for board $board; will retry on next request")
+            if (hasDefaultBoardRepositoryCookies(cookieRepository, board)) {
+                Logger.d(logTag, "Skipping catalog setup for board $board (existing cookies found)")
+                return
+            }
+
+            var fetchedSetup = false
+            try {
+                fetchCatalogSetup(board)
+                fetchedSetup = true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logger.e(logTag, "Failed to initialize cookies for board $board", e)
+            }
+
+            val hasCookies = hasDefaultBoardRepositoryCookies(cookieRepository, board)
+            if (fetchedSetup || hasCookies) {
+                markDefaultBoardRepositoryBoardInitialized(
+                    initializedBoards = initializedBoards,
+                    board = board,
+                    boardInitMutex = boardInitMutex
+                )
+            } else {
+                Logger.w(logTag, "Cookie initialization incomplete for board $board; will retry on next request")
+            }
+        }
+    } finally {
+        boardInitMutex.withLock {
+            val current = boardInitializationMutexes[board]
+            if (current === boardInitializationLock) {
+                current.holders -= 1
+                if (current.holders <= 0 && board in initializedBoards) {
+                    boardInitializationMutexes.remove(board)
+                }
+            }
+        }
     }
 }
 

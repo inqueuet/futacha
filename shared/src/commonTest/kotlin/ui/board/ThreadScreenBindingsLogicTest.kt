@@ -30,6 +30,7 @@ import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -1319,6 +1320,66 @@ class ThreadScreenBindingsLogicTest {
         assertNull(singleMediaSaveJob)
         assertNull(appliedErrorState)
         assertEquals(listOf("画像を保存しました: /manual/images/a.jpg"), shownMessages)
+    }
+
+    @Test
+    fun threadScreenExecutionBindingsSupport_timesOutSingleMediaSaveController() = runBlocking {
+        var singleMediaSaveJob: Job? = null
+        var isSingleMediaSaveInProgress = false
+        val shownMessages = mutableListOf<String>()
+        var appliedErrorState: ThreadManualSaveErrorState? = null
+        val bindings = buildThreadScreenSingleMediaSaveBindings(
+            coroutineScope = this,
+            stateBindings = ThreadScreenSingleMediaSaveStateBindings(
+                currentSingleMediaSaveJob = { singleMediaSaveJob },
+                setSingleMediaSaveJob = { singleMediaSaveJob = it },
+                setIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress = it },
+                currentIsManualSaveInProgress = { false },
+                currentIsSingleMediaSaveInProgress = { isSingleMediaSaveInProgress }
+            ),
+            dependencies = ThreadScreenSingleMediaSaveDependencies(
+                saveRunnerCallbacks = ThreadSingleMediaSaveRunnerCallbacks(
+                    saveMedia = { error("unused") }
+                ),
+                boardId = "test",
+                threadId = "123",
+                manualSaveLocation = SaveLocation.Path("/manual"),
+                manualSaveDirectory = "/manual",
+                resolvedManualSaveDirectory = "/manual",
+                requiresManualLocationSelection = false,
+                shouldRequireManualSaveDirectoryChange = false,
+                hasStorageDependencies = true,
+                saveTimeoutMillis = 10L,
+                performSingleMediaSave = { _, _ ->
+                    delay(100L)
+                    error("save should time out")
+                }
+            ),
+            callbacks = ThreadScreenSingleMediaSaveCallbacks(
+                showOptionalMessage = { message ->
+                    if (message != null) {
+                        shownMessages += message
+                    }
+                },
+                applySaveErrorState = { appliedErrorState = it },
+                showMessage = { shownMessages += it }
+            )
+        )
+
+        bindings.savePreviewMedia(
+            MediaPreviewEntry(
+                url = "https://example.com/src/a.jpg",
+                mediaType = MediaType.Image,
+                postId = "1",
+                title = "title"
+            )
+        )
+        singleMediaSaveJob?.join()
+
+        assertFalse(isSingleMediaSaveInProgress)
+        assertNull(singleMediaSaveJob)
+        assertEquals(emptyList(), shownMessages)
+        assertEquals("保存に失敗しました: メディア保存がタイムアウトしました", appliedErrorState?.message)
     }
 
     @Test

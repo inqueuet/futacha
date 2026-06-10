@@ -14,11 +14,13 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import platform.Foundation.*
 import platform.posix.memcpy
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 
 /**
  * iOS版FileSystem実装
@@ -28,6 +30,7 @@ class IosFileSystem : FileSystem {
 
     private val fileManager = NSFileManager.defaultManager
     private val cleanupMaxAgeMillis = 60 * 60 * 1000L
+    private val streamWriteChunkBytes = 64 * 1024
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
 
@@ -427,9 +430,19 @@ class IosFileSystem : FileSystem {
 
             try {
                 fileHandle.seekToEndOfFile()
+                var written = 0
                 bytes.usePinned { pinned ->
-                    val chunk = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
-                    fileHandle.writeData(chunk)
+                    while (written < bytes.size) {
+                        coroutineContext.ensureActive()
+                        val chunkLength = minOf(streamWriteChunkBytes, bytes.size - written)
+                        val chunk = NSData.create(
+                            bytes = pinned.addressOf(written),
+                            length = chunkLength.toULong()
+                        )
+                        fileHandle.writeData(chunk)
+                        written += chunkLength
+                        coroutineContext.ensureActive()
+                    }
                 }
             } finally {
                 fileHandle.closeFile()
@@ -473,20 +486,28 @@ class IosFileSystem : FileSystem {
                 var totalWritten = 0L
                 val sink = object : FileWriteSink {
                     override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        coroutineContext.ensureActive()
                         require(offset >= 0 && length >= 0 && offset <= bytes.size - length) {
                             "Invalid write range: offset=$offset length=$length size=${bytes.size}"
                         }
                         val nextTotal = totalWritten + length
                         validateFileSize(nextTotal, "file")
                         if (length <= 0) return
+                        var written = 0
                         bytes.usePinned { pinned ->
-                            val chunk = NSData.create(
-                                bytes = pinned.addressOf(offset),
-                                length = length.toULong()
-                            )
-                            fileHandle.writeData(chunk)
+                            while (written < length) {
+                                coroutineContext.ensureActive()
+                                val chunkLength = minOf(streamWriteChunkBytes, length - written)
+                                val chunk = NSData.create(
+                                    bytes = pinned.addressOf(offset + written),
+                                    length = chunkLength.toULong()
+                                )
+                                fileHandle.writeData(chunk)
+                                written += chunkLength
+                                totalWritten += chunkLength
+                                coroutineContext.ensureActive()
+                            }
                         }
-                        totalWritten = nextTotal
                     }
                 }
                 block(sink)

@@ -10,9 +10,13 @@ import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.network.PersistentCookieStorage
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -59,6 +63,28 @@ class DefaultBoardRepositoryTest {
         assertEquals(2, api.fetchCatalogSetupCalls)
         assertEquals(2, api.fetchCatalogCalls)
         assertEquals(1, api.fetchThreadCalls)
+    }
+
+    @Test
+    fun getCatalog_runsCookieSetupOnlyOnceForConcurrentRequests() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi(fetchCatalogSetupDelayMillis = 50L)
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            cookieRepository = CookieRepository(PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH))
+        )
+
+        (1..8)
+            .map {
+                async {
+                    repository.getCatalog(boardUrl, CatalogMode.Catalog)
+                }
+            }
+            .awaitAll()
+
+        assertEquals(1, api.fetchCatalogSetupCalls)
+        assertEquals(8, api.fetchCatalogCalls)
     }
 
     @Test
@@ -411,9 +437,11 @@ class DefaultBoardRepositoryTest {
 private class FakeBoardApi(
     private val threadHeadHtml: String = "<img src=\"/src/default.jpg\">",
     private val fetchCatalogSetupError: Exception? = null,
+    private val fetchCatalogSetupDelayMillis: Long = 0L,
     private val replyResult: String? = null,
     private val createThreadResult: String? = null
 ) : BoardApi {
+    private val callsMutex = Mutex()
     var fetchCatalogSetupCalls = 0
     var fetchCatalogCalls = 0
     var fetchThreadHeadCalls = 0
@@ -425,12 +453,19 @@ private class FakeBoardApi(
     val createThreadCalls = mutableListOf<CreateThreadCall>()
 
     override suspend fun fetchCatalogSetup(board: String) {
-        fetchCatalogSetupCalls += 1
+        callsMutex.withLock {
+            fetchCatalogSetupCalls += 1
+        }
+        if (fetchCatalogSetupDelayMillis > 0L) {
+            delay(fetchCatalogSetupDelayMillis)
+        }
         fetchCatalogSetupError?.let { throw it }
     }
 
     override suspend fun fetchCatalog(board: String, mode: CatalogMode): String {
-        fetchCatalogCalls += 1
+        callsMutex.withLock {
+            fetchCatalogCalls += 1
+        }
         return "<catalog mode='${mode.name}'>$board</catalog>"
     }
 

@@ -27,6 +27,8 @@ class SavedThreadRepository(
     internal val baseDirectory: String = MANUAL_SAVE_DIRECTORY,
     baseSaveLocation: SaveLocation? = null
 ) {
+    private data class IndexLockResult<T>(val value: T)
+
     data class SavedThreadStats(
         val threadCount: Int,
         val totalSize: Long
@@ -48,6 +50,10 @@ class SavedThreadRepository(
     internal val useSaveLocationApi = resolvedSaveLocation !is SaveLocation.Path
     internal val indexRelativePath = "index.json"
     internal var isBaseDirectoryPrepared = false
+
+    companion object {
+        private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 60_000L
+    }
 
     /**
      * インデックスを読み込み
@@ -332,12 +338,23 @@ class SavedThreadRepository(
     }
 
     internal suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(AppDispatchers.io) {
-        ThreadStorageLockRegistry.withStorageLock(storageLockKey(indexRelativePath)) {
-            indexMutex.withLock {
-                block()
-            }
+        val result = withTimeoutOrNull(INDEX_LOCK_WAIT_TIMEOUT_MILLIS) {
+            IndexLockResult(
+                ThreadStorageLockRegistry.withStorageLock(storageLockKey(indexRelativePath)) {
+                    indexMutex.withLock {
+                        block()
+                    }
+                }
+            )
         }
+        if (result != null) {
+            return@withContext result.value
+        }
+        throw IllegalStateException(
+            "Timed out waiting for saved thread index lock after ${INDEX_LOCK_WAIT_TIMEOUT_MILLIS}ms"
+        )
     }
+
     internal fun storageLockKey(relativePath: String): String {
         val baseLocationForLock = if (useSaveLocationApi) resolvedSaveLocation else null
         return buildThreadStorageLockKey(
