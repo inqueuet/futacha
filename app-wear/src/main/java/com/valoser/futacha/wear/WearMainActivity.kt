@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,12 +32,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.valoser.futacha.shared.watch.WatchBoard
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchThreadSummary
@@ -48,6 +49,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ScrollIndicator
 import androidx.wear.compose.material3.Text
 
 class WearMainActivity : ComponentActivity() {
@@ -76,13 +78,9 @@ private fun FutachaWearApp() {
             snapshot = snapshot,
             onRefresh = commandClient::requestRefresh,
             onRequestSync = commandClient::requestSnapshot,
-            onOpenBoardOnPhone = commandClient::openBoardOnPhone,
-            onOpenThreadOnPhone = commandClient::openThreadOnPhone,
             onStartReadAloudOnPhone = commandClient::startReadAloudOnPhone,
             onPauseReadAloudOnPhone = commandClient::pauseReadAloudOnPhone,
-            onStopReadAloudOnPhone = commandClient::stopReadAloudOnPhone,
-            onNextReadAloudOnPhone = commandClient::nextReadAloudOnPhone,
-            onPreviousReadAloudOnPhone = commandClient::previousReadAloudOnPhone
+            onStopReadAloudOnPhone = commandClient::stopReadAloudOnPhone
         )
     }
 }
@@ -92,22 +90,12 @@ private fun FutachaWearContent(
     snapshot: WatchSnapshot?,
     onRefresh: () -> Unit,
     onRequestSync: () -> Unit,
-    onOpenBoardOnPhone: (boardId: String, boardUrl: String) -> Unit,
-    onOpenThreadOnPhone: (boardId: String, boardUrl: String, threadId: String) -> Unit,
     onStartReadAloudOnPhone: (WatchThreadSummary) -> Unit,
     onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onNextReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onPreviousReadAloudOnPhone: (WatchThreadSummary) -> Unit
+    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit
 ) {
-    var selectedBoardId by remember(snapshot?.generatedAtMillis) { mutableStateOf<String?>(null) }
     var selectedThreadId by remember(snapshot?.generatedAtMillis) { mutableStateOf<String?>(null) }
-
-    val selectedBoard = snapshot?.boards?.firstOrNull { it.id == selectedBoardId }
-    val boardThreads = snapshot?.threads
-        ?.filter { selectedBoardId == null || it.boardId == selectedBoardId }
-        .orEmpty()
-    val selectedThread = boardThreads.firstOrNull { it.threadId == selectedThreadId }
+    val selectedThread = snapshot?.threads?.firstOrNull { it.threadId == selectedThreadId }
 
     Box(
         modifier = Modifier
@@ -116,27 +104,15 @@ private fun FutachaWearContent(
     ) {
         when {
             snapshot == null -> EmptySnapshotView(onRequestSync = onRequestSync)
-            selectedThread != null -> ThreadPreviewView(
+            selectedThread != null -> ReadAloudControlView(
                 thread = selectedThread,
                 onBack = { selectedThreadId = null },
-                onOpenThreadOnPhone = onOpenThreadOnPhone,
                 onStartReadAloudOnPhone = onStartReadAloudOnPhone,
                 onPauseReadAloudOnPhone = onPauseReadAloudOnPhone,
-                onStopReadAloudOnPhone = onStopReadAloudOnPhone,
-                onNextReadAloudOnPhone = onNextReadAloudOnPhone,
-                onPreviousReadAloudOnPhone = onPreviousReadAloudOnPhone
-            )
-            selectedBoard != null -> ThreadListView(
-                board = selectedBoard,
-                threads = boardThreads,
-                onBack = { selectedBoardId = null },
-                onThreadSelected = { selectedThreadId = it.threadId },
-                onRefresh = onRefresh,
-                onOpenBoardOnPhone = onOpenBoardOnPhone
+                onStopReadAloudOnPhone = onStopReadAloudOnPhone
             )
             else -> HomeView(
                 snapshot = snapshot,
-                onBoardSelected = { selectedBoardId = it.id },
                 onThreadSelected = { selectedThreadId = it.threadId },
                 onRefresh = onRefresh
             )
@@ -167,11 +143,12 @@ private fun EmptySnapshotView(
 @Composable
 private fun HomeView(
     snapshot: WatchSnapshot,
-    onBoardSelected: (WatchBoard) -> Unit,
     onThreadSelected: (WatchThreadSummary) -> Unit,
     onRefresh: () -> Unit
 ) {
     val watchMatches = snapshot.threads.filter { it.isWatchWordMatch }
+    val unreadThreads = snapshot.threads.filter { it.newReplyCount > 0 }
+    val activeReadAloudThread = snapshot.threads.firstOrNull { it.freshReadAloudStatus() != null }
     val syncLabel = buildSnapshotSyncLabel(snapshot.generatedAtMillis)
     WatchScreen {
         Text(
@@ -184,13 +161,17 @@ private fun HomeView(
             fontSize = 12.sp
         )
         Text(
-            text = "$syncLabel / ${snapshot.boards.size}板 ${snapshot.threads.size}スレ",
+            text = "$syncLabel / ${snapshot.threads.size}スレ",
             fontSize = 10.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(10.dp))
         ActionRow(label = "更新", onClick = onRefresh)
+        activeReadAloudThread?.let { thread ->
+            SectionTitle("読み上げ中")
+            ThreadRow(thread = thread, onClick = { onThreadSelected(thread) })
+        }
         SectionTitle("監視")
         if (watchMatches.isEmpty()) {
             MutedText("一致なし")
@@ -199,43 +180,11 @@ private fun HomeView(
                 ThreadRow(thread = thread, onClick = { onThreadSelected(thread) })
             }
         }
-        SectionTitle("板")
-        snapshot.boards.forEach { board ->
-            val threadCount = snapshot.threads.count { it.boardId == board.id }
-            val unreadThreadCount = snapshot.threads.count {
-                it.boardId == board.id && it.newReplyCount > 0
-            }
-            BoardRow(
-                board = board,
-                threadCount = threadCount,
-                unreadThreadCount = unreadThreadCount,
-                onClick = { onBoardSelected(board) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ThreadListView(
-    board: WatchBoard,
-    threads: List<WatchThreadSummary>,
-    onBack: () -> Unit,
-    onThreadSelected: (WatchThreadSummary) -> Unit,
-    onRefresh: () -> Unit,
-    onOpenBoardOnPhone: (boardId: String, boardUrl: String) -> Unit
-) {
-    WatchScreen {
-        TopBackRow(title = board.name, onBack = onBack)
-        ActionRow(
-            label = "スマホで板を開く",
-            onClick = { onOpenBoardOnPhone(board.id, board.url) }
-        )
-        Spacer(Modifier.height(6.dp))
-        ActionRow(label = "更新", onClick = onRefresh)
-        if (threads.isEmpty()) {
-            MutedText("この板の履歴はありません")
+        SectionTitle("新着")
+        if (unreadThreads.isEmpty()) {
+            MutedText("新着なし")
         } else {
-            threads.forEach { thread ->
+            unreadThreads.take(5).forEach { thread ->
                 ThreadRow(thread = thread, onClick = { onThreadSelected(thread) })
             }
         }
@@ -243,18 +192,15 @@ private fun ThreadListView(
 }
 
 @Composable
-private fun ThreadPreviewView(
+private fun ReadAloudControlView(
     thread: WatchThreadSummary,
     onBack: () -> Unit,
-    onOpenThreadOnPhone: (boardId: String, boardUrl: String, threadId: String) -> Unit,
     onStartReadAloudOnPhone: (WatchThreadSummary) -> Unit,
     onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onNextReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onPreviousReadAloudOnPhone: (WatchThreadSummary) -> Unit
+    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit
 ) {
     WatchScreen {
-        TopBackRow(title = thread.boardName, onBack = onBack)
+        TopBackRow(title = "読み上げ", onBack = onBack)
         Text(
             text = thread.title,
             fontSize = 15.sp,
@@ -265,6 +211,12 @@ private fun ThreadPreviewView(
         Text(
             text = "レス ${thread.replyCount} / 新着 ${thread.newReplyCount}",
             fontSize = 12.sp
+        )
+        Text(
+            text = thread.boardName,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         thread.freshReadAloudStatus()?.let { status ->
             Text(
@@ -280,36 +232,26 @@ private fun ThreadPreviewView(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        Spacer(Modifier.height(8.dp))
-        ActionRow(
-            label = "スマホで開く",
-            onClick = {
-                onOpenThreadOnPhone(thread.boardId, thread.boardUrl, thread.threadId)
-            }
-        )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(10.dp))
         SectionTitle("読み上げ")
-        ActionRow(label = "開始 / 再開", onClick = { onStartReadAloudOnPhone(thread) })
-        ActionRow(label = "前へ", onClick = { onPreviousReadAloudOnPhone(thread) })
-        ActionRow(label = "次へ", onClick = { onNextReadAloudOnPhone(thread) })
-        ActionRow(label = "一時停止", onClick = { onPauseReadAloudOnPhone(thread) })
-        ActionRow(label = "停止", onClick = { onStopReadAloudOnPhone(thread) })
-        SectionTitle("最新")
-        if (thread.previewPosts.isEmpty()) {
-            MutedText("プレビューなし")
-        } else {
-            thread.previewPosts.forEach { post ->
-                Text(
-                    text = post.text,
-                    fontSize = 12.sp,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                )
-            }
-        }
+        ControlRow(
+            icon = "▶",
+            label = "再生 / 再開",
+            backgroundColor = Color(0xFF245C34),
+            onClick = { onStartReadAloudOnPhone(thread) }
+        )
+        ControlRow(
+            icon = "Ⅱ",
+            label = "一時停止",
+            backgroundColor = Color(0xFF3D4B62),
+            onClick = { onPauseReadAloudOnPhone(thread) }
+        )
+        ControlRow(
+            icon = "■",
+            label = "停止",
+            backgroundColor = Color(0xFF6A2D2D),
+            onClick = { onStopReadAloudOnPhone(thread) }
+        )
     }
 }
 
@@ -317,15 +259,26 @@ private fun ThreadPreviewView(
 private fun WatchScreen(
     content: @Composable ColumnScopeMarker.() -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(PaddingValues(horizontal = 18.dp, vertical = 14.dp)),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Top
-    ) {
-        ColumnScopeMarker.content()
+    val scrollState = rememberScrollState()
+    val configuration = LocalConfiguration.current
+    val horizontalPadding = if (configuration.isScreenRound) 30.dp else 18.dp
+    val verticalPadding = if (configuration.isScreenRound) 30.dp else 18.dp
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(PaddingValues(horizontal = horizontalPadding, vertical = verticalPadding)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top
+        ) {
+            ColumnScopeMarker.content()
+        }
+        ScrollIndicator(
+            state = scrollState,
+            modifier = Modifier.align(Alignment.CenterEnd)
+        )
     }
 }
 
@@ -342,7 +295,7 @@ private fun TopBackRow(
     ) {
         Box(
             modifier = Modifier
-                .size(28.dp)
+                .size(48.dp)
                 .clip(CircleShape)
                 .background(Color(0xFF2B2B2B))
                 .clickable(onClick = onBack),
@@ -362,30 +315,6 @@ private fun TopBackRow(
         )
     }
     Spacer(Modifier.height(10.dp))
-}
-
-@Composable
-private fun BoardRow(
-    board: WatchBoard,
-    threadCount: Int,
-    unreadThreadCount: Int,
-    onClick: () -> Unit
-) {
-    RowCard(onClick = onClick) {
-        Text(
-            text = if (board.pinned) "★ ${board.name}" else board.name,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = "${board.category} / ${threadCount}スレ / 新着${unreadThreadCount}",
-            fontSize = 10.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
 }
 
 @Composable
@@ -433,12 +362,51 @@ private fun RowCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .defaultMinSize(minHeight = 48.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(Color(0xFF181818))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         ColumnScopeMarker.content()
+    }
+}
+
+@Composable
+private fun ControlRow(
+    icon: String,
+    label: String,
+    backgroundColor: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .defaultMinSize(minHeight = 48.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(backgroundColor)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.24f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(text = icon, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 10.dp)
+        )
     }
 }
 
@@ -450,6 +418,7 @@ private fun ActionRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = 48.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(Color(0xFF245C34))
             .clickable(onClick = onClick)
