@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.coroutineContext
@@ -118,7 +119,9 @@ internal fun buildCatalogInitialLoadBindings(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
                     try {
-                        val catalog = loadCatalogItems(board, currentCatalogMode())
+                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
+                            loadCatalogItems(board, currentCatalogMode())
+                        }
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
                             return@launch
                         }
@@ -269,7 +272,9 @@ internal fun buildCatalogExecutionBindings(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
                     try {
-                        val catalog = loadCatalogItems(board, currentCatalogMode())
+                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
+                            loadCatalogItems(board, currentCatalogMode())
+                        }
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
                             return@launch
                         }

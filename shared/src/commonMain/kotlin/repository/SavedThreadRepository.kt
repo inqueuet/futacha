@@ -52,7 +52,7 @@ class SavedThreadRepository(
     internal var isBaseDirectoryPrepared = false
 
     companion object {
-        private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 60_000L
+        private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 30_000L
     }
 
     /**

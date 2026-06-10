@@ -162,9 +162,7 @@ internal object ThreadHtmlParserCore {
         }
 
         try {
-            // NOTE: この処理は大きなHTML文字列のコピーを作成するため、メモリ使用量が増加する
-            // TODO: 将来的には、チャンク処理や正規表現での\r?\n対応を検討
-            val normalized = html.replace("\r\n", "\n")
+            val normalized = normalizeLineBreaksIfNeeded(html)
             val canonical = sanitizeCanonicalUrl(
                 canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
             )
@@ -257,9 +255,14 @@ internal object ThreadHtmlParserCore {
         }
     }
 
+    private fun normalizeLineBreaksIfNeeded(html: String): String {
+        if (!html.contains('\r')) return html
+        return html.replace("\r\n", "\n").replace('\r', '\n')
+    }
+
     fun extractOpImageUrl(html: String, baseUrl: String? = null): String? {
         if (html.isBlank()) return null
-        val normalized = html.replace("\r\n", "\n")
+        val normalized = normalizeLineBreaksIfNeeded(html)
         val canonical = sanitizeCanonicalUrl(
             canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
         )
@@ -399,9 +402,7 @@ internal object ThreadHtmlParserCore {
     }
 
     private fun cleanMessageHtml(raw: String): String {
-        return raw
-            .replace("\r\n", "\n")
-            .trim()
+        return normalizeLineBreaksIfNeeded(raw).trim()
     }
 
     private fun stripTags(value: String): String = htmlTagRegex.replace(

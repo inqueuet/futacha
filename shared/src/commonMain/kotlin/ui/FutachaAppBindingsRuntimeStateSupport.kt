@@ -14,8 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.withTimeout
 
 private const val FUTACHA_APP_BINDINGS_TAG = "FutachaApp"
-private const val UI_HISTORY_REFRESH_TIMEOUT_MILLIS = 120_000L
-private const val UI_HISTORY_REFRESH_MAX_THREADS_PER_RUN = 60
+private const val UI_HISTORY_REFRESH_TIMEOUT_MILLIS = 60_000L
+private const val UI_HISTORY_REFRESH_MAX_THREADS_PER_RUN = 30
 
 internal data class FutachaBindingsRuntimeState(
     val screenBindings: FutachaScreenBindingsBundle

@@ -72,9 +72,7 @@ internal object CatalogHtmlParserCore {
 
         try {
             val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
-            // NOTE: この処理は大きなHTML文字列のコピーを作成するため、メモリ使用量が増加する
-            // TODO: 将来的には、チャンク処理や正規表現での\r?\n対応を検討
-            val normalized = html.replace("\r\n", "\n")
+            val normalized = normalizeLineBreaksIfNeeded(html)
 
             // Find table start and end using indexOf for better performance
             val tableStartTag = "<table"
@@ -229,6 +227,11 @@ internal object CatalogHtmlParserCore {
             Logger.e("CatalogHtmlParserCore", "Failed to parse catalog HTML: ${e.message}")
             throw ParserException("Failed to parse catalog HTML", e)
         }
+    }
+
+    private fun normalizeLineBreaksIfNeeded(html: String): String {
+        if (!html.contains('\r')) return html
+        return html.replace("\r\n", "\n").replace('\r', '\n')
     }
 
     private fun extractBetween(text: String, startTagPartial: String, endTag: String): String? {

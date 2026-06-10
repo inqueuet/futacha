@@ -112,7 +112,7 @@ class AppStateStore internal constructor(
 
     companion object {
         private const val TAG = "AppStateStore"
-        private const val SCROLL_DEBOUNCE_DELAY_MS = 1_000L
+        private const val SCROLL_DEBOUNCE_DELAY_MS = 2_000L
         private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
         private const val SELF_POST_KEY_DELIMITER = "::"
         private const val HISTORY_PERSIST_MAX_PASSES = 8

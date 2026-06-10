@@ -139,6 +139,7 @@ class IosFileSystem : FileSystem {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
+            coroutineContext.ensureActive()
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = parentDirectory(absolutePath)
 
@@ -172,6 +173,7 @@ class IosFileSystem : FileSystem {
             if (!success) {
                 throw Exception("Failed to write file")
             }
+            coroutineContext.ensureActive()
             Unit
         }
     }
@@ -181,6 +183,7 @@ class IosFileSystem : FileSystem {
             validatePath(path, "path") // FIX: 入力検証
             val contentBytes = content.encodeToByteArray()
             validateFileSize(contentBytes.size.toLong(), "content") // FIX: サイズ検証
+            coroutineContext.ensureActive()
             val absolutePath = resolveAbsolutePath(path)
             val parentDir = parentDirectory(absolutePath)
 
@@ -211,6 +214,7 @@ class IosFileSystem : FileSystem {
                     throw Exception("Failed to write string: ${error.value?.localizedDescription ?: "Unknown error"}")
                 }
             }
+            coroutineContext.ensureActive()
             Unit
         }
     }
@@ -218,6 +222,7 @@ class IosFileSystem : FileSystem {
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
+            coroutineContext.ensureActive()
             val absolutePath = resolveAbsolutePath(path)
             val data = NSData.dataWithContentsOfFile(absolutePath)
                 ?: throw Exception("File not found: $absolutePath")
@@ -233,6 +238,7 @@ class IosFileSystem : FileSystem {
             bytes.usePinned { pinned ->
                 memcpy(pinned.addressOf(0), data.bytes, data.length)
             }
+            coroutineContext.ensureActive()
             bytes
         }
     }
@@ -240,6 +246,7 @@ class IosFileSystem : FileSystem {
     override suspend fun readString(path: String): Result<String> = withContext(AppDispatchers.io) {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
+            coroutineContext.ensureActive()
             val absolutePath = resolveAbsolutePath(path)
             // FIX: サイズチェックのため、まずファイルサイズを確認
             val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
@@ -255,6 +262,7 @@ class IosFileSystem : FileSystem {
                 if (content == null) {
                     throw Exception("Failed to read file: ${error.value?.localizedDescription ?: "File not found"}")
                 }
+                coroutineContext.ensureActive()
                 content
             }
         }

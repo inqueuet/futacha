@@ -66,7 +66,7 @@ internal object PageEmbeddedHtmlParserSupport {
         contentEndIndex: Int?
     ): List<EmbeddedHtmlContent> {
         if (html.isBlank()) return emptyList()
-        val normalized = html.replace("\r\n", "\n")
+        val normalized = normalizeLineBreaksIfNeeded(html)
         val grouped = LinkedHashMap<EmbeddedHtmlPlacement, MutableList<EmbeddedHtmlContent>>()
         val seenKeys = LinkedHashSet<String>()
 
@@ -106,6 +106,11 @@ internal object PageEmbeddedHtmlParserSupport {
             addAll(grouped[EmbeddedHtmlPlacement.Header].orEmpty())
             addAll(grouped[EmbeddedHtmlPlacement.Footer].orEmpty())
         }
+    }
+
+    private fun normalizeLineBreaksIfNeeded(html: String): String {
+        if (!html.contains('\r')) return html
+        return html.replace("\r\n", "\n").replace('\r', '\n')
     }
 
     private fun findCatalogContentStartIndex(html: String): Int {

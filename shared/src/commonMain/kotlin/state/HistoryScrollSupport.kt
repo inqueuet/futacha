@@ -3,9 +3,9 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlin.math.abs
 
-internal const val HISTORY_SCROLL_OFFSET_WRITE_THRESHOLD_PX = 48
-internal const val HISTORY_SCROLL_PERSIST_MIN_INTERVAL_MS = 5_000L
-internal const val HISTORY_SCROLL_VISITED_UPDATE_INTERVAL_MS = 30_000L
+internal const val HISTORY_SCROLL_OFFSET_WRITE_THRESHOLD_PX = 96
+internal const val HISTORY_SCROLL_PERSIST_MIN_INTERVAL_MS = 15_000L
+internal const val HISTORY_SCROLL_VISITED_UPDATE_INTERVAL_MS = 60_000L
 
 internal fun shouldSkipHistoryScrollUpdate(
     existingEntry: ThreadHistoryEntry?,

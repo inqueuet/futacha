@@ -6,6 +6,7 @@ internal const val DEFAULT_DEL_REASON_CODE = "110"
 internal const val AUTO_SAVE_INTERVAL_MS = 60_000L
 internal const val THREAD_MANUAL_SAVE_TIMEOUT_MS = 6 * 60_000L
 internal const val THREAD_SINGLE_MEDIA_SAVE_TIMEOUT_MS = 150_000L
+internal const val THREAD_REMOTE_LOAD_TIMEOUT_MS = 35_000L
 internal const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
 internal const val ARCHIVE_FALLBACK_TIMEOUT_MS = 20_000L
 internal const val OFFLINE_FALLBACK_TIMEOUT_MS = 10_000L

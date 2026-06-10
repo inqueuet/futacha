@@ -8,6 +8,8 @@ import com.valoser.futacha.shared.model.normalizeWatchWords
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 internal fun buildVisibleCatalogItems(
     items: List<CatalogItem>,
@@ -95,10 +97,13 @@ internal suspend fun loadCatalogItemsForMode(
     }
 
     val fetchResults = coroutineScope {
+        val fetchSemaphore = Semaphore(2)
         CatalogMode.watchSourceModes.map { sourceMode ->
             async {
-                runCatching {
-                    fetchCatalog(boardUrl, sourceMode)
+                fetchSemaphore.withPermit {
+                    runCatching {
+                        fetchCatalog(boardUrl, sourceMode)
+                    }
                 }
             }
         }.awaitAll()

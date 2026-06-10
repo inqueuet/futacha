@@ -209,6 +209,7 @@ private fun CatalogScreenContent(
     val updateLastUsedDeleteKey = persistentBindings.updateLastUsedDeleteKey
     val archiveSearchJson = runtimeHandles.archiveSearchJson
     var pastSearchRuntimeState by searchOverlayStateRefs.pastSearchRuntimeState
+    var hasSyncedCatalogMode by remember(board?.id) { mutableStateOf(false) }
     val catalogGridState = runtimeHandles.catalogGridState
     val catalogListState = runtimeHandles.catalogListState
     LaunchedEffect(board?.id, persistentBindings.persistedCatalogModes) {
@@ -216,6 +217,7 @@ private fun CatalogScreenContent(
             boardId = board?.id,
             persistedCatalogModes = persistentBindings.persistedCatalogModes
         )?.let { catalogMode = it }
+        hasSyncedCatalogMode = true
     }
     LaunchedEffect(board?.url) {
         pastSearchRuntimeState.job?.cancel()
@@ -496,7 +498,8 @@ private fun CatalogScreenContent(
         lifecycleBindings.onNavigateBack()
     }
 
-    LaunchedEffect(board?.url, catalogMode) {
+    LaunchedEffect(board?.url, catalogMode, hasSyncedCatalogMode) {
+        if (!hasSyncedCatalogMode) return@LaunchedEffect
         lifecycleBindings.onInitialLoad()
     }
     val overlayBindings = interactionHandles.overlayBindings

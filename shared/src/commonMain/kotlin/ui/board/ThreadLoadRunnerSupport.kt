@@ -17,7 +17,8 @@ internal data class ThreadLoadRunnerConfig(
     val threadUrlOverride: String?,
     val allowOfflineFallback: Boolean,
     val archiveFallbackTimeoutMillis: Long,
-    val offlineFallbackTimeoutMillis: Long
+    val offlineFallbackTimeoutMillis: Long,
+    val remoteLoadTimeoutMillis: Long
 )
 
 internal fun buildThreadLoadRunnerConfig(
@@ -26,7 +27,8 @@ internal fun buildThreadLoadRunnerConfig(
     threadUrlOverride: String?,
     allowOfflineFallback: Boolean,
     archiveFallbackTimeoutMillis: Long,
-    offlineFallbackTimeoutMillis: Long
+    offlineFallbackTimeoutMillis: Long,
+    remoteLoadTimeoutMillis: Long = THREAD_REMOTE_LOAD_TIMEOUT_MS
 ): ThreadLoadRunnerConfig {
     return ThreadLoadRunnerConfig(
         threadId = threadId,
@@ -34,7 +36,8 @@ internal fun buildThreadLoadRunnerConfig(
         threadUrlOverride = threadUrlOverride,
         allowOfflineFallback = allowOfflineFallback,
         archiveFallbackTimeoutMillis = archiveFallbackTimeoutMillis,
-        offlineFallbackTimeoutMillis = offlineFallbackTimeoutMillis
+        offlineFallbackTimeoutMillis = offlineFallbackTimeoutMillis,
+        remoteLoadTimeoutMillis = remoteLoadTimeoutMillis.coerceAtLeast(1_000L)
     )
 }
 
@@ -129,19 +132,21 @@ internal suspend fun performThreadLoadWithOfflineFallback(
     callbacks: ThreadLoadRunnerCallbacks
 ): ThreadLoadExecutionResult {
     try {
-        val content = when (
-            val fetchRequest = resolveThreadRemoteFetchRequest(
-                threadUrl = config.threadUrlOverride,
-                targetThreadId = config.threadId,
-                boardUrl = config.effectiveBoardUrl
-            )
-        ) {
-            is ThreadRemoteFetchRequest.ByUrl -> callbacks.loadRemoteByUrl(fetchRequest.url)
-            is ThreadRemoteFetchRequest.ByBoard -> callbacks.loadRemoteByBoard(
-                fetchRequest.boardUrl,
-                fetchRequest.threadId
-            )
-        }
+        val content = withTimeoutOrNull(config.remoteLoadTimeoutMillis) {
+            when (
+                val fetchRequest = resolveThreadRemoteFetchRequest(
+                    threadUrl = config.threadUrlOverride,
+                    targetThreadId = config.threadId,
+                    boardUrl = config.effectiveBoardUrl
+                )
+            ) {
+                is ThreadRemoteFetchRequest.ByUrl -> callbacks.loadRemoteByUrl(fetchRequest.url)
+                is ThreadRemoteFetchRequest.ByBoard -> callbacks.loadRemoteByBoard(
+                    fetchRequest.boardUrl,
+                    fetchRequest.threadId
+                )
+            }
+        } ?: throw IllegalStateException("Thread load timed out after ${config.remoteLoadTimeoutMillis}ms")
         return ThreadLoadExecutionResult(
             page = content.page,
             embeddedHtml = content.embeddedHtml,

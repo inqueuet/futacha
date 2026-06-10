@@ -62,6 +62,7 @@ internal suspend fun initializeHttpBoardApiCatalogSetup(
     acceptLanguage: String,
     logTag: String,
     requestAttemptTimeoutMillis: Long,
+    maxAttempts: Int = 3,
     readSmallResponseSummary: suspend (HttpResponse) -> String?
 ) {
     val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
@@ -73,7 +74,8 @@ internal suspend fun initializeHttpBoardApiCatalogSetup(
     try {
         withHttpBoardApiRetry(
             logTag = logTag,
-            requestAttemptTimeoutMillis = requestAttemptTimeoutMillis
+            requestAttemptTimeoutMillis = requestAttemptTimeoutMillis,
+            maxAttempts = maxAttempts
         ) {
             val response: HttpResponse = client.submitForm(
                 url = url,

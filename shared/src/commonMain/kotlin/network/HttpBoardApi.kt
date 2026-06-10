@@ -68,8 +68,9 @@ class HttpBoardApi(
         private const val RESPONSE_READ_BUFFER_BYTES = 8 * 1024
         private const val MAX_ZERO_READ_RETRIES = 250
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
-        private const val RESPONSE_TOTAL_TIMEOUT_MILLIS = 30_000L
-        private const val REQUEST_ATTEMPT_TIMEOUT_MILLIS = 45_000L
+        private const val RESPONSE_TOTAL_TIMEOUT_MILLIS = 20_000L
+        private const val REQUEST_ATTEMPT_TIMEOUT_MILLIS = 25_000L
+        private const val REQUEST_MAX_ATTEMPTS = 2
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
@@ -107,6 +108,7 @@ class HttpBoardApi(
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,
             logTag = TAG,
             requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
+            maxAttempts = REQUEST_MAX_ATTEMPTS,
             readSmallResponseSummary = ::readSmallResponseSummary
         )
     }
@@ -229,7 +231,8 @@ class HttpBoardApi(
         return try {
             withHttpBoardApiRetry(
                 logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS
+                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
+                maxAttempts = REQUEST_MAX_ATTEMPTS
             ) {
                 executeHttpBoardApiTextGet(
                     client = client,
