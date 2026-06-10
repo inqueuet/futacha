@@ -42,7 +42,7 @@ struct iOSApp: App {
                         NSLog("Failed to enqueue Futacha AI deep link: %@", url.absoluteString)
                     }
                 }
-                .onChange(of: scenePhase) { phase in
+                .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         retryPendingFutachaAiDeepLinks()
                     }

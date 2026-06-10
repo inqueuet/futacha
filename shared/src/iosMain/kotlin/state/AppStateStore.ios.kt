@@ -1,13 +1,17 @@
 package com.valoser.futacha.shared.state
 
 import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import platform.Foundation.NSLock
 import platform.Foundation.NSUserDefaults
 
 private const val BOARDS_KEY = "boards_json"
@@ -53,46 +57,53 @@ internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformS
 private class IosPlatformStateStorage : PlatformStateStorage {
     private val defaults = NSUserDefaults.standardUserDefaults()
     private val updateMutex = Mutex()
+    private val cacheLock = NSLock()
     private val stringReadCache = mutableMapOf<String, String?>()
     private val booleanReadCache = mutableMapOf<String, Boolean>()
+    private val locallyUpdatedKeys = mutableSetOf<String>()
+    private val deferredLoadScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val boardsState = MutableStateFlow(readStringState(BOARDS_KEY))
     private val historyState = MutableStateFlow(readStringState(HISTORY_KEY))
-    private val displayStyleState = MutableStateFlow(readStringState(CATALOG_DISPLAY_STYLE_KEY))
-    private val gridColumnsState = MutableStateFlow(readStringState(CATALOG_GRID_COLUMNS_KEY))
-    private val privacyFilterState = MutableStateFlow(readBooleanState(PRIVACY_FILTER_KEY))
-    private val backgroundRefreshState = MutableStateFlow(readBooleanState(BACKGROUND_REFRESH_KEY))
-    private val adsEnabledState = MutableStateFlow(
-        readBooleanState(ADS_ENABLED_KEY, defaultValue = true)
-    )
-    private val postingNoticeState = MutableStateFlow(readBooleanState(POSTING_NOTICE_KEY))
-    private val lightweightModeState = MutableStateFlow(readBooleanState(LIGHTWEIGHT_MODE_KEY))
-    private val threadSummaryModeState = MutableStateFlow(readBooleanState(THREAD_SUMMARY_MODE_KEY))
-    private val aiPostFilterState = MutableStateFlow(readBooleanState(AI_POST_FILTER_KEY))
+    private val displayStyleState = MutableStateFlow<String?>(null)
+    private val gridColumnsState = MutableStateFlow<String?>(null)
+    private val privacyFilterState = MutableStateFlow(false)
+    private val backgroundRefreshState = MutableStateFlow(false)
+    private val adsEnabledState = MutableStateFlow(true)
+    private val postingNoticeState = MutableStateFlow(false)
+    private val lightweightModeState = MutableStateFlow(false)
+    private val threadSummaryModeState = MutableStateFlow(false)
+    private val aiPostFilterState = MutableStateFlow(false)
     private val aiCommandState = MutableStateFlow(readBooleanState(AI_COMMAND_KEY))
-    private val appLockPasswordHashState = MutableStateFlow(readStringState(APP_LOCK_PASSWORD_HASH_KEY))
+    private val appLockPasswordHashState = MutableStateFlow<String?>(null)
     private val manualSaveDirectoryState = MutableStateFlow(
-        sanitizeManualSaveDirectoryValue(readStringState(MANUAL_SAVE_DIRECTORY_KEY))
+        DEFAULT_MANUAL_SAVE_ROOT
     )
-    private val attachmentPickerPreferenceState = MutableStateFlow(readStringState(ATTACHMENT_PICKER_PREF_KEY))
-    private val saveDirectorySelectionState = MutableStateFlow(readStringState(SAVE_DIRECTORY_SELECTION_KEY))
-    private val threadGalleryTapActionState = MutableStateFlow(readStringState(THREAD_GALLERY_TAP_ACTION_KEY))
-    private val themeModeState = MutableStateFlow(readStringState(THEME_MODE_KEY))
-    private val themePaletteState = MutableStateFlow(readStringState(THEME_PALETTE_KEY))
-    private val appIconVariantState = MutableStateFlow(readStringState(APP_ICON_VARIANT_KEY))
-    private val threadDisplayModeState = MutableStateFlow(readStringState(THREAD_DISPLAY_MODE_KEY))
-    private val catalogModeMapState = MutableStateFlow(readStringState(CATALOG_MODE_MAP_KEY))
-    private val ngHeadersState = MutableStateFlow(readStringState(NG_HEADERS_KEY))
-    private val ngWordsState = MutableStateFlow(readStringState(NG_WORDS_KEY))
-    private val catalogNgWordsState = MutableStateFlow(readStringState(CATALOG_NG_WORDS_KEY))
-    private val watchWordsState = MutableStateFlow(readStringState(WATCH_WORDS_KEY))
-    private val selfPostIdentifiersState = MutableStateFlow(readStringState(SELF_POST_IDENTIFIERS_KEY))
-    private val threadMenuConfigState = MutableStateFlow(readStringState(THREAD_MENU_CONFIG_KEY))
-    private val threadSettingsMenuConfigState = MutableStateFlow(readStringState(THREAD_SETTINGS_MENU_CONFIG_KEY))
-    private val threadMenuEntriesState = MutableStateFlow(readStringState(THREAD_MENU_ENTRIES_KEY))
-    private val catalogNavEntriesState = MutableStateFlow(readStringState(CATALOG_NAV_ENTRIES_KEY))
-    private val preferredFileManagerPackageState = MutableStateFlow(readStringState(PREFERRED_FILE_MANAGER_PACKAGE_KEY).orEmpty())
-    private val preferredFileManagerLabelState = MutableStateFlow(readStringState(PREFERRED_FILE_MANAGER_LABEL_KEY).orEmpty())
-    private val lastUsedDeleteKeyState = MutableStateFlow(readStringState(LAST_USED_DELETE_KEY))
+    private val attachmentPickerPreferenceState = MutableStateFlow<String?>(null)
+    private val saveDirectorySelectionState = MutableStateFlow<String?>(null)
+    private val threadGalleryTapActionState = MutableStateFlow<String?>(null)
+    private val themeModeState = MutableStateFlow<String?>(null)
+    private val themePaletteState = MutableStateFlow<String?>(null)
+    private val appIconVariantState = MutableStateFlow<String?>(null)
+    private val threadDisplayModeState = MutableStateFlow<String?>(null)
+    private val catalogModeMapState = MutableStateFlow<String?>(null)
+    private val ngHeadersState = MutableStateFlow<String?>(null)
+    private val ngWordsState = MutableStateFlow<String?>(null)
+    private val catalogNgWordsState = MutableStateFlow<String?>(null)
+    private val watchWordsState = MutableStateFlow<String?>(null)
+    private val selfPostIdentifiersState = MutableStateFlow<String?>(null)
+    private val threadMenuConfigState = MutableStateFlow<String?>(null)
+    private val threadSettingsMenuConfigState = MutableStateFlow<String?>(null)
+    private val threadMenuEntriesState = MutableStateFlow<String?>(null)
+    private val catalogNavEntriesState = MutableStateFlow<String?>(null)
+    private val preferredFileManagerPackageState = MutableStateFlow("")
+    private val preferredFileManagerLabelState = MutableStateFlow("")
+    private val lastUsedDeleteKeyState = MutableStateFlow<String?>(null)
+
+    init {
+        deferredLoadScope.launch {
+            loadDeferredInitialState()
+        }
+    }
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState
@@ -129,12 +140,165 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val preferredFileManagerLabel: Flow<String> = preferredFileManagerLabelState
     override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
 
+    private suspend fun loadDeferredInitialState() {
+        val stringValues = mapOf(
+            CATALOG_DISPLAY_STYLE_KEY to readStringState(CATALOG_DISPLAY_STYLE_KEY),
+            CATALOG_GRID_COLUMNS_KEY to readStringState(CATALOG_GRID_COLUMNS_KEY),
+            APP_LOCK_PASSWORD_HASH_KEY to readStringState(APP_LOCK_PASSWORD_HASH_KEY),
+            MANUAL_SAVE_DIRECTORY_KEY to readStringState(MANUAL_SAVE_DIRECTORY_KEY),
+            ATTACHMENT_PICKER_PREF_KEY to readStringState(ATTACHMENT_PICKER_PREF_KEY),
+            SAVE_DIRECTORY_SELECTION_KEY to readStringState(SAVE_DIRECTORY_SELECTION_KEY),
+            THREAD_GALLERY_TAP_ACTION_KEY to readStringState(THREAD_GALLERY_TAP_ACTION_KEY),
+            THEME_MODE_KEY to readStringState(THEME_MODE_KEY),
+            THEME_PALETTE_KEY to readStringState(THEME_PALETTE_KEY),
+            APP_ICON_VARIANT_KEY to readStringState(APP_ICON_VARIANT_KEY),
+            THREAD_DISPLAY_MODE_KEY to readStringState(THREAD_DISPLAY_MODE_KEY),
+            CATALOG_MODE_MAP_KEY to readStringState(CATALOG_MODE_MAP_KEY),
+            NG_HEADERS_KEY to readStringState(NG_HEADERS_KEY),
+            NG_WORDS_KEY to readStringState(NG_WORDS_KEY),
+            CATALOG_NG_WORDS_KEY to readStringState(CATALOG_NG_WORDS_KEY),
+            WATCH_WORDS_KEY to readStringState(WATCH_WORDS_KEY),
+            SELF_POST_IDENTIFIERS_KEY to readStringState(SELF_POST_IDENTIFIERS_KEY),
+            THREAD_MENU_CONFIG_KEY to readStringState(THREAD_MENU_CONFIG_KEY),
+            THREAD_SETTINGS_MENU_CONFIG_KEY to readStringState(THREAD_SETTINGS_MENU_CONFIG_KEY),
+            THREAD_MENU_ENTRIES_KEY to readStringState(THREAD_MENU_ENTRIES_KEY),
+            CATALOG_NAV_ENTRIES_KEY to readStringState(CATALOG_NAV_ENTRIES_KEY),
+            PREFERRED_FILE_MANAGER_PACKAGE_KEY to readStringState(PREFERRED_FILE_MANAGER_PACKAGE_KEY),
+            PREFERRED_FILE_MANAGER_LABEL_KEY to readStringState(PREFERRED_FILE_MANAGER_LABEL_KEY),
+            LAST_USED_DELETE_KEY to readStringState(LAST_USED_DELETE_KEY)
+        )
+        val booleanValues = mapOf(
+            PRIVACY_FILTER_KEY to readBooleanState(PRIVACY_FILTER_KEY),
+            BACKGROUND_REFRESH_KEY to readBooleanState(BACKGROUND_REFRESH_KEY),
+            ADS_ENABLED_KEY to readBooleanState(ADS_ENABLED_KEY, defaultValue = true),
+            POSTING_NOTICE_KEY to readBooleanState(POSTING_NOTICE_KEY),
+            LIGHTWEIGHT_MODE_KEY to readBooleanState(LIGHTWEIGHT_MODE_KEY),
+            THREAD_SUMMARY_MODE_KEY to readBooleanState(THREAD_SUMMARY_MODE_KEY),
+            AI_POST_FILTER_KEY to readBooleanState(AI_POST_FILTER_KEY),
+            AI_COMMAND_KEY to readBooleanState(AI_COMMAND_KEY)
+        )
+
+        updateMutex.withLock {
+            applyDeferredStringState(CATALOG_DISPLAY_STYLE_KEY, stringValues, displayStyleState)
+            applyDeferredStringState(CATALOG_GRID_COLUMNS_KEY, stringValues, gridColumnsState)
+            applyDeferredBooleanState(PRIVACY_FILTER_KEY, booleanValues, privacyFilterState)
+            applyDeferredBooleanState(BACKGROUND_REFRESH_KEY, booleanValues, backgroundRefreshState)
+            applyDeferredBooleanState(ADS_ENABLED_KEY, booleanValues, adsEnabledState)
+            applyDeferredBooleanState(POSTING_NOTICE_KEY, booleanValues, postingNoticeState)
+            applyDeferredBooleanState(LIGHTWEIGHT_MODE_KEY, booleanValues, lightweightModeState)
+            applyDeferredBooleanState(THREAD_SUMMARY_MODE_KEY, booleanValues, threadSummaryModeState)
+            applyDeferredBooleanState(AI_POST_FILTER_KEY, booleanValues, aiPostFilterState)
+            applyDeferredBooleanState(AI_COMMAND_KEY, booleanValues, aiCommandState)
+            applyDeferredStringState(APP_LOCK_PASSWORD_HASH_KEY, stringValues, appLockPasswordHashState)
+            applyDeferredStringState(
+                key = MANUAL_SAVE_DIRECTORY_KEY,
+                values = stringValues,
+                state = manualSaveDirectoryState,
+                transform = ::sanitizeManualSaveDirectoryValue
+            )
+            applyDeferredStringState(ATTACHMENT_PICKER_PREF_KEY, stringValues, attachmentPickerPreferenceState)
+            applyDeferredStringState(SAVE_DIRECTORY_SELECTION_KEY, stringValues, saveDirectorySelectionState)
+            applyDeferredStringState(THREAD_GALLERY_TAP_ACTION_KEY, stringValues, threadGalleryTapActionState)
+            applyDeferredStringState(THEME_MODE_KEY, stringValues, themeModeState)
+            applyDeferredStringState(THEME_PALETTE_KEY, stringValues, themePaletteState)
+            applyDeferredStringState(APP_ICON_VARIANT_KEY, stringValues, appIconVariantState)
+            applyDeferredStringState(THREAD_DISPLAY_MODE_KEY, stringValues, threadDisplayModeState)
+            applyDeferredStringState(CATALOG_MODE_MAP_KEY, stringValues, catalogModeMapState)
+            applyDeferredStringState(NG_HEADERS_KEY, stringValues, ngHeadersState)
+            applyDeferredStringState(NG_WORDS_KEY, stringValues, ngWordsState)
+            applyDeferredStringState(CATALOG_NG_WORDS_KEY, stringValues, catalogNgWordsState)
+            applyDeferredStringState(WATCH_WORDS_KEY, stringValues, watchWordsState)
+            applyDeferredStringState(SELF_POST_IDENTIFIERS_KEY, stringValues, selfPostIdentifiersState)
+            applyDeferredStringState(THREAD_MENU_CONFIG_KEY, stringValues, threadMenuConfigState)
+            applyDeferredStringState(THREAD_SETTINGS_MENU_CONFIG_KEY, stringValues, threadSettingsMenuConfigState)
+            applyDeferredStringState(THREAD_MENU_ENTRIES_KEY, stringValues, threadMenuEntriesState)
+            applyDeferredStringState(CATALOG_NAV_ENTRIES_KEY, stringValues, catalogNavEntriesState)
+            applyDeferredStringState(
+                key = PREFERRED_FILE_MANAGER_PACKAGE_KEY,
+                values = stringValues,
+                state = preferredFileManagerPackageState,
+                transform = { it.orEmpty() }
+            )
+            applyDeferredStringState(
+                key = PREFERRED_FILE_MANAGER_LABEL_KEY,
+                values = stringValues,
+                state = preferredFileManagerLabelState,
+                transform = { it.orEmpty() }
+            )
+            applyDeferredStringState(LAST_USED_DELETE_KEY, stringValues, lastUsedDeleteKeyState)
+        }
+    }
+
+    private fun applyDeferredStringState(
+        key: String,
+        values: Map<String, String?>,
+        state: MutableStateFlow<String?>
+    ) {
+        if (key !in locallyUpdatedKeys) {
+            state.value = values[key]
+        }
+    }
+
+    private fun applyDeferredStringState(
+        key: String,
+        values: Map<String, String?>,
+        state: MutableStateFlow<String>,
+        transform: (String?) -> String
+    ) {
+        if (key !in locallyUpdatedKeys) {
+            state.value = transform(values[key])
+        }
+    }
+
+    private fun applyDeferredBooleanState(
+        key: String,
+        values: Map<String, Boolean>,
+        state: MutableStateFlow<Boolean>
+    ) {
+        if (key !in locallyUpdatedKeys) {
+            state.value = values[key] ?: state.value
+        }
+    }
+
+    private inline fun <T> withCacheLock(block: () -> T): T {
+        cacheLock.lock()
+        return try {
+            block()
+        } finally {
+            cacheLock.unlock()
+        }
+    }
+
+    private fun cacheStringState(key: String, value: String?) {
+        withCacheLock {
+            stringReadCache[key] = value
+        }
+    }
+
+    private fun cachedStringState(key: String): String? {
+        return withCacheLock {
+            stringReadCache[key]
+        }
+    }
+
+    private fun cacheBooleanState(key: String, value: Boolean) {
+        withCacheLock {
+            booleanReadCache[key] = value
+        }
+    }
+
+    private fun cachedBooleanState(key: String): Boolean? {
+        return withCacheLock {
+            booleanReadCache[key]
+        }
+    }
+
     private fun readStringState(key: String): String? {
         var lastError: Throwable? = null
         repeat(IOS_STATE_READ_MAX_ATTEMPTS) { attempt ->
             runCatching { defaults.stringForKey(key) }
                 .onSuccess { value ->
-                    stringReadCache[key] = value
+                    cacheStringState(key, value)
                     return value
                 }
                 .onFailure { error ->
@@ -145,7 +309,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
                     )
                 }
         }
-        return stringReadCache[key].also {
+        return cachedStringState(key).also {
             if (lastError != null) {
                 Logger.e(
                     "IosPlatformStateStorage",
@@ -166,7 +330,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
                     defaults.boolForKey(key)
                 }
             }.onSuccess { value ->
-                booleanReadCache[key] = value
+                cacheBooleanState(key, value)
                 return value
             }.onFailure { error ->
                 lastError = error
@@ -176,7 +340,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
                 )
             }
         }
-        return (booleanReadCache[key] ?: defaultValue).also {
+        return (cachedBooleanState(key) ?: defaultValue).also {
             if (lastError != null) {
                 Logger.e(
                     "IosPlatformStateStorage",
@@ -203,7 +367,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         update {
             defaults.setObject(value, forKey = key)
             state.value = value
-            stringReadCache[key] = value
+            cacheStringState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -215,7 +380,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         update {
             defaults.setObject(value, forKey = key)
             state.value = value
-            stringReadCache[key] = value
+            cacheStringState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -227,7 +393,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         update {
             defaults.setBool(value, forKey = key)
             state.value = value
-            booleanReadCache[key] = value
+            cacheBooleanState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -244,8 +411,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             defaults.setObject(secondValue, forKey = secondKey)
             firstState.value = firstValue
             secondState.value = secondValue
-            stringReadCache[firstKey] = firstValue
-            stringReadCache[secondKey] = secondValue
+            cacheStringState(firstKey, firstValue)
+            cacheStringState(secondKey, secondValue)
+            locallyUpdatedKeys += firstKey
+            locallyUpdatedKeys += secondKey
         }
     }
 
@@ -257,7 +426,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaults.stringForKey(key) == null) {
             defaults.setObject(value, forKey = key)
             state.value = value
-            stringReadCache[key] = value
+            cacheStringState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -269,7 +439,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaults.objectForKey(key) == null) {
             defaults.setBool(value, forKey = key)
             state.value = value
-            booleanReadCache[key] = value
+            cacheBooleanState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -281,7 +452,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (defaults.stringForKey(key) == null) {
             defaults.setObject(value, forKey = key)
             state.value = value
-            stringReadCache[key] = value
+            cacheStringState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -293,7 +465,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         if (value != null && defaults.stringForKey(key) == null) {
             defaults.setObject(value, forKey = key)
             state.value = value
-            stringReadCache[key] = value
+            cacheStringState(key, value)
+            locallyUpdatedKeys += key
         }
     }
 
@@ -422,7 +595,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
                 defaults.setBool(false, forKey = ADS_ENABLED_KEY)
             }
             adsEnabledState.value = enabled
-            booleanReadCache[ADS_ENABLED_KEY] = enabled
+            cacheBooleanState(ADS_ENABLED_KEY, enabled)
+            locallyUpdatedKeys += ADS_ENABLED_KEY
         }
     }
 

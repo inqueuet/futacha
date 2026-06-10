@@ -295,25 +295,30 @@ internal fun ThreadAutoSaveLaunchEffect(
 ) {
     val currentOnStartAutoSave = rememberUpdatedState(onStartAutoSave)
     val latestPageForAutoSave = rememberUpdatedState(currentPageForAutoSave)
+    val latestAutoSaveEffectState = rememberUpdatedState(autoSaveEffectState)
     LaunchedEffect(
         threadId,
         isShowingOfflineCopy,
         httpClient,
-        fileSystem,
-        autoSaveEffectState.availability
+        fileSystem
     ) {
-        if (autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingPage ||
-            autoSaveEffectState.availability == ThreadAutoSaveAvailability.MissingDependencies ||
-            autoSaveEffectState.availability == ThreadAutoSaveAvailability.OfflineCopy ||
-            autoSaveEffectState.availability == ThreadAutoSaveAvailability.ThreadMismatch
-        ) {
-            return@LaunchedEffect
-        }
         while (isActive) {
-            latestPageForAutoSave.value?.let { page ->
-                currentOnStartAutoSave.value(page)
+            when (latestAutoSaveEffectState.value.availability) {
+                ThreadAutoSaveAvailability.Ready -> {
+                    val page = latestAutoSaveEffectState.value.page
+                        ?: latestPageForAutoSave.value
+                    page?.let { targetPage ->
+                        currentOnStartAutoSave.value(targetPage)
+                    }
+                    delay(AUTO_SAVE_INTERVAL_MS)
+                }
+                ThreadAutoSaveAvailability.InProgress -> delay(1_000L)
+                ThreadAutoSaveAvailability.Throttled -> delay(AUTO_SAVE_INTERVAL_MS)
+                ThreadAutoSaveAvailability.MissingPage -> delay(1_000L)
+                ThreadAutoSaveAvailability.MissingDependencies -> delay(1_000L)
+                ThreadAutoSaveAvailability.OfflineCopy,
+                ThreadAutoSaveAvailability.ThreadMismatch -> return@LaunchedEffect
             }
-            delay(AUTO_SAVE_INTERVAL_MS)
         }
     }
 }

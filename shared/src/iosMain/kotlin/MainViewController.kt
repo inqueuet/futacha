@@ -37,7 +37,11 @@ import platform.Foundation.NSUserDefaults
 import platform.UIKit.UIViewController
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
@@ -45,6 +49,7 @@ import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -105,8 +110,10 @@ private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val IOS_WATCH_PREVIEW_THREAD_LIMIT = 8
 private const val IOS_WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
+private const val IOS_WATCH_COMMAND_ID_MAX_BYTES = 128
 private const val IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES = 128 * 1024
 private const val IOS_WATCH_METADATA_LOAD_TIMEOUT_MILLIS = 1_000L
+private const val IOS_WATCH_HANDLED_COMMAND_ID_MAX_COUNT = 128
 
 private object IosWatchSnapshotBridge {
     private val scope = CoroutineScope(SupervisorJob() + AppDispatchers.io)
@@ -114,17 +121,31 @@ private object IosWatchSnapshotBridge {
     private val builder = WatchSnapshotBuilder()
     private val replyCountLock = NSLock()
     private val previousReplyCounts = mutableMapOf<WatchThreadKey, Int>()
+    private val handledCommandIdsLock = NSLock()
+    private val handledCommandIds = LinkedHashSet<String>()
 
     fun requestSnapshotJson(completion: (String?) -> Unit) {
         scope.launch {
             val encoded = runCatching {
                 val snapshot = buildSnapshot()
-                json.encodeToString(WatchSnapshot.serializer(), snapshot)
+                val snapshotJson = json.encodeToString(WatchSnapshot.serializer(), snapshot)
+                val payloadBytes = snapshotJson.encodeToByteArray().size
+                if (payloadBytes > IOS_WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) {
+                    Logger.w(
+                        "IosWatchSnapshotBridge",
+                        "Dropped watch snapshot because payload is too large: $payloadBytes bytes"
+                    )
+                    null
+                } else {
+                    snapshotJson
+                }
             }.getOrElse { error ->
                 Logger.w("IosWatchSnapshotBridge", "Failed to build watch snapshot: ${error.message}")
                 null
             }
-            completion(encoded)
+            withContext(Dispatchers.Main) {
+                completion(encoded)
+            }
         }
     }
 
@@ -154,6 +175,9 @@ private object IosWatchSnapshotBridge {
         val command = runCatching {
             json.decodeFromString(WatchCommand.serializer(), commandJson)
         }.getOrNull() ?: return false
+        if (isDuplicateCommand(command)) {
+            return true
+        }
         when (command.type) {
             WatchCommandType.Refresh -> {
                 scope.launch {
@@ -181,11 +205,11 @@ private object IosWatchSnapshotBridge {
                 return FutachaAiCommandBridge.enqueue(
                     FutachaAiCommand(
                         action = FutachaAiAction.OpenThread,
-                        parameters = mapOf(
-                            "boardId" to boardId,
-                            "boardUrl" to boardUrl,
-                            "threadId" to threadId
-                        ),
+                        parameters = buildIosWatchCommandParameters(command) {
+                            put("boardId", boardId)
+                            put("boardUrl", boardUrl)
+                            put("threadId", threadId)
+                        },
                         source = "watchos"
                     )
                 )
@@ -197,7 +221,7 @@ private object IosWatchSnapshotBridge {
                 return FutachaAiCommandBridge.enqueue(
                     FutachaAiCommand(
                         action = FutachaAiAction.OpenBoard,
-                        parameters = buildMap {
+                        parameters = buildIosWatchCommandParameters(command) {
                             boardId?.let { put("boardId", it) }
                             boardUrl?.let { put("boardUrl", it) }
                         },
@@ -233,11 +257,11 @@ private object IosWatchSnapshotBridge {
         return FutachaAiCommandBridge.enqueue(
             FutachaAiCommand(
                 action = action,
-                parameters = mapOf(
-                    "boardId" to boardId,
-                    "boardUrl" to boardUrl,
-                    "threadId" to threadId
-                ),
+                parameters = buildIosWatchCommandParameters(command) {
+                    put("boardId", boardId)
+                    put("boardUrl", boardUrl)
+                    put("threadId", threadId)
+                },
                 source = "watchos"
             )
         )
@@ -261,24 +285,38 @@ private object IosWatchSnapshotBridge {
 
     private suspend fun loadPreviewThreadPages(
         history: List<ThreadHistoryEntry>
-    ): Map<WatchThreadKey, ThreadPage> {
-        val result = mutableMapOf<WatchThreadKey, ThreadPage>()
+    ): Map<WatchThreadKey, ThreadPage> = coroutineScope {
         history
             .asSequence()
             .sortedByDescending { it.lastVisitedEpochMillis }
             .filter { it.hasAutoSave }
             .take(IOS_WATCH_PREVIEW_THREAD_LIMIT)
-            .forEach { entry ->
-                val metadata = withTimeoutOrNull(IOS_WATCH_METADATA_LOAD_TIMEOUT_MILLIS) {
-                    IosAppGraph.autoSavedThreadRepository
-                        .loadThreadMetadata(entry.threadId, entry.boardId)
-                        .getOrNull()
+            .map { entry ->
+                async {
+                    val metadata = withTimeoutOrNull(IOS_WATCH_METADATA_LOAD_TIMEOUT_MILLIS) {
+                        IosAppGraph.autoSavedThreadRepository
+                            .loadThreadMetadata(entry.threadId, entry.boardId)
+                            .getOrNull()
+                    }
+                        ?: return@async null
+                    val key = WatchThreadKey(entry.boardId, entry.boardUrl, entry.threadId)
+                    key to metadata.toThreadPage(IosAppGraph.fileSystem)
                 }
-                    ?: return@forEach
-                result[WatchThreadKey(entry.boardId, entry.boardUrl, entry.threadId)] =
-                    metadata.toThreadPage(IosAppGraph.fileSystem)
             }
-        return result
+            .toList()
+            .awaitAll()
+            .filterNotNull()
+            .toMap()
+    }
+
+    private inline fun buildIosWatchCommandParameters(
+        command: WatchCommand,
+        block: MutableMap<String, String>.() -> Unit
+    ): Map<String, String> = buildMap {
+        block()
+        command.commandId
+            ?.takeIf { it.isNotBlank() && it.encodeToByteArray().size <= IOS_WATCH_COMMAND_ID_MAX_BYTES }
+            ?.let { put("commandId", it) }
     }
 
     private inline fun <T> withReplyCountLock(block: () -> T): T {
@@ -287,6 +325,26 @@ private object IosWatchSnapshotBridge {
             block()
         } finally {
             replyCountLock.unlock()
+        }
+    }
+
+    private fun isDuplicateCommand(command: WatchCommand): Boolean {
+        val commandId = command.commandId
+            ?.takeIf { it.isNotBlank() && it.encodeToByteArray().size <= IOS_WATCH_COMMAND_ID_MAX_BYTES }
+            ?: return false
+        handledCommandIdsLock.lock()
+        return try {
+            if (!handledCommandIds.add(commandId)) {
+                true
+            } else {
+                while (handledCommandIds.size > IOS_WATCH_HANDLED_COMMAND_ID_MAX_COUNT) {
+                    val oldestCommandId = handledCommandIds.firstOrNull() ?: break
+                    handledCommandIds.remove(oldestCommandId)
+                }
+                false
+            }
+        } finally {
+            handledCommandIdsLock.unlock()
         }
     }
 }

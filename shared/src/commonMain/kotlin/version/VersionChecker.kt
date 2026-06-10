@@ -1,12 +1,23 @@
 package com.valoser.futacha.shared.version
 
+import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.HttpHeaders
+import io.ktor.utils.io.cancel
+import io.ktor.utils.io.readAvailable
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 
 /**
  * バージョン更新チェック機能
@@ -48,6 +59,11 @@ private val json = Json {
     ignoreUnknownKeys = true
 }
 private const val TAG = "VersionChecker"
+private const val MAX_GITHUB_RELEASE_RESPONSE_BYTES = 256 * 1024
+private const val GITHUB_RELEASE_READ_BUFFER_BYTES = 8 * 1024
+private const val GITHUB_RELEASE_MAX_ZERO_READ_RETRIES = 5
+private const val GITHUB_RELEASE_ZERO_READ_BACKOFF_MILLIS = 50L
+private const val GITHUB_RELEASE_RESPONSE_TIMEOUT_MILLIS = 10_000L
 
 /**
  * バージョン文字列を比較
@@ -132,14 +148,83 @@ suspend fun fetchLatestVersionFromGitHub(
 ): GitHubRelease? {
     return try {
         val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
-        val response = httpClient.get(url).bodyAsText()
-        json.decodeFromString<GitHubRelease>(response)
+        val response = httpClient.get(url)
+        val body = readGitHubReleaseResponseBody(response)
+        withContext(AppDispatchers.parsing) {
+            json.decodeFromString<GitHubRelease>(body)
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         Logger.w(TAG, "Failed to fetch latest version from GitHub: ${e.message}")
         null
     }
+}
+
+private suspend fun readGitHubReleaseResponseBody(response: HttpResponse): String {
+    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+    if (contentLength != null && contentLength > MAX_GITHUB_RELEASE_RESPONSE_BYTES) {
+        throw IllegalStateException("GitHub release response is too large")
+    }
+
+    val bytes = withContext(AppDispatchers.io) {
+        withTimeout(GITHUB_RELEASE_RESPONSE_TIMEOUT_MILLIS) {
+            val channel = response.bodyAsChannel()
+            val buffer = ByteArray(GITHUB_RELEASE_READ_BUFFER_BYTES)
+            var output = ByteArray(GITHUB_RELEASE_READ_BUFFER_BYTES)
+            var totalBytes = 0
+            var zeroReadCount = 0
+            var readLoopCount = 0L
+            var fullyConsumed = false
+            try {
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    if (read == -1) {
+                        fullyConsumed = true
+                        break
+                    }
+                    if (read == 0) {
+                        zeroReadCount += 1
+                        if (zeroReadCount >= GITHUB_RELEASE_MAX_ZERO_READ_RETRIES) {
+                            throw IllegalStateException("GitHub release response read stalled")
+                        }
+                        delay(GITHUB_RELEASE_ZERO_READ_BACKOFF_MILLIS)
+                        continue
+                    }
+
+                    zeroReadCount = 0
+                    val requiredSize = totalBytes + read
+                    if (requiredSize > MAX_GITHUB_RELEASE_RESPONSE_BYTES) {
+                        throw IllegalStateException("GitHub release response is too large")
+                    }
+                    if (requiredSize > output.size) {
+                        var nextSize = output.size
+                        while (nextSize < requiredSize) {
+                            nextSize = (nextSize * 2).coerceAtMost(MAX_GITHUB_RELEASE_RESPONSE_BYTES)
+                            if (nextSize == output.size) break
+                        }
+                        if (nextSize < requiredSize) {
+                            throw IllegalStateException("GitHub release response buffer expansion failed")
+                        }
+                        output = output.copyOf(nextSize)
+                    }
+                    buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
+                    totalBytes = requiredSize
+                    readLoopCount += 1
+                    if (readLoopCount % 32L == 0L) {
+                        yield()
+                    }
+                }
+                if (totalBytes == output.size) output else output.copyOf(totalBytes)
+            } finally {
+                if (!fullyConsumed) {
+                    runCatching { channel.cancel() }
+                }
+            }
+        }
+    }
+    return bytes.decodeToString()
 }
 
 /**

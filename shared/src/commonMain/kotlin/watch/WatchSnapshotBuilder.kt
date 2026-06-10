@@ -108,22 +108,21 @@ internal fun List<Post>.toWatchPreviewPosts(
     maxTextLength: Int
 ): List<WatchPostPreview> {
     if (maxPosts <= 0) return emptyList()
-    return asSequence()
-        .filterNot { it.isDeleted }
-        .mapNotNull { post ->
-            val text = post.messageHtml.toWatchPlainText(maxTextLength)
-            if (text.isBlank()) {
-                null
-            } else {
-                WatchPostPreview(
-                    postId = post.id,
-                    text = text,
-                    postedAtText = post.timestamp.takeIf { it.isNotBlank() }
-                )
-            }
+    val previews = ArrayList<WatchPostPreview>(maxPosts)
+    for (post in asReversed()) {
+        if (post.isDeleted) continue
+        val text = post.messageHtml.toWatchPlainText(maxTextLength)
+        if (text.isBlank()) continue
+        previews += WatchPostPreview(
+            postId = post.id,
+            text = text,
+            postedAtText = post.timestamp.takeIf { it.isNotBlank() }
+        )
+        if (previews.size >= maxPosts) {
+            break
         }
-        .toList()
-        .takeLast(maxPosts)
+    }
+    return previews.asReversed()
 }
 
 internal fun String.toWatchPlainText(maxLength: Int): String {

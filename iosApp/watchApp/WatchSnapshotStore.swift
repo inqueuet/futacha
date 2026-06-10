@@ -17,6 +17,8 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
     private let encoder = JSONEncoder()
     private let workQueue = DispatchQueue(label: "com.valoser.futacha.watchSnapshotStore", qos: .utility)
     private let snapshotPayloadMaxBytes = 128 * 1024
+    private let commandPayloadMaxBytes = 4 * 1024
+    private var commandSequence = 0
 
     private override init() {
         super.init()
@@ -31,6 +33,7 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
         }
         let session = WCSession.default
         guard session.activationState == .activated else {
+            setError("WatchConnectivity is not ready.")
             return
         }
         if !session.isReachable {
@@ -50,9 +53,6 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
 
     func requestRefresh() {
         sendCommand(.refresh())
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.requestSnapshot()
-        }
     }
 
     func openBoardOnPhone(_ board: WatchBoard) {
@@ -100,24 +100,43 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
         }
         let session = WCSession.default
         guard session.activationState == .activated else {
+            setError("WatchConnectivity is not ready.")
             return
         }
         do {
-            let data = try encoder.encode(command)
+            var commandWithId = command
+            commandWithId.commandId = nextCommandId()
+            let data = try encoder.encode(commandWithId)
             guard let json = String(data: data, encoding: .utf8) else {
                 return
             }
+            guard json.utf8.count <= commandPayloadMaxBytes else {
+                setError("Command payload is too large.")
+                return
+            }
             if !session.isReachable {
-                transferCommandJson(json, session: session)
+                if command.type == "Refresh" {
+                    transferCommandJson(json, session: session)
+                } else {
+                    setError("iPhoneアプリを開いてから再実行してください。")
+                }
                 return
             }
             session.sendMessage([commandKey: json], replyHandler: { [weak self] reply in
                 if let accepted = reply["accepted"] as? Bool, !accepted {
-                    self?.setError("Command was rejected by iPhone.")
+                    if let message = reply["message"] as? String, !message.isEmpty {
+                        self?.setError(message)
+                    } else {
+                        self?.setError("Command was rejected by iPhone.")
+                    }
                 }
             }, errorHandler: { [weak self] error in
-                self?.transferCommandJson(json, session: session)
-                self?.setError(error.localizedDescription)
+                if command.type == "Refresh" {
+                    self?.transferCommandJson(json, session: session)
+                    self?.setError(error.localizedDescription)
+                } else {
+                    self?.setError("iPhoneアプリを開いてから再実行してください。")
+                }
             })
         } catch {
             setError(error.localizedDescription)
@@ -208,6 +227,11 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.lastError = message
         }
+    }
+
+    private func nextCommandId() -> String {
+        commandSequence = commandSequence == Int.max ? 1 : commandSequence + 1
+        return "watchos-\(Int(Date().timeIntervalSince1970 * 1000))-\(commandSequence)"
     }
 }
 

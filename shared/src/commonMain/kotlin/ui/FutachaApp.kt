@@ -53,6 +53,8 @@ import kotlin.time.ExperimentalTime
 
 private const val TAG = "FutachaApp"
 private const val APP_LOCK_HASH_LOADING = "__futacha_app_lock_loading__"
+private const val AI_COMMAND_ID_MAX_BYTES = 128
+private const val AI_HANDLED_COMMAND_ID_MAX_COUNT = 128
 
 @OptIn(ExperimentalTime::class)
 @Composable
@@ -251,6 +253,7 @@ fun FutachaApp(
                 var aiResultMessage by remember { mutableStateOf<String?>(null) }
                 var isAiGlobalSettingsVisible by remember { mutableStateOf(false) }
                 var aiFileManagerPickerRequest by remember { mutableStateOf(0) }
+                val handledAiCommandIds = remember { LinkedHashSet<String>() }
                 val onAiScreenCommandConsumed: (FutachaAiCommand) -> Unit = { consumedCommand ->
                     if (pendingAiScreenCommand == consumedCommand) {
                         pendingAiScreenCommand = null
@@ -297,6 +300,9 @@ fun FutachaApp(
                     )
                 )
                 val currentHandleAiCommand by rememberUpdatedState<suspend (FutachaAiCommand) -> Unit> { command ->
+                    if (handledAiCommandIds.isDuplicateAiCommand(command)) {
+                        return@rememberUpdatedState
+                    }
                     val outcome = try {
                         executeFutachaAiCommand(
                             command = command,
@@ -565,4 +571,18 @@ private fun buildAiCommandUnexpectedFailureMessage(error: Throwable): String {
     } else {
         "AI操作に失敗しました: $detail"
     }
+}
+
+private fun LinkedHashSet<String>.isDuplicateAiCommand(command: FutachaAiCommand): Boolean {
+    val commandId = command.parameters["commandId"]
+        ?.takeIf { it.isNotBlank() && it.encodeToByteArray().size <= AI_COMMAND_ID_MAX_BYTES }
+        ?: return false
+    if (!add(commandId)) {
+        return true
+    }
+    while (size > AI_HANDLED_COMMAND_ID_MAX_COUNT) {
+        val oldestCommandId = firstOrNull() ?: break
+        remove(oldestCommandId)
+    }
+    return false
 }

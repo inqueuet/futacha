@@ -75,7 +75,8 @@ data class WatchCommand(
     val type: WatchCommandType,
     val boardId: String? = null,
     val boardUrl: String? = null,
-    val threadId: String? = null
+    val threadId: String? = null,
+    val commandId: String? = null
 )
 
 @Serializable

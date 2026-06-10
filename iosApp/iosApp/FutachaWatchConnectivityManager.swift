@@ -1,6 +1,10 @@
 import Foundation
 import shared
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 #if canImport(WatchConnectivity)
 import WatchConnectivity
 
@@ -93,14 +97,27 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
 
         if let commandJson = message[commandKey] as? String {
             guard commandJson.utf8.count <= commandPayloadMaxBytes else {
-                replyHandler?(["accepted": false])
+                replyHandler?(["accepted": false, "message": "Command payload is too large."])
+                return
+            }
+            let commandType = watchCommandType(commandJson)
+            if isUiDependentCommandType(commandType) && !isApplicationActiveForWatchCommand() {
+                replyHandler?(["accepted": false, "message": "iPhoneアプリを開いてから再実行してください。"])
                 return
             }
             let accepted = MainViewControllerKt.handleIosWatchCommandJson(commandJson: commandJson)
-            replyHandler?(["accepted": accepted])
+            replyHandler?(
+                accepted
+                    ? ["accepted": true]
+                    : ["accepted": false, "message": "iPhone側でコマンドを処理できませんでした。"]
+            )
             if accepted {
-                sendSnapshotIfAvailable()
-                scheduleSnapshotRetries()
+                if commandType == "Refresh" {
+                    scheduleRefreshSnapshotRetries()
+                } else {
+                    sendSnapshotIfAvailable()
+                    scheduleSnapshotRetries()
+                }
             }
             return
         }
@@ -108,6 +125,39 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         if (message[requestSnapshotKey] as? Bool) == true {
             requestSnapshot(replyHandler: replyHandler)
         }
+    }
+
+    private func watchCommandType(_ commandJson: String) -> String? {
+        guard
+            let data = commandJson.data(using: .utf8),
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let type = object["type"] as? String
+        else {
+            return nil
+        }
+        return type
+    }
+
+    private func isUiDependentCommandType(_ type: String?) -> Bool {
+        guard let type else {
+            return true
+        }
+        return type != "Refresh"
+    }
+
+    private func isApplicationActiveForWatchCommand() -> Bool {
+        #if canImport(UIKit)
+        if Thread.isMainThread {
+            return UIApplication.shared.applicationState == .active
+        }
+        var isActive = false
+        DispatchQueue.main.sync {
+            isActive = UIApplication.shared.applicationState == .active
+        }
+        return isActive
+        #else
+        return true
+        #endif
     }
 
     private func requestSnapshot(replyHandler: (([String: Any]) -> Void)?) {
@@ -261,6 +311,18 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
             }
             self.cancelSnapshotRetries()
             [1.5, 3, 8, 20, 45].forEach { delay in
+                self.scheduleSnapshotRetry(after: delay)
+            }
+        }
+    }
+
+    private func scheduleRefreshSnapshotRetries() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.cancelSnapshotRetries()
+            [8, 20, 45, 90, 180].forEach { delay in
                 self.scheduleSnapshotRetry(after: delay)
             }
         }

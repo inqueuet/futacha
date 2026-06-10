@@ -34,7 +34,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
     private static var moderationObserver: NSObjectProtocol?
     private static var moderationCancelObserver: NSObjectProtocol?
     private static var appActiveObserver: NSObjectProtocol?
-    private static let activeTaskLock = NSLock()
+    private static let activeTaskQueue = DispatchQueue(label: "com.valoser.futacha.appleIntelligence.activeTasks")
     private static var activeTasks: [String: Task<Void, Never>] = [:]
     private static var availabilityRefreshTask: Task<Void, Never>?
     private static var availabilityRefreshGeneration = 0
@@ -49,22 +49,21 @@ final class FutachaAppleIntelligenceBridge: NSObject {
 
     static func refreshAvailabilityAsync() {
         var taskToCancel: Task<Void, Never>?
-        activeTaskLock.lock()
-        availabilityRefreshGeneration += 1
-        let generation = availabilityRefreshGeneration
-        taskToCancel = availabilityRefreshTask
-        let task = Task {
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            refreshAvailability()
-            activeTaskLock.lock()
-            if availabilityRefreshGeneration == generation {
-                availabilityRefreshTask = nil
+        activeTaskQueue.sync {
+            availabilityRefreshGeneration += 1
+            let generation = availabilityRefreshGeneration
+            taskToCancel = availabilityRefreshTask
+            availabilityRefreshTask = Task {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                refreshAvailability()
+                activeTaskQueue.sync {
+                    if availabilityRefreshGeneration == generation {
+                        availabilityRefreshTask = nil
+                    }
+                }
             }
-            activeTaskLock.unlock()
         }
-        availabilityRefreshTask = task
-        activeTaskLock.unlock()
         taskToCancel?.cancel()
     }
 
@@ -215,53 +214,54 @@ final class FutachaAppleIntelligenceBridge: NSObject {
 
     private static func storeAiTask(requestId: String, task: Task<Void, Never>, kind: AiTaskKind) {
         var tasksToCancel: [Task<Void, Never>] = []
-        activeTaskLock.lock()
-        switch kind {
-        case .summary:
-            if let previousRequestId = activeSummaryRequestId, previousRequestId != requestId,
-               let previousTask = activeTasks.removeValue(forKey: previousRequestId) {
-                tasksToCancel.append(previousTask)
+        activeTaskQueue.sync {
+            switch kind {
+            case .summary:
+                if let previousRequestId = activeSummaryRequestId, previousRequestId != requestId,
+                   let previousTask = activeTasks.removeValue(forKey: previousRequestId) {
+                    tasksToCancel.append(previousTask)
+                }
+                activeSummaryRequestId = requestId
+            case .moderation:
+                if let previousRequestId = activeModerationRequestId, previousRequestId != requestId,
+                   let previousTask = activeTasks.removeValue(forKey: previousRequestId) {
+                    tasksToCancel.append(previousTask)
+                }
+                activeModerationRequestId = requestId
             }
-            activeSummaryRequestId = requestId
-        case .moderation:
-            if let previousRequestId = activeModerationRequestId, previousRequestId != requestId,
-               let previousTask = activeTasks.removeValue(forKey: previousRequestId) {
-                tasksToCancel.append(previousTask)
+            if let replacedTask = activeTasks.updateValue(task, forKey: requestId) {
+                tasksToCancel.append(replacedTask)
             }
-            activeModerationRequestId = requestId
         }
-        if let replacedTask = activeTasks.updateValue(task, forKey: requestId) {
-            tasksToCancel.append(replacedTask)
-        }
-        activeTaskLock.unlock()
         tasksToCancel.forEach { $0.cancel() }
     }
 
     private static func removeAiTask(requestId: String) {
-        activeTaskLock.lock()
-        activeTasks.removeValue(forKey: requestId)
-        if activeSummaryRequestId == requestId {
-            activeSummaryRequestId = nil
+        activeTaskQueue.sync {
+            activeTasks.removeValue(forKey: requestId)
+            if activeSummaryRequestId == requestId {
+                activeSummaryRequestId = nil
+            }
+            if activeModerationRequestId == requestId {
+                activeModerationRequestId = nil
+            }
         }
-        if activeModerationRequestId == requestId {
-            activeModerationRequestId = nil
-        }
-        activeTaskLock.unlock()
     }
 
     private static func cancelAiTask(requestId: String?) {
         guard let requestId, !requestId.isEmpty else {
             return
         }
-        activeTaskLock.lock()
-        let task = activeTasks.removeValue(forKey: requestId)
-        if activeSummaryRequestId == requestId {
-            activeSummaryRequestId = nil
+        let task = activeTaskQueue.sync {
+            let task = activeTasks.removeValue(forKey: requestId)
+            if activeSummaryRequestId == requestId {
+                activeSummaryRequestId = nil
+            }
+            if activeModerationRequestId == requestId {
+                activeModerationRequestId = nil
+            }
+            return task
         }
-        if activeModerationRequestId == requestId {
-            activeModerationRequestId = nil
-        }
-        activeTaskLock.unlock()
         task?.cancel()
     }
 

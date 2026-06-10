@@ -3,6 +3,7 @@ package com.valoser.futacha.wear.sync
 import android.util.Log
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
+import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.PutDataMapRequest
@@ -39,8 +40,16 @@ class WatchDataLayerListenerService : WearableListenerService() {
     override fun onMessageReceived(messageEvent: MessageEvent) {
         if (messageEvent.path != WATCH_SNAPSHOT_PATH) return
         if (messageEvent.data.isEmpty() || messageEvent.data.size > WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) return
-        val encoded = messageEvent.data.decodeToString()
-        decodeAndSaveSnapshot(encoded, ackId = null)
+        val dataMap = runCatching { DataMap.fromByteArray(messageEvent.data) }.getOrNull()
+        if (dataMap != null) {
+            val encoded = dataMap.getString(WATCH_SNAPSHOT_KEY) ?: return
+            val ackId = dataMap.getString(WATCH_SNAPSHOT_ACK_KEY)
+                ?.takeIf { it.encodeToByteArray().size <= WATCH_SNAPSHOT_ACK_PAYLOAD_MAX_BYTES }
+            decodeAndSaveSnapshot(encoded, ackId)
+        } else {
+            val encoded = messageEvent.data.decodeToString()
+            decodeAndSaveSnapshot(encoded, ackId = null)
+        }
     }
 
     private fun decodeAndSaveSnapshot(encoded: String, ackId: String?) {

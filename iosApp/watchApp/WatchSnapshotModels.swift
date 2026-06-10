@@ -107,9 +107,10 @@ struct WatchCommand: Encodable {
     let boardId: String?
     let boardUrl: String?
     let threadId: String?
+    var commandId: String?
 
     static func refresh() -> WatchCommand {
-        WatchCommand(type: "Refresh", boardId: nil, boardUrl: nil, threadId: nil)
+        WatchCommand(type: "Refresh", boardId: nil, boardUrl: nil, threadId: nil, commandId: nil)
     }
 
     static func openBoard(_ board: WatchBoard) -> WatchCommand {
@@ -117,7 +118,8 @@ struct WatchCommand: Encodable {
             type: "SelectBoard",
             boardId: board.id,
             boardUrl: board.url,
-            threadId: nil
+            threadId: nil,
+            commandId: nil
         )
     }
 
@@ -126,7 +128,8 @@ struct WatchCommand: Encodable {
             type: "OpenThreadOnPhone",
             boardId: thread.boardId,
             boardUrl: thread.boardUrl,
-            threadId: thread.threadId
+            threadId: thread.threadId,
+            commandId: nil
         )
     }
 
@@ -155,7 +158,8 @@ struct WatchCommand: Encodable {
             type: type,
             boardId: thread.boardId,
             boardUrl: thread.boardUrl,
-            threadId: thread.threadId
+            threadId: thread.threadId,
+            commandId: nil
         )
     }
 }

@@ -289,14 +289,18 @@ class DefaultBoardRepository(
     }
 
     override suspend fun voteSaidane(board: String, threadId: String, postId: String) {
-        runWithInitializedCookies(board) {
-            api.voteSaidane(board, threadId, postId)
+        withContext(AppDispatchers.io) {
+            runWithInitializedCookies(board) {
+                api.voteSaidane(board, threadId, postId)
+            }
         }
     }
 
     override suspend fun requestDeletion(board: String, threadId: String, postId: String, reasonCode: String) {
-        runWithInitializedCookies(board) {
-            api.requestDeletion(board, threadId, postId, reasonCode)
+        withContext(AppDispatchers.io) {
+            runWithInitializedCookies(board) {
+                api.requestDeletion(board, threadId, postId, reasonCode)
+            }
         }
     }
 
@@ -307,8 +311,10 @@ class DefaultBoardRepository(
         password: String,
         imageOnly: Boolean
     ) {
-        runWithInitializedCookies(board) {
-            api.deleteByUser(board, threadId, postId, password, imageOnly)
+        withContext(AppDispatchers.io) {
+            runWithInitializedCookies(board) {
+                api.deleteByUser(board, threadId, postId, password, imageOnly)
+            }
         }
     }
 
@@ -326,12 +332,14 @@ class DefaultBoardRepository(
     ): String? {
         // Post operations are sensitive, maybe don't auto-retry if side effects occurred?
         // For now, we'll use standard init check but not full retry loop to avoid double-posting risk
-        return runDefaultBoardRepositoryPostingWithInitializedCookies(
-            board = board,
-            cookieRepository = cookieRepository,
-            ensureCookiesInitialized = ::ensureCookiesInitialized
-        ) {
-            api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        return withContext(AppDispatchers.io) {
+            runDefaultBoardRepositoryPostingWithInitializedCookies(
+                board = board,
+                cookieRepository = cookieRepository,
+                ensureCookiesInitialized = ::ensureCookiesInitialized
+            ) {
+                api.replyToThread(board, threadId, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+            }
         }
     }
 
@@ -346,12 +354,14 @@ class DefaultBoardRepository(
         imageFileName: String?,
         textOnly: Boolean
     ): String? {
-        return runDefaultBoardRepositoryPostingWithInitializedCookies(
-            board = board,
-            cookieRepository = cookieRepository,
-            ensureCookiesInitialized = ::ensureCookiesInitialized
-        ) {
-            api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+        return withContext(AppDispatchers.io) {
+            runDefaultBoardRepositoryPostingWithInitializedCookies(
+                board = board,
+                cookieRepository = cookieRepository,
+                ensureCookiesInitialized = ::ensureCookiesInitialized
+            ) {
+                api.createThread(board, name, email, subject, comment, password, imageFile, imageFileName, textOnly)
+            }
         }
     }
 

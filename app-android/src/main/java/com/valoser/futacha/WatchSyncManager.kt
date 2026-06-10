@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import com.valoser.futacha.shared.ai.FutachaAiAction
@@ -34,6 +35,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -63,6 +67,8 @@ class WatchSyncManager(
     private val snapshotRequestMutex = Mutex()
     private val pendingSnapshotAckMutex = Mutex()
     private val pendingSnapshotAcks = LinkedHashMap<String, WatchSnapshot>()
+    private val handledCommandIdsMutex = Mutex()
+    private val handledCommandIds = LinkedHashSet<String>()
     private var isSnapshotRequestInFlight = false
     private var shouldSendSnapshotAfterCurrentRequest = false
     private val isStarted = AtomicBoolean(false)
@@ -159,6 +165,9 @@ class WatchSyncManager(
                     json.decodeFromString(WatchCommand.serializer(), payload.decodeToString())
                 }
             }.getOrNull() ?: return@launch
+            if (isDuplicateCommand(command)) {
+                return@launch
+            }
             handleCommand(command)
         }
     }
@@ -175,18 +184,22 @@ class WatchSyncManager(
         when (command.type) {
             WatchCommandType.Refresh -> {
                 scope.launch {
-                    runCatching {
-                        withTimeout(WATCH_REFRESH_TIMEOUT_MILLIS) {
-                            historyRefresher.refresh(
-                                autoSaveBudgetMillis = WATCH_REFRESH_AUTO_SAVE_BUDGET_MILLIS,
-                                maxThreadsPerRun = WATCH_REFRESH_MAX_THREADS_PER_RUN,
-                                maxAutoSavesPerRun = WATCH_REFRESH_MAX_AUTO_SAVES_PER_RUN
-                            )
+                    try {
+                        runCatching {
+                            withTimeout(WATCH_REFRESH_TIMEOUT_MILLIS) {
+                                historyRefresher.refresh(
+                                    autoSaveBudgetMillis = WATCH_REFRESH_AUTO_SAVE_BUDGET_MILLIS,
+                                    maxThreadsPerRun = WATCH_REFRESH_MAX_THREADS_PER_RUN,
+                                    maxAutoSavesPerRun = WATCH_REFRESH_MAX_AUTO_SAVES_PER_RUN
+                                )
+                            }
+                        }.onFailure { error ->
+                            if (error is CancellationException && error !is TimeoutCancellationException) {
+                                throw error
+                            }
                         }
-                    }.onFailure { error ->
-                        if (error is CancellationException && error !is TimeoutCancellationException) {
-                            throw error
-                        }
+                    } finally {
+                        requestSnapshot()
                     }
                 }
             }
@@ -214,6 +227,23 @@ class WatchSyncManager(
         }
     }
 
+    private suspend fun isDuplicateCommand(command: WatchCommand): Boolean {
+        val commandId = command.commandId
+            ?.takeIf { it.isNotBlank() && it.encodeToByteArray().size <= WATCH_COMMAND_ID_MAX_BYTES }
+            ?: return false
+        return handledCommandIdsMutex.withLock {
+            if (!handledCommandIds.add(commandId)) {
+                true
+            } else {
+                while (handledCommandIds.size > WATCH_HANDLED_COMMAND_ID_MAX_COUNT) {
+                    val oldestCommandId = handledCommandIds.firstOrNull() ?: break
+                    handledCommandIds.remove(oldestCommandId)
+                }
+                false
+            }
+        }
+    }
+
     private fun enqueueOpenBoardCommand(command: WatchCommand) {
         val boardId = command.boardId?.takeIf { it.isNotBlank() }
         val boardUrl = command.boardUrl?.takeIf { it.isNotBlank() }
@@ -224,6 +254,7 @@ class WatchSyncManager(
                 parameters = buildMap {
                     boardId?.let { put("boardId", it) }
                     boardUrl?.let { put("boardUrl", it) }
+                    command.commandId?.takeIf { it.isNotBlank() }?.let { put("commandId", it) }
                 },
                 source = "wear-os"
             )
@@ -253,7 +284,10 @@ class WatchSyncManager(
                     "boardId" to boardId,
                     "boardUrl" to boardUrl,
                     "threadId" to threadId
-                ),
+                ) + command.commandId
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { mapOf("commandId" to it) }
+                    .orEmpty(),
                 source = "wear-os"
             )
         )
@@ -304,29 +338,41 @@ class WatchSyncManager(
 
     private suspend fun loadPreviewThreadPages(
         history: List<ThreadHistoryEntry>
-    ): Map<WatchThreadKey, ThreadPage> {
-        val result = mutableMapOf<WatchThreadKey, ThreadPage>()
+    ): Map<WatchThreadKey, ThreadPage> = coroutineScope {
         history
             .asSequence()
             .sortedByDescending { it.lastVisitedEpochMillis }
             .filter { it.hasAutoSave }
             .take(WATCH_PREVIEW_THREAD_LIMIT)
-            .forEach { entry ->
-                val metadata = autoSavedThreadRepository
-                    .loadThreadMetadataWithTimeout(entry.threadId, entry.boardId)
-                    ?: return@forEach
-                val key = WatchThreadKey(
-                    boardId = entry.boardId,
-                    boardUrl = entry.boardUrl,
-                    threadId = entry.threadId
-                )
-                result[key] = metadata.toThreadPage(fileSystem)
+            .map { entry ->
+                async {
+                    val metadata = autoSavedThreadRepository
+                        .loadThreadMetadataWithTimeout(entry.threadId, entry.boardId)
+                        ?: return@async null
+                    val key = WatchThreadKey(
+                        boardId = entry.boardId,
+                        boardUrl = entry.boardUrl,
+                        threadId = entry.threadId
+                    )
+                    key to metadata.toThreadPage(fileSystem)
+                }
             }
-        return result
+            .toList()
+            .awaitAll()
+            .filterNotNull()
+            .toMap()
     }
 
     private suspend fun sendSnapshot(snapshot: WatchSnapshot) {
         val encoded = json.encodeToString(WatchSnapshot.serializer(), snapshot)
+        val payload = encoded.encodeToByteArray()
+        if (payload.size > WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) {
+            Logger.w(
+                TAG,
+                "Dropped watch snapshot because payload is too large: ${payload.size} bytes"
+            )
+            return
+        }
         val ackId = nextSnapshotAckId(snapshot)
         registerPendingSnapshotAck(ackId, snapshot)
         val request = PutDataMapRequest.create(WATCH_SNAPSHOT_PATH).apply {
@@ -338,13 +384,24 @@ class WatchSyncManager(
         val sentDataItem = (Wearable.getDataClient(context.applicationContext)
             .putDataItem(request)
             .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS) != null)
-        val sentMessage = sendSnapshotMessage(encoded)
+        val sentMessage = sendSnapshotMessage(encoded, ackId)
         if (!sentMessage && !sentDataItem) {
             removePendingSnapshotAck(ackId)
         }
     }
 
-    private suspend fun sendSnapshotMessage(encoded: String): Boolean {
+    private suspend fun sendSnapshotMessage(encoded: String, ackId: String): Boolean {
+        val payload = DataMap().apply {
+            putString(WATCH_SNAPSHOT_KEY, encoded)
+            putString(WATCH_SNAPSHOT_ACK_KEY, ackId)
+        }.toByteArray()
+        if (payload.size > WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES) {
+            Logger.w(
+                TAG,
+                "Skipped watch snapshot message because payload is too large: ${payload.size} bytes"
+            )
+            return false
+        }
         val appContext = context.applicationContext
         val connectedNodes = Wearable.getNodeClient(appContext)
             .connectedNodes
@@ -355,7 +412,6 @@ class WatchSyncManager(
             .ifEmpty { connectedNodes }
         if (nodes.isEmpty()) return false
 
-        val payload = encoded.encodeToByteArray()
         var sent = false
         nodes.forEach { node ->
             val messageId = Wearable.getMessageClient(appContext)
@@ -433,8 +489,11 @@ class WatchSyncManager(
         private const val TAG = "WatchSyncManager"
         private const val WATCH_PREVIEW_THREAD_LIMIT = 8
         private const val WATCH_COMMAND_PAYLOAD_MAX_BYTES = 4 * 1024
+        private const val WATCH_COMMAND_ID_MAX_BYTES = 128
         private const val WATCH_SNAPSHOT_ACK_PAYLOAD_MAX_BYTES = 128
+        private const val WATCH_SNAPSHOT_PAYLOAD_MAX_BYTES = 96 * 1024
         private const val WATCH_PENDING_SNAPSHOT_ACK_MAX_COUNT = 8
+        private const val WATCH_HANDLED_COMMAND_ID_MAX_COUNT = 128
         private const val WATCH_SNAPSHOT_DEBOUNCE_MILLIS = 1_000L
         private const val WATCH_SNAPSHOT_REQUEST_TIMEOUT_MILLIS = 10_000L
         private const val WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS = 10_000L
