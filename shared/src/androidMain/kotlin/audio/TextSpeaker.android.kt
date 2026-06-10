@@ -69,16 +69,24 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
                     IOException("読み上げ中にエラーが発生しました (code: $errorCode)")
                 )
             }
+
+            // QUEUE_FLUSH で中断された発話は onDone/onError ではなく onStop で
+            // 通知されるため、ここで解放しないと continuation が30秒タイムアウト
+            // まで残り続ける(iOS 側の didCancelSpeechUtterance に相当)
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                handleUtteranceStopped(utteranceId)
+            }
         })
     }
 
     actual suspend fun speak(text: String) {
         if (text.isBlank()) return
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
-        initState.await()
-
         // タイムアウトを追加してコルーチンがハングするのを防ぐ
+        // 初期化待ちもタイムアウト内に含める: TTSエンジンが初期化コールバックを
+        // 返さない端末で speak() が永久サスペンドするのを防ぐ
         withTimeout(SPEAK_TIMEOUT_MS) {
+            initState.await()
             suspendCancellableCoroutine<Unit> { continuation ->
                 val utteranceId = UUID.randomUUID().toString()
                 synchronized(lock) {
@@ -140,6 +148,14 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         } else {
             continuation.resumeWithException(error)
         }
+    }
+
+    private fun handleUtteranceStopped(utteranceId: String?) {
+        if (utteranceId == null) return
+        val continuation = synchronized(lock) {
+            continuations.remove(utteranceId)
+        }
+        continuation?.cancel(CancellationException("読み上げが停止されました"))
     }
 
     private fun cancelPending(reason: CancellationException) {

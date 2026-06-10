@@ -26,6 +26,9 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
     private var shouldSendSnapshotAfterCurrentRequest = false
     private var pendingSnapshotAckPayloads: [String: String] = [:]
     private var pendingSnapshotAckOrder: [String] = []
+    private let applicationActiveLock = NSLock()
+    private var isApplicationActiveCache = false
+    private var applicationActiveObserversInstalled = false
 
     private override init() {
         super.init()
@@ -35,6 +38,7 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         guard WCSession.isSupported() else {
             return
         }
+        installApplicationActiveObserversIfNeeded()
         let session = WCSession.default
         session.delegate = self
         session.activate()
@@ -150,14 +154,52 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
         if Thread.isMainThread {
             return UIApplication.shared.applicationState == .active
         }
-        var isActive = false
-        DispatchQueue.main.sync {
-            isActive = UIApplication.shared.applicationState == .active
-        }
-        return isActive
+        // Avoid DispatchQueue.main.sync from the WCSession delegate queue: it
+        // stalls watch command handling whenever the main thread is busy and
+        // can deadlock if the main thread ever waits on this queue.
+        applicationActiveLock.lock()
+        defer { applicationActiveLock.unlock() }
+        return isApplicationActiveCache
         #else
         return true
         #endif
+    }
+
+    private func installApplicationActiveObserversIfNeeded() {
+        #if canImport(UIKit)
+        let install = { [weak self] in
+            guard let self, !self.applicationActiveObserversInstalled else {
+                return
+            }
+            self.applicationActiveObserversInstalled = true
+            self.updateApplicationActiveCache(UIApplication.shared.applicationState == .active)
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateApplicationActiveCache(true)
+            }
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateApplicationActiveCache(false)
+            }
+        }
+        if Thread.isMainThread {
+            install()
+        } else {
+            DispatchQueue.main.async(execute: install)
+        }
+        #endif
+    }
+
+    private func updateApplicationActiveCache(_ isActive: Bool) {
+        applicationActiveLock.lock()
+        isApplicationActiveCache = isActive
+        applicationActiveLock.unlock()
     }
 
     private func requestSnapshot(replyHandler: (([String: Any]) -> Void)?) {

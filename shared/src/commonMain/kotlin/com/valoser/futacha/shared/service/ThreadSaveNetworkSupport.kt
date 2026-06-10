@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.TextEncoding
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
@@ -201,6 +202,12 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
                 val response: HttpResponse = withTimeoutOrNull(request.mediaRequestTimeoutMillis) {
                     httpClient.get(request.url) {
                         headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+                        timeout {
+                            // The client-wide request timeout (30s) keeps counting while the
+                            // body streams and would abort large downloads; extend it to the
+                            // save-duration budget. Connect/socket timeouts stay at defaults.
+                            requestTimeoutMillis = request.maxSaveDurationMs
+                        }
                     }
                 } ?: throw IllegalStateException(
                     "Download request timed out after ${request.mediaRequestTimeoutMillis}ms: ${request.url}"

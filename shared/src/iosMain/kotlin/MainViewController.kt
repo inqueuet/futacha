@@ -2,6 +2,7 @@ package com.valoser.futacha.shared
 
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.remember
 import androidx.compose.ui.window.ComposeUIViewController
 import com.valoser.futacha.shared.background.BackgroundRefreshManager
@@ -386,13 +387,33 @@ fun registerIosBackgroundRefreshTask() {
     }
 }
 
+/**
+ * Pairs acquireHttpClient/releaseHttpClient with the remember lifecycle,
+ * including abandoned compositions where DisposableEffect.onDispose never runs.
+ */
+private class IosHttpClientLease : RememberObserver {
+    val client: io.ktor.client.HttpClient = IosAppGraph.acquireHttpClient()
+    private var released = false
+
+    private fun release() {
+        if (!released) {
+            released = true
+            IosAppGraph.releaseHttpClient()
+        }
+    }
+
+    override fun onRemembered() {}
+    override fun onForgotten() = release()
+    override fun onAbandoned() = release()
+}
+
 fun MainViewController(): UIViewController {
     return ComposeUIViewController {
         val stateStore = remember { IosAppGraph.stateStore }
         val fileSystem = remember { IosAppGraph.fileSystem }
         val autoSavedThreadRepository = remember { IosAppGraph.autoSavedThreadRepository }
         val cookieRepository = remember { IosAppGraph.cookieRepository }
-        val httpClient = remember { IosAppGraph.acquireHttpClient() }
+        val httpClient = remember { IosHttpClientLease() }.client
         LaunchedEffect(fileSystem) {
             (fileSystem as? com.valoser.futacha.shared.util.IosFileSystem)
                 ?.cleanupTempFiles()
@@ -456,7 +477,6 @@ fun MainViewController(): UIViewController {
         DisposableEffect(Unit) {
             onDispose {
                 releaseSecurityScopedResource()
-                IosAppGraph.releaseHttpClient()
             }
         }
 

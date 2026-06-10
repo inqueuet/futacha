@@ -21,6 +21,7 @@ import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.version.createVersionChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -60,7 +61,9 @@ class MainActivity : ComponentActivity() {
             DisposableEffect(app, httpClient) {
                 onDispose {
                     if (app == null) {
-                        localResourceScope.launch {
+                        // onDestroy cancels localResourceScope before the composition is
+                        // disposed; NonCancellable keeps this cleanup job runnable.
+                        localResourceScope.launch(NonCancellable) {
                             runCatching { httpClient.close() }
                         }
                     }

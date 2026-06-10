@@ -152,21 +152,37 @@ private fun readPickedMediaBytesFromFileUrl(
     var totalRead = 0
 
     try {
-        while (true) {
-            val chunk = fileHandle.readDataOfLength(64UL * 1024UL)
-            val chunkLength = chunk.length.toInt()
-            if (chunkLength <= 0) break
-            if (totalRead + chunkLength > expectedSize) {
-                Logger.w("ImagePicker.ios", "Selected $mediaLabel exceeded declared file size while reading")
-                return null
+        memScoped {
+            val readError = alloc<ObjCObjectVar<NSError?>>()
+            while (true) {
+                // readDataOfLength throws ObjC NSException on I/O errors, which
+                // Kotlin/Native cannot catch; use the error-returning variant.
+                readError.value = null
+                val chunk = fileHandle.readDataUpToLength(64UL * 1024UL, error = readError.ptr)
+                if (chunk == null) {
+                    Logger.w(
+                        "ImagePicker.ios",
+                        "Failed to read $mediaLabel: ${readError.value?.localizedDescription}"
+                    )
+                    return null
+                }
+                val chunkLength = chunk.length.toInt()
+                if (chunkLength <= 0) break
+                if (totalRead + chunkLength > expectedSize) {
+                    Logger.w("ImagePicker.ios", "Selected $mediaLabel exceeded declared file size while reading")
+                    return null
+                }
+                output.usePinned { pinned ->
+                    memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
+                }
+                totalRead += chunkLength
             }
-            output.usePinned { pinned ->
-                memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
-            }
-            totalRead += chunkLength
         }
     } finally {
-        fileHandle.closeFile()
+        memScoped {
+            val closeError = alloc<ObjCObjectVar<NSError?>>()
+            fileHandle.closeAndReturnError(closeError.ptr)
+        }
     }
 
     if (totalRead <= 0 || totalRead > MAX_PICKED_IMAGE_BYTES) {

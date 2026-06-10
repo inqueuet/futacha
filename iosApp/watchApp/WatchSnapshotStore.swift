@@ -19,6 +19,9 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
     private let snapshotPayloadMaxBytes = 128 * 1024
     private let commandPayloadMaxBytes = 4 * 1024
     private var commandSequence = 0
+    // Accessed only on workQueue (serial); tracks the newest accepted snapshot
+    // so a stale replay (e.g. delayed applicationContext) cannot overwrite it.
+    private var latestGeneratedAtMillis: Int64?
 
     private override init() {
         super.init()
@@ -161,6 +164,10 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
             }
             do {
                 let snapshot = try self.decoder.decode(WatchSnapshot.self, from: data)
+                if let latest = self.latestGeneratedAtMillis, snapshot.generatedAtMillis < latest {
+                    return
+                }
+                self.latestGeneratedAtMillis = snapshot.generatedAtMillis
                 UserDefaults.standard.set(json, forKey: self.snapshotDefaultsKey)
                 if let ackId {
                     self.ackSnapshot(id: ackId)
@@ -211,6 +218,10 @@ final class WatchSnapshotStore: NSObject, ObservableObject {
             guard let snapshot = try? self.decoder.decode(WatchSnapshot.self, from: data) else {
                 return
             }
+            if let latest = self.latestGeneratedAtMillis, snapshot.generatedAtMillis <= latest {
+                return
+            }
+            self.latestGeneratedAtMillis = snapshot.generatedAtMillis
             DispatchQueue.main.async {
                 self.snapshot = snapshot
             }

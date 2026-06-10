@@ -17,13 +17,16 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okio.Buffer
 import platform.AVFoundation.AVAssetImageGenerator
+import platform.AVFoundation.AVAssetImageGeneratorSucceeded
 import platform.AVFoundation.AVURLAsset
+import platform.AVFoundation.valueWithCMTime
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
 import platform.CoreMedia.CMTimeMakeWithSeconds
 import platform.Foundation.NSData
 import platform.Foundation.NSError
 import platform.Foundation.NSURL
+import platform.Foundation.NSValue
 import platform.Foundation.pathExtension
 import platform.UIKit.UIImage
 import platform.UIKit.UIImagePNGRepresentation
@@ -45,6 +48,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalForeignApi::class)
 internal class IosVideoFrameFetcher(
@@ -117,7 +121,7 @@ private fun NSData.toByteArray(): ByteArray {
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun createAvFoundationThumbnail(
+private suspend fun createAvFoundationThumbnail(
     url: NSURL,
     options: Options
 ): NSData {
@@ -127,14 +131,38 @@ private fun createAvFoundationThumbnail(
     resolveMaximumThumbnailSize(options)?.let { (width, height) ->
         generator.maximumSize = CGSizeMake(width, height)
     }
-    val cgImage = generator.copyCGImageAtTime(
-        requestedTime = CMTimeMakeWithSeconds(0.0, preferredTimescale = 600),
-        actualTime = null,
-        error = null
-    ) ?: error("Failed to generate video thumbnail for $url")
-    val uiImage = UIImage.imageWithCGImage(cgImage)
-    return UIImagePNGRepresentation(uiImage)
-        ?: error("Failed to encode video thumbnail as PNG")
+    return withTimeoutOrNull(AV_THUMBNAIL_TIMEOUT_MILLIS) {
+        suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation {
+                generator.cancelAllCGImageGeneration()
+            }
+            val requestedTime = NSValue.valueWithCMTime(
+                CMTimeMakeWithSeconds(0.0, preferredTimescale = 600)
+            )
+            generator.generateCGImagesAsynchronouslyForTimes(
+                listOf(requestedTime)
+            ) { _, cgImage, _, result, generationError ->
+                if (!continuation.isActive) return@generateCGImagesAsynchronouslyForTimes
+                if (result == AVAssetImageGeneratorSucceeded && cgImage != null) {
+                    val data = UIImagePNGRepresentation(UIImage.imageWithCGImage(cgImage))
+                    if (data != null) {
+                        continuation.resume(data)
+                    } else {
+                        continuation.resumeWithException(
+                            IllegalStateException("Failed to encode video thumbnail as PNG")
+                        )
+                    }
+                } else {
+                    continuation.resumeWithException(
+                        IllegalStateException(
+                            generationError?.localizedDescription
+                                ?: "Failed to generate video thumbnail for $url"
+                        )
+                    )
+                }
+            }
+        }
+    } ?: error("Timed out generating video thumbnail for $url")
 }
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
@@ -230,6 +258,7 @@ private const val MAX_WEBKIT_THUMBNAIL_HEIGHT = 180.0
 private const val WEBKIT_THUMBNAIL_CACHE_MAX_ENTRIES = 32
 private const val WEBKIT_READY_POLL_LIMIT = 25
 private const val WEBKIT_READY_POLL_DELAY_MILLIS = 100L
+private const val AV_THUMBNAIL_TIMEOUT_MILLIS = 20_000L
 
 private fun resolveWebKitThumbnailSize(options: Options): Pair<Double, Double> {
     val maximumSize = resolveMaximumThumbnailSize(options)

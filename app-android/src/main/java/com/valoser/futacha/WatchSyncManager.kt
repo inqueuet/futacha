@@ -34,6 +34,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -136,23 +137,36 @@ class WatchSyncManager(
 
     private suspend fun drainSnapshotRequests() {
         var shouldContinue = true
-        while (shouldContinue) {
-            runCatching {
-                withTimeout(WATCH_SNAPSHOT_REQUEST_TIMEOUT_MILLIS) {
-                    sendCurrentSnapshot()
+        try {
+            while (shouldContinue) {
+                runCatching {
+                    withTimeout(WATCH_SNAPSHOT_REQUEST_TIMEOUT_MILLIS) {
+                        sendCurrentSnapshot()
+                    }
+                }.onFailure { error ->
+                    if (error is CancellationException && error !is TimeoutCancellationException) {
+                        throw error
+                    }
                 }
-            }.onFailure { error ->
-                if (error is CancellationException && error !is TimeoutCancellationException) {
-                    throw error
+                shouldContinue = snapshotRequestMutex.withLock {
+                    val pending = shouldSendSnapshotAfterCurrentRequest
+                    shouldSendSnapshotAfterCurrentRequest = false
+                    if (!pending) {
+                        isSnapshotRequestInFlight = false
+                    }
+                    pending
                 }
             }
-            shouldContinue = snapshotRequestMutex.withLock {
-                val pending = shouldSendSnapshotAfterCurrentRequest
-                shouldSendSnapshotAfterCurrentRequest = false
-                if (!pending) {
-                    isSnapshotRequestInFlight = false
+        } finally {
+            // If we exit abnormally (e.g. scope cancellation) the in-flight flag
+            // must be cleared, or every future requestSnapshot() becomes a no-op.
+            if (shouldContinue) {
+                withContext(NonCancellable) {
+                    snapshotRequestMutex.withLock {
+                        shouldSendSnapshotAfterCurrentRequest = false
+                        isSnapshotRequestInFlight = false
+                    }
                 }
-                pending
             }
         }
     }

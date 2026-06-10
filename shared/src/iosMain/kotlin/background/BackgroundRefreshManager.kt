@@ -116,6 +116,14 @@ object BackgroundRefreshManager {
 
     private fun handleTask(task: BGTask) {
         NSLog("BGTask handler invoked for $TASK_ID")
+        // BGTaskScheduler invokes this on a system background queue; hop to main
+        // so all manager state stays main-confined like configure()/cancel().
+        runOnMain {
+            handleTaskOnMain(task)
+        }
+    }
+
+    private fun handleTaskOnMain(task: BGTask) {
         hasPendingRefreshRequest = false
         var taskCompleted = false
         val completeTask: (Boolean) -> Unit = { success ->

@@ -29,6 +29,7 @@ import com.google.mlkit.common.sdkinternal.MlKitContext
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -737,6 +738,7 @@ private suspend fun performAvailabilityCheck(
                 )
             }
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             AiAvailability(
                 isAvailable = false,
                 unavailableReason = error.message ?: "Gemini Nano 要約の可用性を確認できませんでした。",
@@ -782,6 +784,7 @@ private suspend fun performLocalThreadSummary(
                     )
                 )
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
             } finally {
                 summarizer.close()
@@ -825,6 +828,7 @@ private suspend fun performLocalPostModeration(
                     }
                 )
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 Result.success(input.posts.map { PostModerationResult(postId = it.id, shouldHide = false) })
             } finally {
                 promptModel.close()

@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
@@ -60,6 +61,12 @@ class SingleMediaSaveService(
                         val response = withTimeoutOrNull(MEDIA_REQUEST_TIMEOUT_MILLIS) {
                             httpClient.get(normalizedUrl) {
                                 headers[HttpHeaders.Accept] = "image/*,video/*;q=0.9,*/*;q=0.2"
+                                timeout {
+                                    // The client-wide request timeout (30s) keeps counting while
+                                    // the body streams and would abort large downloads; extend it
+                                    // to the save-duration budget.
+                                    requestTimeoutMillis = MAX_SAVE_DURATION_MILLIS
+                                }
                             }
                         } ?: throw IllegalStateException(
                             "保存に失敗しました: ダウンロードがタイムアウトしました (${MEDIA_REQUEST_TIMEOUT_MILLIS}ms)"

@@ -42,7 +42,15 @@ object WatchSnapshotStore {
 
     suspend fun loadPersisted(context: Context) {
         if (snapshotState.value != null) return
-        snapshotState.value = load(context)
+        val loaded = load(context) ?: return
+        saveMutex.withLock {
+            // A fresher snapshot may have arrived via save() while load() was
+            // reading disk; never overwrite it with older persisted data.
+            val current = snapshotState.value
+            if (current == null || loaded.generatedAtMillis > current.generatedAtMillis) {
+                snapshotState.value = loaded
+            }
+        }
     }
 
     fun loadDataLayerSnapshotAsync(context: Context) {
