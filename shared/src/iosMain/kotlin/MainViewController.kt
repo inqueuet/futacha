@@ -79,10 +79,11 @@ private object IosAppGraph {
 
     fun acquireHttpClient(): io.ktor.client.HttpClient {
         return withResourceLock {
-            httpClientRefCount += 1
-            httpClient ?: createHttpClient(cookieStorage = cookieStorage).also {
+            val client = httpClient ?: createHttpClient(cookieStorage = cookieStorage).also {
                 httpClient = it
             }
+            httpClientRefCount += 1
+            client
         }
     }
 

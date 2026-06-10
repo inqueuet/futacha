@@ -4,8 +4,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,23 +37,34 @@ actual fun PlatformVideoPlayer(
     val currentCallback by rememberUpdatedState(onStateChanged)
     val currentSizeCallback by rememberUpdatedState(onVideoSizeKnown)
     val currentControlsCallback by rememberUpdatedState(onControlsVisibilityChanged)
-    val player = remember(context) {
-        ExoPlayer.Builder(context).build().apply {
+    var player by remember(context) { mutableStateOf<ExoPlayer?>(null) }
+
+    DisposableEffect(context) {
+        val createdPlayer = ExoPlayer.Builder(context).build().apply {
             playWhenReady = false
         }
+        player = createdPlayer
+        onDispose {
+            if (player === createdPlayer) {
+                player = null
+            }
+            createdPlayer.release()
+        }
     }
+
     val mediaItem = remember(videoUrl) {
         MediaItem.fromUri(videoUrl)
     }
 
-    LaunchedEffect(mediaItem) {
+    LaunchedEffect(mediaItem, player) {
+        val activePlayer = player ?: return@LaunchedEffect
         currentCallback(VideoPlayerState.Buffering)
-        player.setMediaItem(mediaItem)
-        player.prepare()
+        activePlayer.setMediaItem(mediaItem)
+        activePlayer.prepare()
     }
 
     LaunchedEffect(volume, isMuted, player) {
-        player.volume = normalizeVideoPlayerVolume(volume, isMuted)
+        player?.volume = normalizeVideoPlayerVolume(volume, isMuted)
     }
 
     AndroidView(
@@ -82,11 +95,12 @@ actual fun PlatformVideoPlayer(
     )
 
     DisposableEffect(player) {
+        val activePlayer = player ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> currentCallback(VideoPlayerState.Buffering)
-                    Player.STATE_READY -> currentCallback(resolveReadyVideoPlayerState(player.isPlaying))
+                    Player.STATE_READY -> currentCallback(resolveReadyVideoPlayerState(activePlayer.isPlaying))
                     Player.STATE_ENDED -> currentCallback(VideoPlayerState.Idle)
                 }
             }
@@ -103,10 +117,9 @@ actual fun PlatformVideoPlayer(
                 currentSizeCallback(videoSize.width, videoSize.height)
             }
         }
-        player.addListener(listener)
+        activePlayer.addListener(listener)
         onDispose {
-            player.removeListener(listener)
-            player.release()
+            activePlayer.removeListener(listener)
         }
     }
 }

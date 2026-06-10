@@ -17,11 +17,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import platform.FileProvider.NSFileProviderDomain
 import platform.FileProvider.NSFileProviderManager
+import kotlin.concurrent.AtomicReference
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+
+private const val FILE_PROVIDER_OPTIONS_TIMEOUT_MILLIS = 3_000L
 
 @Composable
 actual fun FileManagerPickerDialog(
@@ -74,27 +78,42 @@ actual fun FileManagerPickerDialog(
     )
 }
 
-private suspend fun fetchFileProviderOptions(): List<IosFileManagerOption> = suspendCoroutine { continuation ->
-    NSFileProviderManager.getDomainsWithCompletionHandler { domains, error ->
-        if (error != null) {
-            Logger.w("FileManagerPicker", "Failed to load file providers: ${error.localizedDescription}")
-            continuation.resume(emptyList())
-            return@getDomainsWithCompletionHandler
-        }
-        val resolved = domains
-            ?.filterIsInstance<NSFileProviderDomain>()
-            ?.mapNotNull { domain ->
-                val packageName = domain.identifier ?: return@mapNotNull null
-                IosFileManagerOption(
-                    packageName = packageName,
-                    label = domain.displayName
-                )
+private suspend fun fetchFileProviderOptions(): List<IosFileManagerOption> =
+    withTimeoutOrNull(FILE_PROVIDER_OPTIONS_TIMEOUT_MILLIS) {
+        suspendCancellableCoroutine { continuation ->
+            val completed = AtomicReference<Any?>(null)
+
+            fun complete(options: List<IosFileManagerOption>) {
+                if (completed.compareAndSet(null, Unit)) {
+                    continuation.resume(options)
+                }
             }
-            ?.sortedBy { it.label.lowercase() }
-            .orEmpty()
-        continuation.resume(resolved)
-    }
-}
+
+            continuation.invokeOnCancellation {
+                completed.compareAndSet(null, Unit)
+            }
+
+            NSFileProviderManager.getDomainsWithCompletionHandler { domains, error ->
+                if (error != null) {
+                    Logger.w("FileManagerPicker", "Failed to load file providers: ${error.localizedDescription}")
+                    complete(emptyList())
+                    return@getDomainsWithCompletionHandler
+                }
+                val resolved = domains
+                    ?.filterIsInstance<NSFileProviderDomain>()
+                    ?.mapNotNull { domain ->
+                        val packageName = domain.identifier ?: return@mapNotNull null
+                        IosFileManagerOption(
+                            packageName = packageName,
+                            label = domain.displayName
+                        )
+                    }
+                    ?.sortedBy { it.label.lowercase() }
+                    .orEmpty()
+                complete(resolved)
+            }
+        }
+    }.orEmpty()
 
 private fun defaultFilesOption(): IosFileManagerOption {
     return IosFileManagerOption(

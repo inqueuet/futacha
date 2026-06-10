@@ -27,6 +27,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
     private val lock = Any()
     private val continuations = mutableMapOf<String, CancellableContinuation<Unit>>()
     private val tts: TextToSpeech
+    @Volatile
     private var closed = false
 
     companion object {

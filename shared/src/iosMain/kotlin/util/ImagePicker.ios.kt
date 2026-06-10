@@ -51,7 +51,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 /**
  * UIDocumentPicker delegate の保持
  */
-private val activePickerDelegate = AtomicReference<NSObject?>(null)
+private val activePickerDelegates = AtomicReference<List<NSObject>>(emptyList())
 private const val DEFAULT_PICKED_VIDEO_FILE_NAME = "video.mov"
 
 private class ResumeGate {
@@ -62,12 +62,19 @@ private class ResumeGate {
 }
 
 private fun retainPickerDelegate(delegate: NSObject) {
-    activePickerDelegate.value = delegate
+    while (true) {
+        val current = activePickerDelegates.value
+        if (activePickerDelegates.compareAndSet(current, current + delegate)) return
+    }
 }
 
 private fun releasePickerDelegate(delegate: NSObject?) {
     delegate ?: return
-    activePickerDelegate.compareAndSet(delegate, null)
+    while (true) {
+        val current = activePickerDelegates.value
+        val next = current.filterNot { it === delegate }
+        if (next.size == current.size || activePickerDelegates.compareAndSet(current, next)) return
+    }
 }
 
 private fun isVideoMimeType(mimeType: String): Boolean =
