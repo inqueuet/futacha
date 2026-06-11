@@ -1,0 +1,494 @@
+================================================================================
+futacha コード調査結果まとめ(バグ・フリーズ・パフォーマンス)
+調査日: 2026-06-11
+================================================================================
+
+本ファイルは以下3回の調査結果をまとめたもの。
+  調査1: バグ・フリーズ全般の多角的調査
+  調査2: カタログ表示のカクつき(ぬるぬる動かない)の原因調査
+  調査3: スレ表示画面のフリーズ・動作の遅さの原因調査
+
+--------------------------------------------------------------------------------
+■ 最優先(フリーズの直接原因)
+--------------------------------------------------------------------------------
+
+[P1-1] iOS: WebM サムネイル生成が WKWebView をメインスレッドで実行
+  場所: shared/src/iosMain/kotlin/ui/image/IosVideoFrameFetcher.kt:216-252
+  内容:
+    - webm 添付のサムネイルを、メインキュー上で WKWebView 生成 → HTML ロード
+      → WebView 内で動画ダウンロード/デコード → JS ポーリング(100ms x 25回)
+      → スナップショット撮影、という手順で生成している。
+    - WKWebView の生成・ロードだけで数十〜数百ms メインスレッドを占有するため、
+      webm 付きレスが画面に入るたびに画面全体がフリーズする。
+      iOS でのフリーズの最有力原因。
+  追加の問題:
+    - この処理には全体タイムアウトがない。didFinishNavigation も didFail も
+      呼ばれずロードが止まると continuation が永遠に resume されず、
+      webKitThumbnailSemaphore(permits=1、:92)を握ったままになる。
+      → 以後セッション中すべての webm サムネ取得が永久に詰まる。
+      (AVFoundation 側 :134 には 20 秒タイムアウトがあるが WebKit 側にはない)
+  修正方針:
+    - withTimeoutOrNull で全体タイムアウトを付け、セマフォ解放を保証する(簡単・効果大)。
+    - 可能なら WKWebView 方式自体をオフメイン化または事前生成/再利用に変更。
+
+[P1-2] AI 投稿フィルタ有効時: レス1件ごとに全画面更新+サービス bind/unbind
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadScreenContentHost.kt:27
+        (THREAD_AI_POST_MODERATION_BATCH_SIZE = 1)
+        shared/src/androidMain/kotlin/ai/OnDeviceAiService.android.kt:447-545
+  内容:
+    - バッチサイズ1のため、レス1件分類するたびに AiPostModerationUiState
+      (新しい results リスト入り)が発行され(:358-365)、ThreadContent 全体が
+      再コンポーズ → aiHiddenPostState の O(n) 再計算(:380-393)も毎回再実行。
+      1000 レスのスレでは数百回繰り返される。
+    - Android では requestRemoteAi が 1 リクエストごとに bindService/unbindService
+      するため、レス1件 = 1回の IPC 接続確立+切断。数百回の bind/unbind が走る。
+    - 処理中ずっと CPU を食い続け、端末によっては固まったように見える。
+  修正方針:
+    - バッチサイズを増やす。UI への結果反映を間引く(例: 10件ごと/完了時のみ)。
+    - サービス接続を一定時間維持して使い回す。
+  補足:
+    - aiPostModerationUiState の produceState は key3=summaryState のため、
+      要約の Loading→Ready 遷移でモデレーションが最初からやり直しになる(:268-272)。
+
+--------------------------------------------------------------------------------
+■ 高優先(スクロール時のカクつき: スレ画面・カタログ共通の構造問題)
+--------------------------------------------------------------------------------
+
+[P2-1] エッジスワイプ更新: オーバースクロール値をコンポジションで読んでいる
+  場所: shared/src/commonMain/kotlin/ui/board/EdgeSwipeRefreshSupport.kt:122-148
+        (特に :142 の remember(overscrollOffset))
+  影響箇所: CatalogItemComponents.kt:39,50(カタログ Grid/List)
+            ThreadContentLayout.kt:71-97(スレ画面)
+  内容:
+    - animateFloatAsState の値をコンポジション内で読み、バインディングを
+      毎フレーム作り直している。上下端で引っ張った瞬間とリリース後の
+      スプリング収束まで、毎フレーム:
+        * CatalogGrid / ThreadContent 全体の再コンポーズ
+        * offset { } / edgeSwipeRefresh(composed)のモディファイアチェーン再構築
+        * リストの再レイアウト
+    - Modifier.offset { } のラムダ版を使っているのに読み取りがコンポジション側に
+      あるため、遅延読み取りの利点が失われている。
+    - さらに onOverscrollTargetChanged はドラッグ中の毎スクロールフレームで
+      呼ばれる(:314, :335)。
+    - スレ画面はカードが重いため被害がカタログより大きい。
+  修正方針:
+    - overscrollOffset を State<Float>(または () -> Float)のまま offset { }
+      ラムダ内で読む。バインディングを毎フレーム再生成しない。
+
+[P2-2] スクロール端の判定もコンポジションで読んでいる
+  場所: shared/src/commonMain/kotlin/ui/board/EdgeSwipeRefreshSupport.kt:91-103, 106-119
+  内容:
+    - derivedStateOf で作った isAtTop/isAtBottom をすぐコンポジションで読んで
+      Boolean に潰しているため、最上部からスクロール開始した瞬間・最下部到達の
+      瞬間に CatalogGrid / ThreadContent が再コンポーズされる。
+      「スクロールし始めに一瞬引っかかる」症状の典型原因。
+  修正方針:
+    - edgeSwipeRefresh 側は rememberUpdatedState で受けているので、
+      () -> Boolean のラムダで渡せばコンポジション読み取り自体が不要。
+
+[P2-3] スレ画面: isScrollInProgress のコンポジション読み取り
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadContentLayout.kt:76
+  内容:
+    - val isScrolling = listState.isScrollInProgress をコンポジションで直接
+      読んでいるため、スクロールの開始と停止のたびに ThreadContent 全体が
+      再コンポーズされる。
+    - その際 showQuotePreview が新インスタンスになり、items 内の
+      buildThreadScreenPostCardCallbacks(:155-168)が全可視レス分作り直され、
+      全 ThreadPostCard が再コンポーズされる。レスカードは画像+注釈付き
+      テキストで重く、スクロール開始の引っかかりの主因。
+  修正方針:
+    - isScrolling は引用プレビュー抑制にしか使っていないので、ラムダ内で
+      listState.isScrollInProgress を直接読む形にする。
+
+[P2-4] スレ画面スクロールバー: layoutInfo をコンポジションで毎フレーム読む
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadContentSupport.kt:164-217
+  内容:
+    - listState.layoutInfo / firstVisibleItemScrollOffset をコンポジションで
+      直接読んでいるため、ThreadScrollbar はスクロール中毎フレーム再コンポーズ
+      される。毎フレーム visibleItems の map/filter/average のアロケーションも発生。
+  修正方針:
+    - 計算を Canvas の draw スコープ内(または drawWithCache + derivedStateOf)
+      に移し、コンポジション読み取りをなくす。
+
+--------------------------------------------------------------------------------
+■ 中優先(慢性的な遅さ)
+--------------------------------------------------------------------------------
+
+[P3-1] 読み上げ中: 画面最大のコンポーザブルがレス移動ごとに全再実行
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadScreenDerivedRuntimeSupport.kt:180-194
+        shared/src/commonMain/kotlin/ui/board/ThreadScreen.kt:682, :629-667
+  内容:
+    - firstVisibleSegmentIndex は derivedStateOf だが ThreadScreen.kt:682 で
+      コンポジション中に読まれている。読み上げコントロール表示中は、先頭可視
+      アイテムが変わるたびに 1100 行の ThreadScreenContent 全体(数百個の
+      ラムダ束の再生成を含む)が再コンポーズされる。
+    - ThreadScreen.kt:629 の LaunchedEffect は currentReadAloudIndex をキーに
+      持つため、レスを読み進めるごとに再起動して WatchReadAloudStatusStore を
+      更新。それが Watch スナップショット生成(自動保存スレのメタデータを
+      ディスクから8件読込+JSON エンコード、WatchSyncManager.kt:106 の1秒
+      デバウンス)を毎回誘発する。
+
+[P3-2] AppDispatchers.parsing(並列度2)への一極集中
+  場所: shared/src/commonMain/kotlin/util/AppDispatchers.kt:51
+  内容:
+    - スレを開いた瞬間、以下が並列度2のディスパッチャに同時に殺到する:
+        * 全レスの派生データ構築(ThreadContentLayout.kt:57)
+        * メディアプレビュー一覧・読み上げセグメント・検索ターゲット
+          (ThreadScreenDerivedRuntimeSupport.kt:130-178)
+        * NG/絞り込みフィルタの全レス走査(ThreadScreenContentHost.kt:149)
+        * フィンガープリント計算(同 :96-108)
+        * 可視レス本文の AnnotatedString 生成(ThreadMessageComponents.kt:132)
+        * ネットワークレスポンスの文字コード変換(HttpBoardApiResponseSupport.kt:34)
+    - 本文注釈が他の全レス走査ジョブの後ろに並び、大スレを開いた直後に
+      レス本文がしばらく空白のままになる。
+  修正方針:
+    - 本文注釈だけ別ディスパッチャに分ける、または並列度を端末性能に応じて上げる。
+
+[P3-3] レスカード/カタログの画像まわり
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadPostComponents.kt:114-124
+        shared/src/commonMain/kotlin/ui/board/CatalogPreviewImageComponents.kt:46-59
+  内容:
+    - ThreadPostCard の ImageRequest に .size() 指定がない(:114-118)。
+      heightIn(max=200dp)+fillMaxWidth では制約が緩く、大きな画像が原寸近くで
+      デコードされる余地がある。
+    - painterState の collectAsState(ThreadPostComponents.kt:124、
+      CatalogPreviewImageComponents.kt:59)により、画像1枚のロードで
+      カード/セルが最低2回(Loading→Success)再コンポーズされる。
+      フリング中は大量発生。購読はフォールバック判定にしか使っていないので、
+      derivedStateOf で Error/Empty のみに絞れる。
+
+[P3-4] サムネ失敗時の動画フォールバックが重い
+  場所: shared/src/commonMain/kotlin/ui/image/ImageLoaderProvider.kt:96-147
+        (FutabaExtensionFallbackInterceptor)
+        shared/src/androidMain/kotlin/ui/image/ImageLoaderProvider.android.kt:10
+  内容:
+    - /src/ 画像の取得失敗時に .webm/.mp4 を試し、VideoFrameDecoder(Android)/
+      IosVideoFrameFetcher(iOS)が動画をダウンロードしてフレーム抽出する。
+      死んだサムネが多い板ではスクロール中にこの重い処理が並行して走る。
+    - デコードは Dispatchers.Default.limitedParallelism(3)
+      (AppDispatchers.kt:70-72)で UI スレッドとコアを取り合い、低〜中スペック
+      端末ではフリング中のフレーム落ちになる。
+  修正方針:
+    - カタログ用リクエストでは動画フォールバックを無効化する
+      (カタログサムネは /cat/ の jpg なので本来不要)。
+
+[P3-5] カタログ: カードごとに毎回走る計算
+  場所: shared/src/commonMain/kotlin/ui/board/CatalogItemComponents.kt:77-87, 151-161
+        shared/src/commonMain/kotlin/model/CatalogMode.kt:35-49
+        shared/src/commonMain/kotlin/ui/board/CatalogHeadMetadataSupport.kt:108-118
+  内容:
+    - matchesWatchWords は呼ばれるたびに監視ワードリスト全体を
+      trim/lowercase/distinct で正規化する。表示中アイテム数 x 再コンポーズ回数
+      だけ無駄なリスト生成が発生(P2-1/P2-2 の全カード再コンポーズと掛け算)。
+    - buildCatalogHeadMetadataCacheKey はアイテムごとに joinToString で
+      文字列キーを生成(毎回アロケーション)。
+  修正方針:
+    - normalizeWatchWords を一度だけ実行して正規化済みリストを渡す
+      (フィルタ側 CatalogViewTransformer.kt:40 では既にそうしている)。
+
+[P3-6] カタログ: モノリシック CatalogScreenContent(検索入力中のカクつき)
+  場所: shared/src/commonMain/kotlin/ui/board/CatalogScreen.kt:156-568
+  内容:
+    - 検索ボックスに1文字入力するごとに 400 行のボディ全体が再実行され、
+      buildCatalogScreenInteractionBindingsBundle /
+      buildCatalogScreenHostBindings の数十個のラムダ束を毎回再生成する。
+      フィルタ自体はデバウンス済みだが、画面全体の再コンポーズは毎キーストローク。
+    - スレ画面の ThreadScreenContent(ThreadScreen.kt:215-1193)も同じ構造。
+
+[P3-7] カタログ: フィルタ結果が非同期で初期値が空リスト(ちらつき)
+  場所: shared/src/commonMain/kotlin/ui/board/CatalogScreenHostComponents.kt:89-98
+        shared/src/commonMain/kotlin/ui/board/CatalogScreenDerivedRuntimeSupport.kt:42-57
+  内容:
+    - produceState(initialValue = emptyList()) でフィルタを非同期実行するため、
+      初回表示やモード切替直後はフィルタ完了まで空リストになり、
+      CatalogContentComponents.kt:68 の分岐で「表示できるスレッドがありません」が
+      一瞬表示されてからグリッドが出る。
+    - また produceState のキーが items リストを含む data class のため、
+      Success 分岐の再コンポーズごとにカタログ全アイテムの equals 比較(O(n))が走る。
+
+--------------------------------------------------------------------------------
+■ 機能バグ(調査1で発見)
+--------------------------------------------------------------------------------
+
+[B-1] Wear: スナップショット受信のたびに画面選択がリセットされる(重要度: 高)
+  場所: app-wear/src/main/java/com/valoser/futacha/wear/WearMainActivity.kt:97
+  内容:
+    - var selectedThreadId by remember(snapshot?.generatedAtMillis) { mutableStateOf(null) }
+      のキーが generatedAtMillis のため、新しいスナップショットが届くたびに
+      選択状態が null にリセットされる。
+    - スマホ側は読み上げ位置の変化のたびにスナップショットを再送する
+      (ThreadScreen.kt:629 の LaunchedEffect → WatchReadAloudStatusStore.update
+      → WatchSyncManager の combine が 1 秒デバウンスで送信)。
+    - 結果: 読み上げ中はレスが進むたびに Watch の ReadAloudControlView が閉じて
+      HomeView に強制的に戻される。ユーザーに見える不具合。
+  修正方針:
+    - キーを外す(remember { ... })。スレ消滅時は既に
+      firstOrNull { it.threadId == selectedThreadId } で安全に処理されている。
+
+[B-2] Cookie トランザクションがネットワーク I/O 中ロックを保持(重要度: 中)
+  場所: shared/src/commonMain/kotlin/network/PersistentCookieStorage.kt:247-267
+  内容:
+    - commitOnSuccess は transactionMutex.withLock { block() } で block()
+      (ネットワーク要求を含む)の完了までロックを保持する。
+    - addCookie / removeCookie / clearAll は withMutationSerialization 経由で
+      同じ transactionMutex を取るため、トランザクション外の並行リクエストが
+      Set-Cookie を受け取るとトランザクションの通信終了までブロックされる。
+      低速回線では Cookie 書き込みが直列化し、フリーズに見える遅延になり得る。
+    - さらに block() 内で CookieTransactionContext を継承しない別の
+      CoroutineScope に処理を launch して await し、その中で addCookie が
+      呼ばれるとデッドロックする。
+  修正方針:
+    - ステージング用マップを分け、ロック保持を mutex 内のメモリ操作だけに限定する。
+
+[B-3] ThreadScreen: AI コマンド実行 Effect のキー設計による二重実行(重要度: 中)
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadScreen.kt:816-917
+  内容:
+    - LaunchedEffect(args.aiCommand, readAloudSegments.size) で、消費通知
+      (onAiCommandConsumed)が when 分岐の完了後にしか呼ばれない。
+    - サスペンドする分岐(例: drawerState.open() はアニメーション完了まで
+      suspend)の実行中に readAloudSegments.size が変化すると、Effect が
+      未消費の同じコマンドでリスタートして再実行される。
+    - 同期分岐は中断点がないため安全。suspend を含む分岐のみリスク。
+  修正方針:
+    - 消費判定を Effect 冒頭で行う(実行前に消費済みフラグを立てる)か、
+      セグメント待機が必要なコマンドだけ別 Effect に分ける。
+    - 同様の Effect はカタログ側にもある(CatalogScreen.kt:412-474)が、
+      こちらはキーが args.aiCommand のみでリスクは低い。
+
+[B-4] WatchSyncManager: 同期コレクタが非キャンセル例外で静かに死ぬ(重要度: 中)
+  場所: app-android/src/main/java/com/valoser/futacha/WatchSyncManager.kt:124-128
+  内容:
+    - catch (error: Throwable) { if (error is CancellationException) throw error }
+      が CancellationException 以外を握りつぶし、finally で isStarted=false に
+      なるが誰も再起動しない。
+    - combine の上流(ストレージ読み取り等)が例外を投げると、ログも出ずに
+      Watch への自動スナップショット送信がプロセス再起動まで完全に停止する。
+  修正方針:
+    - FutachaApplication の背景フロー(retryWhen + バックオフ + ログ)と同様の
+      リトライを入れる。
+
+[B-5] ImagePicker(iOS): 30 秒タイムアウトの dispatch_after がキャンセルされない(低)
+  場所: shared/src/iosMain/kotlin/util/ImagePicker.ios.kt:88-102
+  内容:
+    - 読み込みが即成功してもタイマーは 30 秒後に必ず発火し complete(null) を呼ぶ。
+      ResumeGate で二重 resume は防がれているためクラッシュはしないが、
+      クロージャ(と選択メディアへの参照)が 30 秒間保持され、毎回警告ログが出る。
+  修正方針: DispatchWorkItem にしてキャンセルする。
+
+[B-6] HistoryRefresher: バッチ失敗時に残りジョブがキャンセルされない(低)
+  場所: shared/src/commonMain/kotlin/service/HistoryRefresher.kt:235-262
+  内容:
+    - supervisorScope 内で最初の await() が例外を投げても残りのバッチジョブは
+      キャンセルされず完走待ちになる(supervisorScope は例外で抜ける際も子の
+      完了を待つ)。失敗時の終了がフェッチタイムアウト分(最大30秒x並列数)遅れる。
+  修正方針: 例外時に batchJobs.forEach { it.cancel() }。
+
+[B-7] iOSApp.swift: BGTask 登録がリフレクション頼み(低)
+  場所: iosApp/iosApp/iOSApp.swift:543-564
+  内容:
+    - NSClassFromString によるクラス名探索のため、共有フレームワークのクラス名が
+      変わると背景更新登録が静かに失敗する(ログのみ)。
+  修正方針: shared を import 済みなので
+    MainViewControllerKt.registerIosBackgroundRefreshTask() を直接呼ぶ。
+
+[B-8] Wear: 同期ラベル・読み上げ鮮度判定が System.currentTimeMillis() 固定(低)
+  場所: app-wear/src/main/java/com/valoser/futacha/wear/WearMainActivity.kt:473-495
+  内容:
+    - コンポジション時に取得した現在時刻で判定するため、再コンポーズが起きるまで
+      「同期古い」表示や読み上げ状態の鮮度が更新されない。表示のみの問題。
+
+--------------------------------------------------------------------------------
+■ 確認して問題なしと判断した領域(調査済み・対応不要)
+--------------------------------------------------------------------------------
+
+- ネットワーク読み取りループ(HttpBoardApiResponseSupport / ArchiveSearch /
+  VersionChecker / FileSystem.android): 総タイムアウト or アイドルタイムアウト
+  + ゼロリード上限 + サイズ上限あり
+- リトライループ(withHttpBoardApiRetry): 上限・バックオフあり
+- TTS(TextSpeaker.android): 初期化待ち含む30秒タイムアウト、onStop での
+  continuation 解放まで対応済み
+- Apple Intelligence ブリッジ(FutachaAppleIntelligenceBridge.swift /
+  OnDeviceAiService.ios.kt): queue.sync のネストは別スレッド間でデッドロック
+  せず、45秒タイムアウト+キャンセル通知+observer 解放あり
+- Compose のジェスチャ while(true)(ThreadScreenScaffoldHost /
+  ThreadMediaPreviewComponents): pressed 解除で break する正しいパターン
+- FutachaApplication / MainViewController の初期化: ANR 対策
+  (バックグラウンド初期化、runBlocking 回避)済み
+- AppStateStore: Mutex 分離とデッドロック防止ガイドラインに沿った設計
+- ThreadMessageText の注釈生成: グローバル LRU キャッシュ+オフメイン実行で最適化済み
+  (get/put とも main スレッドからのみアクセスされ単一スレッドで安全)
+- ThreadTreeContent / NG フィルタ / AI 要約: いずれも produceState +
+  AppDispatchers.parsing/io でオフメイン化済み
+- rememberCatalogHeadMetadataTitles: snapshotFlow を LaunchedEffect 内で収集し、
+  スクロール停止時のみ解決する正しい実装
+- FutachaWatchConnectivityManager.swift: main.sync 回避済み
+  (applicationActiveCache + NSLock)、ack/再送設計も妥当
+
+--------------------------------------------------------------------------------
+■ 改善済み
+--------------------------------------------------------------------------------
+
+[DONE-1] [P1-1] iOS WebM サムネイル生成に全体タイムアウトを追加
+  対応日: 2026-06-11
+  場所: shared/src/iosMain/kotlin/ui/image/IosVideoFrameFetcher.kt:216-255
+  改善したこと:
+    - WebM サムネイル生成の WKWebView 待機全体を 10 秒で打ち切るようにした。
+    - didFinishNavigation / didFailNavigation が呼ばれない停止状態でも、
+      suspendCancellableCoroutine がキャンセルされ、invokeOnCancellation 経由で
+      WebmThumbnailNavigationDelegate.dispose() が main queue 上で実行される。
+    - これにより webKitThumbnailSemaphore(permits=1) を握ったままになり、
+      以後すべての WebM サムネイル取得が詰まるセッション永久停止を防止する。
+  改善方法:
+    - createWebKitThumbnail() の本体を
+      withTimeoutOrNull(WEBKIT_THUMBNAIL_TIMEOUT_MILLIS) で包んだ。
+    - WEBKIT_THUMBNAIL_TIMEOUT_MILLIS = 10_000L を追加し、
+      タイムアウト時は "Timed out generating WebM thumbnail for $url" で失敗させる。
+    - 既存の continuation.invokeOnCancellation の cleanup 経路を利用するため、
+      WKWebView の stopLoading / navigationDelegate 解除 / video src 破棄は既存実装で行う。
+  確認:
+    - ./gradlew :shared:compileKotlinIosSimulatorArm64 成功。
+
+[DONE-2] [P2-1][P2-2][P2-3] スクロール時のコンポジション読み取りを削減
+  対応日: 2026-06-11
+  場所:
+    - shared/src/commonMain/kotlin/ui/board/EdgeSwipeRefreshSupport.kt
+    - shared/src/commonMain/kotlin/ui/board/CatalogItemComponents.kt
+    - shared/src/commonMain/kotlin/ui/board/ThreadContentLayout.kt
+    - shared/src/commonMain/kotlin/ui/board/ThreadTreeContent.kt
+  改善したこと:
+    - エッジスワイプ更新の overscrollOffset を Float 値ではなく State<Float> として保持し、
+      Modifier.offset { ... } のラムダ内で value を読むようにした。
+    - listState/gridState の canScrollBackward / canScrollForward をコンポジション中に
+      Boolean 化せず、ScrollEdgeStateReader のラムダで nested scroll 処理中に読むようにした。
+    - ThreadContent / ThreadTreeContent の isScrollInProgress もコンポジション中に直接読まず、
+      引用プレビュー表示判定のラムダ内で読むようにした。
+  改善方法:
+    - EdgeSwipeRefreshVisualState.overscrollOffset を State<Float> に変更。
+    - rememberScrollEdgeState(listState/gridState) は ScrollEdgeStateReader を返し、
+      isAtTop/isAtBottom を安定したラムダとして保持するように変更。
+    - Modifier.edgeSwipeRefresh() の isAtTop/isAtBottom 引数を Boolean から
+      () -> Boolean に変更し、NestedScrollConnection 内で最新値を評価するように変更。
+    - CatalogGrid / CatalogList / ThreadContent / ThreadTreeContent の offset 読み取りを
+      overscrollOffset.value に更新。
+  確認:
+    - ./gradlew :shared:check 成功。
+
+[DONE-3] [P1-2] AI 投稿フィルタの分類バッチサイズを拡大
+  対応日: 2026-06-11
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadScreenContentHost.kt:27
+  改善したこと:
+    - THREAD_AI_POST_MODERATION_BATCH_SIZE を 1 から 8 に変更した。
+    - レス1件ごとに AiPostModerationUiState を更新して ThreadContent 全体の
+      再コンポーズと aiHiddenPostState 再計算を誘発していた頻度を削減した。
+    - Android では classifyPosts 呼び出し回数が減るため、requestRemoteAi の
+      bindService/unbindService 回数も同じ比率で減る。
+  改善方法:
+    - 既存の投稿単位キャッシュと Android/iOS 側の内部チャンク分割はそのまま維持。
+    - バッチサイズはタイムアウト増加リスクを抑えるため、まず 8 に留めた。
+  残課題:
+    - UI 反映はバッチごとなので、非表示候補の反映は最大 8 件分遅れる。
+    - Android service 接続の一定時間再利用は未実装。
+    - aiPostModerationUiState の produceState が key3=summaryState のため、
+      要約状態遷移でモデレーションが再起動する問題は残る。
+  確認:
+    - ./gradlew :shared:check 成功。
+
+[DONE-4] [B-1] Wear のスナップショット更新時の選択リセットを修正
+  対応日: 2026-06-11
+  場所: app-wear/src/main/java/com/valoser/futacha/wear/WearMainActivity.kt:97
+  改善したこと:
+    - スマホ側から新しい WatchSnapshot が届いても、Wear 側で選択中のスレッド ID を
+      null に戻さないようにした。
+    - 読み上げ中に generatedAtMillis が更新されても、ReadAloudControlView が
+      HomeView に戻される問題を防止した。
+  改善方法:
+    - selectedThreadId の state を remember(snapshot?.generatedAtMillis) ではなく
+      remember { mutableStateOf<String?>(null) } で保持するように変更。
+    - selectedThread は従来どおり snapshot?.threads?.firstOrNull で解決するため、
+      スレッドがスナップショットから消えた場合は HomeView 表示に戻る。
+  確認:
+    - ./gradlew :app-wear:compileDebugKotlin 成功。
+
+[DONE-5] [P2-4] スレスクロールバーの layoutInfo 読み取りを draw 側へ移動
+  対応日: 2026-06-11
+  場所: shared/src/commonMain/kotlin/ui/board/ThreadContentSupport.kt:164-225
+  改善したこと:
+    - ThreadScrollbar が listState.layoutInfo / firstVisibleItemScrollOffset を
+      コンポジション中に読む処理をやめ、Canvas の draw ラムダ内で読むようにした。
+    - スクロール中の毎フレーム再コンポーズを避け、スクロールバー描画の更新に限定した。
+    - visibleItems の map/filter/average による一時リスト生成をやめ、
+      ループで平均サイズを計算するようにした。
+  改善方法:
+    - ThreadScrollbar は常に Canvas を配置し、描画条件を満たさない場合は
+      return@Canvas で何も描かない形に変更。
+    - スクロール位置、viewport、visible item のサイズ集計、thumb の位置/高さ計算を
+      Canvas 内へ移動した。
+  確認:
+    - ./gradlew :shared:check 成功。
+
+[DONE-6] [P3-1] firstVisibleSegmentIndex のコンポジション読み取り位置を修正
+  対応日: 2026-06-11
+  場所:
+    - shared/src/commonMain/kotlin/ui/board/ThreadScreenDerivedRuntimeSupport.kt
+    - shared/src/commonMain/kotlin/ui/board/ThreadScreen.kt
+    - shared/src/commonMain/kotlin/ui/board/ThreadScreenHostBindingsSupport.kt
+    - shared/src/commonMain/kotlin/ui/board/ThreadScreenOverlayHost.kt
+  改善したこと:
+    - firstVisibleSegmentIndex を ThreadScreen のコンポジション中に Int として読まず、
+      () -> Int の遅延評価で読み上げ UI へ渡すようにした。
+    - スクロールで先頭可視アイテムが変わるたびに、ThreadScreen 全体の再コンポーズを
+      誘発していた読み取りを避けた。
+    - ReadAloudControlSheet 表示時と「表示中レスへ移動」実行時だけ最新値を評価する。
+  改善方法:
+    - ThreadScreenDerivedRuntimeState.firstVisibleSegmentIndex を Int から () -> Int に変更。
+    - derivedStateOf の State<Int> は保持したまま、value 読み取りをラムダ内に閉じ込めた。
+    - Host/Overlay の firstVisibleSegmentIndex 受け渡しも () -> Int に変更した。
+  残課題:
+    - WatchReadAloudStatusStore.update は currentReadAloudIndex 変更ごとに実行されるため、
+      Watch スナップショット生成頻度の削減は未対応。
+  確認:
+    - ./gradlew :shared:check 成功。
+
+[DONE-7] [P3-3][P3-5] 画像 state 購読と監視ワード正規化の負荷を削減
+  対応日: 2026-06-11
+  場所:
+    - shared/src/commonMain/kotlin/ui/board/ThreadPostComponents.kt
+    - shared/src/commonMain/kotlin/ui/board/CatalogPreviewImageComponents.kt
+    - shared/src/commonMain/kotlin/ui/board/CatalogItemComponents.kt
+  改善したこと:
+    - ThreadPostCard のサムネイルで painter.state を collectAsState するのをやめ、
+      LaunchedEffect 内で収集してフォールバック表示が必要な時だけ Compose state を更新するようにした。
+    - CatalogPreviewImage も painter.state の collectAsState をやめ、
+      エラー時の候補 URL 切り替えと最終フォールバック表示だけ state に反映するようにした。
+    - CatalogGrid / CatalogList で watchWords を一度だけ normalizeWatchWords し、
+      各カードでは matchesNormalizedWatchWords を使うようにした。
+  改善方法:
+    - Loading / Success の通常遷移では、カード/セル側の Compose state を更新しない。
+    - Error またはロード開始後の Empty でのみフォールバック表示フラグを更新する。
+    - normalizedWatchWords を remember(watchWords) で保持し、カードごとの trim/lowercase/distinct を避ける。
+  残課題:
+    - ThreadPostCard の ImageRequest size 指定は未対応。
+    - buildCatalogHeadMetadataCacheKey のカードごとの文字列生成は未対応。
+  確認:
+    - ./gradlew :shared:check 成功。
+
+--------------------------------------------------------------------------------
+■ 対応の推奨順序
+--------------------------------------------------------------------------------
+
+ 1. [DONE-1] [P1-1] iOS WebM サムネのタイムアウト追加+セマフォ解放保証
+ 2. [DONE-2] [P2-1][P2-2] エッジスワイプの overscroll/端判定のコンポジション読み排除
+    (カタログ・スレ両方に効く)
+ 3. [DONE-2] [P2-3] isScrollInProgress のコンポジション読み排除
+ 4. [DONE-3] [P1-2] AI フィルタのバッチサイズ増
+    (UI 反映間引き+サービス接続維持は残課題)
+ 5. [DONE-4] [B-1] Wear の選択リセット修正
+ 6. [DONE-5] [P2-4] スレスクロールバーの draw スコープ化
+ 7. [DONE-6] [P3-1] 読み上げ中の firstVisibleSegmentIndex 読み取り位置の修正
+    (WatchReadAloudStatusStore 更新頻度は残課題)
+ 8. [DONE-7] [P3-3][P3-5] 画像 painter 購読の絞り込み・監視ワード正規化の一回化
+    (ImageRequest size 指定と cache key 生成削減は残課題)
+ 9. [B-2][B-3][B-4] Cookie ロック / AI コマンド二重実行 / Watch 同期リトライ
+10. [P3-2][P3-4][P3-6][P3-7] ディスパッチャ分離・動画フォールバック無効化・
+    モノリス分割・フィルタちらつき(影響度に応じて)
+================================================================================
