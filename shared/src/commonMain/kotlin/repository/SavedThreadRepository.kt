@@ -350,6 +350,9 @@ class SavedThreadRepository(
                 true
             } == true
             if (!acquired) {
+                if (indexLocked) {
+                    indexMutex.unlock()
+                }
                 throw IllegalStateException(
                     "Timed out waiting for saved thread index lock after ${INDEX_LOCK_WAIT_TIMEOUT_MILLIS}ms"
                 )

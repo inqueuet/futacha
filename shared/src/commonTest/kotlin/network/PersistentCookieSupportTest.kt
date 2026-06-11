@@ -219,4 +219,24 @@ class PersistentCookieSupportTest {
         assertEquals(linkedMapOf("external" to "3", "b" to "2"), applied)
         assertTrue(coordinator.shouldPersistImmediately(null))
     }
+
+    @Test
+    fun transactionCoordinator_supportsMultipleActiveTransactions() {
+        val coordinator = PersistentCookieTransactionCoordinator<String, String>("PersistentCookieSupportTest")
+        val snapshot = linkedMapOf("a" to "1")
+        val firstId = coordinator.begin(snapshot)
+        val secondId = coordinator.begin(snapshot)
+
+        coordinator.mutableSnapshotFor(firstId)?.put("first", "2")
+        coordinator.mutableSnapshotFor(secondId)?.put("second", "3")
+
+        assertFalse(coordinator.shouldPersistImmediately(firstId))
+        assertFalse(coordinator.shouldPersistImmediately(secondId))
+        assertEquals("2", coordinator.snapshotFor(firstId)?.get("first"))
+        assertEquals("3", coordinator.snapshotFor(secondId)?.get("second"))
+
+        coordinator.rollback(firstId)
+        assertNull(coordinator.snapshotFor(firstId))
+        assertEquals("3", coordinator.snapshotFor(secondId)?.get("second"))
+    }
 }

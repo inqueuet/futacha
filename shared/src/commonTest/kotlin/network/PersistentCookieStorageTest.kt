@@ -3,7 +3,10 @@ package com.valoser.futacha.shared.network
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import io.ktor.http.Cookie
 import io.ktor.http.Url
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -81,6 +84,46 @@ class PersistentCookieStorageTest {
 
         assertEquals(listOf("initial"), storage.listCookies().map { it.name })
         assertEquals(snapshotBefore, fileSystem.readString(STORAGE_PATH).getOrThrow())
+    }
+
+    @Test
+    fun commitOnSuccess_doesNotSerializeBlockExecution() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondFinished = CompletableDeferred<Unit>()
+
+        val first = async {
+            storage.commitOnSuccess {
+                firstStarted.complete(Unit)
+                releaseFirst.await()
+                storage.addCookie(
+                    Url("https://dec.2chan.net/b/"),
+                    Cookie(name = "first", value = "1", domain = "dec.2chan.net", path = "/")
+                )
+            }
+        }
+        firstStarted.await()
+
+        val second = async {
+            storage.commitOnSuccess {
+                storage.addCookie(
+                    Url("https://dec.2chan.net/b/"),
+                    Cookie(name = "second", value = "2", domain = "dec.2chan.net", path = "/")
+                )
+                secondFinished.complete(Unit)
+            }
+        }
+
+        withTimeout(1_000L) {
+            secondFinished.await()
+        }
+        releaseFirst.complete(Unit)
+        first.await()
+        second.await()
+
+        assertEquals(setOf("first", "second"), storage.listCookies().map { it.name }.toSet())
     }
 
     @Test

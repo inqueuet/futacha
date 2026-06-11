@@ -12,8 +12,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlin.coroutines.coroutineContext
+
+private const val HTTP_BOARD_API_RESPONSE_READ_IDLE_TIMEOUT_MILLIS = 10_000L
 
 internal suspend fun readHttpBoardApiResponseBodyAsString(
     response: HttpResponse,
@@ -83,7 +86,11 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
             try {
                 while (true) {
                     coroutineContext.ensureActive()
-                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    val read = withTimeoutOrNull(
+                        httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis)
+                    ) {
+                        channel.readAvailable(buffer, 0, buffer.size)
+                    } ?: throw NetworkException("Response body read stalled")
                     if (read == -1) {
                         fullyConsumed = true
                         break
@@ -166,7 +173,11 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
             try {
                 reading@ while (true) {
                     coroutineContext.ensureActive()
-                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    val read = withTimeoutOrNull(
+                        httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis)
+                    ) {
+                        channel.readAvailable(buffer, 0, buffer.size)
+                    } ?: throw NetworkException("Response head read stalled")
                     if (read == -1) {
                         fullyConsumed = true
                         break
@@ -226,6 +237,12 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
             }
         }
     }
+}
+
+private fun httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis: Long): Long {
+    return HTTP_BOARD_API_RESPONSE_READ_IDLE_TIMEOUT_MILLIS
+        .coerceAtMost(responseTotalTimeoutMillis)
+        .coerceAtLeast(1L)
 }
 
 internal suspend fun readSmallHttpBoardApiResponseSummary(

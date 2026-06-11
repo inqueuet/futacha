@@ -8,6 +8,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
 import coil3.compose.LocalPlatformContext
+import com.valoser.futacha.shared.ai.OnDeviceAiService
 import com.valoser.futacha.shared.ai.PostModerationInput
 import com.valoser.futacha.shared.ai.PostModerationResult
 import com.valoser.futacha.shared.ai.ThreadSummaryInput
@@ -243,12 +244,12 @@ internal fun ThreadScreenContentHost(
                     title = null,
                     posts = aiSourcePosts
                 )
-                val summaryResult = withTimeoutOrNull(THREAD_AI_SUMMARY_UI_TIMEOUT_MS) {
-                    withContext(AppDispatchers.io) {
-                        aiInferenceMutex.withLock {
-                            aiService.summarizeThread(summaryInput)
-                        }
-                    }
+                val summaryResult = runThreadAiInferenceWithTimeout(
+                    timeoutMillis = THREAD_AI_SUMMARY_UI_TIMEOUT_MS,
+                    aiInferenceMutex = aiInferenceMutex,
+                    aiService = aiService
+                ) {
+                    aiService.summarizeThread(summaryInput)
                 }
                 value = summaryResult?.fold(
                     onSuccess = {
@@ -336,12 +337,12 @@ internal fun ThreadScreenContentHost(
                 delay(THREAD_AI_POST_MODERATION_START_DELAY_MS)
                 postBatches.forEachIndexed { index, posts ->
                     val batchInput = input.copy(posts = posts)
-                    val moderationResult = withTimeoutOrNull(THREAD_AI_POST_MODERATION_BATCH_TIMEOUT_MS) {
-                        withContext(AppDispatchers.io) {
-                            aiInferenceMutex.withLock {
-                                aiService.classifyPosts(batchInput)
-                            }
-                        }
+                    val moderationResult = runThreadAiInferenceWithTimeout(
+                        timeoutMillis = THREAD_AI_POST_MODERATION_BATCH_TIMEOUT_MS,
+                        aiInferenceMutex = aiInferenceMutex,
+                        aiService = aiService
+                    ) {
+                        aiService.classifyPosts(batchInput)
                     }
                     val moderation = moderationResult?.getOrNull()
                     processedPosts += posts.size
@@ -461,6 +462,25 @@ internal fun ThreadScreenContentHost(
             }
         }
     }
+}
+
+private suspend fun <T> runThreadAiInferenceWithTimeout(
+    timeoutMillis: Long,
+    aiInferenceMutex: Mutex,
+    aiService: OnDeviceAiService,
+    block: suspend () -> T
+): T? {
+    val result = withTimeoutOrNull(timeoutMillis) {
+        withContext(AppDispatchers.io) {
+            aiInferenceMutex.withLock {
+                block()
+            }
+        }
+    }
+    if (result == null) {
+        aiService.cancelActiveRequests()
+    }
+    return result
 }
 
 internal fun shouldDeferAiPostModeration(

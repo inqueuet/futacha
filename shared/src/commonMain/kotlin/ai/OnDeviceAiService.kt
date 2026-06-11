@@ -55,6 +55,7 @@ interface OnDeviceAiService {
     suspend fun getAvailability(): AiAvailability
     suspend fun summarizeThread(input: ThreadSummaryInput): Result<ThreadSummary>
     suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>>
+    fun cancelActiveRequests() = Unit
 }
 
 expect fun createOnDeviceAiService(platformContext: Any? = null): OnDeviceAiService

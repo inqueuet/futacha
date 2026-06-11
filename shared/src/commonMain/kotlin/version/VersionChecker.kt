@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
@@ -64,6 +65,7 @@ private const val GITHUB_RELEASE_READ_BUFFER_BYTES = 8 * 1024
 private const val GITHUB_RELEASE_MAX_ZERO_READ_RETRIES = 5
 private const val GITHUB_RELEASE_ZERO_READ_BACKOFF_MILLIS = 50L
 private const val GITHUB_RELEASE_RESPONSE_TIMEOUT_MILLIS = 10_000L
+private const val GITHUB_RELEASE_READ_IDLE_TIMEOUT_MILLIS = 10_000L
 
 /**
  * バージョン文字列を比較
@@ -179,7 +181,9 @@ private suspend fun readGitHubReleaseResponseBody(response: HttpResponse): Strin
             try {
                 while (true) {
                     coroutineContext.ensureActive()
-                    val read = channel.readAvailable(buffer, 0, buffer.size)
+                    val read = withTimeoutOrNull(GITHUB_RELEASE_READ_IDLE_TIMEOUT_MILLIS) {
+                        channel.readAvailable(buffer, 0, buffer.size)
+                    } ?: throw IllegalStateException("GitHub release response read stalled")
                     if (read == -1) {
                         fullyConsumed = true
                         break

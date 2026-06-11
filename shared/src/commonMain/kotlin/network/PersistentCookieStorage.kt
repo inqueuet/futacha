@@ -63,7 +63,6 @@ class PersistentCookieStorage(
         PersistentCookieTransactionCoordinator<CookieKey, StoredCookie>("PersistentCookieStorage")
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
     private val mutex = Mutex()
-    private val transactionMutex = Mutex()
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
     // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
@@ -246,23 +245,22 @@ class PersistentCookieStorage(
         if (inheritedTransactionId != null) {
             return block()
         }
-        return transactionMutex.withLock {
-            var saveSnapshot: StoredCookieFile? = null
-            val transactionId = mutex.withLock {
-                saveSnapshot = ensureLoadedLocked()
-                transactionCoordinator.begin(cookies)
-            }
-            saveSnapshot?.let { persistSnapshot(it) }
-            runCatching {
-                withContext(CookieTransactionContext(transactionId)) {
-                    block()
-                }
-            }.onSuccess {
-                persistTransaction(transactionId)
-            }.onFailure {
-                rollbackTransaction(transactionId)
-            }.getOrThrow()
+        var saveSnapshot: StoredCookieFile? = null
+        val transactionId = mutex.withLock {
+            saveSnapshot = ensureLoadedLocked()
+            transactionCoordinator.begin(cookies)
         }
+        saveSnapshot?.let { persistSnapshot(it) }
+        val result = try {
+            withContext(CookieTransactionContext(transactionId)) {
+                block()
+            }
+        } catch (t: Throwable) {
+            rollbackTransaction(transactionId)
+            throw t
+        }
+        persistTransaction(transactionId)
+        return result
     }
 
     private suspend fun persistTransaction(transactionId: Long?) {

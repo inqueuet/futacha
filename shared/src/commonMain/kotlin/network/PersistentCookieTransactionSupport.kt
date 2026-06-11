@@ -9,12 +9,12 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
         val stagedSnapshot: MutableMap<K, V>
     )
 
-    private var transaction: Transaction<K, V>? = null
+    private val transactions = linkedMapOf<Long, Transaction<K, V>>()
     private var transactionSequence = 0L
 
     fun begin(currentSnapshot: Map<K, V>): Long {
         transactionSequence += 1
-        transaction = Transaction(
+        transactions[transactionSequence] = Transaction(
             id = transactionSequence,
             baseSnapshot = HashMap(currentSnapshot),
             stagedSnapshot = HashMap(currentSnapshot)
@@ -23,9 +23,7 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
     }
 
     fun mutableSnapshotFor(transactionId: Long?): MutableMap<K, V>? {
-        return transaction
-            ?.takeIf { it.id == transactionId }
-            ?.stagedSnapshot
+        return transactions[transactionId]?.stagedSnapshot
     }
 
     fun snapshotFor(transactionId: Long?): Map<K, V>? {
@@ -33,8 +31,7 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
     }
 
     fun shouldPersistImmediately(coroutineTransactionId: Long?): Boolean {
-        val activeTransaction = transaction ?: return true
-        return activeTransaction.id != coroutineTransactionId
+        return coroutineTransactionId == null || coroutineTransactionId !in transactions
     }
 
     fun <S> commit(
@@ -42,19 +39,14 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
         applyChanges: (baseSnapshot: Map<K, V>, stagedSnapshot: Map<K, V>) -> Unit,
         createSnapshot: () -> S
     ): S? {
-        val activeTransaction = transaction?.takeIf { it.id == transactionId } ?: return null
+        val activeTransaction = transactions[transactionId] ?: return null
         applyChanges(activeTransaction.baseSnapshot, activeTransaction.stagedSnapshot)
         val savePayload = createSnapshot()
-        clear()
+        transactions.remove(transactionId)
         return savePayload
     }
 
     fun rollback(transactionId: Long?) {
-        if (transaction?.id != transactionId) return
-        clear()
-    }
-
-    private fun clear() {
-        transaction = null
+        transactions.remove(transactionId)
     }
 }

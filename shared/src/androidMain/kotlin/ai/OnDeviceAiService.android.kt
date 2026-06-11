@@ -199,6 +199,10 @@ private class AndroidOnDeviceAiService(
         }
         Result.success(emptyList())
     }
+
+    override fun cancelActiveRequests() {
+        aiRemoteServiceSession.cancelActiveRequests()
+    }
 }
 
 class AndroidAiWorkerService : Service() {
@@ -472,7 +476,14 @@ private class AndroidAiRemoteServiceSession {
     private var isBinding = false
     private var pendingBindReady: ((Messenger?) -> Unit)? = null
     private var activeDisconnectHandler: (() -> Unit)? = null
+    private var activeRequestId: Int? = null
     private var idleUnbindRunnable: Runnable? = null
+
+    fun cancelActiveRequests() {
+        mainHandler.post {
+            activeRequestId?.let(::sendCancelToWorker)
+        }
+    }
 
     suspend fun request(
         context: Context,
@@ -483,104 +494,113 @@ private class AndroidAiRemoteServiceSession {
     ): Bundle? = withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
         requestMutex.withLock {
             suspendCancellableCoroutine { continuation ->
-            val appContext = context.applicationContext
-            val requestId = data.getInt(KEY_REQUEST_ID)
-            val completed = AtomicBoolean(false)
+                val appContext = context.applicationContext
+                val requestId = data.getInt(KEY_REQUEST_ID)
+                val completed = AtomicBoolean(false)
 
-            lateinit var handleDisconnect: () -> Unit
+                lateinit var handleDisconnect: () -> Unit
 
-            fun sendCancelToWorker() {
-                val cancel = Message.obtain(null, MSG_CANCEL_REQUEST).apply {
-                    this.data = Bundle().apply {
-                        putInt(KEY_REQUEST_ID, requestId)
-                    }
-                }
-                mainHandler.post {
-                    runCatching {
-                        remoteMessenger?.send(cancel)
-                    }
-                }
-            }
-
-            fun finish(bundle: Bundle?) {
-                if (!completed.compareAndSet(false, true)) return
-                mainHandler.post {
-                    if (activeDisconnectHandler === handleDisconnect) {
-                        activeDisconnectHandler = null
-                    }
-                    scheduleIdleUnbind(appContext)
-                }
-                continuation.resume(bundle)
-            }
-
-            val replyMessenger = Messenger(
-                Handler(Looper.getMainLooper()) { message ->
-                    if (message.data.getInt(KEY_REQUEST_ID) != requestId) {
-                        return@Handler false
-                    }
-                    if (completed.get()) {
-                        return@Handler true
-                    }
-                    if (!message.data.getBoolean(KEY_RESPONSE_FINAL, true)) {
-                        onProgress?.invoke(message.data)
-                        return@Handler true
-                    }
-                    finish(message.data)
-                    true
-                }
-            )
-
-            fun sendRequest(remote: Messenger) {
-                val request = Message.obtain(null, what).apply {
-                    this.data = data
-                    replyTo = replyMessenger
-                }
-                try {
-                    remote.send(request)
-                } catch (_: RemoteException) {
-                    finish(null)
-                }
-            }
-
-            handleDisconnect = {
-                finish(null)
-            }
-
-            continuation.invokeOnCancellation {
-                if (completed.compareAndSet(false, true)) {
-                    sendCancelToWorker()
+                fun finish(bundle: Bundle?) {
+                    if (!completed.compareAndSet(false, true)) return
                     mainHandler.post {
                         if (activeDisconnectHandler === handleDisconnect) {
                             activeDisconnectHandler = null
                         }
+                        if (activeRequestId == requestId) {
+                            activeRequestId = null
+                        }
                         scheduleIdleUnbind(appContext)
                     }
+                    continuation.resume(bundle)
                 }
-            }
 
-            mainHandler.post {
-                if (completed.get()) {
-                    return@post
-                }
-                cancelIdleUnbind()
-                activeDisconnectHandler = handleDisconnect
-                val existingRemote = remoteMessenger
-                if (existingRemote != null) {
-                    sendRequest(existingRemote)
-                    return@post
-                }
-                bind(appContext) { remote ->
-                    if (completed.get()) {
-                        // The coroutine was cancelled while Android was binding the service.
-                    } else if (remote == null) {
+                val replyMessenger = Messenger(
+                    Handler(Looper.getMainLooper()) { message ->
+                        if (message.data.getInt(KEY_REQUEST_ID) != requestId) {
+                            return@Handler false
+                        }
+                        if (completed.get()) {
+                            return@Handler true
+                        }
+                        if (!message.data.getBoolean(KEY_RESPONSE_FINAL, true)) {
+                            onProgress?.invoke(message.data)
+                            return@Handler true
+                        }
+                        finish(message.data)
+                        true
+                    }
+                )
+
+                fun sendRequest(remote: Messenger) {
+                    val request = Message.obtain(null, what).apply {
+                        this.data = data
+                        replyTo = replyMessenger
+                    }
+                    try {
+                        remote.send(request)
+                    } catch (_: RemoteException) {
                         finish(null)
-                    } else {
-                        sendRequest(remote)
+                    }
+                }
+
+                handleDisconnect = {
+                    finish(null)
+                }
+
+                continuation.invokeOnCancellation {
+                    if (completed.compareAndSet(false, true)) {
+                        mainHandler.post {
+                            sendCancelToWorker(requestId)
+                            if (activeRequestId == requestId) {
+                                activeRequestId = null
+                            }
+                            if (activeDisconnectHandler === handleDisconnect) {
+                                activeDisconnectHandler = null
+                            }
+                            scheduleIdleUnbind(appContext)
+                        }
+                    }
+                }
+
+                if (completed.get()) {
+                    return@suspendCancellableCoroutine
+                }
+
+                mainHandler.post {
+                    if (completed.get()) {
+                        return@post
+                    }
+                    cancelIdleUnbind()
+                    activeDisconnectHandler = handleDisconnect
+                    activeRequestId = requestId
+                    val existingRemote = remoteMessenger
+                    if (existingRemote != null) {
+                        sendRequest(existingRemote)
+                        return@post
+                    }
+                    bind(appContext) { remote ->
+                        if (completed.get()) {
+                            // The coroutine was cancelled while Android was binding the service.
+                        } else if (remote == null) {
+                            finish(null)
+                        } else {
+                            sendRequest(remote)
+                        }
                     }
                 }
             }
         }
     }
+
+    private fun sendCancelToWorker(requestId: Int) {
+        val cancel = Message.obtain(null, MSG_CANCEL_REQUEST).apply {
+            this.data = Bundle().apply {
+                putInt(KEY_REQUEST_ID, requestId)
+            }
+        }
+        runCatching {
+            remoteMessenger?.send(cancel)
+        }
     }
 
     private fun bind(appContext: Context, onReady: (Messenger?) -> Unit) {
