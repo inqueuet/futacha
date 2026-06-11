@@ -11,6 +11,13 @@ internal data class AiHiddenPostState(
     val reasons: Map<String, String> = emptyMap()
 )
 
+internal class AiHiddenPostResolutionContext(
+    val existingPostIds: Set<String>,
+    val opPostId: String?,
+    val maxHiddenPosts: Int,
+    val selfPostIdentifiers: Set<String>
+)
+
 internal data class AiPostModerationUiState(
     val isEnabled: Boolean = false,
     val isRunning: Boolean = false,
@@ -36,25 +43,50 @@ internal fun resolveAiHiddenPostState(
     moderationResults: List<PostModerationResult>,
     selfPostIdentifiers: Set<String> = emptySet()
 ): AiHiddenPostState {
-    if (posts.isEmpty() || moderationResults.isEmpty()) {
+    if (posts.isEmpty()) {
         return AiHiddenPostState()
     }
-    val existingPostIds = posts.map { it.id }.toSet()
-    val opPostId = posts.firstOrNull()?.id
-    val maxHiddenPosts = resolveAiHiddenPostLimit(posts.size)
+    return resolveAiHiddenPostState(
+        context = buildAiHiddenPostResolutionContext(
+            posts = posts,
+            selfPostIdentifiers = selfPostIdentifiers
+        ),
+        moderationResults = moderationResults
+    )
+}
+
+internal fun buildAiHiddenPostResolutionContext(
+    posts: List<Post>,
+    selfPostIdentifiers: Set<String> = emptySet()
+): AiHiddenPostResolutionContext {
+    return AiHiddenPostResolutionContext(
+        existingPostIds = posts.map { it.id }.toSet(),
+        opPostId = posts.firstOrNull()?.id,
+        maxHiddenPosts = resolveAiHiddenPostLimit(posts.size),
+        selfPostIdentifiers = selfPostIdentifiers.toSet()
+    )
+}
+
+internal fun resolveAiHiddenPostState(
+    context: AiHiddenPostResolutionContext,
+    moderationResults: List<PostModerationResult>
+): AiHiddenPostState {
+    if (context.existingPostIds.isEmpty() || moderationResults.isEmpty()) {
+        return AiHiddenPostState()
+    }
     val hiddenPostIds = linkedSetOf<String>()
     val reasons = linkedMapOf<String, String>()
     moderationResults.forEach { result ->
         val postId = result.postId.trim()
         if (!result.shouldHide ||
             postId.isBlank() ||
-            postId !in existingPostIds ||
-            postId == opPostId ||
-            postId in selfPostIdentifiers
+            postId !in context.existingPostIds ||
+            postId == context.opPostId ||
+            postId in context.selfPostIdentifiers
         ) {
             return@forEach
         }
-        if (hiddenPostIds.size >= maxHiddenPosts) {
+        if (hiddenPostIds.size >= context.maxHiddenPosts) {
             return@forEach
         }
         hiddenPostIds += postId

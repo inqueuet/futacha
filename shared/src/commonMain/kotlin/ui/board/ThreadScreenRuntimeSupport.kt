@@ -15,5 +15,13 @@ internal const val THREAD_FILTER_DEBOUNCE_MILLIS = 120L
 internal const val THREAD_FILTER_CACHE_MAX_ENTRIES = 8
 internal const val ACTION_BUSY_NOTICE_INTERVAL_MS = 1_000L
 
+internal fun resolveThreadDebouncedSearchQuery(query: String): String {
+    return query.trim()
+}
+
+internal fun resolveThreadSearchDebounceMillis(query: String): Long {
+    return if (query.isEmpty()) 0L else THREAD_SEARCH_DEBOUNCE_MILLIS
+}
+
 internal fun isSaveLocationPermissionIssue(error: Throwable): Boolean =
     isThreadSaveLocationPermissionIssue(error)

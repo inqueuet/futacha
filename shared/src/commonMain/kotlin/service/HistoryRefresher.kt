@@ -246,7 +246,12 @@ class HistoryRefresher(
                             )
                         }
                     }
-                    batchJobs.forEach { it.await() } // Wait for current batch to complete
+                    try {
+                        batchJobs.forEach { it.await() } // Wait for current batch to complete
+                    } catch (error: Throwable) {
+                        batchJobs.forEach { it.cancel() }
+                        throw error
+                    }
 
                     // 定期的にupdatesをフラッシュしてメモリ使用量を制限
                     val batchFlushSucceeded = updates.flush(

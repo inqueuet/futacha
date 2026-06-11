@@ -129,7 +129,7 @@ internal fun ThreadMessageText(
             value = AnnotatedString("")
             return@produceState
         }
-        value = withContext(AppDispatchers.parsing) {
+        value = withContext(AppDispatchers.textAnnotation) {
             buildAnnotatedMessageBase(messageHtml, quoteReferences)
         }
         threadMessageAnnotationBaseCache.put(annotationCacheKey, value)

@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         FutachaAppleIntelligenceBridge.installAiBridge()
-        registerIosBackgroundRefreshTaskIfAvailable()
+        MainViewControllerKt.registerIosBackgroundRefreshTask()
         #if canImport(WatchConnectivity)
         FutachaWatchConnectivityManager.shared.start()
         #endif
@@ -539,26 +539,3 @@ struct FutachaAppShortcuts: AppShortcutsProvider {
     }
 }
 #endif
-
-private func registerIosBackgroundRefreshTaskIfAvailable() {
-    let candidateClassNames = [
-        "SharedMainViewControllerKt",
-        "shared.SharedMainViewControllerKt",
-        "MainViewControllerKt",
-        "shared.MainViewControllerKt"
-    ]
-    let selector = NSSelectorFromString("registerIosBackgroundRefreshTask")
-
-    for className in candidateClassNames {
-        guard let type = NSClassFromString(className) as? NSObject.Type else {
-            continue
-        }
-        guard type.responds(to: selector) else {
-            continue
-        }
-        _ = type.perform(selector)
-        return
-    }
-
-    NSLog("registerIosBackgroundRefreshTask entry point was not found in shared framework")
-}

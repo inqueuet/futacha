@@ -511,7 +511,7 @@ class CatalogScreenSupportTest {
             snackbarHostState = snackbarHostState,
             board = board,
             catalogMode = CatalogMode.Many,
-            searchQuery = "cat",
+            searchQueryState = mutableStateOf("cat"),
             isSearchActive = true,
             topBarCallbacks = runtimeBindings.topBarCallbacks,
             catalogNavEntries = listOf(
@@ -550,7 +550,7 @@ class CatalogScreenSupportTest {
             setCreateThreadDialogVisible = setDialogVisible,
             board = board,
             archiveSearchQuery = "foo",
-            searchQuery = "cat",
+            searchQueryState = mutableStateOf("cat"),
             catalogMode = CatalogMode.Many,
             catalogDisplayStyle = CatalogDisplayStyle.Grid,
             catalogGridColumns = 5,

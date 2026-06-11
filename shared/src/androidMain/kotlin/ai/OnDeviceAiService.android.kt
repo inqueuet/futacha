@@ -40,6 +40,8 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -55,6 +57,7 @@ private const val AI_POST_MODERATION_TIMEOUT_MILLIS = 20_000L
 private const val AI_REMOTE_REQUEST_TIMEOUT_MILLIS = 180_000L
 private const val AI_REMOTE_AVAILABILITY_TIMEOUT_MILLIS = 90_000L
 private const val AI_REMOTE_DOWNLOAD_TIMEOUT_MILLIS = 15 * 60 * 1_000L
+private const val AI_REMOTE_SERVICE_IDLE_UNBIND_MILLIS = 10_000L
 
 private const val MSG_SUMMARIZE_THREAD = 1
 private const val MSG_CLASSIFY_POSTS = 2
@@ -94,6 +97,7 @@ private const val AI_IPC_SUMMARY_MAX_MESSAGE_CHARS = 10_000
 private const val AI_IPC_SUMMARY_MAX_TOTAL_MESSAGE_CHARS = 10_000
 
 private val aiRequestIds = AtomicInteger(1)
+private val aiRemoteServiceSession = AndroidAiRemoteServiceSession()
 
 actual fun createOnDeviceAiService(platformContext: Any?): OnDeviceAiService {
     return AndroidOnDeviceAiService(platformContext as? Context)
@@ -452,12 +456,37 @@ private suspend fun requestRemoteAi(
     onProgress: ((Bundle) -> Unit)? = null
 ): Bundle? {
     return withTimeoutOrNull(timeoutMillis) {
+        aiRemoteServiceSession.request(
+            context = context,
+            what = what,
+            data = data,
+            onProgress = onProgress
+        )
+    }
+}
+
+private class AndroidAiRemoteServiceSession {
+    private val requestMutex = Mutex()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var connection: ServiceConnection? = null
+    private var remoteMessenger: Messenger? = null
+    private var isBinding = false
+    private var pendingBindReady: ((Messenger?) -> Unit)? = null
+    private var activeDisconnectHandler: (() -> Unit)? = null
+    private var idleUnbindRunnable: Runnable? = null
+
+    suspend fun request(
+        context: Context,
+        what: Int,
+        data: Bundle,
+        onProgress: ((Bundle) -> Unit)?
+    ): Bundle? = requestMutex.withLock {
         suspendCancellableCoroutine { continuation ->
             val appContext = context.applicationContext
-            val completed = AtomicBoolean(false)
-            var connection: ServiceConnection? = null
-            var remoteMessenger: Messenger? = null
             val requestId = data.getInt(KEY_REQUEST_ID)
+            val completed = AtomicBoolean(false)
+
+            lateinit var handleDisconnect: () -> Unit
 
             fun sendCancelToWorker() {
                 val cancel = Message.obtain(null, MSG_CANCEL_REQUEST).apply {
@@ -465,15 +494,20 @@ private suspend fun requestRemoteAi(
                         putInt(KEY_REQUEST_ID, requestId)
                     }
                 }
-                runCatching {
-                    remoteMessenger?.send(cancel)
+                mainHandler.post {
+                    runCatching {
+                        remoteMessenger?.send(cancel)
+                    }
                 }
             }
 
             fun finish(bundle: Bundle?) {
                 if (!completed.compareAndSet(false, true)) return
-                connection?.let {
-                    runCatching { appContext.unbindService(it) }
+                mainHandler.post {
+                    if (activeDisconnectHandler === handleDisconnect) {
+                        activeDisconnectHandler = null
+                    }
+                    scheduleIdleUnbind(appContext)
                 }
                 continuation.resume(bundle)
             }
@@ -495,53 +529,130 @@ private suspend fun requestRemoteAi(
                 }
             )
 
-            connection = object : ServiceConnection {
-                override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                    if (completed.get()) {
-                        runCatching { appContext.unbindService(this) }
-                        return
-                    }
-                    val remote = Messenger(service)
-                    remoteMessenger = remote
-                    val request = Message.obtain(null, what).apply {
-                        this.data = data
-                        replyTo = replyMessenger
-                    }
-                    try {
-                        remote.send(request)
-                    } catch (_: RemoteException) {
-                        finish(null)
-                    }
+            fun sendRequest(remote: Messenger) {
+                val request = Message.obtain(null, what).apply {
+                    this.data = data
+                    replyTo = replyMessenger
                 }
-
-                override fun onServiceDisconnected(name: ComponentName?) {
+                try {
+                    remote.send(request)
+                } catch (_: RemoteException) {
                     finish(null)
                 }
+            }
 
-                override fun onBindingDied(name: ComponentName?) {
-                    finish(null)
-                }
-
-                override fun onNullBinding(name: ComponentName?) {
-                    finish(null)
-                }
+            handleDisconnect = {
+                finish(null)
             }
 
             continuation.invokeOnCancellation {
                 if (completed.compareAndSet(false, true)) {
                     sendCancelToWorker()
-                    runCatching { appContext.unbindService(connection) }
+                    mainHandler.post {
+                        if (activeDisconnectHandler === handleDisconnect) {
+                            activeDisconnectHandler = null
+                        }
+                        scheduleIdleUnbind(appContext)
+                    }
                 }
             }
 
-            val intent = Intent(appContext, AndroidAiWorkerService::class.java)
-            val bound = runCatching {
-                appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
-            }.getOrDefault(false)
-            if (!bound) {
-                finish(null)
+            mainHandler.post {
+                if (completed.get()) {
+                    return@post
+                }
+                cancelIdleUnbind()
+                activeDisconnectHandler = handleDisconnect
+                val existingRemote = remoteMessenger
+                if (existingRemote != null) {
+                    sendRequest(existingRemote)
+                    return@post
+                }
+                bind(appContext) { remote ->
+                    if (completed.get()) {
+                        // The coroutine was cancelled while Android was binding the service.
+                    } else if (remote == null) {
+                        finish(null)
+                    } else {
+                        sendRequest(remote)
+                    }
+                }
             }
         }
+    }
+
+    private fun bind(appContext: Context, onReady: (Messenger?) -> Unit) {
+        pendingBindReady = onReady
+        if (isBinding) return
+        val serviceConnection = connection ?: createConnection().also {
+            connection = it
+        }
+        isBinding = true
+        val intent = Intent(appContext, AndroidAiWorkerService::class.java)
+        val bound = runCatching {
+            appContext.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        }.getOrDefault(false)
+        if (!bound) {
+            isBinding = false
+            pendingBindReady = null
+            onReady(null)
+        }
+    }
+
+    private fun createConnection(): ServiceConnection {
+        return object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                isBinding = false
+                remoteMessenger = service?.let(::Messenger)
+                val onReady = pendingBindReady
+                pendingBindReady = null
+                onReady?.invoke(remoteMessenger)
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                clearRemoteConnection()
+                activeDisconnectHandler?.invoke()
+            }
+
+            override fun onBindingDied(name: ComponentName?) {
+                clearRemoteConnection()
+                activeDisconnectHandler?.invoke()
+            }
+
+            override fun onNullBinding(name: ComponentName?) {
+                clearRemoteConnection()
+                activeDisconnectHandler?.invoke()
+            }
+        }
+    }
+
+    private fun clearRemoteConnection() {
+        isBinding = false
+        remoteMessenger = null
+        pendingBindReady?.invoke(null)
+        pendingBindReady = null
+    }
+
+    private fun cancelIdleUnbind() {
+        idleUnbindRunnable?.let(mainHandler::removeCallbacks)
+        idleUnbindRunnable = null
+    }
+
+    private fun scheduleIdleUnbind(appContext: Context) {
+        cancelIdleUnbind()
+        val runnable = Runnable {
+            if (activeDisconnectHandler != null || pendingBindReady != null) return@Runnable
+            val serviceConnection = connection ?: return@Runnable
+            runCatching { appContext.unbindService(serviceConnection) }
+            if (connection === serviceConnection) {
+                connection = null
+                remoteMessenger = null
+                isBinding = false
+            }
+            idleUnbindRunnable = null
+        }
+        idleUnbindRunnable = runnable
+        mainHandler.postDelayed(runnable, AI_REMOTE_SERVICE_IDLE_UNBIND_MILLIS)
     }
 }
 

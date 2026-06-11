@@ -31,6 +31,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,7 +59,7 @@ internal fun ThreadTopBar(
     replyCount: Int?,
     statusLabel: String?,
     isSearchActive: Boolean,
-    searchQuery: String,
+    searchQueryState: State<String>,
     currentSearchIndex: Int,
     totalSearchMatches: Int,
     onSearchQueryChange: (String) -> Unit,
@@ -71,6 +72,7 @@ internal fun ThreadTopBar(
     onSearch: () -> Unit,
     onMenuSettings: () -> Unit
 ) {
+    val searchQuery = searchQueryState.value
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(isSearchActive) {
         if (isSearchActive) {

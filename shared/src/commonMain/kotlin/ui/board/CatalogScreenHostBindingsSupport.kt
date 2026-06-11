@@ -4,6 +4,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.State
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
@@ -27,7 +28,7 @@ internal data class CatalogScreenScaffoldBindings(
     val snackbarHostState: SnackbarHostState,
     val board: BoardSummary?,
     val catalogMode: CatalogMode,
-    val searchQuery: String,
+    val searchQueryState: State<String>,
     val isSearchActive: Boolean,
     val topBarCallbacks: CatalogTopBarCallbacks,
     val catalogNavEntries: List<CatalogNavEntryConfig>,
@@ -59,7 +60,7 @@ internal data class CatalogScreenOverlayHostBindings(
     val setCreateThreadDialogVisible: (Boolean) -> Unit,
     val board: BoardSummary?,
     val archiveSearchQuery: String,
-    val searchQuery: String,
+    val searchQueryState: State<String>,
     val catalogMode: CatalogMode,
     val catalogDisplayStyle: CatalogDisplayStyle,
     val catalogGridColumns: Int,
@@ -94,7 +95,7 @@ internal data class CatalogScreenHostBindingsInputs(
     val snackbarHostState: SnackbarHostState,
     val board: BoardSummary?,
     val catalogMode: CatalogMode,
-    val searchQuery: String,
+    val searchQueryState: State<String>,
     val isSearchActive: Boolean,
     val runtimeBindings: CatalogScreenRuntimeBindingsBundle,
     val preferencesState: ScreenPreferencesState,
@@ -145,7 +146,7 @@ internal fun buildCatalogScreenHostBindings(
         snackbarHostState = inputs.snackbarHostState,
         board = inputs.board,
         catalogMode = inputs.catalogMode,
-        searchQuery = inputs.searchQuery,
+        searchQueryState = inputs.searchQueryState,
         isSearchActive = inputs.isSearchActive,
         topBarCallbacks = inputs.runtimeBindings.topBarCallbacks,
         catalogNavEntries = inputs.preferencesState.catalogNavEntries,
@@ -176,7 +177,7 @@ internal fun buildCatalogScreenHostBindings(
         setCreateThreadDialogVisible = inputs.setCreateThreadDialogVisible,
         board = inputs.board,
         archiveSearchQuery = inputs.archiveSearchQuery,
-        searchQuery = inputs.searchQuery,
+        searchQueryState = inputs.searchQueryState,
         catalogMode = inputs.catalogMode,
         catalogDisplayStyle = inputs.catalogDisplayStyle,
         catalogGridColumns = inputs.catalogGridColumns,

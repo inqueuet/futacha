@@ -31,17 +31,31 @@ internal fun rememberCatalogHeadMetadataTitles(
     listState: LazyListState,
     resolveHeadMetadata: Boolean
 ): Map<String, String> {
-    val resolvedTitles = remember(boardUrl, repository) { mutableStateMapOf<String, String>() }
+    val resolvedTitlesByItemId = remember(boardUrl, repository) { mutableStateMapOf<String, String>() }
+    val resolvedCacheKeysByItemId = remember(boardUrl, repository) {
+        mutableStateMapOf<String, CatalogHeadMetadataCacheKey>()
+    }
     val hasHeader = embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }
     val itemById = remember(items) { items.associateBy { it.id } }
-    val activeCacheKeys = remember(boardUrl, items) {
-        items.mapTo(mutableSetOf()) { item ->
-            buildCatalogHeadMetadataCacheKey(boardUrl, item)
+    val activeCacheKeysByItemId = remember(boardUrl, items) {
+        items.associate { item ->
+            item.id to buildCatalogHeadMetadataCacheKey(boardUrl, item)
         }
     }
 
-    LaunchedEffect(activeCacheKeys) {
-        resolvedTitles.keys.retainAll(activeCacheKeys)
+    LaunchedEffect(activeCacheKeysByItemId) {
+        resolvedTitlesByItemId.keys.retainAll(activeCacheKeysByItemId.keys)
+        resolvedCacheKeysByItemId.keys.retainAll(activeCacheKeysByItemId.keys)
+        val staleItemIds = resolvedCacheKeysByItemId
+            .filter { (itemId, cacheKey) ->
+                activeCacheKeysByItemId[itemId] != cacheKey
+            }
+            .keys
+            .toList()
+        staleItemIds.forEach { itemId ->
+            resolvedTitlesByItemId.remove(itemId)
+            resolvedCacheKeysByItemId.remove(itemId)
+        }
     }
 
     LaunchedEffect(
@@ -80,39 +94,49 @@ internal fun rememberCatalogHeadMetadataTitles(
                     .asSequence()
                     .mapNotNull(itemById::get)
                     .filter { item ->
-                        val cacheKey = buildCatalogHeadMetadataCacheKey(boardUrl, item)
-                        cacheKey !in resolvedTitles &&
+                        val cacheKey = activeCacheKeysByItemId[item.id]
+                            ?: buildCatalogHeadMetadataCacheKey(boardUrl, item)
+                        resolvedCacheKeysByItemId[item.id] != cacheKey &&
                             shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)
                     }
                     .take(MAX_CATALOG_HEAD_METADATA_BATCH_SIZE)
                     .forEach { item ->
-                        val cacheKey = buildCatalogHeadMetadataCacheKey(boardUrl, item)
+                        val cacheKey = activeCacheKeysByItemId[item.id]
+                            ?: buildCatalogHeadMetadataCacheKey(boardUrl, item)
                         val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
                         val title = withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
                             repository.resolveCatalogDisplayTitle(boardUrl, item)
                         }
                             ?.takeIf { it.isNotBlank() }
                             ?: fallbackTitle
-                        resolvedTitles[cacheKey] = title
+                        resolvedTitlesByItemId[item.id] = title
+                        resolvedCacheKeysByItemId[item.id] = cacheKey
                     }
             }
     }
 
-    return resolvedTitles
+    return resolvedTitlesByItemId
 }
 
 internal fun buildCatalogFallbackDisplayTitle(item: CatalogItem): String {
     return item.title?.takeIf { it.isNotBlank() } ?: "無題"
 }
 
+internal data class CatalogHeadMetadataCacheKey(
+    val boardUrl: String,
+    val itemId: String,
+    val replyCount: Int,
+    val title: String
+)
+
 internal fun buildCatalogHeadMetadataCacheKey(
     boardUrl: String?,
     item: CatalogItem
-): String {
-    return listOf(
-        boardUrl.orEmpty(),
-        item.id,
-        item.replyCount.toString(),
-        item.title.orEmpty()
-    ).joinToString("|")
+): CatalogHeadMetadataCacheKey {
+    return CatalogHeadMetadataCacheKey(
+        boardUrl = boardUrl.orEmpty(),
+        itemId = item.id,
+        replyCount = item.replyCount,
+        title = item.title.orEmpty()
+    )
 }

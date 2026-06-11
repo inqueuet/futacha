@@ -45,6 +45,7 @@ import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_STALE_AGE_MILLIS
 import com.valoser.futacha.wear.sync.PhoneCommandClient
 import com.valoser.futacha.wear.sync.WatchSnapshotStore
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -60,6 +61,8 @@ class WearMainActivity : ComponentActivity() {
         }
     }
 }
+
+private const val WATCH_NOW_TICK_MILLIS = 30_000L
 
 @Composable
 private fun FutachaWearApp() {
@@ -96,6 +99,14 @@ private fun FutachaWearContent(
 ) {
     var selectedThreadId by remember { mutableStateOf<String?>(null) }
     val selectedThread = snapshot?.threads?.firstOrNull { it.threadId == selectedThreadId }
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(WATCH_NOW_TICK_MILLIS)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -106,6 +117,7 @@ private fun FutachaWearContent(
             snapshot == null -> EmptySnapshotView(onRequestSync = onRequestSync)
             selectedThread != null -> ReadAloudControlView(
                 thread = selectedThread,
+                nowMillis = nowMillis,
                 onBack = { selectedThreadId = null },
                 onStartReadAloudOnPhone = onStartReadAloudOnPhone,
                 onPauseReadAloudOnPhone = onPauseReadAloudOnPhone,
@@ -113,6 +125,7 @@ private fun FutachaWearContent(
             )
             else -> HomeView(
                 snapshot = snapshot,
+                nowMillis = nowMillis,
                 onThreadSelected = { selectedThreadId = it.threadId },
                 onRefresh = onRefresh
             )
@@ -143,13 +156,16 @@ private fun EmptySnapshotView(
 @Composable
 private fun HomeView(
     snapshot: WatchSnapshot,
+    nowMillis: Long,
     onThreadSelected: (WatchThreadSummary) -> Unit,
     onRefresh: () -> Unit
 ) {
     val watchMatches = snapshot.threads.filter { it.isWatchWordMatch }
     val unreadThreads = snapshot.threads.filter { it.newReplyCount > 0 }
-    val activeReadAloudThread = snapshot.threads.firstOrNull { it.freshReadAloudStatus() != null }
-    val syncLabel = buildSnapshotSyncLabel(snapshot.generatedAtMillis)
+    val activeReadAloudThread = snapshot.threads.firstOrNull {
+        it.freshReadAloudStatus(nowMillis) != null
+    }
+    val syncLabel = buildSnapshotSyncLabel(snapshot.generatedAtMillis, nowMillis)
     WatchScreen {
         Text(
             text = "futacha",
@@ -170,14 +186,14 @@ private fun HomeView(
         ActionRow(label = "更新", onClick = onRefresh)
         activeReadAloudThread?.let { thread ->
             SectionTitle("読み上げ中")
-            ThreadRow(thread = thread, onClick = { onThreadSelected(thread) })
+            ThreadRow(thread = thread, nowMillis = nowMillis, onClick = { onThreadSelected(thread) })
         }
         SectionTitle("監視")
         if (watchMatches.isEmpty()) {
             MutedText("一致なし")
         } else {
             watchMatches.take(3).forEach { thread ->
-                ThreadRow(thread = thread, onClick = { onThreadSelected(thread) })
+                ThreadRow(thread = thread, nowMillis = nowMillis, onClick = { onThreadSelected(thread) })
             }
         }
         SectionTitle("新着")
@@ -185,7 +201,7 @@ private fun HomeView(
             MutedText("新着なし")
         } else {
             unreadThreads.take(5).forEach { thread ->
-                ThreadRow(thread = thread, onClick = { onThreadSelected(thread) })
+                ThreadRow(thread = thread, nowMillis = nowMillis, onClick = { onThreadSelected(thread) })
             }
         }
     }
@@ -194,6 +210,7 @@ private fun HomeView(
 @Composable
 private fun ReadAloudControlView(
     thread: WatchThreadSummary,
+    nowMillis: Long,
     onBack: () -> Unit,
     onStartReadAloudOnPhone: (WatchThreadSummary) -> Unit,
     onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
@@ -218,7 +235,7 @@ private fun ReadAloudControlView(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        thread.freshReadAloudStatus()?.let { status ->
+        thread.freshReadAloudStatus(nowMillis)?.let { status ->
             Text(
                 text = buildReadAloudStatusLabel(
                     stateName = status.state.name,
@@ -320,6 +337,7 @@ private fun TopBackRow(
 @Composable
 private fun ThreadRow(
     thread: WatchThreadSummary,
+    nowMillis: Long,
     onClick: () -> Unit
 ) {
     RowCard(onClick = onClick) {
@@ -336,7 +354,7 @@ private fun ThreadRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        thread.freshReadAloudStatus()?.let { status ->
+        thread.freshReadAloudStatus(nowMillis)?.let { status ->
             Text(
                 text = buildReadAloudStatusLabel(
                     stateName = status.state.name,

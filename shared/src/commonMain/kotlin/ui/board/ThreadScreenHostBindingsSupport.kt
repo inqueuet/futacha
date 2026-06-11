@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.lazy.LazyListState
 import com.valoser.futacha.shared.model.ThreadDisplayMode
@@ -37,7 +38,7 @@ internal data class ThreadScreenHostRuntimeInputs(
     val resolvedReplyCount: Int?,
     val statusLabel: String?,
     val isSearchActive: Boolean,
-    val searchQuery: String,
+    val searchQueryState: State<String>,
     val currentSearchResultIndex: Int,
     val totalSearchMatches: Int,
     val uiState: ThreadUiState,
@@ -114,7 +115,7 @@ internal data class ThreadScreenHostScaffoldInputs(
     val resolvedReplyCount: Int?,
     val statusLabel: String?,
     val isSearchActive: Boolean,
-    val searchQuery: String,
+    val searchQueryState: State<String>,
     val currentSearchResultIndex: Int,
     val totalSearchMatches: Int,
     val topBarCallbacks: ThreadTopBarCallbacks,
@@ -219,7 +220,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             resolvedReplyCount = scaffoldInputs.resolvedReplyCount,
             statusLabel = scaffoldInputs.statusLabel,
             isSearchActive = scaffoldInputs.isSearchActive,
-            searchQuery = scaffoldInputs.searchQuery,
+            searchQueryState = scaffoldInputs.searchQueryState,
             currentSearchResultIndex = scaffoldInputs.currentSearchResultIndex,
             totalSearchMatches = scaffoldInputs.totalSearchMatches,
             topBarCallbacks = scaffoldInputs.topBarCallbacks,
@@ -328,7 +329,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             resolvedReplyCount = inputs.resolvedReplyCount,
             statusLabel = inputs.statusLabel,
             isSearchActive = inputs.isSearchActive,
-            searchQuery = inputs.searchQuery,
+            searchQueryState = inputs.searchQueryState,
             currentSearchResultIndex = inputs.currentSearchResultIndex,
             totalSearchMatches = inputs.totalSearchMatches,
             topBarCallbacks = inputs.uiBindings.topBarCallbacks,

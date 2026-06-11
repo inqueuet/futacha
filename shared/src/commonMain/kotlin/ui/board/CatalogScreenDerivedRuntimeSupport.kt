@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -15,6 +16,31 @@ internal data class CatalogVisibleItemsRequest(
     val catalogNgWords: List<String>,
     val catalogNgFilteringEnabled: Boolean,
     val query: String
+)
+
+private data class CatalogVisibleItemsFilterKey(
+    val mode: CatalogMode,
+    val watchWords: List<String>,
+    val catalogNgWords: List<String>,
+    val catalogNgFilteringEnabled: Boolean,
+    val query: String
+)
+
+private class CatalogVisibleItemsItemsKey(
+    private val items: List<CatalogItem>
+) {
+    override fun equals(other: Any?): Boolean {
+        return other is CatalogVisibleItemsItemsKey && other.items === items
+    }
+
+    override fun hashCode(): Int {
+        return items.size
+    }
+}
+
+private class CatalogVisibleItemsPreviousResult(
+    var items: List<CatalogItem>,
+    var visibleItems: List<CatalogItem>? = null
 )
 
 internal fun buildCatalogVisibleItemsRequest(
@@ -39,11 +65,34 @@ internal fun buildCatalogVisibleItemsRequest(
 internal fun rememberCatalogVisibleItemsState(
     request: CatalogVisibleItemsRequest
 ): State<List<CatalogItem>> {
+    val previousResult = remember {
+        CatalogVisibleItemsPreviousResult(request.items)
+    }
+    if (previousResult.items !== request.items) {
+        previousResult.items = request.items
+        previousResult.visibleItems = null
+    }
+    val itemsKey = CatalogVisibleItemsItemsKey(request.items)
+    val filterKey = CatalogVisibleItemsFilterKey(
+        mode = request.mode,
+        watchWords = request.watchWords,
+        catalogNgWords = request.catalogNgWords,
+        catalogNgFilteringEnabled = request.catalogNgFilteringEnabled,
+        query = request.query
+    )
     return produceState<List<CatalogItem>>(
-        initialValue = emptyList(),
-        key1 = request
+        initialValue = previousResult.visibleItems ?: buildVisibleCatalogItems(
+            items = request.items,
+            mode = request.mode,
+            watchWords = request.watchWords,
+            catalogNgWords = request.catalogNgWords,
+            catalogNgFilteringEnabled = request.catalogNgFilteringEnabled,
+            query = request.query
+        ),
+        key1 = itemsKey,
+        key2 = filterKey
     ) {
-        value = withContext(AppDispatchers.parsing) {
+        val visibleItems = withContext(AppDispatchers.parsing) {
             buildVisibleCatalogItems(
                 items = request.items,
                 mode = request.mode,
@@ -53,5 +102,7 @@ internal fun rememberCatalogVisibleItemsState(
                 query = request.query
             )
         }
+        value = visibleItems
+        previousResult.visibleItems = visibleItems
     }
 }

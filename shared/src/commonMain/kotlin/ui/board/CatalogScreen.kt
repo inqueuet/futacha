@@ -196,7 +196,7 @@ private fun CatalogScreenContent(
     var catalogLoadGeneration by uiRuntimeStateRefs.catalogLoadGeneration
     var isHistoryRefreshing by uiRuntimeStateRefs.isHistoryRefreshing
     var isSearchActive by searchOverlayStateRefs.isSearchActive
-    var searchQuery by searchOverlayStateRefs.searchQuery
+    val searchQueryState = searchOverlayStateRefs.searchQuery
     var debouncedSearchQuery by searchOverlayStateRefs.debouncedSearchQuery
     var overlayState by searchOverlayStateRefs.overlayState
     var createThreadDraft by draftDisplayStateRefs.createThreadDraft
@@ -338,7 +338,7 @@ private fun CatalogScreenContent(
             setShowGlobalSettings = { isVisible ->
                 overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
             },
-            setSearchQuery = { searchQuery = it },
+            setSearchQuery = { searchQueryState.value = it },
             setSearchActive = { isSearchActive = it },
             lastUsedDeleteKey = lastUsedDeleteKey,
             currentCreateThreadPassword = { createThreadDraft.password },
@@ -424,7 +424,7 @@ private fun CatalogScreenContent(
                 isSearchActive = true
             }
             FutachaAiAction.SearchCatalog -> {
-                searchQuery = command.searchQueryParameter().orEmpty()
+                searchQueryState.value = command.searchQueryParameter().orEmpty()
                 isSearchActive = true
             }
             FutachaAiAction.OpenHistoryDrawer -> {
@@ -484,7 +484,7 @@ private fun CatalogScreenContent(
         currentPastSearchRuntimeState = { pastSearchRuntimeState },
         setPastSearchRuntimeState = { pastSearchRuntimeState = it },
         setSearchActive = { isSearchActive = it },
-        setSearchQuery = { searchQuery = it }
+        setSearchQuery = { searchQueryState.value = it }
     )
     DisposableEffect(Unit) {
         onDispose {
@@ -517,7 +517,7 @@ private fun CatalogScreenContent(
             snackbarHostState = snackbarHostState,
             board = board,
             catalogMode = catalogMode,
-            searchQuery = searchQuery,
+            searchQueryState = searchQueryState,
             isSearchActive = isSearchActive,
             runtimeBindings = runtimeBindings,
             preferencesState = preferencesState,

@@ -39,11 +39,13 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -105,6 +107,17 @@ class WatchSyncManager(
                 }
                     .debounce(WATCH_SNAPSHOT_DEBOUNCE_MILLIS)
                     .distinctUntilChanged()
+                    .retryWhen { cause, attempt ->
+                        if (cause is CancellationException) throw cause
+                        val delayMillis = watchSnapshotRetryDelayMillis(attempt)
+                        Logger.e(
+                            TAG,
+                            "Watch snapshot stream failed; retrying in ${delayMillis}ms (attempt=${attempt + 1})",
+                            cause
+                        )
+                        delay(delayMillis)
+                        true
+                    }
                     .collect { inputs ->
                         try {
                             sendSnapshot(
@@ -123,6 +136,7 @@ class WatchSyncManager(
                     }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
+                Logger.e(TAG, "Watch snapshot stream stopped unexpectedly", error)
             } finally {
                 isStarted.set(false)
             }
@@ -545,6 +559,13 @@ class WatchSyncManager(
         }
     }
 
+    private fun watchSnapshotRetryDelayMillis(attempt: Long): Long {
+        val shift = attempt.coerceAtMost(WATCH_SNAPSHOT_RETRY_MAX_SHIFT.toLong()).toInt()
+        val multiplier = 1L shl shift
+        return (WATCH_SNAPSHOT_RETRY_BASE_DELAY_MILLIS * multiplier)
+            .coerceAtMost(WATCH_SNAPSHOT_RETRY_MAX_DELAY_MILLIS)
+    }
+
     private companion object {
         private const val TAG = "WatchSyncManager"
         private const val WATCH_PREVIEW_THREAD_LIMIT = 8
@@ -555,6 +576,9 @@ class WatchSyncManager(
         private const val WATCH_PENDING_SNAPSHOT_ACK_MAX_COUNT = 8
         private const val WATCH_HANDLED_COMMAND_ID_MAX_COUNT = 128
         private const val WATCH_SNAPSHOT_DEBOUNCE_MILLIS = 1_000L
+        private const val WATCH_SNAPSHOT_RETRY_BASE_DELAY_MILLIS = 1_000L
+        private const val WATCH_SNAPSHOT_RETRY_MAX_DELAY_MILLIS = 60_000L
+        private const val WATCH_SNAPSHOT_RETRY_MAX_SHIFT = 6
         private const val WATCH_SNAPSHOT_REQUEST_TIMEOUT_MILLIS = 10_000L
         private const val WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS = 10_000L
         private const val WATCH_METADATA_LOAD_TIMEOUT_MILLIS = 1_000L

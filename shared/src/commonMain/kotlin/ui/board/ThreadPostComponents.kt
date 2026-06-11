@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,6 +45,8 @@ import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 private val ThreadPostFooterTextColor = FutabaTextDim
 private val ThreadPostFooterAccentColor = FutabaAccentRed
 private val ThreadPostFooterAuthorColor = FutabaNameGreen
+private val ThreadPostThumbnailMaxWidth = 800.dp
+private val ThreadPostThumbnailMaxHeight = 200.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -68,6 +71,7 @@ internal fun ThreadPostCard(
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
+    val density = LocalDensity.current
     val backgroundColor = when {
         post.isDeleted -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
         else -> MaterialTheme.colorScheme.surface
@@ -111,10 +115,22 @@ internal fun ThreadPostCard(
         val thumbnailForDisplay = if (shouldCollapseDeletedBody) null else resolvePostDisplayMediaUrl(post)
         thumbnailForDisplay?.let { displayUrl ->
             val imageLoader = LocalFutachaImageLoader.current
-            val thumbnailRequest = remember(platformContext, displayUrl) {
+            val thumbnailTargetWidthPx = remember(density) {
+                with(density) { ThreadPostThumbnailMaxWidth.roundToPx() }
+            }
+            val thumbnailTargetHeightPx = remember(density) {
+                with(density) { ThreadPostThumbnailMaxHeight.roundToPx() }
+            }
+            val thumbnailRequest = remember(
+                platformContext,
+                displayUrl,
+                thumbnailTargetWidthPx,
+                thumbnailTargetHeightPx
+            ) {
                 ImageRequest.Builder(platformContext)
                     .data(displayUrl)
                     .crossfade(true)
+                    .size(thumbnailTargetWidthPx, thumbnailTargetHeightPx)
                     .build()
             }
             val thumbnailPainter = rememberAsyncImagePainter(
@@ -160,7 +176,7 @@ internal fun ThreadPostCard(
                 modifier = run {
                     val baseModifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 200.dp)
+                        .heightIn(max = ThreadPostThumbnailMaxHeight)
                         .clip(MaterialTheme.shapes.small)
                         .background(backgroundColor)
                     val targetUrl = resolvePostTargetMediaUrl(post) ?: displayUrl

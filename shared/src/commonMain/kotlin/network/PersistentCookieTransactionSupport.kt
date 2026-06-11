@@ -3,46 +3,58 @@ package com.valoser.futacha.shared.network
 internal class PersistentCookieTransactionCoordinator<K, V>(
     @Suppress("UNUSED_PARAMETER") private val logTag: String
 ) {
-    private var transactionSnapshot: Map<K, V>? = null
-    private var activeTransactionId: Long? = null
+    private data class Transaction<K, V>(
+        val id: Long,
+        val baseSnapshot: Map<K, V>,
+        val stagedSnapshot: MutableMap<K, V>
+    )
+
+    private var transaction: Transaction<K, V>? = null
     private var transactionSequence = 0L
 
     fun begin(currentSnapshot: Map<K, V>): Long {
-        transactionSnapshot = HashMap(currentSnapshot)
         transactionSequence += 1
-        activeTransactionId = transactionSequence
+        transaction = Transaction(
+            id = transactionSequence,
+            baseSnapshot = HashMap(currentSnapshot),
+            stagedSnapshot = HashMap(currentSnapshot)
+        )
         return transactionSequence
     }
 
-    fun shouldPersistImmediately(coroutineTransactionId: Long?): Boolean {
-        val isInActiveTransaction =
-            activeTransactionId != null && coroutineTransactionId == activeTransactionId
-        return transactionSnapshot == null || !isInActiveTransaction
+    fun mutableSnapshotFor(transactionId: Long?): MutableMap<K, V>? {
+        return transaction
+            ?.takeIf { it.id == transactionId }
+            ?.stagedSnapshot
     }
 
-    suspend fun commit(transactionId: Long?, encodeSnapshot: suspend () -> String): String? {
-        if (activeTransactionId != transactionId) return null
+    fun snapshotFor(transactionId: Long?): Map<K, V>? {
+        return mutableSnapshotFor(transactionId)
+    }
+
+    fun shouldPersistImmediately(coroutineTransactionId: Long?): Boolean {
+        val activeTransaction = transaction ?: return true
+        return activeTransaction.id != coroutineTransactionId
+    }
+
+    suspend fun commit(
+        transactionId: Long?,
+        applyChanges: (baseSnapshot: Map<K, V>, stagedSnapshot: Map<K, V>) -> Unit,
+        encodeSnapshot: suspend () -> String
+    ): String? {
+        val activeTransaction = transaction?.takeIf { it.id == transactionId } ?: return null
+        applyChanges(activeTransaction.baseSnapshot, activeTransaction.stagedSnapshot)
         val savePayload = encodeSnapshot()
         clear()
         return savePayload
     }
 
-    suspend fun rollback(
-        transactionId: Long?,
-        restoreSnapshot: (Map<K, V>) -> Unit,
-        encodeSnapshot: suspend () -> String
-    ): String? {
-        if (activeTransactionId != transactionId) return null
-        val savePayload = transactionSnapshot?.let { snapshot ->
-            restoreSnapshot(snapshot)
-            encodeSnapshot()
-        }
+    fun rollback(transactionId: Long?) {
+        if (transaction?.id != transactionId) return
         clear()
-        return savePayload
     }
 
     private fun clear() {
-        transactionSnapshot = null
-        activeTransactionId = null
+        transaction = null
     }
 }

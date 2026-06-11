@@ -27,6 +27,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +50,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryId
 internal fun CatalogTopBar(
     board: BoardSummary?,
     mode: CatalogMode,
-    searchQuery: String,
+    searchQueryState: State<String>,
     isSearchActive: Boolean,
     onSearchQueryChange: (String) -> Unit,
     onSearchActiveChange: (Boolean) -> Unit,
@@ -58,6 +59,7 @@ internal fun CatalogTopBar(
     onMenuAction: (CatalogMenuAction) -> Unit
 ) {
     var isMenuExpanded by remember { mutableStateOf(false) }
+    val searchQuery by searchQueryState
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
 

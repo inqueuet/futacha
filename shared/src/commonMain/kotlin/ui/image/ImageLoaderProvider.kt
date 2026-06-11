@@ -18,7 +18,9 @@ import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
@@ -98,6 +100,11 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
     private val exhaustedUrlsMutex = Mutex()
     private val exhaustedUrls = LinkedHashSet<String>()
     private val exhaustedUrlMaxEntries = 256
+    private val recoveredUrlsMutex = Mutex()
+    private val recoveredUrls = LinkedHashMap<String, String>()
+    private val recoveredUrlMaxEntries = 256
+    private val videoFallbackSemaphore = Semaphore(permits = 1)
+    private val videoFallbackExtensions = setOf("webm", "mp4")
 
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
         val initialRequest = chain.request
@@ -110,6 +117,18 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
                 if (isExhausted(url)) {
                     return initialResult
                 }
+                readRecoveredUrl(url)?.let { recoveredUrl ->
+                    val recoveredResult = proceedWithFallbackUrl(
+                        chain = chain,
+                        initialRequest = initialRequest,
+                        fallbackUrl = recoveredUrl
+                    )
+                    if (recoveredResult is SuccessResult) {
+                        markRecovered(url, recoveredUrl)
+                        return recoveredResult
+                    }
+                    forgetRecoveredUrl(url)
+                }
                 val normalizedUrl = url.substringBefore('#').substringBefore('?')
                 val currentExtension = sourceExtensionRegex
                     .find(normalizedUrl)
@@ -120,11 +139,14 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
                 for (ext in fallbackExtensions) {
                     val newUrl = replaceOrAppendExtension(url, ext)
                     if (newUrl == url) continue
-                    val newRequest = initialRequest.newBuilder().data(newUrl).build()
-                    val newResult = chain.withRequest(newRequest).proceed()
+                    val newResult = proceedWithFallbackUrl(
+                        chain = chain,
+                        initialRequest = initialRequest,
+                        fallbackUrl = newUrl
+                    )
 
                     if (newResult is SuccessResult) {
-                        markRecovered(url)
+                        markRecovered(url, newUrl)
                         return newResult
                     }
                 }
@@ -146,13 +168,53 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
             .take(2)
     }
 
+    private suspend fun proceedWithFallbackUrl(
+        chain: Interceptor.Chain,
+        initialRequest: coil3.request.ImageRequest,
+        fallbackUrl: String
+    ): ImageResult {
+        val request = initialRequest.newBuilder().data(fallbackUrl).build()
+        val proceed: suspend () -> ImageResult = {
+            chain.withRequest(request).proceed()
+        }
+        return if (fallbackUrl.extensionOrNull() in videoFallbackExtensions) {
+            videoFallbackSemaphore.withPermit {
+                proceed()
+            }
+        } else {
+            proceed()
+        }
+    }
+
     private suspend fun isExhausted(url: String): Boolean {
         return exhaustedUrlsMutex.withLock { url in exhaustedUrls }
     }
 
-    private suspend fun markRecovered(url: String) {
+    private suspend fun readRecoveredUrl(url: String): String? {
+        return recoveredUrlsMutex.withLock {
+            recoveredUrls.remove(url)?.also { recoveredUrl ->
+                recoveredUrls[url] = recoveredUrl
+            }
+        }
+    }
+
+    private suspend fun markRecovered(url: String, recoveredUrl: String) {
         exhaustedUrlsMutex.withLock {
             exhaustedUrls.remove(url)
+        }
+        recoveredUrlsMutex.withLock {
+            recoveredUrls.remove(url)
+            recoveredUrls[url] = recoveredUrl
+            while (recoveredUrls.size > recoveredUrlMaxEntries) {
+                val eldest = recoveredUrls.keys.firstOrNull() ?: break
+                recoveredUrls.remove(eldest)
+            }
+        }
+    }
+
+    private suspend fun forgetRecoveredUrl(url: String) {
+        recoveredUrlsMutex.withLock {
+            recoveredUrls.remove(url)
         }
     }
 
@@ -173,6 +235,14 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         } else {
             "$url.$extension"
         }
+    }
+
+    private fun String.extensionOrNull(): String? {
+        return sourceExtensionRegex
+            .find(substringBefore('#').substringBefore('?'))
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.lowercase()
     }
 }
 

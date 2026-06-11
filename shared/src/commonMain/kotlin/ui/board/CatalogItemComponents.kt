@@ -83,9 +83,7 @@ internal fun CatalogGrid(
             CatalogCard(
                 item = catalogItem,
                 boardUrl = board?.url,
-                resolvedDisplayTitle = resolvedHeadTitles[
-                    buildCatalogHeadMetadataCacheKey(board?.url, catalogItem)
-                ],
+                resolvedDisplayTitle = resolvedHeadTitles[catalogItem.id],
                 resolveHeadMetadata = resolveHeadMetadata,
                 isWatchWordMatch = catalogItem.matchesNormalizedWatchWords(normalizedWatchWords),
                 onClick = { onThreadSelected(catalogItem) }
@@ -160,9 +158,7 @@ internal fun CatalogList(
             CatalogListItem(
                 item = catalogItem,
                 boardUrl = board?.url,
-                resolvedDisplayTitle = resolvedHeadTitles[
-                    buildCatalogHeadMetadataCacheKey(board?.url, catalogItem)
-                ],
+                resolvedDisplayTitle = resolvedHeadTitles[catalogItem.id],
                 resolveHeadMetadata = resolveHeadMetadata,
                 isWatchWordMatch = catalogItem.matchesNormalizedWatchWords(normalizedWatchWords),
                 onClick = { onThreadSelected(catalogItem) }

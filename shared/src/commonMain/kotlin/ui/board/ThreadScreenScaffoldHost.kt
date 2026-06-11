@@ -21,6 +21,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.*
@@ -41,7 +42,7 @@ internal data class ThreadScreenScaffoldBindings(
     val resolvedReplyCount: Int?,
     val statusLabel: String?,
     val isSearchActive: Boolean,
-    val searchQuery: String,
+    val searchQueryState: State<String>,
     val currentSearchResultIndex: Int,
     val totalSearchMatches: Int,
     val topBarCallbacks: ThreadTopBarCallbacks,
@@ -94,7 +95,7 @@ internal fun ThreadScreenScaffoldHost(
                         replyCount = bindings.resolvedReplyCount,
                         statusLabel = bindings.statusLabel,
                         isSearchActive = bindings.isSearchActive,
-                        searchQuery = bindings.searchQuery,
+                        searchQueryState = bindings.searchQueryState,
                         currentSearchIndex = bindings.currentSearchResultIndex,
                         totalSearchMatches = bindings.totalSearchMatches,
                         onSearchQueryChange = bindings.topBarCallbacks.onSearchQueryChange,

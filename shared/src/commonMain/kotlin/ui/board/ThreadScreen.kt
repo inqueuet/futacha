@@ -100,10 +100,15 @@ import com.valoser.futacha.shared.watch.WatchReadAloudPlaybackState
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchReadAloudStatusStore
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlin.time.Clock
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.time.ExperimentalTime
+
+private const val WATCH_READ_ALOUD_PROGRESS_UPDATE_STEP = 5
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
@@ -210,7 +215,7 @@ fun ThreadScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, FlowPreview::class)
 @Composable
 private fun ThreadScreenContent(
     args: ThreadScreenContentArgs
@@ -558,7 +563,15 @@ private fun ThreadScreenContent(
     }
 
     var isSearchActive by searchStateRefs.isSearchActive
-    var searchQuery by searchStateRefs.searchQuery
+    val searchQueryState = searchStateRefs.searchQuery
+    var debouncedThreadSearchQuery by rememberSaveable(threadId) { mutableStateOf("") }
+    LaunchedEffect(searchQueryState) {
+        snapshotFlow { searchQueryState.value }
+            .map(::resolveThreadDebouncedSearchQuery)
+            .distinctUntilChanged()
+            .debounce(::resolveThreadSearchDebounceMillis)
+            .collect { debouncedThreadSearchQuery = it }
+    }
     var currentSearchResultIndex by searchStateRefs.currentSearchResultIndex
     val shouldPrepareReadAloudForAiCommand = when (args.aiCommand?.action) {
         FutachaAiAction.StartThreadReadAloud,
@@ -575,7 +588,7 @@ private fun ThreadScreenContent(
         shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForAiCommand,
         lazyListState,
         isSearchActive,
-        searchQuery
+        debouncedThreadSearchQuery
     )
     val derivedUiState = derivedRuntimeState.derivedUiState
     val currentSuccessState = derivedUiState.successState
@@ -626,20 +639,31 @@ private fun ThreadScreenContent(
         currentReadAloudIndex = currentReadAloudIndex,
         onCurrentReadAloudIndexChanged = { currentReadAloudIndex = it }
     )
+    val watchReadAloudPlaybackState = when (readAloudStatus) {
+        is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
+        is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
+        ReadAloudStatus.Idle -> null
+    }
+    val watchReadAloudProgressBucket = remember(
+        watchReadAloudPlaybackState,
+        currentReadAloudIndex,
+        readAloudSegments.size
+    ) {
+        resolveWatchReadAloudProgressUpdateBucket(
+            playbackState = watchReadAloudPlaybackState,
+            currentIndex = currentReadAloudIndex,
+            totalPosts = readAloudSegments.size
+        )
+    }
     LaunchedEffect(
         board.id,
         effectiveBoardUrl,
         threadId,
-        readAloudStatus,
-        currentReadAloudIndex,
+        watchReadAloudPlaybackState,
+        watchReadAloudProgressBucket,
         readAloudSegments.size
     ) {
-        val playbackState = when (readAloudStatus) {
-            is ReadAloudStatus.Speaking -> WatchReadAloudPlaybackState.Speaking
-            is ReadAloudStatus.Paused -> WatchReadAloudPlaybackState.Paused
-            ReadAloudStatus.Idle -> null
-        }
-        if (playbackState == null) {
+        if (watchReadAloudPlaybackState == null) {
             WatchReadAloudStatusStore.clearIfMatches(
                 boardId = board.id,
                 boardUrl = effectiveBoardUrl,
@@ -657,7 +681,7 @@ private fun ThreadScreenContent(
                 boardId = board.id,
                 boardUrl = effectiveBoardUrl,
                 threadId = threadId,
-                state = playbackState,
+                state = watchReadAloudPlaybackState,
                 postId = segment?.postId,
                 currentIndex = currentReadAloudIndex.coerceAtLeast(0),
                 totalPosts = readAloudSegments.size,
@@ -699,7 +723,7 @@ private fun ThreadScreenContent(
         }
     )
     ThreadSearchIndexEffects(
-        searchQuery = searchQuery,
+        searchQuery = debouncedThreadSearchQuery,
         threadId = threadId,
         searchMatches = searchMatches,
         currentSearchResultIndex = currentSearchResultIndex,
@@ -780,7 +804,7 @@ private fun ThreadScreenContent(
                     stateStore?.setPrivacyFilterEnabled(!isPrivacyFilterEnabled)
                 }
             },
-            setSearchQuery = { searchQuery = it },
+            setSearchQuery = { searchQueryState.value = it },
             setSearchActive = { isSearchActive = it },
             singleMediaSaveBindings = singleMediaSaveBindings,
             currentSuccessState = currentSuccessState,
@@ -815,7 +839,42 @@ private fun ThreadScreenContent(
     val performRefresh = interactionUiHandles.performRefresh
     LaunchedEffect(args.aiCommand, readAloudSegments.size) {
         val command = args.aiCommand ?: return@LaunchedEffect
-        var didConsume = true
+        val requiresReadAloudSegments = when (command.action) {
+            FutachaAiAction.StartThreadReadAloud,
+            FutachaAiAction.NextThreadReadAloud,
+            FutachaAiAction.PreviousThreadReadAloud -> true
+            else -> false
+        }
+        if (requiresReadAloudSegments && readAloudSegments.isEmpty()) {
+            return@LaunchedEffect
+        }
+        val shouldConsume = when (command.action) {
+            FutachaAiAction.RefreshCurrentThread,
+            FutachaAiAction.ScrollThreadToTop,
+            FutachaAiAction.ScrollThreadToBottom,
+            FutachaAiAction.StartThreadReadAloud,
+            FutachaAiAction.PauseThreadReadAloud,
+            FutachaAiAction.StopThreadReadAloud,
+            FutachaAiAction.NextThreadReadAloud,
+            FutachaAiAction.PreviousThreadReadAloud,
+            FutachaAiAction.StartThreadSearch,
+            FutachaAiAction.SearchThread,
+            FutachaAiAction.NextSearchResult,
+            FutachaAiAction.PreviousSearchResult,
+            FutachaAiAction.OpenHistoryDrawer,
+            FutachaAiAction.OpenGallery,
+            FutachaAiAction.OpenThreadSettings,
+            FutachaAiAction.OpenThreadExternally,
+            FutachaAiAction.OpenCookieManagement,
+            FutachaAiAction.SaveCurrentThread,
+            FutachaAiAction.SaveThread,
+            FutachaAiAction.DraftReply -> true
+            else -> false
+        }
+        if (!shouldConsume) {
+            return@LaunchedEffect
+        }
+        args.onAiCommandConsumed(command)
         when (command.action) {
             FutachaAiAction.RefreshCurrentThread -> {
                 performRefresh()
@@ -827,7 +886,6 @@ private fun ThreadScreenContent(
                 handleMenuEntry(ThreadMenuEntryId.ScrollToBottom)
             }
             FutachaAiAction.StartThreadReadAloud -> {
-                if (readAloudSegments.isEmpty()) return@LaunchedEffect
                 sheetOverlayState = openThreadReadAloudOverlay(sheetOverlayState)
                 startReadAloud()
             }
@@ -839,14 +897,12 @@ private fun ThreadScreenContent(
                 showMessage(buildReadAloudStoppedMessage())
             }
             FutachaAiAction.NextThreadReadAloud -> {
-                if (readAloudSegments.isEmpty()) return@LaunchedEffect
                 seekReadAloudToIndex(
                     (currentReadAloudIndex + 1).coerceAtMost(readAloudSegments.lastIndex),
                     true
                 )
             }
             FutachaAiAction.PreviousThreadReadAloud -> {
-                if (readAloudSegments.isEmpty()) return@LaunchedEffect
                 seekReadAloudToIndex(
                     (currentReadAloudIndex - 1).coerceAtLeast(0),
                     true
@@ -856,7 +912,7 @@ private fun ThreadScreenContent(
                 isSearchActive = true
             }
             FutachaAiAction.SearchThread -> {
-                searchQuery = command.searchQueryParameter().orEmpty()
+                searchQueryState.value = command.searchQueryParameter().orEmpty()
                 currentSearchResultIndex = -1
                 isSearchActive = true
             }
@@ -907,12 +963,7 @@ private fun ThreadScreenContent(
                     )
                 )
             }
-            else -> {
-                didConsume = false
-            }
-        }
-        if (didConsume) {
-            args.onAiCommandConsumed(command)
+            else -> Unit
         }
     }
     val uiBindings = interactionUiHandles.uiBindings
@@ -1041,7 +1092,7 @@ private fun ThreadScreenContent(
             resolvedReplyCount = resolvedReplyCount,
             statusLabel = statusLabel,
             isSearchActive = isSearchActive,
-            searchQuery = searchQuery,
+            searchQueryState = searchQueryState,
             currentSearchResultIndex = currentSearchResultIndex,
             totalSearchMatches = searchMatches.size,
             uiState = uiState.value,
@@ -1189,5 +1240,21 @@ private fun ThreadScreenContent(
         ThreadScreenOverlayHost(
             bindings = hostBindingsBundle.overlayBindings
         )
+    }
+}
+
+private fun resolveWatchReadAloudProgressUpdateBucket(
+    playbackState: WatchReadAloudPlaybackState?,
+    currentIndex: Int,
+    totalPosts: Int
+): Int {
+    if (playbackState == null) return -1
+    val normalizedIndex = currentIndex.coerceAtLeast(0)
+    val lastIndex = totalPosts - 1
+    return when {
+        playbackState == WatchReadAloudPlaybackState.Paused -> normalizedIndex
+        normalizedIndex == 0 -> 0
+        lastIndex >= 0 && normalizedIndex >= lastIndex -> lastIndex
+        else -> normalizedIndex / WATCH_READ_ALOUD_PROGRESS_UPDATE_STEP
     }
 }

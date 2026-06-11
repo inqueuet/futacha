@@ -190,23 +190,33 @@ class PersistentCookieSupportTest {
         assertFalse(coordinator.shouldPersistImmediately(transactionId))
         assertTrue(coordinator.shouldPersistImmediately(null))
 
-        var restored = emptyMap<String, String>()
-        val rollbackPayload = coordinator.rollback(
-            transactionId = transactionId,
-            restoreSnapshot = { restored = it },
-            encodeSnapshot = { "rolled-back" }
-        )
+        coordinator.mutableSnapshotFor(transactionId)?.put("a", "2")
+        coordinator.rollback(transactionId = transactionId)
 
-        assertEquals(snapshot, restored)
-        assertEquals("rolled-back", rollbackPayload)
+        assertNull(coordinator.snapshotFor(transactionId))
 
         val committedId = coordinator.begin(snapshot)
+        coordinator.mutableSnapshotFor(committedId)?.put("b", "2")
+        coordinator.mutableSnapshotFor(committedId)?.remove("a")
+        val applied = linkedMapOf("a" to "1", "external" to "3")
         val commitPayload = coordinator.commit(
             transactionId = committedId,
+            applyChanges = { baseSnapshot, stagedSnapshot ->
+                (baseSnapshot.keys + stagedSnapshot.keys).forEach { key ->
+                    val stagedValue = stagedSnapshot[key]
+                    if (baseSnapshot[key] == stagedValue) return@forEach
+                    if (stagedValue == null) {
+                        applied.remove(key)
+                    } else {
+                        applied[key] = stagedValue
+                    }
+                }
+            },
             encodeSnapshot = { "committed" }
         )
 
         assertEquals("committed", commitPayload)
+        assertEquals(linkedMapOf("external" to "3", "b" to "2"), applied)
         assertTrue(coordinator.shouldPersistImmediately(null))
     }
 }

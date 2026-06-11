@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
 import coil3.compose.LocalPlatformContext
@@ -26,7 +27,9 @@ private const val THREAD_AI_SUMMARY_UI_TIMEOUT_MS = 20_000L
 private const val THREAD_AI_POST_MODERATION_BATCH_TIMEOUT_MS = 25_000L
 private const val THREAD_AI_POST_MODERATION_BATCH_SIZE = 8
 private const val THREAD_AI_POST_MODERATION_BATCH_DELAY_MS = 120L
+private const val THREAD_AI_POST_MODERATION_UI_UPDATE_BATCH_INTERVAL = 2
 private const val THREAD_AI_POST_MODERATION_START_DELAY_MS = 1_500L
+private const val THREAD_AI_POST_MODERATION_SUMMARY_WAIT_DELAY_MS = 120L
 private const val THREAD_AI_SUMMARY_START_DELAY_MS = 120L
 
 internal data class ThreadScreenContentHostBindings(
@@ -265,21 +268,25 @@ internal fun ThreadScreenContentHost(
                     }
                 ) ?: ThreadSummaryUiState.Unavailable("スレ要約がタイムアウトしました。")
             }
+            val latestSummaryState = rememberUpdatedState(summaryState)
             val aiPostModerationUiState by produceState(
                 initialValue = AiPostModerationUiState(isEnabled = shouldApplyAiPostFilter),
                 key1 = shouldApplyAiPostFilter,
                 key2 = aiCacheKey,
-                key3 = summaryState
+                key3 = shouldShowThreadSummary
             ) {
-                if (
+                while (
                     shouldDeferAiPostModeration(
                         shouldApplyAiPostFilter = shouldApplyAiPostFilter,
                         shouldShowThreadSummary = shouldShowThreadSummary,
-                        summaryState = summaryState
+                        summaryState = latestSummaryState.value
                     )
                 ) {
                     value = AiPostModerationUiState(isEnabled = shouldApplyAiPostFilter)
-                    return@produceState
+                    if (!shouldApplyAiPostFilter) {
+                        return@produceState
+                    }
+                    delay(THREAD_AI_POST_MODERATION_SUMMARY_WAIT_DELAY_MS)
                 }
                 val input = PostModerationInput(
                     threadId = state.page.threadId,
@@ -316,13 +323,15 @@ internal fun ThreadScreenContentHost(
                 val mergedModeration = linkedMapOf<String, PostModerationResult>().apply {
                     putAll(cachedResults)
                 }
+                var publishedModeration = cachedResults.values.toList()
                 var processedPosts = cachedResults.size
                 var failedBatchCount = 0
                 value = AiPostModerationUiState(
                     isEnabled = true,
                     isRunning = postBatches.isNotEmpty(),
                     processedPosts = processedPosts,
-                    totalPosts = input.posts.size
+                    totalPosts = input.posts.size,
+                    results = publishedModeration
                 )
                 delay(THREAD_AI_POST_MODERATION_START_DELAY_MS)
                 postBatches.forEachIndexed { index, posts ->
@@ -355,40 +364,54 @@ internal fun ThreadScreenContentHost(
                             }
                         }
                     }
-                    value = AiPostModerationUiState(
-                        isEnabled = true,
-                        isRunning = index != postBatches.lastIndex,
-                        processedPosts = processedPosts,
-                        totalPosts = input.posts.size,
-                        failedBatchCount = failedBatchCount,
-                        results = mergedModeration.values.toList()
+                    val shouldPublishBatch = shouldPublishAiPostModerationBatch(
+                        index = index,
+                        lastIndex = postBatches.lastIndex,
+                        didFail = moderationResult == null || moderation == null
                     )
+                    if (shouldPublishBatch) {
+                        publishedModeration = mergedModeration.values.toList()
+                        value = AiPostModerationUiState(
+                            isEnabled = true,
+                            isRunning = index != postBatches.lastIndex,
+                            processedPosts = processedPosts,
+                            totalPosts = input.posts.size,
+                            failedBatchCount = failedBatchCount,
+                            results = publishedModeration
+                        )
+                    }
                     if (index != postBatches.lastIndex) {
                         delay(THREAD_AI_POST_MODERATION_BATCH_DELAY_MS)
                     }
                 }
-                val moderation = mergedModeration.values.toList()
-                value = AiPostModerationUiState(
-                    isEnabled = true,
-                    isRunning = false,
-                    processedPosts = input.posts.size,
-                    totalPosts = input.posts.size,
-                    failedBatchCount = failedBatchCount,
-                    results = moderation
-                )
+            }
+            val aiHiddenPostResolutionContext by produceState<AiHiddenPostResolutionContext?>(
+                initialValue = null,
+                key1 = filteredPage.posts,
+                key2 = bindings.selfPostIdentifierSet
+            ) {
+                value = withContext(AppDispatchers.parsing) {
+                    buildAiHiddenPostResolutionContext(
+                        posts = filteredPage.posts,
+                        selfPostIdentifiers = bindings.selfPostIdentifierSet
+                    )
+                }
             }
             val aiHiddenPostState by produceState(
                 initialValue = AiHiddenPostState(),
-                key1 = filteredPage.posts,
-                key2 = aiPostModerationUiState.results,
-                key3 = bindings.selfPostIdentifierSet
+                key1 = aiHiddenPostResolutionContext,
+                key2 = aiPostModerationUiState.results
             ) {
-                value = withContext(AppDispatchers.parsing) {
-                    resolveAiHiddenPostState(
-                        posts = filteredPage.posts,
-                        moderationResults = aiPostModerationUiState.results,
-                        selfPostIdentifiers = bindings.selfPostIdentifierSet
-                    )
+                val resolutionContext = aiHiddenPostResolutionContext
+                value = if (resolutionContext == null) {
+                    AiHiddenPostState()
+                } else {
+                    withContext(AppDispatchers.parsing) {
+                        resolveAiHiddenPostState(
+                            context = resolutionContext,
+                            moderationResults = aiPostModerationUiState.results
+                        )
+                    }
                 }
             }
             when (bindings.threadDisplayMode) {
@@ -447,4 +470,14 @@ internal fun shouldDeferAiPostModeration(
 ): Boolean {
     if (!shouldApplyAiPostFilter) return true
     return shouldShowThreadSummary && summaryState == ThreadSummaryUiState.Loading
+}
+
+internal fun shouldPublishAiPostModerationBatch(
+    index: Int,
+    lastIndex: Int,
+    didFail: Boolean
+): Boolean {
+    if (index >= lastIndex) return true
+    if (didFail) return true
+    return (index + 1) % THREAD_AI_POST_MODERATION_UI_UPDATE_BATCH_INTERVAL == 0
 }

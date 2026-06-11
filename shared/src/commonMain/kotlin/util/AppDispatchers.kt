@@ -11,6 +11,7 @@ expect val platformIoDispatcher: CoroutineDispatcher
  * FIX: メインスレッドでの重い処理を防止するためのガイドライン
  * - parsing: HTML/JSONパース処理専用（並列度2）
  *   使用例: withContext(AppDispatchers.parsing) { parseHtml(html) }
+ * - textAnnotation: UI本文のAnnotatedString生成専用（並列度2）
  * - mockData: テストデータ生成専用（並列度1）
  * - imageFetch: 画像フェッチ専用（並列度可変）
  * - io: ファイルI/O、ネットワーク処理（Dispatchers.IO）
@@ -49,6 +50,9 @@ expect val platformIoDispatcher: CoroutineDispatcher
 object AppDispatchers {
     // FIX: HTML/JSONパース処理専用Dispatcher（並列度2で過負荷防止）
     val parsing: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(2)
+
+    // FIX: 可視本文のAnnotatedString生成をパース系ジョブから分離する
+    val textAnnotation: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(2)
 
     // FIX: テストデータ生成専用Dispatcher（並列度1で順序保証）
     val mockData: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1)

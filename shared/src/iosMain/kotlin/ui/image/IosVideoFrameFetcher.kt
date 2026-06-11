@@ -92,6 +92,7 @@ private val IOS_VIDEO_THUMBNAIL_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm")
 private val webKitThumbnailSemaphore = Semaphore(permits = 1)
 private val webKitThumbnailCacheMutex = Mutex()
 private val webKitThumbnailCache = LinkedHashMap<String, NSData>()
+private val webKitThumbnailWebViewPool = WebKitThumbnailWebViewPool()
 
 private fun String.toVideoThumbnailUrlOrNull(): NSURL? {
     val trimmed = trim()
@@ -227,12 +228,10 @@ private suspend fun createWebKitThumbnail(
                 }
             }
             dispatch_async(dispatch_get_main_queue()) {
-                val configuration = WKWebViewConfiguration().apply {
-                    allowsInlineMediaPlayback = true
-                }
-                val webView = WKWebView(
-                    frame = CGRectMake(0.0, 0.0, targetWidth, targetHeight),
-                    configuration = configuration
+                if (!continuation.isActive) return@dispatch_async
+                val webView = webKitThumbnailWebViewPool.acquire(
+                    targetWidth = targetWidth,
+                    targetHeight = targetHeight
                 )
                 val delegate = WebmThumbnailNavigationDelegate(
                     webView = webView,
@@ -264,6 +263,31 @@ private const val WEBKIT_READY_POLL_LIMIT = 25
 private const val WEBKIT_READY_POLL_DELAY_MILLIS = 100L
 private const val WEBKIT_THUMBNAIL_TIMEOUT_MILLIS = 10_000L
 private const val AV_THUMBNAIL_TIMEOUT_MILLIS = 20_000L
+
+@OptIn(ExperimentalForeignApi::class)
+private class WebKitThumbnailWebViewPool {
+    private var webView: WKWebView? = null
+
+    fun acquire(
+        targetWidth: Double,
+        targetHeight: Double
+    ): WKWebView {
+        return (webView ?: createWebView().also { webView = it }).also {
+            it.setFrame(CGRectMake(0.0, 0.0, targetWidth, targetHeight))
+            it.navigationDelegate = null
+        }
+    }
+
+    private fun createWebView(): WKWebView {
+        val configuration = WKWebViewConfiguration().apply {
+            allowsInlineMediaPlayback = true
+        }
+        return WKWebView(
+            frame = CGRectMake(0.0, 0.0, DEFAULT_WEBKIT_THUMBNAIL_WIDTH, DEFAULT_WEBKIT_THUMBNAIL_HEIGHT),
+            configuration = configuration
+        )
+    }
+}
 
 private fun resolveWebKitThumbnailSize(options: Options): Pair<Double, Double> {
     val maximumSize = resolveMaximumThumbnailSize(options)

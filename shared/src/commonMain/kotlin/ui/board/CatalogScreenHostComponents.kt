@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -56,7 +57,7 @@ internal fun CatalogScreenScaffold(
                 CatalogTopBar(
                     board = bindings.board,
                     mode = bindings.catalogMode,
-                    searchQuery = bindings.searchQuery,
+                    searchQueryState = bindings.searchQueryState,
                     isSearchActive = bindings.isSearchActive,
                     onSearchQueryChange = bindings.topBarCallbacks.onSearchQueryChange,
                     onSearchActiveChange = bindings.topBarCallbacks.onSearchActiveChange,
@@ -102,7 +103,7 @@ internal fun CatalogScreenScaffold(
                         board = bindings.board,
                         repository = bindings.activeRepository,
                         watchWords = bindings.watchWords,
-                        isSearching = bindings.searchQuery.isNotBlank(),
+                        isSearching = bindings.debouncedSearchQuery.isNotBlank(),
                         onThreadSelected = bindings.onThreadSelected,
                         onRefresh = bindings.performRefresh,
                         isRefreshing = bindings.isRefreshing,
@@ -213,11 +214,14 @@ internal fun CatalogScreenOverlayHost(
     }
 
     if (bindings.overlayState.showPastThreadSearchDialog) {
-        PastThreadSearchDialog(
-            initialQuery = buildPastThreadSearchDialogInitialQuery(
+        val initialQuery = remember(bindings.overlayState.showPastThreadSearchDialog) {
+            buildPastThreadSearchDialogInitialQuery(
                 archiveSearchQuery = bindings.archiveSearchQuery,
-                searchQuery = bindings.searchQuery
-            ),
+                searchQuery = bindings.searchQueryState.value
+            )
+        }
+        PastThreadSearchDialog(
+            initialQuery = initialQuery,
             onDismiss = bindings.overlayBindings.pastThreadSearchDialogCallbacks.onDismiss,
             onSearch = bindings.overlayBindings.pastThreadSearchDialogCallbacks.onSearch
         )
