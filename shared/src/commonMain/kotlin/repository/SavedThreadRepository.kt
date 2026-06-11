@@ -338,14 +338,26 @@ class SavedThreadRepository(
     }
 
     internal suspend fun <T> withIndexLock(block: suspend () -> T): T = withContext(AppDispatchers.io) {
-        val result = withTimeoutOrNull(INDEX_LOCK_WAIT_TIMEOUT_MILLIS) {
-            IndexLockResult(
-                ThreadStorageLockRegistry.withStorageLock(storageLockKey(indexRelativePath)) {
-                    indexMutex.withLock {
-                        block()
-                    }
-                }
-            )
+        val result = ThreadStorageLockRegistry.withStorageLockOrNull(
+            storageId = storageLockKey(indexRelativePath),
+            waitTimeoutMillis = INDEX_LOCK_WAIT_TIMEOUT_MILLIS
+        ) {
+            var indexLocked = false
+            val acquired = withTimeoutOrNull(INDEX_LOCK_WAIT_TIMEOUT_MILLIS) {
+                indexMutex.lock()
+                indexLocked = true
+                true
+            } == true
+            if (!acquired) {
+                throw IllegalStateException(
+                    "Timed out waiting for saved thread index lock after ${INDEX_LOCK_WAIT_TIMEOUT_MILLIS}ms"
+                )
+            }
+            try {
+                IndexLockResult(block())
+            } finally {
+                indexMutex.unlock()
+            }
         }
         if (result != null) {
             return@withContext result.value

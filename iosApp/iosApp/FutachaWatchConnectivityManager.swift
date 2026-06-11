@@ -339,8 +339,13 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
 
     private func scheduleSnapshotRetry(after seconds: TimeInterval) {
         dispatchPrecondition(condition: .onQueue(.main))
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.sendSnapshotIfAvailable()
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+            self.snapshotRetryWorkItems.removeAll { $0 === workItem }
+            self.sendSnapshotIfAvailable()
         }
         snapshotRetryWorkItems.append(workItem)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: workItem)

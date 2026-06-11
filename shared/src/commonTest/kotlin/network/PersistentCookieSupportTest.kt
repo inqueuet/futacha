@@ -212,7 +212,7 @@ class PersistentCookieSupportTest {
                     }
                 }
             },
-            encodeSnapshot = { "committed" }
+            createSnapshot = { "committed" }
         )
 
         assertEquals("committed", commitPayload)

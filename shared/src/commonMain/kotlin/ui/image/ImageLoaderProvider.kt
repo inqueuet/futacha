@@ -14,6 +14,7 @@ import coil3.request.ImageResult
 import coil3.request.SuccessResult
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.DevicePerformanceProfile
+import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -21,6 +22,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
@@ -31,6 +33,8 @@ private const val DEFAULT_IMAGE_DISK_CACHE_BYTES = 128L * 1024L * 1024L
 private const val LIGHT_IMAGE_MEMORY_CACHE_BYTES = 16L * 1024L * 1024L
 private const val LIGHT_IMAGE_DISK_CACHE_BYTES = 64L * 1024L * 1024L
 private const val LIGHT_MAX_PARALLELISM = 2
+private const val VIDEO_FALLBACK_MAX_PARALLELISM = 2
+private const val VIDEO_FALLBACK_TIMEOUT_MILLIS = 10_000L
 internal const val IMAGE_DISK_CACHE_DIR = "futacha_image_cache"
 
 data class ImageCacheConfig(
@@ -103,7 +107,7 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
     private val recoveredUrlsMutex = Mutex()
     private val recoveredUrls = LinkedHashMap<String, String>()
     private val recoveredUrlMaxEntries = 256
-    private val videoFallbackSemaphore = Semaphore(permits = 1)
+    private val videoFallbackSemaphore = Semaphore(permits = VIDEO_FALLBACK_MAX_PARALLELISM)
     private val videoFallbackExtensions = setOf("webm", "mp4")
 
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
@@ -172,14 +176,22 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         chain: Interceptor.Chain,
         initialRequest: coil3.request.ImageRequest,
         fallbackUrl: String
-    ): ImageResult {
+    ): ImageResult? {
         val request = initialRequest.newBuilder().data(fallbackUrl).build()
         val proceed: suspend () -> ImageResult = {
             chain.withRequest(request).proceed()
         }
         return if (fallbackUrl.extensionOrNull() in videoFallbackExtensions) {
             videoFallbackSemaphore.withPermit {
-                proceed()
+                withTimeoutOrNull(VIDEO_FALLBACK_TIMEOUT_MILLIS) {
+                    proceed()
+                } ?: run {
+                    Logger.w(
+                        "FutabaExtensionFallbackInterceptor",
+                        "Timed out fetching video fallback candidate after ${VIDEO_FALLBACK_TIMEOUT_MILLIS}ms: $fallbackUrl"
+                    )
+                    null
+                }
             }
         } else {
             proceed()

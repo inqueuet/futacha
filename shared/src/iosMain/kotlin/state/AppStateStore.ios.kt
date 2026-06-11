@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.onStart
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import platform.Foundation.NSLock
 import platform.Foundation.NSUserDefaults
@@ -103,40 +104,43 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         loadDeferredInitialState()
     }
 
-    override val boardsJson: Flow<String?> = boardsState
-    override val historyJson: Flow<String?> = historyState
-    override val privacyFilterEnabled: Flow<Boolean> = privacyFilterState
-    override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
-    override val adsEnabled: Flow<Boolean> = adsEnabledState
-    override val hasShownPostingNotice: Flow<Boolean> = postingNoticeState
-    override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
-    override val threadSummaryModeEnabled: Flow<Boolean> = threadSummaryModeState
-    override val aiPostFilterEnabled: Flow<Boolean> = aiPostFilterState
-    override val aiCommandEnabled: Flow<Boolean> = aiCommandState
-    override val appLockPasswordHash: Flow<String?> = appLockPasswordHashState
-    override val manualSaveDirectory: Flow<String> = manualSaveDirectoryState
-    override val attachmentPickerPreference: Flow<String?> = attachmentPickerPreferenceState
-    override val saveDirectorySelection: Flow<String?> = saveDirectorySelectionState
-    override val threadGalleryTapAction: Flow<String?> = threadGalleryTapActionState
-    override val themeMode: Flow<String?> = themeModeState
-    override val themePalette: Flow<String?> = themePaletteState
-    override val appIconVariant: Flow<String?> = appIconVariantState
-    override val threadDisplayMode: Flow<String?> = threadDisplayModeState
-    override val catalogModeMapJson: Flow<String?> = catalogModeMapState
-    override val catalogDisplayStyle: Flow<String?> = displayStyleState
-    override val catalogGridColumns: Flow<String?> = gridColumnsState
-    override val ngHeadersJson: Flow<String?> = ngHeadersState
-    override val ngWordsJson: Flow<String?> = ngWordsState
-    override val catalogNgWordsJson: Flow<String?> = catalogNgWordsState
-    override val watchWordsJson: Flow<String?> = watchWordsState
-    override val selfPostIdentifiersJson: Flow<String?> = selfPostIdentifiersState
-    override val threadMenuConfigJson: Flow<String?> = threadMenuConfigState
-    override val threadSettingsMenuConfigJson: Flow<String?> = threadSettingsMenuConfigState
-    override val threadMenuEntriesConfigJson: Flow<String?> = threadMenuEntriesState
-    override val catalogNavEntriesConfigJson: Flow<String?> = catalogNavEntriesState
-    override val preferredFileManagerPackage: Flow<String> = preferredFileManagerPackageState
-    override val preferredFileManagerLabel: Flow<String> = preferredFileManagerLabelState
-    override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
+    override val boardsJson: Flow<String?> = awaitDeferredInitialLoad(boardsState)
+    override val historyJson: Flow<String?> = awaitDeferredInitialLoad(historyState)
+    override val privacyFilterEnabled: Flow<Boolean> = awaitDeferredInitialLoad(privacyFilterState)
+    override val backgroundRefreshEnabled: Flow<Boolean> = awaitDeferredInitialLoad(backgroundRefreshState)
+    override val adsEnabled: Flow<Boolean> = awaitDeferredInitialLoad(adsEnabledState)
+    override val hasShownPostingNotice: Flow<Boolean> = awaitDeferredInitialLoad(postingNoticeState)
+    override val lightweightModeEnabled: Flow<Boolean> = awaitDeferredInitialLoad(lightweightModeState)
+    override val threadSummaryModeEnabled: Flow<Boolean> = awaitDeferredInitialLoad(threadSummaryModeState)
+    override val aiPostFilterEnabled: Flow<Boolean> = awaitDeferredInitialLoad(aiPostFilterState)
+    override val aiCommandEnabled: Flow<Boolean> = awaitDeferredInitialLoad(aiCommandState)
+    override val appLockPasswordHash: Flow<String?> = awaitDeferredInitialLoad(appLockPasswordHashState)
+    override val manualSaveDirectory: Flow<String> = awaitDeferredInitialLoad(manualSaveDirectoryState)
+    override val attachmentPickerPreference: Flow<String?> = awaitDeferredInitialLoad(attachmentPickerPreferenceState)
+    override val saveDirectorySelection: Flow<String?> = awaitDeferredInitialLoad(saveDirectorySelectionState)
+    override val threadGalleryTapAction: Flow<String?> = awaitDeferredInitialLoad(threadGalleryTapActionState)
+    override val themeMode: Flow<String?> = awaitDeferredInitialLoad(themeModeState)
+    override val themePalette: Flow<String?> = awaitDeferredInitialLoad(themePaletteState)
+    override val appIconVariant: Flow<String?> = awaitDeferredInitialLoad(appIconVariantState)
+    override val threadDisplayMode: Flow<String?> = awaitDeferredInitialLoad(threadDisplayModeState)
+    override val catalogModeMapJson: Flow<String?> = awaitDeferredInitialLoad(catalogModeMapState)
+    override val catalogDisplayStyle: Flow<String?> = awaitDeferredInitialLoad(displayStyleState)
+    override val catalogGridColumns: Flow<String?> = awaitDeferredInitialLoad(gridColumnsState)
+    override val ngHeadersJson: Flow<String?> = awaitDeferredInitialLoad(ngHeadersState)
+    override val ngWordsJson: Flow<String?> = awaitDeferredInitialLoad(ngWordsState)
+    override val catalogNgWordsJson: Flow<String?> = awaitDeferredInitialLoad(catalogNgWordsState)
+    override val watchWordsJson: Flow<String?> = awaitDeferredInitialLoad(watchWordsState)
+    override val selfPostIdentifiersJson: Flow<String?> = awaitDeferredInitialLoad(selfPostIdentifiersState)
+    override val threadMenuConfigJson: Flow<String?> = awaitDeferredInitialLoad(threadMenuConfigState)
+    override val threadSettingsMenuConfigJson: Flow<String?> = awaitDeferredInitialLoad(threadSettingsMenuConfigState)
+    override val threadMenuEntriesConfigJson: Flow<String?> = awaitDeferredInitialLoad(threadMenuEntriesState)
+    override val catalogNavEntriesConfigJson: Flow<String?> = awaitDeferredInitialLoad(catalogNavEntriesState)
+    override val preferredFileManagerPackage: Flow<String> = awaitDeferredInitialLoad(preferredFileManagerPackageState)
+    override val preferredFileManagerLabel: Flow<String> = awaitDeferredInitialLoad(preferredFileManagerLabelState)
+    override val lastUsedDeleteKey: Flow<String?> = awaitDeferredInitialLoad(lastUsedDeleteKeyState)
+
+    private fun <T> awaitDeferredInitialLoad(flow: Flow<T>): Flow<T> =
+        flow.onStart { deferredLoadJob.join() }
 
     private suspend fun loadDeferredInitialState() {
         val stringValues = mapOf(

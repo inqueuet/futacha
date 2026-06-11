@@ -124,7 +124,14 @@ private final class FutachaAiDeepLinkSubmitter {
     }
 
     private func scheduleRetry(delay: TimeInterval? = nil) {
-        guard retryWorkItem == nil, !pending.isEmpty else {
+        guard !pending.isEmpty else {
+            return
+        }
+        if delay != nil {
+            retryWorkItem?.cancel()
+            retryWorkItem = nil
+        }
+        guard retryWorkItem == nil else {
             return
         }
         let workItem = DispatchWorkItem { [weak self] in

@@ -37,14 +37,14 @@ internal class PersistentCookieTransactionCoordinator<K, V>(
         return activeTransaction.id != coroutineTransactionId
     }
 
-    suspend fun commit(
+    fun <S> commit(
         transactionId: Long?,
         applyChanges: (baseSnapshot: Map<K, V>, stagedSnapshot: Map<K, V>) -> Unit,
-        encodeSnapshot: suspend () -> String
-    ): String? {
+        createSnapshot: () -> S
+    ): S? {
         val activeTransaction = transaction?.takeIf { it.id == transactionId } ?: return null
         applyChanges(activeTransaction.baseSnapshot, activeTransaction.stagedSnapshot)
-        val savePayload = encodeSnapshot()
+        val savePayload = createSnapshot()
         clear()
         return savePayload
     }

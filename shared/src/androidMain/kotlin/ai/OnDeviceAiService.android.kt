@@ -455,14 +455,13 @@ private suspend fun requestRemoteAi(
     timeoutMillis: Long,
     onProgress: ((Bundle) -> Unit)? = null
 ): Bundle? {
-    return withTimeoutOrNull(timeoutMillis) {
-        aiRemoteServiceSession.request(
-            context = context,
-            what = what,
-            data = data,
-            onProgress = onProgress
-        )
-    }
+    return aiRemoteServiceSession.request(
+        context = context,
+        what = what,
+        data = data,
+        timeoutMillis = timeoutMillis,
+        onProgress = onProgress
+    )
 }
 
 private class AndroidAiRemoteServiceSession {
@@ -479,9 +478,11 @@ private class AndroidAiRemoteServiceSession {
         context: Context,
         what: Int,
         data: Bundle,
+        timeoutMillis: Long,
         onProgress: ((Bundle) -> Unit)?
     ): Bundle? = requestMutex.withLock {
-        suspendCancellableCoroutine { continuation ->
+        withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+            suspendCancellableCoroutine { continuation ->
             val appContext = context.applicationContext
             val requestId = data.getInt(KEY_REQUEST_ID)
             val completed = AtomicBoolean(false)
@@ -578,6 +579,7 @@ private class AndroidAiRemoteServiceSession {
                     }
                 }
             }
+        }
         }
     }
 

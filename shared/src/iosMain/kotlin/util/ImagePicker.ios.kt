@@ -80,6 +80,19 @@ private fun releasePickerDelegate(delegate: NSObject?) {
     }
 }
 
+private fun dismissPresentedPicker(
+    picker: UIViewController,
+    completion: () -> Unit
+) {
+    dispatch_async(dispatch_get_main_queue()) {
+        if (picker.presentingViewController != null || picker.isBeingPresented()) {
+            picker.dismissViewControllerAnimated(true, completion = completion)
+        } else {
+            completion()
+        }
+    }
+}
+
 private fun isVideoMimeType(mimeType: String): Boolean =
     mimeType.trim().startsWith("video/", ignoreCase = true)
 
@@ -432,7 +445,9 @@ private fun pickFromPhotoLibrary(
         if (resumeGate.tryOpen()) {
             loadTimeout?.cancel()
             loadTimeout = null
-            releasePickerDelegate(delegateRef)
+            dismissPresentedPicker(picker) {
+                releasePickerDelegate(delegateRef)
+            }
         }
     }
     picker.delegate = delegate

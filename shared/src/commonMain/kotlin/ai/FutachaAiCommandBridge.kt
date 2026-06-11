@@ -10,6 +10,8 @@ object FutachaAiCommandBridge {
     private const val COMMAND_BUFFER_CAPACITY = 128
     private val commandChannel = Channel<FutachaAiCommand>(capacity = COMMAND_BUFFER_CAPACITY)
 
+    // receiveAsFlow distributes elements across collectors; keep this flow single-consumer.
+    // FutachaApp is the intended collector, and extra collectors would steal commands.
     val commands: Flow<FutachaAiCommand> = commandChannel.receiveAsFlow()
 
     fun enqueue(command: FutachaAiCommand): Boolean {

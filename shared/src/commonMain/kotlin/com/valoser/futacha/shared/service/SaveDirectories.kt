@@ -65,13 +65,22 @@ object ThreadStorageLockRegistry {
             current.holders += 1
             current
         }
+        var locked = false
         return try {
-            withTimeoutOrNull(waitTimeoutMillis.coerceAtLeast(1L)) {
-                entry.mutex.withLock {
-                    block()
-                }
+            val acquired = withTimeoutOrNull(waitTimeoutMillis.coerceAtLeast(1L)) {
+                entry.mutex.lock()
+                locked = true
+                true
+            } == true
+            if (!acquired) {
+                null
+            } else {
+                block()
             }
         } finally {
+            if (locked) {
+                entry.mutex.unlock()
+            }
             guard.withLock {
                 val current = locks[key]
                 if (current === entry) {
