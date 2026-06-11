@@ -32,7 +32,6 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
 
     companion object {
         private const val MAX_PENDING_UTTERANCES = 100
-        private const val SPEAK_TIMEOUT_MS = 30000L // 30秒タイムアウト
     }
 
     init {
@@ -86,7 +85,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         // タイムアウトを追加してコルーチンがハングするのを防ぐ
         // 初期化待ちもタイムアウト内に含める: TTSエンジンが初期化コールバックを
         // 返さない端末で speak() が永久サスペンドするのを防ぐ
-        withTimeout(SPEAK_TIMEOUT_MS) {
+        withTimeout(calculateTextSpeakerTimeoutMillis(text)) {
             initState.await()
             suspendCancellableCoroutine<Unit> { continuation ->
                 val utteranceId = UUID.randomUUID().toString()

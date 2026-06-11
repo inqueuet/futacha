@@ -19,7 +19,6 @@ import platform.darwin.NSObject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-private const val IOS_SPEAK_TIMEOUT_MS = 30_000L
 private const val IOS_JAPANESE_VOICE = "ja-JP"
 private val IOS_SPEECH_BOUNDARY_IMMEDIATE = AVSpeechBoundary.AVSpeechBoundaryImmediate
 
@@ -59,7 +58,7 @@ actual class TextSpeaker actual constructor(platformContext: Any?) {
         if (text.isBlank()) return
         if (closed) throw CancellationException("TextSpeaker は既に閉じられています")
 
-        withTimeout(IOS_SPEAK_TIMEOUT_MS) {
+        withTimeout(calculateTextSpeakerTimeoutMillis(text)) {
             suspendCancellableCoroutine<Unit> { continuation ->
                 val utterance = AVSpeechUtterance(string = text).apply {
                     voice = AVSpeechSynthesisVoice.voiceWithLanguage(IOS_JAPANESE_VOICE)

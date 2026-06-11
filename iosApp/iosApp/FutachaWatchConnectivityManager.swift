@@ -18,7 +18,7 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
     private let commandPayloadMaxBytes = 4 * 1024
     private let snapshotRequestTimeoutSeconds: TimeInterval = 10
     private let maxPendingSnapshotAcks = 8
-    private var snapshotRetryWorkItems: [DispatchWorkItem] = []
+    private var snapshotRetryWorkItems: [UUID: DispatchWorkItem] = [:]
     private var snapshotTimeoutWorkItem: DispatchWorkItem?
     private var snapshotRequestGeneration = 0
     private var isSnapshotRequestInFlight = false
@@ -339,15 +339,15 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
 
     private func scheduleSnapshotRetry(after seconds: TimeInterval) {
         dispatchPrecondition(condition: .onQueue(.main))
-        var workItem: DispatchWorkItem!
-        workItem = DispatchWorkItem { [weak self] in
+        let retryId = UUID()
+        let workItem = DispatchWorkItem { [weak self] in
             guard let self else {
                 return
             }
-            self.snapshotRetryWorkItems.removeAll { $0 === workItem }
+            self.snapshotRetryWorkItems[retryId] = nil
             self.sendSnapshotIfAvailable()
         }
-        snapshotRetryWorkItems.append(workItem)
+        snapshotRetryWorkItems[retryId] = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: workItem)
     }
 
@@ -377,7 +377,7 @@ final class FutachaWatchConnectivityManager: NSObject, WCSessionDelegate {
 
     private func cancelSnapshotRetries() {
         dispatchPrecondition(condition: .onQueue(.main))
-        snapshotRetryWorkItems.forEach { $0.cancel() }
+        snapshotRetryWorkItems.values.forEach { $0.cancel() }
         snapshotRetryWorkItems.removeAll()
     }
 }

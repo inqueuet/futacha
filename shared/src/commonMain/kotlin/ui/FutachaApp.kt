@@ -47,6 +47,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.detectDevicePerformanceProfile
 import com.valoser.futacha.shared.version.UpdateInfo
 import com.valoser.futacha.shared.version.VersionChecker
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.ExperimentalTime
@@ -80,9 +81,15 @@ fun FutachaApp(
         initialValue = APP_LOCK_HASH_LOADING,
         key1 = stateStore
     ) {
-        stateStore.appLockPasswordHash.collect { storedHash ->
-            value = storedHash
-        }
+        stateStore.appLockPasswordHash
+            .catch { error ->
+                if (error is CancellationException) throw error
+                Logger.e(TAG, "Failed to load app lock password hash", error)
+                value = null
+            }
+            .collect { storedHash ->
+                value = storedHash
+            }
     }
     var isUnlockedForSession by remember { mutableStateOf(false) }
     LaunchedEffect(startupAppLockHash) {
@@ -126,10 +133,27 @@ fun FutachaApp(
         themeMode = observedRuntimeState.themeMode,
         themePalette = observedRuntimeState.themePalette
     ) {
-        val isLightweightModeEnabled by stateStore.isLightweightModeEnabled.collectAsState(
-            initial = devicePerformanceProfile.isLowSpec
-        )
-        val shouldUseLightweightMode = isLightweightModeEnabled || devicePerformanceProfile.isLowSpec
+        val persistedLightweightMode by produceState<Boolean?>(
+            initialValue = null,
+            key1 = stateStore
+        ) {
+            stateStore.isLightweightModeEnabled
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    Logger.e(TAG, "Failed to load lightweight mode preference", error)
+                    value = devicePerformanceProfile.isLowSpec
+                }
+                .collect { enabled ->
+                    value = enabled
+                }
+        }
+        if (persistedLightweightMode == null) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                FutachaAppLockLoadingScreen()
+            }
+            return@FutachaTheme
+        }
+        val shouldUseLightweightMode = persistedLightweightMode == true || devicePerformanceProfile.isLowSpec
         val imageLoader = rememberFutachaImageLoader(lightweightMode = shouldUseLightweightMode)
         DisposableEffect(imageLoader) {
             onDispose {

@@ -34,24 +34,41 @@ import kotlin.coroutines.cancellation.CancellationException
 private const val BACKGROUND_FLOW_MAX_RETRIES = 12L
 
 class FutachaApplication : Application() {
-    lateinit var appStateStore: AppStateStore
-        private set
-    lateinit var httpClient: io.ktor.client.HttpClient
-        private set
-    lateinit var boardRepository: BoardRepository
-        private set
-    lateinit var historyRefresher: HistoryRefresher
-        private set
-    lateinit var autoSavedThreadRepository: SavedThreadRepository
-        private set
-    lateinit var fileSystem: FileSystem
-        private set
-    lateinit var cookieStorage: PersistentCookieStorage
-        private set
-    lateinit var cookieRepository: CookieRepository
-        private set
-    lateinit var watchSyncManager: WatchSyncManager
-        private set
+    private var appStateStoreValue: AppStateStore? = null
+    val appStateStore: AppStateStore
+        get() = requireMainProcessValue("appStateStore", appStateStoreValue)
+
+    private var httpClientValue: io.ktor.client.HttpClient? = null
+    val httpClient: io.ktor.client.HttpClient
+        get() = requireMainProcessValue("httpClient", httpClientValue)
+
+    private var boardRepositoryValue: BoardRepository? = null
+    val boardRepository: BoardRepository
+        get() = requireMainProcessValue("boardRepository", boardRepositoryValue)
+
+    private var historyRefresherValue: HistoryRefresher? = null
+    val historyRefresher: HistoryRefresher
+        get() = requireMainProcessValue("historyRefresher", historyRefresherValue)
+
+    private var autoSavedThreadRepositoryValue: SavedThreadRepository? = null
+    val autoSavedThreadRepository: SavedThreadRepository
+        get() = requireMainProcessValue("autoSavedThreadRepository", autoSavedThreadRepositoryValue)
+
+    private var fileSystemValue: FileSystem? = null
+    val fileSystem: FileSystem
+        get() = requireMainProcessValue("fileSystem", fileSystemValue)
+
+    private var cookieStorageValue: PersistentCookieStorage? = null
+    val cookieStorage: PersistentCookieStorage
+        get() = requireMainProcessValue("cookieStorage", cookieStorageValue)
+
+    private var cookieRepositoryValue: CookieRepository? = null
+    val cookieRepository: CookieRepository
+        get() = requireMainProcessValue("cookieRepository", cookieRepositoryValue)
+
+    private var watchSyncManagerValue: WatchSyncManager? = null
+    val watchSyncManager: WatchSyncManager
+        get() = requireMainProcessValue("watchSyncManager", watchSyncManagerValue)
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -61,8 +78,8 @@ class FutachaApplication : Application() {
             return
         }
         initializeVersionCheckerContext(applicationContext)
-        appStateStore = createAppStateStore(applicationContext)
-        fileSystem = createFileSystem(applicationContext)
+        appStateStoreValue = createAppStateStore(applicationContext)
+        fileSystemValue = createFileSystem(applicationContext)
 
         // FIX: 起動時ANR防止 - 一時ファイルクリーンアップはバックグラウンドで実行
         applicationScope.launch {
@@ -74,16 +91,16 @@ class FutachaApplication : Application() {
                 }
         }
 
-        autoSavedThreadRepository = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
-        cookieStorage = PersistentCookieStorage(fileSystem)
-        cookieRepository = CookieRepository(cookieStorage)
-        httpClient = createHttpClient(applicationContext, cookieStorage)
-        boardRepository = DefaultBoardRepository(
+        autoSavedThreadRepositoryValue = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        cookieStorageValue = PersistentCookieStorage(fileSystem)
+        cookieRepositoryValue = CookieRepository(cookieStorage)
+        httpClientValue = createHttpClient(applicationContext, cookieStorage)
+        boardRepositoryValue = DefaultBoardRepository(
             api = HttpBoardApi(httpClient),
             parser = createHtmlParser(),
             cookieRepository = cookieRepository
         )
-        historyRefresher = HistoryRefresher(
+        historyRefresherValue = HistoryRefresher(
             stateStore = appStateStore,
             repository = boardRepository,
             dispatcher = Dispatchers.IO,
@@ -92,7 +109,7 @@ class FutachaApplication : Application() {
             fileSystem = fileSystem,
             maxConcurrency = 1
         )
-        watchSyncManager = WatchSyncManager(
+        watchSyncManagerValue = WatchSyncManager(
             context = applicationContext,
             stateStore = appStateStore,
             historyRefresher = historyRefresher,
@@ -162,10 +179,15 @@ class FutachaApplication : Application() {
         applicationScope.cancel()
         // httpClient will be closed automatically when scope is cancelled
         // Avoid runBlocking to prevent ANR
-        if (::boardRepository.isInitialized) {
-            boardRepository.closeAsync()
-        }
+        boardRepositoryValue?.closeAsync()
         super.onTerminate()
+    }
+
+    private fun <T : Any> requireMainProcessValue(name: String, value: T?): T {
+        return value ?: error(
+            "FutachaApplication.$name is not initialized. " +
+                "The :ai process skips app-wide initialization; only AndroidAiWorkerService should run there."
+        )
     }
 
     private fun isAiWorkerProcess(): Boolean {

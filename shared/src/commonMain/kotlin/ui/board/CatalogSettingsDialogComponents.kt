@@ -150,7 +150,10 @@ internal fun WatchWordsSheet(
                         .defaultMinSize(minHeight = 120.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(watchWords) { entry ->
+                    items(
+                        items = watchWords,
+                        key = { entry -> "watch:$entry" }
+                    ) { entry ->
                         ListItem(
                             headlineContent = { Text(entry) },
                             trailingContent = {

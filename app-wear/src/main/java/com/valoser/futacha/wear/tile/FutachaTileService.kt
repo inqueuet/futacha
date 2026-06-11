@@ -45,11 +45,9 @@ class FutachaTileService : TileService() {
                 } ?: WatchSnapshotStore.observe().value
                 buildTile(requestParams, snapshot)
             }.onSuccess { tile ->
-                completeTileFuture(future, tile)
+                completeActiveTileRequest(future, tile)
             }.onFailure {
-                completeTileFuture(future, buildTile(requestParams, WatchSnapshotStore.observe().value))
-            }.also {
-                activeTileRequests.remove(future)
+                completeActiveTileRequest(future, buildTile(requestParams, WatchSnapshotStore.observe().value))
             }
         }
         return future
@@ -103,12 +101,19 @@ class FutachaTileService : TileService() {
     }
 
     override fun onDestroy() {
-        activeTileRequests.forEach { (future, requestParams) ->
-            completeTileFuture(future, buildTile(requestParams, WatchSnapshotStore.observe().value))
+        activeTileRequests.entries.toList().forEach { (future, requestParams) ->
+            if (activeTileRequests.remove(future) != null) {
+                completeTileFuture(future, buildTile(requestParams, WatchSnapshotStore.observe().value))
+            }
         }
-        activeTileRequests.clear()
         tileScope.coroutineContext.cancelChildren()
         super.onDestroy()
+    }
+
+    private fun completeActiveTileRequest(future: SettableFuture<Tile>, tile: Tile) {
+        if (activeTileRequests.remove(future) != null) {
+            completeTileFuture(future, tile)
+        }
     }
 
     private fun completeTileFuture(future: SettableFuture<Tile>, tile: Tile) {

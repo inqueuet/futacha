@@ -36,11 +36,40 @@ final class FutachaAppleIntelligenceBridge: NSObject {
     private static var appActiveObserver: NSObjectProtocol?
     private static let activeTaskQueue = DispatchQueue(label: "com.valoser.futacha.appleIntelligence.activeTasks")
     private static var activeTasks: [String: Task<Void, Never>] = [:]
+    private static var pendingCancelledRequestIds: Set<String> = []
     private static var availabilityRefreshTask: Task<Void, Never>?
     private static var availabilityRefreshGeneration = 0
     private static var activeSummaryRequestId: String?
     private static var activeModerationRequestId: String?
     private static let modelResponseTimeoutNanoseconds: UInt64 = 45_000_000_000
+
+    private final class AiTaskStartGate {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpened = false
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if isOpened {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    self.continuation = continuation
+                    lock.unlock()
+                }
+            }
+        }
+
+        func open() {
+            lock.lock()
+            isOpened = true
+            let continuation = continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume()
+        }
+    }
 
     static func refreshAvailability() {
         UserDefaults.standard.set(isThreadSummaryAvailable().boolValue, forKey: availabilityKey)
@@ -48,23 +77,22 @@ final class FutachaAppleIntelligenceBridge: NSObject {
     }
 
     static func refreshAvailabilityAsync() {
-        var taskToCancel: Task<Void, Never>?
-        activeTaskQueue.sync {
+        activeTaskQueue.async {
             availabilityRefreshGeneration += 1
             let generation = availabilityRefreshGeneration
-            taskToCancel = availabilityRefreshTask
+            let taskToCancel = availabilityRefreshTask
             availabilityRefreshTask = Task {
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 refreshAvailability()
-                activeTaskQueue.sync {
+                activeTaskQueue.async {
                     if availabilityRefreshGeneration == generation {
                         availabilityRefreshTask = nil
                     }
                 }
             }
+            taskToCancel?.cancel()
         }
-        taskToCancel?.cancel()
     }
 
     static func installAiBridge() {
@@ -138,9 +166,10 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             return
         }
         let sourceText = notification.userInfo?[summaryRequestTextKey] as? String ?? ""
+        let startGate = AiTaskStartGate()
         let task = Task {
             defer { removeAiTask(requestId: requestId) }
-            await Task.yield()
+            await startGate.wait()
             guard !Task.isCancelled else { return }
             do {
                 let summary = try await generateThreadSummary(sourceText: sourceText)
@@ -168,6 +197,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             }
         }
         storeAiTask(requestId: requestId, task: task, kind: .summary)
+        startGate.open()
     }
 
     private static func handleModerationRequest(_ notification: Notification) {
@@ -175,9 +205,10 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             return
         }
         let sourceText = notification.userInfo?[moderationRequestTextKey] as? String ?? ""
+        let startGate = AiTaskStartGate()
         let task = Task {
             defer { removeAiTask(requestId: requestId) }
-            await Task.yield()
+            await startGate.wait()
             guard !Task.isCancelled else { return }
             do {
                 let response = try await generatePostModeration(sourceText: sourceText)
@@ -205,6 +236,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
             }
         }
         storeAiTask(requestId: requestId, task: task, kind: .moderation)
+        startGate.open()
     }
 
     private enum AiTaskKind {
@@ -229,8 +261,18 @@ final class FutachaAppleIntelligenceBridge: NSObject {
                 }
                 activeModerationRequestId = requestId
             }
-            if let replacedTask = activeTasks.updateValue(task, forKey: requestId) {
-                tasksToCancel.append(replacedTask)
+            if pendingCancelledRequestIds.remove(requestId) != nil {
+                tasksToCancel.append(task)
+                if activeSummaryRequestId == requestId {
+                    activeSummaryRequestId = nil
+                }
+                if activeModerationRequestId == requestId {
+                    activeModerationRequestId = nil
+                }
+            } else {
+                if let replacedTask = activeTasks.updateValue(task, forKey: requestId) {
+                    tasksToCancel.append(replacedTask)
+                }
             }
         }
         tasksToCancel.forEach { $0.cancel() }
@@ -239,6 +281,7 @@ final class FutachaAppleIntelligenceBridge: NSObject {
     private static func removeAiTask(requestId: String) {
         activeTaskQueue.sync {
             activeTasks.removeValue(forKey: requestId)
+            pendingCancelledRequestIds.remove(requestId)
             if activeSummaryRequestId == requestId {
                 activeSummaryRequestId = nil
             }
@@ -254,6 +297,9 @@ final class FutachaAppleIntelligenceBridge: NSObject {
         }
         let task = activeTaskQueue.sync {
             let task = activeTasks.removeValue(forKey: requestId)
+            if task == nil {
+                pendingCancelledRequestIds.insert(requestId)
+            }
             if activeSummaryRequestId == requestId {
                 activeSummaryRequestId = nil
             }

@@ -108,9 +108,26 @@ private final class FutachaAiDeepLinkSubmitter {
     }
 
     private func shouldRetry(_ raw: String) -> Bool {
-        raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .hasPrefix("futacha://ai")
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("futacha://ai") else {
+            return false
+        }
+        guard let components = URLComponents(string: trimmed) else {
+            return false
+        }
+        if components.queryItems?.contains(where: { item in
+            let name = item.name
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .filter { $0 != "_" && $0 != "-" }
+            return (name == "action" || name == "command") &&
+                !(item.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) == true {
+            return true
+        }
+        return components.path
+            .split(separator: "/")
+            .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     private func enqueuePending(_ raw: String) {

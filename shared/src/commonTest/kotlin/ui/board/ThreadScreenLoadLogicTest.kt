@@ -30,8 +30,11 @@ import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import androidx.compose.ui.unit.Density
@@ -180,6 +183,40 @@ class ThreadScreenLoadLogicTest {
             cancelledResult
         )
         assertEquals(null, failureMessage)
+    }
+
+    @Test
+    fun runThreadReadAloudSession_reportsTimeoutCancellationAsFailure() = runBlocking {
+        val segments = listOf(
+            ReadAloudSegment(postIndex = 1, postId = "10", body = "long")
+        )
+        var failure: Throwable? = null
+
+        val result = runThreadReadAloudSession(
+            startIndex = 0,
+            segments = segments,
+            isRunnerActive = { true },
+            wasCancelledByUser = { false },
+            callbacks = ThreadReadAloudRunnerCallbacks(
+                speakSegment = {
+                    withTimeout(1L) {
+                        delay(10_000L)
+                    }
+                },
+                onFailure = { error ->
+                    failure = error
+                }
+            )
+        )
+
+        assertEquals(
+            ThreadReadAloudRunResult(
+                completedNormally = false,
+                nextIndex = 0
+            ),
+            result
+        )
+        assertTrue(failure is TimeoutCancellationException)
     }
 
     @Test

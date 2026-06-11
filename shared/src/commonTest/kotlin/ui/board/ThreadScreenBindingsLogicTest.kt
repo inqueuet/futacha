@@ -30,6 +30,8 @@ import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
@@ -975,6 +977,78 @@ class ThreadScreenBindingsLogicTest {
             ),
             messages
         )
+    }
+
+    @Test
+    fun threadScreenExecutionBindingsSupport_seekKeepsRestartedReadAloudJob() = runBlocking {
+        val segments = listOf(
+            ReadAloudSegment(postIndex = 0, postId = "10", body = "a"),
+            ReadAloudSegment(postIndex = 1, postId = "20", body = "b")
+        )
+        var state = ThreadReadAloudRuntimeState(
+            job = null,
+            status = ReadAloudStatus.Idle,
+            currentIndex = 0,
+            cancelRequestedByUser = false
+        )
+        var runCount = 0
+        val firstSessionStarted = CompletableDeferred<Unit>()
+        val firstSessionCancelled = CompletableDeferred<Unit>()
+        val secondSessionStarted = CompletableDeferred<Unit>()
+        val bindings = buildThreadScreenReadAloudBindings(
+            coroutineScope = this,
+            stateBindings = ThreadScreenReadAloudStateBindings(
+                currentState = { state },
+                setState = { state = it }
+            ),
+            callbacks = ThreadScreenReadAloudCallbacks(
+                showMessage = {},
+                showOptionalMessage = {},
+                scrollToPostIndex = {},
+                speakText = {},
+                cancelActiveReadAloud = {
+                    val current = state
+                    state = current.copy(cancelRequestedByUser = true)
+                    current.job?.cancel()
+                }
+            ),
+            dependencies = ThreadScreenReadAloudDependencies(
+                currentSegments = { segments },
+                runSession = { startIndex, activeSegments, _, _, callbacks ->
+                    runCount += 1
+                    callbacks.onSegmentStart(activeSegments[startIndex], startIndex)
+                    if (runCount == 1) {
+                        firstSessionStarted.complete(Unit)
+                        try {
+                            awaitCancellation()
+                        } finally {
+                            firstSessionCancelled.complete(Unit)
+                        }
+                    } else {
+                        secondSessionStarted.complete(Unit)
+                        awaitCancellation()
+                    }
+                }
+            )
+        )
+
+        bindings.startReadAloud()
+        firstSessionStarted.await()
+        val firstJob = assertNotNull(state.job)
+
+        bindings.seekReadAloudToIndex(1, false)
+        secondSessionStarted.await()
+        val restartedJob = assertNotNull(state.job)
+        assertFalse(restartedJob === firstJob)
+
+        firstSessionCancelled.await()
+        yield()
+
+        assertSame(restartedJob, state.job)
+        assertEquals(1, state.currentIndex)
+
+        restartedJob.cancel()
+        restartedJob.join()
     }
 
     @Test

@@ -206,7 +206,10 @@ internal fun NgManagementSheet(
                         .defaultMinSize(minHeight = 120.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(entries) { entry ->
+                    items(
+                        items = entries,
+                        key = { entry -> "${section.name}:$entry" }
+                    ) { entry ->
                         ListItem(
                             headlineContent = { Text(entry) },
                             trailingContent = {

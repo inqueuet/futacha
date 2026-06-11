@@ -78,6 +78,24 @@ internal fun buildThreadScreenReadAloudBindings(
         stateBindings.setState(transform(stateBindings.currentState()))
     }
 
+    fun updateStateIfCurrentJob(
+        job: Job,
+        transform: (ThreadReadAloudRuntimeState) -> ThreadReadAloudRuntimeState
+    ): Boolean {
+        var updated = false
+        stateBindings.setState(
+            stateBindings.currentState().let { state ->
+                if (state.job === job) {
+                    updated = true
+                    transform(state)
+                } else {
+                    state
+                }
+            }
+        )
+        return updated
+    }
+
     lateinit var startReadAloud: () -> Unit
     startReadAloud = start@{
         val segments = dependencies.currentSegments()
@@ -95,6 +113,7 @@ internal fun buildThreadScreenReadAloudBindings(
             updateState { it.copy(currentIndex = startState.normalizedIndex) }
         }
         updateState { it.copy(cancelRequestedByUser = false) }
+        var launchedJob: Job? = null
         val nextJob = coroutineScope.launch(start = CoroutineStart.LAZY) {
             var completedNormally = false
             try {
@@ -122,20 +141,26 @@ internal fun buildThreadScreenReadAloudBindings(
                 completedNormally = runResult.completedNormally
                 updateState { it.copy(currentIndex = runResult.nextIndex) }
             } finally {
-                updateState { it.copy(cancelRequestedByUser = false) }
-                val finalState = dependencies.resolveFinalState(
-                    completedNormally,
-                    stateBindings.currentState().status
-                )
-                updateState {
-                    it.copy(
-                        job = null,
-                        status = finalState.status
+                val finishedJob = launchedJob
+                if (
+                    finishedJob != null &&
+                    updateStateIfCurrentJob(finishedJob) { it.copy(cancelRequestedByUser = false) }
+                ) {
+                    val finalState = dependencies.resolveFinalState(
+                        completedNormally,
+                        stateBindings.currentState().status
                     )
+                    updateStateIfCurrentJob(finishedJob) {
+                        it.copy(
+                            job = null,
+                            status = finalState.status
+                        )
+                    }
+                    callbacks.showOptionalMessage(finalState.message)
                 }
-                callbacks.showOptionalMessage(finalState.message)
             }
         }
+        launchedJob = nextJob
         updateState { it.copy(job = nextJob) }
         nextJob.start()
     }

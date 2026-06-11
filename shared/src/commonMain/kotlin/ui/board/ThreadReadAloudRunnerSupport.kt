@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 
 internal data class ThreadReadAloudRunnerCallbacks(
     val onSegmentStart: (ReadAloudSegment, Int) -> Unit = { _, _ -> },
@@ -78,6 +79,12 @@ internal suspend fun runThreadReadAloudSession(
                 nextIndex = index
             )
         }
+    } catch (error: TimeoutCancellationException) {
+        callbacks.onFailure(error)
+        return ThreadReadAloudRunResult(
+            completedNormally = false,
+            nextIndex = index
+        )
     } catch (error: CancellationException) {
         if (!wasCancelledByUser()) {
             throw error

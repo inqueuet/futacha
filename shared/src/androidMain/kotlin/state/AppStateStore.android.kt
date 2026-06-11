@@ -1,10 +1,12 @@
 package com.valoser.futacha.shared.state
 
 import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
@@ -20,7 +22,18 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 
 private const val DATASTORE_NAME = "futacha_state"
-private val Context.dataStore by preferencesDataStore(name = DATASTORE_NAME)
+private const val MAX_DATASTORE_READ_RETRIES = 5L
+private val Context.dataStore by preferencesDataStore(
+    name = DATASTORE_NAME,
+    corruptionHandler = ReplaceFileCorruptionHandler { error ->
+        Logger.e(
+            "AndroidPlatformStateStorage",
+            "DataStore preferences were corrupted; replacing them with empty preferences",
+            error
+        )
+        emptyPreferences()
+    }
+)
 
 internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
     val context = (platformContext as? Context)?.applicationContext
@@ -76,7 +89,7 @@ private class AndroidPlatformStateStorage(
                     is CancellationException -> throw cause
                     is IOException -> {
                         val cached = lastReadablePreferences.get()
-                        if (cached != null) {
+                        if (cached != null && attempt < MAX_DATASTORE_READ_RETRIES) {
                             Logger.w(
                                 "AndroidPlatformStateStorage",
                                 "DataStore read failure detected; using last known preferences snapshot and retrying: ${cause.message}"
@@ -88,7 +101,7 @@ private class AndroidPlatformStateStorage(
                         } else {
                             Logger.e(
                                 "AndroidPlatformStateStorage",
-                                "DataStore read failure with no cached snapshot",
+                                "DataStore read failure exceeded retry budget",
                                 cause
                             )
                             false
@@ -100,6 +113,14 @@ private class AndroidPlatformStateStorage(
             .catch { e ->
                 when (e) {
                     is CancellationException -> throw e
+                    is IOException -> {
+                        Logger.e(
+                            "AndroidPlatformStateStorage",
+                            "Using fallback preferences after DataStore read failure",
+                            e
+                        )
+                        emit(lastReadablePreferences.get() ?: emptyPreferences())
+                    }
                     else -> throw StorageException("Failed to read DataStore preferences", e)
                 }
             }
