@@ -35,7 +35,7 @@ internal data class ThreadScreenOverlayHostBindings(
     val ngFilteringEnabled: Boolean,
     val readAloudSegments: List<ReadAloudSegment>,
     val currentReadAloudIndex: Int,
-    val firstVisibleSegmentIndex: Int,
+    val firstVisibleSegmentIndex: () -> Int,
     val readAloudStatus: ReadAloudStatus,
     val isPrivacyFilterEnabled: Boolean,
     val saveProgress: SaveProgress?,
@@ -218,7 +218,7 @@ internal fun ThreadScreenOverlayHost(
         ReadAloudControlSheet(
             segments = bindings.readAloudSegments,
             currentIndex = bindings.currentReadAloudIndex,
-            visibleSegmentIndex = bindings.firstVisibleSegmentIndex,
+            visibleSegmentIndex = bindings.firstVisibleSegmentIndex(),
             status = bindings.readAloudStatus,
             onSeek = bindings.uiBindings.readAloudControlCallbacks.onSeek,
             onSeekToVisible = bindings.uiBindings.readAloudControlCallbacks.onSeekToVisible,

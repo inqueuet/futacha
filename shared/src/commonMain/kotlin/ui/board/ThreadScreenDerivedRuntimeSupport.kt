@@ -48,7 +48,7 @@ internal data class ThreadScreenDerivedRuntimeState(
     val searchMatches: List<ThreadSearchMatch>,
     val postHighlightRanges: Map<String, List<IntRange>>,
     val readAloudSegments: List<ReadAloudSegment>,
-    val firstVisibleSegmentIndex: Int
+    val firstVisibleSegmentIndex: () -> Int
 )
 
 internal data class ThreadBackSwipeMetrics(
@@ -177,7 +177,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
             buildReadAloudSegments(currentPosts)
         }
     }
-    val firstVisibleSegmentIndex by remember(
+    val firstVisibleSegmentIndexState = remember(
         readAloudSegments,
         lazyListState,
         derivedUiState.shouldPrepareReadAloudSegments
@@ -191,6 +191,9 @@ internal fun rememberThreadScreenDerivedRuntimeState(
                 firstVisibleItemIndex = lazyListState.firstVisibleItemIndex
             ).firstVisibleSegmentIndex
         }
+    }
+    val firstVisibleSegmentIndex = remember(firstVisibleSegmentIndexState) {
+        { firstVisibleSegmentIndexState.value }
     }
     val postHighlightRanges = remember(
         isSearchActive,

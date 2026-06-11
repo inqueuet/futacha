@@ -785,7 +785,7 @@ private fun ThreadScreenContent(
             singleMediaSaveBindings = singleMediaSaveBindings,
             currentSuccessState = currentSuccessState,
             threadFilterBinding = threadFilterBinding,
-            firstVisibleSegmentIndex = { firstVisibleSegmentIndex },
+            firstVisibleSegmentIndex = firstVisibleSegmentIndex,
             pauseReadAloud = pauseReadAloud,
             stopReadAloud = stopReadAloud,
             threadNgMutationCallbacks = threadNgMutationCallbacks,

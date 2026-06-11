@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -18,7 +19,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
-import com.valoser.futacha.shared.model.matchesWatchWords
+import com.valoser.futacha.shared.model.matchesNormalizedWatchWords
+import com.valoser.futacha.shared.model.normalizeWatchWords
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -41,13 +43,16 @@ internal fun CatalogGrid(
         isRefreshing = isRefreshing,
         animationLabel = "catalogGridOverscroll"
     )
+    val normalizedWatchWords = remember(watchWords) {
+        normalizeWatchWords(watchWords)
+    }
 
     LazyVerticalGrid(
         state = gridState,
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 8.dp)
-            .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.toInt()) }
+            .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.value.toInt()) }
             .edgeSwipeRefresh(
                 isRefreshing = isRefreshing,
                 isAtTop = edgeSwipeRefreshBinding.edgeState.isAtTop,
@@ -82,7 +87,7 @@ internal fun CatalogGrid(
                     buildCatalogHeadMetadataCacheKey(board?.url, catalogItem)
                 ],
                 resolveHeadMetadata = resolveHeadMetadata,
-                isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
+                isWatchWordMatch = catalogItem.matchesNormalizedWatchWords(normalizedWatchWords),
                 onClick = { onThreadSelected(catalogItem) }
             )
         }
@@ -121,12 +126,15 @@ internal fun CatalogList(
         isRefreshing = isRefreshing,
         animationLabel = "catalogListOverscroll"
     )
+    val normalizedWatchWords = remember(watchWords) {
+        normalizeWatchWords(watchWords)
+    }
 
     LazyColumn(
         state = listState,
         modifier = modifier
             .fillMaxSize()
-            .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.toInt()) }
+            .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.value.toInt()) }
             .edgeSwipeRefresh(
                 isRefreshing = isRefreshing,
                 isAtTop = edgeSwipeRefreshBinding.edgeState.isAtTop,
@@ -156,7 +164,7 @@ internal fun CatalogList(
                     buildCatalogHeadMetadataCacheKey(board?.url, catalogItem)
                 ],
                 resolveHeadMetadata = resolveHeadMetadata,
-                isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
+                isWatchWordMatch = catalogItem.matchesNormalizedWatchWords(normalizedWatchWords),
                 onClick = { onThreadSelected(catalogItem) }
             )
         }

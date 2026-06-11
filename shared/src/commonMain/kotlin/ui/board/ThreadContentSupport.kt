@@ -165,30 +165,6 @@ internal fun ThreadScrollbar(
     listState: LazyListState,
     modifier: Modifier = Modifier
 ) {
-    val layoutInfo = listState.layoutInfo
-    val visibleItems = layoutInfo.visibleItemsInfo
-    if (visibleItems.isEmpty()) return
-    val totalItems = layoutInfo.totalItemsCount
-    if (totalItems <= 0) return
-    val viewportHeightPx = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-    if (viewportHeightPx <= 0) return
-    val avgItemSizePx = visibleItems
-        .map { it.size }
-        .filter { it > 0 }
-        .takeIf { it.isNotEmpty() }
-        ?.average()
-        ?.toFloat()
-        ?: return
-    val contentHeightPx = avgItemSizePx * totalItems
-    if (contentHeightPx <= viewportHeightPx) return
-
-    val firstVisibleSize = visibleItems.firstOrNull()?.size?.coerceAtLeast(1) ?: 1
-    val partialIndex = listState.firstVisibleItemScrollOffset / firstVisibleSize.toFloat()
-    val totalScrollableItems = (totalItems - visibleItems.size).coerceAtLeast(1)
-    val scrollFraction = ((listState.firstVisibleItemIndex + partialIndex) / totalScrollableItems)
-        .coerceIn(0f, 1f)
-    val thumbHeightFraction = (viewportHeightPx / contentHeightPx).coerceIn(0.05f, 1f)
-
     val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
 
@@ -197,6 +173,35 @@ internal fun ThreadScrollbar(
             .fillMaxHeight()
             .width(6.dp)
     ) {
+        val layoutInfo = listState.layoutInfo
+        val visibleItems = layoutInfo.visibleItemsInfo
+        if (visibleItems.isEmpty()) return@Canvas
+        val totalItems = layoutInfo.totalItemsCount
+        if (totalItems <= 0) return@Canvas
+        val viewportHeightPx = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+        if (viewportHeightPx <= 0) return@Canvas
+
+        var visibleSizeTotal = 0
+        var visibleSizeCount = 0
+        visibleItems.forEach { item ->
+            if (item.size > 0) {
+                visibleSizeTotal += item.size
+                visibleSizeCount += 1
+            }
+        }
+        if (visibleSizeCount == 0) return@Canvas
+
+        val avgItemSizePx = visibleSizeTotal.toFloat() / visibleSizeCount.toFloat()
+        val contentHeightPx = avgItemSizePx * totalItems
+        if (contentHeightPx <= viewportHeightPx) return@Canvas
+
+        val firstVisibleSize = visibleItems.firstOrNull()?.size?.coerceAtLeast(1) ?: 1
+        val partialIndex = listState.firstVisibleItemScrollOffset / firstVisibleSize.toFloat()
+        val totalScrollableItems = (totalItems - visibleItems.size).coerceAtLeast(1)
+        val scrollFraction = ((listState.firstVisibleItemIndex + partialIndex) / totalScrollableItems)
+            .coerceIn(0f, 1f)
+        val thumbHeightFraction = (viewportHeightPx / contentHeightPx).coerceIn(0.05f, 1f)
+
         val trackWidth = size.width
         val trackHeight = size.height
         val trackCornerRadius = CornerRadius(trackWidth / 2f, trackWidth / 2f)

@@ -217,38 +217,42 @@ private suspend fun createWebKitThumbnail(
     url: NSURL,
     targetWidth: Double,
     targetHeight: Double
-): NSData = suspendCancellableCoroutine { continuation ->
-    val delegateRetainer = WebmThumbnailDelegateRetainer()
-    continuation.invokeOnCancellation {
-        dispatch_async(dispatch_get_main_queue()) {
-            delegateRetainer.dispose()
-        }
-    }
-    dispatch_async(dispatch_get_main_queue()) {
-        val configuration = WKWebViewConfiguration().apply {
-            allowsInlineMediaPlayback = true
-        }
-        val webView = WKWebView(
-            frame = CGRectMake(0.0, 0.0, targetWidth, targetHeight),
-            configuration = configuration
-        )
-        val delegate = WebmThumbnailNavigationDelegate(
-            webView = webView,
-            url = url,
-            targetWidth = targetWidth,
-            targetHeight = targetHeight,
-            onComplete = completion@{ result ->
-                delegateRetainer.release()
-                if (!continuation.isActive) return@completion
-                result
-                    .onSuccess { data -> continuation.resume(data) }
-                    .onFailure { error -> continuation.resumeWithException(error) }
+): NSData {
+    return withTimeoutOrNull(WEBKIT_THUMBNAIL_TIMEOUT_MILLIS) {
+        suspendCancellableCoroutine { continuation ->
+            val delegateRetainer = WebmThumbnailDelegateRetainer()
+            continuation.invokeOnCancellation {
+                dispatch_async(dispatch_get_main_queue()) {
+                    delegateRetainer.dispose()
+                }
             }
-        )
-        delegateRetainer.retain(delegate)
-        webView.navigationDelegate = delegate
-        delegate.start()
-    }
+            dispatch_async(dispatch_get_main_queue()) {
+                val configuration = WKWebViewConfiguration().apply {
+                    allowsInlineMediaPlayback = true
+                }
+                val webView = WKWebView(
+                    frame = CGRectMake(0.0, 0.0, targetWidth, targetHeight),
+                    configuration = configuration
+                )
+                val delegate = WebmThumbnailNavigationDelegate(
+                    webView = webView,
+                    url = url,
+                    targetWidth = targetWidth,
+                    targetHeight = targetHeight,
+                    onComplete = completion@{ result ->
+                        delegateRetainer.release()
+                        if (!continuation.isActive) return@completion
+                        result
+                            .onSuccess { data -> continuation.resume(data) }
+                            .onFailure { error -> continuation.resumeWithException(error) }
+                    }
+                )
+                delegateRetainer.retain(delegate)
+                webView.navigationDelegate = delegate
+                delegate.start()
+            }
+        }
+    } ?: error("Timed out generating WebM thumbnail for $url")
 }
 
 private const val DEFAULT_WEBKIT_THUMBNAIL_WIDTH = 160.0
@@ -258,6 +262,7 @@ private const val MAX_WEBKIT_THUMBNAIL_HEIGHT = 180.0
 private const val WEBKIT_THUMBNAIL_CACHE_MAX_ENTRIES = 32
 private const val WEBKIT_READY_POLL_LIMIT = 25
 private const val WEBKIT_READY_POLL_DELAY_MILLIS = 100L
+private const val WEBKIT_THUMBNAIL_TIMEOUT_MILLIS = 10_000L
 private const val AV_THUMBNAIL_TIMEOUT_MILLIS = 20_000L
 
 private fun resolveWebKitThumbnailSize(options: Options): Pair<Double, Double> {

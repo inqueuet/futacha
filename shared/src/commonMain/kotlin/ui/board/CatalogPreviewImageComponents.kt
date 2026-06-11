@@ -6,9 +6,9 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -56,17 +56,45 @@ internal fun CatalogPreviewImage(
         model = imageRequest,
         imageLoader = imageLoader
     )
-    val painterState by imagePainter.state.collectAsState()
-
-    LaunchedEffect(painterState, candidateIndex, candidates.size) {
-        if (painterState is AsyncImagePainter.State.Error && candidateIndex < candidates.lastIndex) {
-            candidateIndex += 1
-        }
+    var shouldShowFallback by remember(activeUrl, candidateIndex, candidates.size) {
+        mutableStateOf(activeUrl.isNullOrBlank())
     }
 
-    val shouldShowFallback = activeUrl.isNullOrBlank() ||
-        ((painterState is AsyncImagePainter.State.Error || painterState is AsyncImagePainter.State.Empty) &&
-            candidateIndex >= candidates.lastIndex)
+    LaunchedEffect(imagePainter, activeUrl, candidateIndex, candidates.size) {
+        if (activeUrl.isNullOrBlank()) {
+            shouldShowFallback = true
+            return@LaunchedEffect
+        }
+        var hasStartedLoading = false
+        imagePainter.state.collect { state ->
+            when (state) {
+                is AsyncImagePainter.State.Error -> {
+                    if (candidateIndex < candidates.lastIndex) {
+                        candidateIndex += 1
+                    } else if (!shouldShowFallback) {
+                        shouldShowFallback = true
+                    }
+                }
+
+                is AsyncImagePainter.State.Loading -> {
+                    hasStartedLoading = true
+                }
+
+                is AsyncImagePainter.State.Success -> {
+                    hasStartedLoading = true
+                    if (shouldShowFallback) {
+                        shouldShowFallback = false
+                    }
+                }
+
+                is AsyncImagePainter.State.Empty -> {
+                    if (hasStartedLoading && candidateIndex >= candidates.lastIndex && !shouldShowFallback) {
+                        shouldShowFallback = true
+                    }
+                }
+            }
+        }
+    }
 
     if (shouldShowFallback) {
         Icon(

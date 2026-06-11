@@ -10,12 +10,12 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
@@ -50,14 +50,19 @@ internal data class ScrollEdgeState(
     val isAtBottom: Boolean
 )
 
+internal class ScrollEdgeStateReader(
+    val isAtTop: () -> Boolean,
+    val isAtBottom: () -> Boolean
+)
+
 internal data class EdgeSwipeRefreshBinding(
-    val edgeState: ScrollEdgeState,
+    val edgeState: ScrollEdgeStateReader,
     val metrics: EdgeSwipeRefreshMetrics,
     val visualState: EdgeSwipeRefreshVisualState
 )
 
 internal class EdgeSwipeRefreshVisualState(
-    val overscrollOffset: Float,
+    val overscrollOffset: State<Float>,
     private val setOverscrollTarget: (Float) -> Unit
 ) {
     fun onOverscrollTargetChanged(value: Float) {
@@ -87,33 +92,21 @@ internal fun rememberEdgeSwipeRefreshMetrics(): EdgeSwipeRefreshMetrics {
 }
 
 @Composable
-internal fun rememberScrollEdgeState(listState: LazyListState): ScrollEdgeState {
-    val isAtTop by remember(listState) {
-        derivedStateOf { !listState.canScrollBackward }
-    }
-    val isAtBottom by remember(listState) {
-        derivedStateOf { !listState.canScrollForward }
-    }
-    return remember(isAtTop, isAtBottom) {
-        resolveScrollEdgeState(
-            canScrollBackward = !isAtTop,
-            canScrollForward = !isAtBottom
+internal fun rememberScrollEdgeState(listState: LazyListState): ScrollEdgeStateReader {
+    return remember(listState) {
+        ScrollEdgeStateReader(
+            isAtTop = { !listState.canScrollBackward },
+            isAtBottom = { !listState.canScrollForward }
         )
     }
 }
 
 @Composable
-internal fun rememberScrollEdgeState(gridState: LazyGridState): ScrollEdgeState {
-    val isAtTop by remember(gridState) {
-        derivedStateOf { !gridState.canScrollBackward }
-    }
-    val isAtBottom by remember(gridState) {
-        derivedStateOf { !gridState.canScrollForward }
-    }
-    return remember(isAtTop, isAtBottom) {
-        resolveScrollEdgeState(
-            canScrollBackward = !isAtTop,
-            canScrollForward = !isAtBottom
+internal fun rememberScrollEdgeState(gridState: LazyGridState): ScrollEdgeStateReader {
+    return remember(gridState) {
+        ScrollEdgeStateReader(
+            isAtTop = { !gridState.canScrollBackward },
+            isAtBottom = { !gridState.canScrollForward }
         )
     }
 }
@@ -124,7 +117,7 @@ internal fun rememberEdgeSwipeRefreshVisualState(
     animationLabel: String
 ): EdgeSwipeRefreshVisualState {
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
-    val overscrollOffset by animateFloatAsState(
+    val overscrollOffset = animateFloatAsState(
         targetValue = overscrollTarget,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioNoBouncy,
@@ -268,8 +261,8 @@ internal fun releaseEdgeSwipeRefreshDrag(
 
 internal fun Modifier.edgeSwipeRefresh(
     isRefreshing: Boolean,
-    isAtTop: Boolean,
-    isAtBottom: Boolean,
+    isAtTop: () -> Boolean,
+    isAtBottom: () -> Boolean,
     maxOverscrollPx: Float,
     refreshTriggerPx: Float,
     onOverscrollTargetChanged: (Float) -> Unit,
@@ -327,8 +320,8 @@ internal fun Modifier.edgeSwipeRefresh(
                     totalDrag = totalDrag,
                     dragAmount = available.y,
                     isRefreshing = latestIsRefreshing,
-                    isAtTop = latestIsAtTop,
-                    isAtBottom = latestIsAtBottom,
+                    isAtTop = latestIsAtTop(),
+                    isAtBottom = latestIsAtBottom(),
                     maxOverscrollPx = latestMaxOverscrollPx
                 )
                 totalDrag = updatedState.totalDrag

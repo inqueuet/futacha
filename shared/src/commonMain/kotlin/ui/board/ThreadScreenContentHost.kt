@@ -24,7 +24,7 @@ import androidx.compose.foundation.lazy.LazyListState
 
 private const val THREAD_AI_SUMMARY_UI_TIMEOUT_MS = 20_000L
 private const val THREAD_AI_POST_MODERATION_BATCH_TIMEOUT_MS = 25_000L
-private const val THREAD_AI_POST_MODERATION_BATCH_SIZE = 1
+private const val THREAD_AI_POST_MODERATION_BATCH_SIZE = 8
 private const val THREAD_AI_POST_MODERATION_BATCH_DELAY_MS = 120L
 private const val THREAD_AI_POST_MODERATION_START_DELAY_MS = 1_500L
 private const val THREAD_AI_SUMMARY_START_DELAY_MS = 120L

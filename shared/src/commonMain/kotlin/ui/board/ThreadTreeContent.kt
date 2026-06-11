@@ -137,9 +137,8 @@ internal fun ThreadTreeContent(
         isRefreshing = isRefreshing,
         animationLabel = "threadTreeOverscroll"
     )
-    val isScrolling = listState.isScrollInProgress
     val showQuotePreview = buildThreadScreenQuotePreviewPresenter(
-        isScrolling = { isScrolling },
+        isScrolling = { listState.isScrollInProgress },
         posterIdLabels = posterIdLabels,
         setState = { quotePreviewState = it }
     )
@@ -149,7 +148,7 @@ internal fun ThreadTreeContent(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.toInt()) }
+                    .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.value.toInt()) }
                     .edgeSwipeRefresh(
                         isRefreshing = isRefreshing,
                         isAtTop = edgeSwipeRefreshBinding.edgeState.isAtTop,

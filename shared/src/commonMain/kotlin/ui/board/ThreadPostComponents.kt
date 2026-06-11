@@ -18,7 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -121,7 +121,41 @@ internal fun ThreadPostCard(
                 model = thumbnailRequest,
                 imageLoader = imageLoader
             )
-            val thumbnailPainterState by thumbnailPainter.state.collectAsState()
+            var shouldShowThumbnailFallback by remember(thumbnailPainter) {
+                mutableStateOf(false)
+            }
+            LaunchedEffect(thumbnailPainter) {
+                var hasStartedLoading = false
+                thumbnailPainter.state.collect { state ->
+                    when (state) {
+                        is AsyncImagePainter.State.Error -> {
+                            if (!shouldShowThumbnailFallback) {
+                                shouldShowThumbnailFallback = true
+                            }
+                        }
+
+                        is AsyncImagePainter.State.Loading -> {
+                            hasStartedLoading = true
+                            if (shouldShowThumbnailFallback) {
+                                shouldShowThumbnailFallback = false
+                            }
+                        }
+
+                        is AsyncImagePainter.State.Success -> {
+                            hasStartedLoading = true
+                            if (shouldShowThumbnailFallback) {
+                                shouldShowThumbnailFallback = false
+                            }
+                        }
+
+                        is AsyncImagePainter.State.Empty -> {
+                            if (hasStartedLoading && !shouldShowThumbnailFallback) {
+                                shouldShowThumbnailFallback = true
+                            }
+                        }
+                    }
+                }
+            }
             Box(
                 modifier = run {
                     val baseModifier = Modifier
@@ -147,23 +181,19 @@ internal fun ThreadPostCard(
                     }
                 }
             ) {
-                when (thumbnailPainterState) {
-                    is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
-                        MediaThumbnailFallbackIcon(
-                            url = displayUrl,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    }
-
-                    else -> {
-                        Image(
-                            painter = thumbnailPainter,
-                            contentDescription = "添付画像",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                if (shouldShowThumbnailFallback) {
+                    MediaThumbnailFallbackIcon(
+                        url = displayUrl,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else {
+                    Image(
+                        painter = thumbnailPainter,
+                        contentDescription = "添付画像",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }

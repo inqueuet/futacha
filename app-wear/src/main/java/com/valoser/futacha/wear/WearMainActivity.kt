@@ -94,7 +94,7 @@ private fun FutachaWearContent(
     onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
     onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit
 ) {
-    var selectedThreadId by remember(snapshot?.generatedAtMillis) { mutableStateOf<String?>(null) }
+    var selectedThreadId by remember { mutableStateOf<String?>(null) }
     val selectedThread = snapshot?.threads?.firstOrNull { it.threadId == selectedThreadId }
 
     Box(
