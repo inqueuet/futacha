@@ -6,15 +6,15 @@ import com.valoser.futacha.shared.network.BoardUrlResolver
 import io.ktor.http.ContentType
 import kotlin.text.RegexOption
 
-private val IMAGE_SRC_REGEX = Regex("""<img[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-private val LINK_HREF_REGEX = Regex("""<a[^>]+href\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-private val VIDEO_SRC_REGEX = Regex("""<video[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-private val SOURCE_SRC_REGEX = Regex("""<source[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>""", RegexOption.IGNORE_CASE)
-private val SCRIPT_SRC_REGEX = Regex("""(?si)<script[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>.*?</script>""")
-private val IFRAME_SRC_REGEX = Regex("""(?si)<iframe[^>]+src\s*=\s*['"]([^'"]+)['"][^>]*>.*?</iframe>""")
-private val CHARSET_REGEX = Regex("""<meta[^>]+charset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
+private const val THREAD_SAVE_TAG_ATTR_LIMIT = 700
+private const val THREAD_SAVE_EXTERNAL_TAG_BODY_LIMIT = 200_000
+private val IMAGE_SRC_REGEX = Regex("""<img\b[^>]{0,700}\bsrc\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
+private val LINK_HREF_REGEX = Regex("""<a\b[^>]{0,700}\bhref\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
+private val VIDEO_SRC_REGEX = Regex("""<video\b[^>]{0,700}\bsrc\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
+private val SOURCE_SRC_REGEX = Regex("""<source\b[^>]{0,700}\bsrc\s*=\s*['"]([^'"]+)['"][^>]{0,700}>""", RegexOption.IGNORE_CASE)
+private val CHARSET_REGEX = Regex("""<meta\b[^>]{0,700}\bcharset\s*=\s*["']?([^"'>\s]+)""", RegexOption.IGNORE_CASE)
 private val CONTENT_TYPE_META_REGEX = Regex(
-    """<meta[^>]+http-equiv\s*=\s*["']?Content-Type["']?[^>]*>""",
+    """<meta\b[^>]{0,700}\bhttp-equiv\s*=\s*["']?Content-Type["']?[^>]{0,700}>""",
     RegexOption.IGNORE_CASE
 )
 private val CONTENT_TYPE_CHARSET_REGEX = Regex("""charset\s*=\s*[^"'>;\s]+""", RegexOption.IGNORE_CASE)
@@ -99,15 +99,95 @@ internal fun stripSavedExternalScriptsAndIframes(html: String): String {
         return normalized.contains("/bin/") || normalized.contains("dec.2chan.net")
     }
 
-    var updated = SCRIPT_SRC_REGEX.replace(html) { matchResult ->
-        val src = matchResult.groupValues.getOrNull(1).orEmpty()
-        if (shouldStrip(src)) "" else matchResult.value
+    val withoutScripts = stripSavedExternalTagWithSrc(html, tagName = "script", shouldStrip = ::shouldStrip)
+    return stripSavedExternalTagWithSrc(withoutScripts, tagName = "iframe", shouldStrip = ::shouldStrip)
+}
+
+private fun stripSavedExternalTagWithSrc(
+    html: String,
+    tagName: String,
+    shouldStrip: (String) -> Boolean
+): String {
+    val startToken = "<$tagName"
+    val endToken = "</$tagName>"
+    val builder = StringBuilder(html.length)
+    var searchStart = 0
+    while (searchStart < html.length) {
+        val tagStart = html.indexOf(startToken, startIndex = searchStart, ignoreCase = true)
+        if (tagStart == -1) {
+            builder.append(html, searchStart, html.length)
+            break
+        }
+        builder.append(html, searchStart, tagStart)
+        val tagEnd = findBoundedThreadSaveTagEnd(html, tagStart)
+        if (tagEnd == -1) {
+            builder.append(html[tagStart])
+            searchStart = tagStart + 1
+            continue
+        }
+        val tag = html.substring(tagStart, tagEnd + 1)
+        val closeIndex = html.indexOf(endToken, startIndex = tagEnd + 1, ignoreCase = true)
+        val boundedCloseIndex = closeIndex.takeIf {
+            it != -1 && it - tagEnd <= THREAD_SAVE_EXTERNAL_TAG_BODY_LIMIT
+        }
+        val endExclusive = boundedCloseIndex?.plus(endToken.length) ?: tagEnd + 1
+        val src = extractThreadSaveTagAttribute(tag, "src")
+        if (src != null && shouldStrip(src)) {
+            searchStart = endExclusive
+        } else {
+            builder.append(html, tagStart, endExclusive)
+            searchStart = endExclusive
+        }
     }
-    updated = IFRAME_SRC_REGEX.replace(updated) { matchResult ->
-        val src = matchResult.groupValues.getOrNull(1).orEmpty()
-        if (shouldStrip(src)) "" else matchResult.value
+    return builder.toString()
+}
+
+private fun findBoundedThreadSaveTagEnd(html: String, startIndex: Int): Int {
+    val limit = minOf(html.length, startIndex + THREAD_SAVE_TAG_ATTR_LIMIT)
+    var index = startIndex + 1
+    while (index < limit) {
+        when (html[index]) {
+            '>' -> return index
+            '<' -> return -1
+        }
+        index += 1
     }
-    return updated
+    return -1
+}
+
+private fun extractThreadSaveTagAttribute(tag: String, attributeName: String): String? {
+    var searchStart = 0
+    while (searchStart < tag.length) {
+        val attrIndex = tag.indexOf(attributeName, startIndex = searchStart, ignoreCase = true)
+        if (attrIndex == -1) return null
+        val before = tag.getOrNull(attrIndex - 1)
+        val after = tag.getOrNull(attrIndex + attributeName.length)
+        val hasNameBoundary = before == null || !before.isLetterOrDigit()
+        val hasValueBoundary = after == null || after.isWhitespace() || after == '='
+        if (!hasNameBoundary || !hasValueBoundary) {
+            searchStart = attrIndex + attributeName.length
+            continue
+        }
+        var index = attrIndex + attributeName.length
+        while (index < tag.length && tag[index].isWhitespace()) index += 1
+        if (tag.getOrNull(index) != '=') {
+            searchStart = index
+            continue
+        }
+        index += 1
+        while (index < tag.length && tag[index].isWhitespace()) index += 1
+        val quote = tag.getOrNull(index)
+        if (quote == '\'' || quote == '"') {
+            val valueStart = index + 1
+            val valueEnd = tag.indexOf(quote, startIndex = valueStart)
+            if (valueEnd != -1) return tag.substring(valueStart, valueEnd)
+            return null
+        }
+        val valueStart = index
+        while (index < tag.length && !tag[index].isWhitespace() && tag[index] != '>') index += 1
+        return tag.substring(valueStart, index).takeIf { it.isNotBlank() }
+    }
+    return null
 }
 
 internal fun forceSavedHtmlUtf8Charset(html: String): String {

@@ -1,6 +1,11 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.Post
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
+
+private const val READ_ALOUD_CANCELLATION_CHECK_INTERVAL = 32
 
 internal data class ReadAloudSegment(
     val postIndex: Int,
@@ -22,17 +27,23 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
 private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?://\\S+|\\bttp://\\S+")
 private val READ_ALOUD_WHITESPACE_REGEX = Regex("\\s{2,}")
 
-internal fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
-    return posts.mapIndexedNotNull { index, post ->
-        if (post.isDeleted) return@mapIndexedNotNull null
+internal suspend fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
+    val segments = ArrayList<ReadAloudSegment>()
+    posts.forEachIndexed { index, post ->
+        if (index % READ_ALOUD_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
+        if (post.isDeleted) return@forEachIndexed
         val lines = messageHtmlToLines(post.messageHtml)
             .map { stripUrlsForReadAloud(it).trim() }
             .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
-        if (lines.isEmpty()) return@mapIndexedNotNull null
-        if (containsDeletionNotice(lines)) return@mapIndexedNotNull null
+        if (lines.isEmpty()) return@forEachIndexed
+        if (containsDeletionNotice(lines)) return@forEachIndexed
         val body = lines.joinToString("\n")
-        ReadAloudSegment(index, post.id, body)
+        segments += ReadAloudSegment(index, post.id, body)
     }
+    return segments
 }
 
 internal fun stripUrlsForReadAloud(value: String): String {

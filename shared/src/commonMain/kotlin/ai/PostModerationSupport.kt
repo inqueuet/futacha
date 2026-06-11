@@ -1,13 +1,13 @@
 package com.valoser.futacha.shared.ai
 
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.util.replaceHtmlBreakTags
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 
 private const val POST_MODERATION_MAX_BODY_CHARS = 220
 private const val POST_MODERATION_MAX_REASON_CHARS = 80
 private const val POST_MODERATION_MAX_SOURCE_CHARS = 12_000
 
-private val moderationHtmlBreakRegex = Regex("(?i)<br\\s*/?>|</p>")
-private val moderationHtmlTagRegex = Regex("<[^>]+>")
 private val moderationWhitespaceRegex = Regex("\\s+")
 private val moderationQuoteLineRegex = Regex("^>+")
 private val moderationUrlRegex = Regex("""https?://\S+|www\.\S+""", RegexOption.IGNORE_CASE)
@@ -58,9 +58,9 @@ fun parsePostModerationResponse(response: String): Map<String, PostModerationRes
 }
 
 private fun buildPostModerationBody(messageHtml: String): String {
-    return messageHtml
-        .replace(moderationHtmlBreakRegex, "\n")
-        .replace(moderationHtmlTagRegex, " ")
+    return stripHtmlTagsLinear(
+        replaceHtmlBreakTags(messageHtml, lineBreakReplacement = "\n", paragraphReplacement = "\n")
+    )
         .decodeBasicHtmlEntities()
         .lines()
         .map { line ->

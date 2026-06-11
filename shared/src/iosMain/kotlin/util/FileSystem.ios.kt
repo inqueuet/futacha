@@ -31,6 +31,8 @@ class IosFileSystem : FileSystem {
     private val fileManager = NSFileManager.defaultManager
     private val cleanupMaxAgeMillis = 60 * 60 * 1000L
     private val streamWriteChunkBytes = 64 * 1024
+    private val recursiveDeleteMaxDurationMillis = 30_000L
+    private val recursiveDeleteMaxItems = 10_000
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
 
@@ -41,6 +43,10 @@ class IosFileSystem : FileSystem {
     private fun isNoSuchFileError(error: NSError?): Boolean {
         // NSFileNoSuchFileError
         return error?.code == 4L
+    }
+
+    private fun currentTimeMillis(): Long {
+        return (NSDate().timeIntervalSince1970 * 1000.0).toLong()
     }
 
     private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
@@ -135,88 +141,26 @@ class IosFileSystem : FileSystem {
         }
     }
 
-    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> {
         runFsCatching {
-            validatePath(path, "path") // FIX: 入力検証
-            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
-            coroutineContext.ensureActive()
-            val absolutePath = resolveAbsolutePath(path)
-            val parentDir = parentDirectory(absolutePath)
-
-            // Create parent directory with error checking
-            memScoped {
-                val error = alloc<ObjCObjectVar<NSError?>>()
-                val success = fileManager.createDirectoryAtPath(
-                    parentDir,
-                    withIntermediateDirectories = true,
-                    attributes = null,
-                    error = error.ptr
-                )
-                if (!success && error.value != null) {
-                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
-                }
+            validatePath(path, "path")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return Result.failure(it)
+        }
+        return writeByteStream(path) { sink ->
+            var offset = 0
+            while (offset < bytes.size) {
+                coroutineContext.ensureActive()
+                val length = minOf(streamWriteChunkBytes, bytes.size - offset)
+                sink.write(bytes, offset, length)
+                offset += length
             }
-
-            // Pin bytes and write atomically within the same scope for memory safety
-            val success = bytes.usePinned { pinned ->
-                val data = NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
-                memScoped {
-                    val error = alloc<ObjCObjectVar<NSError?>>()
-                    val writeSuccess = data.writeToFile(absolutePath, options = NSDataWritingAtomic, error = error.ptr)
-                    if (!writeSuccess) {
-                        throw Exception("Failed to write file: ${error.value?.localizedDescription ?: "Unknown error"}")
-                    }
-                    writeSuccess
-                }
-            }
-
-            if (!success) {
-                throw Exception("Failed to write file")
-            }
-            coroutineContext.ensureActive()
-            Unit
         }
     }
 
-    override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(AppDispatchers.io) {
-        runFsCatching {
-            validatePath(path, "path") // FIX: 入力検証
-            val contentBytes = content.encodeToByteArray()
-            validateFileSize(contentBytes.size.toLong(), "content") // FIX: サイズ検証
-            coroutineContext.ensureActive()
-            val absolutePath = resolveAbsolutePath(path)
-            val parentDir = parentDirectory(absolutePath)
-
-            // Create parent directory with error checking
-            memScoped {
-                val error = alloc<ObjCObjectVar<NSError?>>()
-                val success = fileManager.createDirectoryAtPath(
-                    parentDir,
-                    withIntermediateDirectories = true,
-                    attributes = null,
-                    error = error.ptr
-                )
-                if (!success && error.value != null) {
-                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
-                }
-            }
-
-            // Write string with error checking
-            memScoped {
-                val error = alloc<ObjCObjectVar<NSError?>>()
-                val success = NSString.create(string = content).writeToFile(
-                    absolutePath,
-                    atomically = true,
-                    encoding = NSUTF8StringEncoding,
-                    error = error.ptr
-                )
-                if (!success) {
-                    throw Exception("Failed to write string: ${error.value?.localizedDescription ?: "Unknown error"}")
-                }
-            }
-            coroutineContext.ensureActive()
-            Unit
-        }
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return writeBytes(path, content.encodeToByteArray())
     }
 
     override suspend fun readBytes(path: String): Result<ByteArray> = withContext(AppDispatchers.io) {
@@ -231,19 +175,28 @@ class IosFileSystem : FileSystem {
             if (fileSize == 0L) {
                 return@runFsCatching ByteArray(0)
             }
-            val data = NSData.dataWithContentsOfFile(absolutePath)
-                ?: throw Exception("File not found: $absolutePath")
-
-            val length = data.length.toLong()
-            validateFileSize(length, "file")
-            val lengthInt = length.toInt()
-
+            val lengthInt = fileSize.toInt()
             val bytes = ByteArray(lengthInt)
-            bytes.usePinned { pinned ->
-                memcpy(pinned.addressOf(0), data.bytes, data.length)
+            val fileHandle = NSFileHandle.fileHandleForReadingAtPath(absolutePath)
+                ?: throw Exception("Failed to open file for reading: $absolutePath")
+            var offset = 0
+            try {
+                while (offset < lengthInt) {
+                    coroutineContext.ensureActive()
+                    val requested = minOf(streamWriteChunkBytes, lengthInt - offset)
+                    val data = fileHandle.readDataOfLength(requested.toULong())
+                    val readLength = data.length.toInt()
+                    if (readLength <= 0) break
+                    bytes.usePinned { pinned ->
+                        memcpy(pinned.addressOf(offset), data.bytes, data.length)
+                    }
+                    offset += readLength
+                }
+            } finally {
+                fileHandle.closeFile()
             }
             coroutineContext.ensureActive()
-            bytes
+            if (offset == bytes.size) bytes else bytes.copyOf(offset)
         }
     }
 
@@ -295,20 +248,56 @@ class IosFileSystem : FileSystem {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
-            memScoped {
-                val error = alloc<ObjCObjectVar<NSError?>>()
-                val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
-                if (!success) {
-                    val nsError = error.value
-                    // If file doesn't exist, consider it a success (already deleted)
-                    if (isNoSuchFileError(nsError)) {
-                        return@runFsCatching Unit
-                    }
-                    throw Exception("Failed to delete recursively: ${nsError?.localizedDescription ?: "Unknown error"}")
-                }
-            }
+            val deadlineMillis = currentTimeMillis() + recursiveDeleteMaxDurationMillis
+            deleteRecursivelyBounded(
+                absolutePath = absolutePath,
+                deadlineMillis = deadlineMillis,
+                counter = RecursiveDeleteCounter()
+            )
             Unit
         }
+    }
+
+    private suspend fun deleteRecursivelyBounded(
+        absolutePath: String,
+        deadlineMillis: Long,
+        counter: RecursiveDeleteCounter
+    ) {
+        coroutineContext.ensureActive()
+        if (currentTimeMillis() > deadlineMillis) {
+            throw Exception("Timed out while deleting recursively: $absolutePath")
+        }
+        counter.count += 1
+        if (counter.count > recursiveDeleteMaxItems) {
+            throw Exception("Too many files while deleting recursively: $absolutePath")
+        }
+
+        memScoped {
+            val isDirectory = alloc<BooleanVar>()
+            val exists = fileManager.fileExistsAtPath(absolutePath, isDirectory.ptr)
+            if (!exists) return
+            if (isDirectory.value) {
+                val children = fileManager.contentsOfDirectoryAtPath(absolutePath, error = null)
+                    ?.filterIsInstance<String>()
+                    .orEmpty()
+                for (child in children) {
+                    deleteRecursivelyBounded(
+                        absolutePath = joinPathSegments(absolutePath, child),
+                        deadlineMillis = deadlineMillis,
+                        counter = counter
+                    )
+                }
+            }
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
+            if (!success && !isNoSuchFileError(error.value)) {
+                throw Exception("Failed to delete recursively: ${error.value?.localizedDescription ?: "Unknown error"}")
+            }
+        }
+    }
+
+    private class RecursiveDeleteCounter {
+        var count: Int = 0
     }
 
     override suspend fun exists(path: String): Boolean = withContext(AppDispatchers.io) {

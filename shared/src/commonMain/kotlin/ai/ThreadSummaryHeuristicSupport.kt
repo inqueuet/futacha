@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.ai
 
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.util.replaceHtmlBreakTags
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 
 private const val SUMMARY_MAX_SOURCE_POSTS = 80
 private const val SUMMARY_MAX_SOURCE_CHARS = 10_000
@@ -9,8 +11,6 @@ private const val SUMMARY_MAX_HEADLINE_CHARS = 120
 private const val SUMMARY_MAX_BULLET_CHARS = 300
 private const val SUMMARY_MAX_OUTPUT_CHARS = 1_000
 
-private val htmlBreakRegex = Regex("(?i)<br\\s*/?>|</p>")
-private val htmlTagRegex = Regex("<[^>]+>")
 private val hexEntityRegex = Regex("&#x([0-9a-fA-F]+);")
 private val numEntityRegex = Regex("&#(\\d+);")
 private val whitespaceRegex = Regex("\\s+")
@@ -134,9 +134,9 @@ private fun Post.toSummaryLines(): List<String> {
 }
 
 private fun Post.toSummaryBodyLines(): List<String> {
-    return messageHtml
-        .replace(htmlBreakRegex, "\n")
-        .replace(htmlTagRegex, "")
+    return stripHtmlTagsLinear(
+        replaceHtmlBreakTags(messageHtml, lineBreakReplacement = "\n", paragraphReplacement = "\n")
+    )
         .decodeBasicHtmlEntities()
         .split('\n')
         .map { line ->

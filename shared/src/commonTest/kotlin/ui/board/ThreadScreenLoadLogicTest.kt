@@ -353,7 +353,7 @@ class ThreadScreenLoadLogicTest {
             )
         )
 
-        val segments = buildReadAloudSegments(posts)
+        val segments = runBlocking { buildReadAloudSegments(posts) }
 
         assertEquals(2, segments.size)
         assertEquals("1", segments[0].postId)
@@ -585,20 +585,22 @@ class ThreadScreenLoadLogicTest {
 
     @Test
     fun buildThreadSearchTargets_includesSubjectAuthorPosterIdAndBody() {
-        val targets = buildThreadSearchTargets(
-            listOf(
-                Post(
-                    id = "10",
-                    author = "Alice",
-                    subject = "件名",
-                    timestamp = "24/01/01(月)00:00:00",
-                    posterId = "ID:abc",
-                    messageHtml = "本文<br>二行目",
-                    imageUrl = null,
-                    thumbnailUrl = null
+        val targets = runBlocking {
+            buildThreadSearchTargets(
+                listOf(
+                    Post(
+                        id = "10",
+                        author = "Alice",
+                        subject = "件名",
+                        timestamp = "24/01/01(月)00:00:00",
+                        posterId = "ID:abc",
+                        messageHtml = "本文<br>二行目",
+                        imageUrl = null,
+                        thumbnailUrl = null
+                    )
                 )
             )
-        )
+        }
 
         assertEquals(1, targets.size)
         assertEquals("10", targets[0].postId)
@@ -611,15 +613,17 @@ class ThreadScreenLoadLogicTest {
 
     @Test
     fun buildThreadSearchMatches_returnsPostMatchesAndHighlightRanges() {
-        val targets = buildThreadSearchTargets(
-            listOf(
-                post(id = "1", messageHtml = "猫と犬"),
-                post(id = "2", messageHtml = "犬だけ"),
-                post(id = "3", messageHtml = "猫が二回 猫")
+        val targets = runBlocking {
+            buildThreadSearchTargets(
+                listOf(
+                    post(id = "1", messageHtml = "猫と犬"),
+                    post(id = "2", messageHtml = "犬だけ"),
+                    post(id = "3", messageHtml = "猫が二回 猫")
+                )
             )
-        )
+        }
 
-        val matches = buildThreadSearchMatches(targets, "猫")
+        val matches = runBlocking { buildThreadSearchMatches(targets, "猫") }
 
         assertEquals(listOf("1", "3"), matches.map { it.postId })
         assertEquals(listOf(0..0), matches[0].highlightRanges)
@@ -1311,7 +1315,7 @@ class ThreadScreenLoadLogicTest {
             )
         )
 
-        val entries = buildMediaPreviewEntries(posts)
+        val entries = runBlocking { buildMediaPreviewEntries(posts) }
 
         assertEquals(3, entries.size)
         assertEquals(MediaType.Image, determineMediaType("https://may.2chan.net/b/src/1.png"))

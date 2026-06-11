@@ -53,6 +53,7 @@ class SavedThreadRepository(
 
     companion object {
         private const val INDEX_LOCK_WAIT_TIMEOUT_MILLIS = 30_000L
+        private const val INDEX_LOCK_OPERATION_TIMEOUT_MILLIS = 30_000L
     }
 
     /**
@@ -354,7 +355,11 @@ class SavedThreadRepository(
                 )
             }
             try {
-                IndexLockResult(block())
+                withTimeoutOrNull(INDEX_LOCK_OPERATION_TIMEOUT_MILLIS) {
+                    IndexLockResult(block())
+                } ?: throw IllegalStateException(
+                    "Timed out while holding saved thread index lock after ${INDEX_LOCK_OPERATION_TIMEOUT_MILLIS}ms"
+                )
             } finally {
                 indexMutex.unlock()
             }

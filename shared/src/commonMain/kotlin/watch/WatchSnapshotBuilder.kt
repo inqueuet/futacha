@@ -4,6 +4,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.util.replaceHtmlBreakTags
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -14,8 +16,6 @@ private const val DEFAULT_MAX_WATCH_WORD_LENGTH = 40
 private const val DEFAULT_MAX_PREVIEW_POSTS = 5
 private const val DEFAULT_MAX_PREVIEW_TEXT_LENGTH = 140
 
-private val WATCH_HTML_BREAK_REGEX = Regex("(?i)<br\\s*/?>|</p>")
-private val WATCH_HTML_TAG_REGEX = Regex("<[^>]+>")
 private val WATCH_WHITESPACE_REGEX = Regex("\\s+")
 
 class WatchSnapshotBuilder(
@@ -131,8 +131,9 @@ internal fun List<Post>.toWatchPreviewPosts(
 
 internal fun String.toWatchPlainText(maxLength: Int): String {
     if (maxLength <= 0) return ""
-    val normalized = replace(WATCH_HTML_BREAK_REGEX, " ")
-        .replace(WATCH_HTML_TAG_REGEX, "")
+    val normalized = stripHtmlTagsLinear(
+        replaceHtmlBreakTags(this, lineBreakReplacement = " ", paragraphReplacement = " ")
+    )
         .decodeWatchHtmlEntities()
         .replace(WATCH_WHITESPACE_REGEX, " ")
         .trim()

@@ -6,9 +6,9 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -56,45 +56,17 @@ internal fun CatalogPreviewImage(
         model = imageRequest,
         imageLoader = imageLoader
     )
-    var shouldShowFallback by remember(activeUrl, candidateIndex, candidates.size) {
-        mutableStateOf(activeUrl.isNullOrBlank())
-    }
+    val imageState by imagePainter.state.collectAsState()
 
-    LaunchedEffect(imagePainter, activeUrl, candidateIndex, candidates.size) {
-        if (activeUrl.isNullOrBlank()) {
-            shouldShowFallback = true
-            return@LaunchedEffect
-        }
-        var hasStartedLoading = false
-        imagePainter.state.collect { state ->
-            when (state) {
-                is AsyncImagePainter.State.Error -> {
-                    if (candidateIndex < candidates.lastIndex) {
-                        candidateIndex += 1
-                    } else if (!shouldShowFallback) {
-                        shouldShowFallback = true
-                    }
-                }
-
-                is AsyncImagePainter.State.Loading -> {
-                    hasStartedLoading = true
-                }
-
-                is AsyncImagePainter.State.Success -> {
-                    hasStartedLoading = true
-                    if (shouldShowFallback) {
-                        shouldShowFallback = false
-                    }
-                }
-
-                is AsyncImagePainter.State.Empty -> {
-                    if (hasStartedLoading && candidateIndex >= candidates.lastIndex && !shouldShowFallback) {
-                        shouldShowFallback = true
-                    }
-                }
-            }
+    LaunchedEffect(imageState, activeUrl, candidateIndex, candidates.size) {
+        if (activeUrl.isNullOrBlank()) return@LaunchedEffect
+        if (imageState is AsyncImagePainter.State.Error && candidateIndex < candidates.lastIndex) {
+            candidateIndex += 1
         }
     }
+
+    val shouldShowFallback = activeUrl.isNullOrBlank() ||
+        (imageState is AsyncImagePainter.State.Error && candidateIndex >= candidates.lastIndex)
 
     if (shouldShowFallback) {
         Icon(

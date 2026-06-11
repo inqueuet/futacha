@@ -1,8 +1,12 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.Post
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
 
 private const val THREAD_SEARCH_MAX_HIGHLIGHT_RANGES_PER_POST = 64
+private const val THREAD_SEARCH_CANCELLATION_CHECK_INTERVAL = 32
 
 internal fun nextThreadSearchResultIndex(currentIndex: Int, matchCount: Int): Int {
     if (matchCount <= 0) return 0
@@ -88,35 +92,45 @@ internal data class ThreadSearchTarget(
     val messagePlainText: String
 )
 
-internal fun buildThreadSearchTargets(posts: List<Post>): List<ThreadSearchTarget> {
+internal suspend fun buildThreadSearchTargets(posts: List<Post>): List<ThreadSearchTarget> {
     if (posts.isEmpty()) return emptyList()
-    return posts.mapIndexed { index, post ->
+    val targets = ArrayList<ThreadSearchTarget>(posts.size)
+    posts.forEachIndexed { index, post ->
+        if (index % THREAD_SEARCH_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
         val messagePlainText = messageHtmlToPlainText(post.messageHtml)
-        ThreadSearchTarget(
+        targets += ThreadSearchTarget(
             postId = post.id,
             postIndex = index,
             searchableText = buildSearchTextForPost(post, messagePlainText),
             messagePlainText = messagePlainText
         )
     }
+    return targets
 }
 
-internal fun buildThreadSearchMatches(
+internal suspend fun buildThreadSearchMatches(
     searchTargets: List<ThreadSearchTarget>,
     query: String
 ): List<ThreadSearchMatch> {
     if (searchTargets.isEmpty()) return emptyList()
     val normalizedQuery = query.trim().lowercase()
     if (normalizedQuery.isEmpty()) return emptyList()
-    return searchTargets.mapNotNull { target ->
+    val matches = ArrayList<ThreadSearchMatch>()
+    searchTargets.forEachIndexed { index, target ->
+        if (index % THREAD_SEARCH_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
         val haystack = target.searchableText
         if (haystack.contains(normalizedQuery)) {
             val ranges = computeHighlightRanges(target.messagePlainText, normalizedQuery)
-            ThreadSearchMatch(target.postId, target.postIndex, ranges)
-        } else {
-            null
+            matches += ThreadSearchMatch(target.postId, target.postIndex, ranges)
         }
     }
+    return matches
 }
 
 internal fun buildSearchTextForPost(post: Post, messagePlainText: String): String {

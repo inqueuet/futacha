@@ -1,16 +1,14 @@
 package com.valoser.futacha.shared.ui.board
 
-private val BR_TAG_REGEX = Regex("(?i)<br\\s*/?>")
-private val P_TAG_REGEX = Regex("(?i)</p>")
-private val HTML_TAG_REGEX = Regex("<[^>]+>")
+import com.valoser.futacha.shared.util.replaceHtmlBreakTags
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
+
 private val HEX_ENTITY_REGEX = Regex("&#x([0-9a-fA-F]+);")
 private val NUM_ENTITY_REGEX = Regex("&#(\\d+);")
 
 internal fun messageHtmlToLines(html: String): List<String> {
-    val normalized = html
-        .replace(BR_TAG_REGEX, "\n")
-        .replace(P_TAG_REGEX, "\n\n")
-    val withoutTags = normalized.replace(HTML_TAG_REGEX, "")
+    val normalized = replaceHtmlBreakTags(html)
+    val withoutTags = stripHtmlTagsLinear(normalized)
     val decoded = decodeAllHtmlEntities(withoutTags)
     return decoded.lines()
 }

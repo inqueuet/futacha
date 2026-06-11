@@ -13,12 +13,18 @@ import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.shouldResolveCatalogThreadTitleFromHead
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CATALOG_HEAD_METADATA_TIMEOUT_MS = 3_000L
 private const val MAX_CATALOG_HEAD_METADATA_BATCH_SIZE = 24
+private const val MAX_CATALOG_HEAD_METADATA_CONCURRENCY = 4
 
 @Composable
 internal fun rememberCatalogHeadMetadataTitles(
@@ -90,7 +96,7 @@ internal fun rememberCatalogHeadMetadataTitles(
                 if (isScrolling) {
                     return@collectLatest
                 }
-                visibleIds
+                val pendingItems = visibleIds
                     .asSequence()
                     .mapNotNull(itemById::get)
                     .filter { item ->
@@ -100,18 +106,38 @@ internal fun rememberCatalogHeadMetadataTitles(
                             shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)
                     }
                     .take(MAX_CATALOG_HEAD_METADATA_BATCH_SIZE)
-                    .forEach { item ->
-                        val cacheKey = activeCacheKeysByItemId[item.id]
-                            ?: buildCatalogHeadMetadataCacheKey(boardUrl, item)
-                        val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
-                        val title = withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
-                            repository.resolveCatalogDisplayTitle(boardUrl, item)
+                    .toList()
+                if (pendingItems.isEmpty()) {
+                    return@collectLatest
+                }
+                val resolvedTitles = coroutineScope {
+                    val semaphore = Semaphore(MAX_CATALOG_HEAD_METADATA_CONCURRENCY)
+                    pendingItems.map { item ->
+                        async {
+                            semaphore.withPermit {
+                                val cacheKey = activeCacheKeysByItemId[item.id]
+                                    ?: buildCatalogHeadMetadataCacheKey(boardUrl, item)
+                                val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
+                                val title = withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
+                                    repository.resolveCatalogDisplayTitle(boardUrl, item)
+                                }
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: fallbackTitle
+                                CatalogHeadMetadataResult(
+                                    itemId = item.id,
+                                    cacheKey = cacheKey,
+                                    title = title
+                                )
+                            }
                         }
-                            ?.takeIf { it.isNotBlank() }
-                            ?: fallbackTitle
-                        resolvedTitlesByItemId[item.id] = title
-                        resolvedCacheKeysByItemId[item.id] = cacheKey
+                    }.awaitAll()
+                }
+                resolvedTitles.forEach { result ->
+                    if (activeCacheKeysByItemId[result.itemId] == result.cacheKey) {
+                        resolvedTitlesByItemId[result.itemId] = result.title
+                        resolvedCacheKeysByItemId[result.itemId] = result.cacheKey
                     }
+                }
             }
     }
 
@@ -126,6 +152,12 @@ internal data class CatalogHeadMetadataCacheKey(
     val boardUrl: String,
     val itemId: String,
     val replyCount: Int,
+    val title: String
+)
+
+private data class CatalogHeadMetadataResult(
+    val itemId: String,
+    val cacheKey: CatalogHeadMetadataCacheKey,
     val title: String
 )
 

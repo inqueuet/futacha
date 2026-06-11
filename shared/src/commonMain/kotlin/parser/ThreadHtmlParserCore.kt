@@ -4,6 +4,8 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.replaceHtmlBreakTags
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
@@ -132,7 +134,6 @@ internal object ThreadHtmlParserCore {
     private val noReferenceRegex = Regex("No\\.?\\s*(\\d+)", RegexOption.IGNORE_CASE)
     private val leadingNumberRegex = Regex("^(\\d+)")
     private val idReferenceRegex = Regex("ID:[^\\s>]+")
-    private val htmlTagRegex = Regex("<[^>]+>")
     private val videoExtensions = setOf("mp4", "webm", "mkv", "mov", "avi", "ts", "flv")
     private const val MIN_PARTIAL_MATCH_LENGTH = 6
     private val mediaFilenameRegex = Regex(
@@ -145,7 +146,6 @@ internal object ThreadHtmlParserCore {
     )
     // FIX: 正規表現の再コンパイル防止 - 関数内で毎回生成されていたパターンをトップレベルに移動
     private val deletedRegex = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE)
-    private val brTagRegex = Regex("(?i)<br\\s*/?>")
     private val whitespaceRegex = Regex("\\s+")
     private val deletedPostNoticeTexts = listOf(
         "スレッドを立てた人によって削除されました",
@@ -424,10 +424,10 @@ internal object ThreadHtmlParserCore {
         return normalizeLineBreaksIfNeeded(raw).trim()
     }
 
-    private fun stripTags(value: String): String = htmlTagRegex.replace(
-        value.replace(brTagRegex, "\n"),
-        ""
-    )
+    private fun stripTags(value: String): String {
+        val normalized = replaceHtmlBreakTags(value, lineBreakReplacement = "\n", paragraphReplacement = "\n")
+        return stripHtmlTagsLinear(normalized)
+    }
 
     private fun normalizeMessageText(messageHtml: String): String {
         if (messageHtml.isEmpty()) return ""

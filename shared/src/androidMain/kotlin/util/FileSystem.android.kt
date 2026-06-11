@@ -38,6 +38,10 @@ class AndroidFileSystem(
     companion object {
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val SAF_READ_IDLE_TIMEOUT_MILLIS = 15_000L
+        private const val SAF_TREE_NAVIGATION_MAX_DEPTH = 32
+        private const val SAF_TREE_DELETE_MAX_ITEMS = 10_000
+        private const val SAF_TREE_DELETE_MAX_DURATION_MILLIS = 30_000L
+        private const val SAF_WRITE_CHUNK_BYTES = 64 * 1024
     }
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
@@ -387,7 +391,7 @@ class AndroidFileSystem(
         }
     }
 
-    private fun resolveTreeParentDirectory(
+    private suspend fun resolveTreeParentDirectory(
         baseDir: DocumentFile,
         relativePath: String,
         createDirectories: Boolean
@@ -402,12 +406,13 @@ class AndroidFileSystem(
         return parentDir to fileName
     }
 
-    private fun findOrCreateTreeFile(
+    private suspend fun findOrCreateTreeFile(
         parentDir: DocumentFile,
         fileName: String
     ): DocumentFile {
-        return parentDir.findFile(fileName)?.takeIf { !it.isDirectory }
-            ?: parentDir.createFile("application/octet-stream", fileName)
+        val existing = runInterruptible { parentDir.findFile(fileName) }
+        return existing?.takeIf { file -> !runInterruptible { file.isDirectory } }
+            ?: runInterruptible { parentDir.createFile("application/octet-stream", fileName) }
             ?: throw IllegalStateException("Failed to create file: $fileName")
     }
 
@@ -502,8 +507,16 @@ class AndroidFileSystem(
                         context.contentResolver.openOutputStream(file.uri, "wt")
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
                     try {
+                        var offset = 0
+                        while (offset < bytes.size) {
+                            coroutineContext.ensureActive()
+                            val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
+                            runInterruptible {
+                                output.write(bytes, offset, length)
+                            }
+                            offset += length
+                        }
                         runInterruptible {
-                            output.write(bytes)
                             output.flush()
                         }
                     } finally {
@@ -545,8 +558,16 @@ class AndroidFileSystem(
                         context.contentResolver.openOutputStream(file.uri, "wa")
                     } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
                     try {
+                        var offset = 0
+                        while (offset < bytes.size) {
+                            coroutineContext.ensureActive()
+                            val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
+                            runInterruptible {
+                                output.write(bytes, offset, length)
+                            }
+                            offset += length
+                        }
                         runInterruptible {
-                            output.write(bytes)
                             output.flush()
                         }
                     } finally {
@@ -743,17 +764,21 @@ class AndroidFileSystem(
         com.valoser.futacha.shared.util.splitParentAndFileName(relativePath)
 
     // FIX: DocumentFileナビゲーションのエラーハンドリングを強化
-    private fun navigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile? {
+    private suspend fun navigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile? {
         if (relativePath.isEmpty()) return base
         val segments = relativePath.split('/').filter { it.isNotBlank() }
+        if (segments.size > SAF_TREE_NAVIGATION_MAX_DEPTH) {
+            throw IllegalStateException("Directory path is too deep: $relativePath")
+        }
         var current = base
         for ((index, segment) in segments.withIndex()) {
-            val next = current.findFile(segment)
+            coroutineContext.ensureActive()
+            val next = runInterruptible { current.findFile(segment) }
             if (next == null) {
                 Logger.d("AndroidFileSystem", "Directory not found at segment[$index]: $segment (path: $relativePath)")
                 return null
             }
-            if (!next.isDirectory) {
+            if (!runInterruptible { next.isDirectory }) {
                 Logger.w("AndroidFileSystem", "Path segment is not a directory at segment[$index]: $segment (path: $relativePath)")
                 return null
             }
@@ -763,16 +788,20 @@ class AndroidFileSystem(
     }
 
     // FIX: ディレクトリ作成時のエラーメッセージを詳細化
-    private fun createOrNavigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile {
+    private suspend fun createOrNavigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile {
         if (relativePath.isEmpty()) return base
         val segments = relativePath.split('/').filter { it.isNotBlank() }
+        if (segments.size > SAF_TREE_NAVIGATION_MAX_DEPTH) {
+            throw IllegalStateException("Directory path is too deep: $relativePath")
+        }
         var current = base
         for ((index, segment) in segments.withIndex()) {
-            val existing = current.findFile(segment)
-            current = if (existing != null && existing.isDirectory) {
+            coroutineContext.ensureActive()
+            val existing = runInterruptible { current.findFile(segment) }
+            current = if (existing != null && runInterruptible { existing.isDirectory }) {
                 existing
             } else if (existing == null) {
-                current.createDirectory(segment)
+                runInterruptible { current.createDirectory(segment) }
                     ?: throw IllegalStateException("Failed to create directory at segment[$index]: $segment (path: $relativePath, base: ${base.uri})")
             } else {
                 throw IllegalStateException("Path segment exists but is not a directory at segment[$index]: $segment (path: $relativePath)")
@@ -781,16 +810,32 @@ class AndroidFileSystem(
         return current
     }
 
-    private fun deleteDocumentRecursively(target: DocumentFile): Boolean {
-        if (target.isDirectory) {
-            val children = runCatching { target.listFiles() }.getOrElse { emptyArray() }
+    private suspend fun deleteDocumentRecursively(
+        target: DocumentFile,
+        deadlineMillis: Long = System.currentTimeMillis() + SAF_TREE_DELETE_MAX_DURATION_MILLIS,
+        counter: SafTreeDeleteCounter = SafTreeDeleteCounter()
+    ): Boolean {
+        coroutineContext.ensureActive()
+        if (System.currentTimeMillis() > deadlineMillis) {
+            throw IllegalStateException("Timed out while deleting SAF tree item: ${target.uri}")
+        }
+        counter.count += 1
+        if (counter.count > SAF_TREE_DELETE_MAX_ITEMS) {
+            throw IllegalStateException("Too many files while deleting SAF tree item: ${target.uri}")
+        }
+        if (runInterruptible { target.isDirectory }) {
+            val children = runCatching { runInterruptible { target.listFiles() } }.getOrElse { emptyArray() }
             children.forEach { child ->
-                if (!deleteDocumentRecursively(child)) {
+                if (!deleteDocumentRecursively(child, deadlineMillis, counter)) {
                     return false
                 }
             }
         }
-        return target.delete() || !target.exists()
+        return runInterruptible { target.delete() } || !runInterruptible { target.exists() }
+    }
+
+    private class SafTreeDeleteCounter {
+        var count: Int = 0
     }
 
     /**

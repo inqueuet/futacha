@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.parser
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -38,11 +39,11 @@ internal object CatalogHtmlParserCore {
     private const val MAX_CHUNK_SIZE = 100_000 // Process HTML in chunks to prevent ReDoS
 
     private val anchorRegex = Regex(
-        pattern = "<a[^>]+href=['\"]([^'\"]+)['\"][^>]*>",
+        pattern = "<a\\b[^>]{0,700}\\bhref=['\"]([^'\"]+)['\"][^>]{0,700}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val imageRegex = Regex(
-        pattern = "<img[^>]+src=['\"]([^'\"]+)['\"][^>]*>",
+        pattern = "<img\\b[^>]{0,700}\\bsrc=['\"]([^'\"]+)['\"][^>]{0,700}>",
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val widthAttrRegex = Regex(
@@ -54,7 +55,6 @@ internal object CatalogHtmlParserCore {
         options = setOf(RegexOption.IGNORE_CASE)
     )
     private val threadIdRegex = Regex("res/(\\d+)\\.htm")
-    private val htmlTagRegex = Regex("<[^>]+>")
     private val trailingSRegex = Regex("(?i)s(\\.[a-zA-Z0-9]+)$")
     private val supportedMediaExtensions = setOf(
         "jpg", "jpeg", "png", "gif", "webp", "bmp",
@@ -291,7 +291,7 @@ internal object CatalogHtmlParserCore {
     }
 
     private fun cleanText(raw: String): String {
-        val withoutTags = htmlTagRegex.replace(raw, "")
+        val withoutTags = stripHtmlTagsLinear(raw)
         return HtmlEntityDecoder.decode(withoutTags).trim()
     }
 }

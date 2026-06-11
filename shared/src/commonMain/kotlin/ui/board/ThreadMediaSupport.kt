@@ -1,6 +1,11 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.Post
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
+
+private const val THREAD_MEDIA_PREVIEW_CANCELLATION_CHECK_INTERVAL = 32
 
 internal enum class MediaType {
     Image,
@@ -98,10 +103,16 @@ internal fun buildThreadAttachmentActionTarget(
     )
 }
 
-internal fun buildMediaPreviewEntries(posts: List<Post>): List<MediaPreviewEntry> {
-    return posts.mapNotNull { post ->
-        buildMediaPreviewEntry(post)
+internal suspend fun buildMediaPreviewEntries(posts: List<Post>): List<MediaPreviewEntry> {
+    val entries = ArrayList<MediaPreviewEntry>()
+    posts.forEachIndexed { index, post ->
+        if (index % THREAD_MEDIA_PREVIEW_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
+        buildMediaPreviewEntry(post)?.let(entries::add)
     }
+    return entries
 }
 
 private fun extractPreviewTitle(post: Post): String {

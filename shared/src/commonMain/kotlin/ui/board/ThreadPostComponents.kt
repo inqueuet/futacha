@@ -18,7 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -137,41 +137,8 @@ internal fun ThreadPostCard(
                 model = thumbnailRequest,
                 imageLoader = imageLoader
             )
-            var shouldShowThumbnailFallback by remember(thumbnailPainter) {
-                mutableStateOf(false)
-            }
-            LaunchedEffect(thumbnailPainter) {
-                var hasStartedLoading = false
-                thumbnailPainter.state.collect { state ->
-                    when (state) {
-                        is AsyncImagePainter.State.Error -> {
-                            if (!shouldShowThumbnailFallback) {
-                                shouldShowThumbnailFallback = true
-                            }
-                        }
-
-                        is AsyncImagePainter.State.Loading -> {
-                            hasStartedLoading = true
-                            if (shouldShowThumbnailFallback) {
-                                shouldShowThumbnailFallback = false
-                            }
-                        }
-
-                        is AsyncImagePainter.State.Success -> {
-                            hasStartedLoading = true
-                            if (shouldShowThumbnailFallback) {
-                                shouldShowThumbnailFallback = false
-                            }
-                        }
-
-                        is AsyncImagePainter.State.Empty -> {
-                            if (hasStartedLoading && !shouldShowThumbnailFallback) {
-                                shouldShowThumbnailFallback = true
-                            }
-                        }
-                    }
-                }
-            }
+            val thumbnailPainterState by thumbnailPainter.state.collectAsState()
+            val shouldShowThumbnailFallback = thumbnailPainterState is AsyncImagePainter.State.Error
             Box(
                 modifier = run {
                     val baseModifier = Modifier

@@ -81,14 +81,7 @@ internal fun rememberCatalogVisibleItemsState(
         query = request.query
     )
     return produceState<List<CatalogItem>>(
-        initialValue = previousResult.visibleItems ?: buildVisibleCatalogItems(
-            items = request.items,
-            mode = request.mode,
-            watchWords = request.watchWords,
-            catalogNgWords = request.catalogNgWords,
-            catalogNgFilteringEnabled = request.catalogNgFilteringEnabled,
-            query = request.query
-        ),
+        initialValue = previousResult.visibleItems.orEmpty(),
         key1 = itemsKey,
         key2 = filterKey
     ) {
