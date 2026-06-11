@@ -6,4 +6,4 @@ import kotlinx.coroutines.newFixedThreadPoolContext
 
 @OptIn(DelicateCoroutinesApi::class)
 actual val platformIoDispatcher: CoroutineDispatcher =
-    newFixedThreadPoolContext(4, "FutachaIo")
+    newFixedThreadPoolContext(8, "FutachaIo")

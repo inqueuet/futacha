@@ -3,7 +3,6 @@ package com.valoser.futacha
 import android.content.Context
 import android.content.Intent
 import com.google.android.gms.tasks.Task
-import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
@@ -47,12 +46,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.resume
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
 
@@ -512,10 +513,15 @@ class WatchSyncManager(
     }
 
     private suspend fun <T> Task<T>.awaitOrNull(timeoutMillis: Long): T? {
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                Tasks.await(this@awaitOrNull, timeoutMillis, TimeUnit.MILLISECONDS)
-            }.getOrNull()
+        return withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+            suspendCancellableCoroutine { continuation ->
+                addOnCompleteListener { task ->
+                    if (!continuation.isActive) return@addOnCompleteListener
+                    continuation.resume(
+                        if (task.isSuccessful) task.result else null
+                    )
+                }
+            }
         }
     }
 

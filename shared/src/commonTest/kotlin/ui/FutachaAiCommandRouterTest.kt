@@ -23,6 +23,13 @@ import kotlin.test.assertTrue
 
 class FutachaAiCommandRouterTest {
     @Test
+    fun bridgeCommandLaunchPolicyOnlyRunsHistoryRefreshAsynchronously() {
+        assertTrue(shouldLaunchAiCommandFromBridge(FutachaAiCommand(FutachaAiAction.RefreshHistory)))
+        assertFalse(shouldLaunchAiCommandFromBridge(FutachaAiCommand(FutachaAiAction.OpenBoardList)))
+        assertFalse(shouldLaunchAiCommandFromBridge(FutachaAiCommand(FutachaAiAction.OpenThread)))
+    }
+
+    @Test
     fun disabledAiCommandsRejectAppOperationsButAllowSettings() {
         runBlocking {
             val harness = RouterHarness(isAiCommandEnabled = false)

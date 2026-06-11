@@ -364,7 +364,13 @@ fun FutachaApp(
 
                 LaunchedEffect(Unit) {
                     FutachaAiCommandBridge.commands.collect { command ->
-                        currentHandleAiCommand(command)
+                        if (shouldLaunchAiCommandFromBridge(command)) {
+                            launch {
+                                currentHandleAiCommand(command)
+                            }
+                        } else {
+                            currentHandleAiCommand(command)
+                        }
                     }
                 }
 
@@ -586,6 +592,10 @@ internal fun shouldRequestAiFileManagerPicker(
 ): Boolean {
     return command.action == FutachaAiAction.OpenFileManagerSettings &&
         shouldOpenAiGlobalSettings(command, outcome)
+}
+
+internal fun shouldLaunchAiCommandFromBridge(command: FutachaAiCommand): Boolean {
+    return command.action == FutachaAiAction.RefreshHistory
 }
 
 private fun buildAiCommandUnexpectedFailureMessage(error: Throwable): String {

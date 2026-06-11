@@ -32,6 +32,10 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.withContext
 
+internal fun buildThreadPostLazyListKey(index: Int, post: Post): String {
+    return "thread-post-$index-${post.id}"
+}
+
 @Composable
 internal fun ThreadContent(
     page: ThreadPage,
@@ -146,7 +150,7 @@ internal fun ThreadContent(
                 }
                 itemsIndexed(
                     items = page.posts,
-                    key = { _, post -> post.id }
+                    key = ::buildThreadPostLazyListKey
                 ) { index, post ->
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
                     val isAiHidden = post.id in aiHiddenPostIds && post.id !in revealedAiHiddenPostIds

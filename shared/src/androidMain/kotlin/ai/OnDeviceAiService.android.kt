@@ -92,7 +92,7 @@ private const val KEY_AVAILABILITY_TOTAL = "availability_total"
 private const val AI_IPC_SUMMARY_MAX_POSTS = 80
 private const val AI_IPC_MODERATION_MAX_POSTS_PER_REQUEST = 256
 private const val AI_IPC_MAX_MESSAGE_CHARS = 500
-private const val AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS = 120_000
+private const val AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS = 32_000
 private const val AI_IPC_SUMMARY_MAX_MESSAGE_CHARS = 10_000
 private const val AI_IPC_SUMMARY_MAX_TOTAL_MESSAGE_CHARS = 10_000
 
@@ -480,8 +480,8 @@ private class AndroidAiRemoteServiceSession {
         data: Bundle,
         timeoutMillis: Long,
         onProgress: ((Bundle) -> Unit)?
-    ): Bundle? = requestMutex.withLock {
-        withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+    ): Bundle? = withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+        requestMutex.withLock {
             suspendCancellableCoroutine { continuation ->
             val appContext = context.applicationContext
             val requestId = data.getInt(KEY_REQUEST_ID)
@@ -580,7 +580,7 @@ private class AndroidAiRemoteServiceSession {
                 }
             }
         }
-        }
+    }
     }
 
     private fun bind(appContext: Context, onReady: (Messenger?) -> Unit) {

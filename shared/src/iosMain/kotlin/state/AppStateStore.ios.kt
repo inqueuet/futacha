@@ -74,7 +74,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val lightweightModeState = MutableStateFlow(false)
     private val threadSummaryModeState = MutableStateFlow(false)
     private val aiPostFilterState = MutableStateFlow(false)
-    private val aiCommandState = MutableStateFlow(readBooleanState(AI_COMMAND_KEY))
+    private val aiCommandState = MutableStateFlow(false)
     private val appLockPasswordHashState = MutableStateFlow<String?>(null)
     private val manualSaveDirectoryState = MutableStateFlow(
         DEFAULT_MANUAL_SAVE_ROOT

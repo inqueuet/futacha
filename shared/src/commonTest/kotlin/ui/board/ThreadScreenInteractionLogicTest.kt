@@ -45,6 +45,21 @@ import kotlin.test.assertTrue
 
 class ThreadScreenInteractionLogicTest {
     @Test
+    fun threadContentLazyListKeys_stayUniqueForDuplicatePostIds() {
+        val posts = listOf(
+            Post(id = "100", author = null, subject = null, timestamp = "now", messageHtml = "first", imageUrl = null, thumbnailUrl = null),
+            Post(id = "100", author = null, subject = null, timestamp = "now", messageHtml = "duplicate", imageUrl = null, thumbnailUrl = null),
+            Post(id = "101", author = null, subject = null, timestamp = "now", messageHtml = "next", imageUrl = null, thumbnailUrl = null)
+        )
+
+        val keys = posts.mapIndexed(::buildThreadPostLazyListKey)
+
+        assertEquals(keys.distinct(), keys)
+        assertEquals("thread-post-0-100", keys.first())
+        assertEquals("thread-post-1-100", keys[1])
+    }
+
+    @Test
     fun threadScreenBindingSupport_wrapsHistoryGalleryAndQuotePreviewCallbacks() {
         var dismissedEntry: ThreadHistoryEntry? = null
         var selectedEntry: ThreadHistoryEntry? = null

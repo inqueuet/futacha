@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.valoser.futacha.shared.ui.image
 
 import coil3.ImageLoader
@@ -12,10 +14,15 @@ import coil3.size.pxOrElse
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCSignatureOverride
+import kotlinx.cinterop.ObjCObjectVar
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okio.Buffer
+import com.valoser.futacha.shared.util.AppDispatchers
 import platform.AVFoundation.AVAssetImageGenerator
 import platform.AVFoundation.AVAssetImageGeneratorSucceeded
 import platform.AVFoundation.AVURLAsset
@@ -23,11 +30,7 @@ import platform.AVFoundation.valueWithCMTime
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
 import platform.CoreMedia.CMTimeMakeWithSeconds
-import platform.Foundation.NSData
-import platform.Foundation.NSError
-import platform.Foundation.NSURL
-import platform.Foundation.NSValue
-import platform.Foundation.pathExtension
+import platform.Foundation.*
 import platform.UIKit.UIImage
 import platform.UIKit.UIImagePNGRepresentation
 import platform.WebKit.WKNavigation
@@ -48,6 +51,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalForeignApi::class)
@@ -174,14 +178,23 @@ private suspend fun createCachedWebKitThumbnail(
     val (targetWidth, targetHeight) = resolveWebKitThumbnailSize(options)
     val cacheKey = buildWebKitThumbnailCacheKey(url, targetWidth, targetHeight)
     readCachedWebKitThumbnail(cacheKey)?.let { return it }
+    readDiskCachedWebKitThumbnail(cacheKey)?.let { data ->
+        rememberWebKitThumbnail(cacheKey, data)
+        return data
+    }
     return webKitThumbnailSemaphore.withPermit {
         readCachedWebKitThumbnail(cacheKey)?.let { return@withPermit it }
+        readDiskCachedWebKitThumbnail(cacheKey)?.let { data ->
+            rememberWebKitThumbnail(cacheKey, data)
+            return@withPermit data
+        }
         createWebKitThumbnail(
             url = url,
             targetWidth = targetWidth,
             targetHeight = targetHeight
         ).also { data ->
             rememberWebKitThumbnail(cacheKey, data)
+            writeDiskCachedWebKitThumbnail(cacheKey, data)
         }
     }
 }
@@ -211,6 +224,52 @@ private fun buildWebKitThumbnailCacheKey(
     height: Double
 ): String {
     return "${url.absoluteString.orEmpty()}#${width.toInt()}x${height.toInt()}"
+}
+
+private suspend fun readDiskCachedWebKitThumbnail(cacheKey: String): NSData? {
+    return withContext(AppDispatchers.io) {
+        val path = buildWebKitThumbnailDiskCachePath(cacheKey) ?: return@withContext null
+        NSData.dataWithContentsOfFile(path)
+    }
+}
+
+private suspend fun writeDiskCachedWebKitThumbnail(cacheKey: String, data: NSData) {
+    withContext(AppDispatchers.io) {
+        val directory = webKitThumbnailDiskCacheDirectory() ?: return@withContext
+        val path = buildWebKitThumbnailDiskCachePath(cacheKey) ?: return@withContext
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            NSFileManager.defaultManager.createDirectoryAtPath(
+                path = directory,
+                withIntermediateDirectories = true,
+                attributes = null,
+                error = error.ptr
+            )
+            data.writeToFile(path, options = NSDataWritingAtomic, error = error.ptr)
+        }
+    }
+}
+
+private fun buildWebKitThumbnailDiskCachePath(cacheKey: String): String? {
+    val directory = webKitThumbnailDiskCacheDirectory() ?: return null
+    return "$directory/${buildStableWebKitThumbnailDiskCacheFileName(cacheKey)}"
+}
+
+private fun webKitThumbnailDiskCacheDirectory(): String? {
+    val imageCacheDirectory = getPlatformDiskCacheDirectory(platformContext = null)
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: return null
+    return "$imageCacheDirectory/$WEBKIT_THUMBNAIL_DISK_CACHE_DIR"
+}
+
+private fun buildStableWebKitThumbnailDiskCacheFileName(cacheKey: String): String {
+    var hash = FNV_1A_64_OFFSET_BASIS
+    cacheKey.forEach { ch ->
+        hash = hash xor ch.code.toLong()
+        hash *= FNV_1A_64_PRIME
+    }
+    return "${hash.toULong().toString(radix = 16).padStart(16, '0')}.png"
 }
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
@@ -259,10 +318,13 @@ private const val DEFAULT_WEBKIT_THUMBNAIL_HEIGHT = 90.0
 private const val MAX_WEBKIT_THUMBNAIL_WIDTH = 240.0
 private const val MAX_WEBKIT_THUMBNAIL_HEIGHT = 180.0
 private const val WEBKIT_THUMBNAIL_CACHE_MAX_ENTRIES = 32
+private const val WEBKIT_THUMBNAIL_DISK_CACHE_DIR = "webm_thumbnails"
 private const val WEBKIT_READY_POLL_LIMIT = 25
 private const val WEBKIT_READY_POLL_DELAY_MILLIS = 100L
 private const val WEBKIT_THUMBNAIL_TIMEOUT_MILLIS = 10_000L
 private const val AV_THUMBNAIL_TIMEOUT_MILLIS = 20_000L
+private const val FNV_1A_64_OFFSET_BASIS = -3750763034362895579L
+private const val FNV_1A_64_PRIME = 1099511628211L
 
 @OptIn(ExperimentalForeignApi::class)
 private class WebKitThumbnailWebViewPool {

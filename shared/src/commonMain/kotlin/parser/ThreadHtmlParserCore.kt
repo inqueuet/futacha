@@ -302,7 +302,8 @@ internal object ThreadHtmlParserCore {
         return extension.lowercase() in videoExtensions
     }
 
-    // FIX: ReDoS対策 - タイムアウト付きregex検索に変更
+    // ReDoS対策の本線は各Regexの長さ制限と入力サイズ上限。
+    // Regex.find自体はCPUバウンドで、coroutine timeoutでは実行中のマッチングを中断できない。
     private suspend fun extractBetween(
         text: String,
         startRegex: Regex,
@@ -310,7 +311,7 @@ internal object ThreadHtmlParserCore {
         timeoutMillis: Long = 500L
     ): String? {
         return try {
-            // FIX: 複雑なパターンマッチングに500msタイムアウトを設定（低速端末対応）
+            // 呼び出し元のキャンセルを拾うための外枠。正規表現の安全性は bounded pattern で担保する。
             kotlinx.coroutines.withTimeoutOrNull(timeoutMillis) {
                 val start = startRegex.find(text) ?: return@withTimeoutOrNull null
                 val end = endRegex.find(text, start.range.last) ?: return@withTimeoutOrNull null
@@ -327,7 +328,7 @@ internal object ThreadHtmlParserCore {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Logger.w("ThreadHtmlParserCore", "extractBetween timeout or error: ${e.message}")
+            Logger.w("ThreadHtmlParserCore", "extractBetween failed: ${e.message}")
             null
         }
     }

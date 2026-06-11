@@ -40,6 +40,7 @@ import kotlinx.serialization.json.Json
 import androidx.compose.ui.unit.Density
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -217,6 +218,31 @@ class ThreadScreenLoadLogicTest {
             result
         )
         assertTrue(failure is TimeoutCancellationException)
+    }
+
+    @Test
+    fun runThreadReadAloudSession_rethrowsParentTimeoutCancellation() {
+        runBlocking {
+            val segments = listOf(
+                ReadAloudSegment(postIndex = 1, postId = "10", body = "long")
+            )
+
+            assertFailsWith<TimeoutCancellationException> {
+                withTimeout(1L) {
+                    runThreadReadAloudSession(
+                        startIndex = 0,
+                        segments = segments,
+                        isRunnerActive = { true },
+                        wasCancelledByUser = { true },
+                        callbacks = ThreadReadAloudRunnerCallbacks(
+                            speakSegment = {
+                                delay(10_000L)
+                            }
+                        )
+                    )
+                }
+            }
+        }
     }
 
     @Test
