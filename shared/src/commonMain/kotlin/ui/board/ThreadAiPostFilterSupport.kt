@@ -4,14 +4,32 @@ import com.valoser.futacha.shared.ai.PostModerationResult
 import com.valoser.futacha.shared.model.Post
 
 private const val AI_HIDDEN_REASON_MAX_CHARS = 80
-private const val AI_HIDDEN_MAX_POSTS = 8
-private const val AI_HIDDEN_MAX_PERCENT = 20
 private val AI_HIDDEN_REASON_WHITESPACE_REGEX = Regex("\\s+")
 
 internal data class AiHiddenPostState(
     val postIds: Set<String> = emptySet(),
     val reasons: Map<String, String> = emptyMap()
 )
+
+internal data class AiPostModerationUiState(
+    val isEnabled: Boolean = false,
+    val isRunning: Boolean = false,
+    val processedPosts: Int = 0,
+    val totalPosts: Int = 0,
+    val failedBatchCount: Int = 0,
+    val results: List<PostModerationResult> = emptyList()
+) {
+    val hiddenCandidateCount: Int
+        get() = results.count { it.shouldHide }
+
+    val progress: Float?
+        get() {
+            if (totalPosts <= 0) return null
+            return processedPosts.toFloat()
+                .div(totalPosts.toFloat())
+                .coerceIn(0f, 1f)
+        }
+}
 
 internal fun resolveAiHiddenPostState(
     posts: List<Post>,
@@ -52,11 +70,7 @@ internal fun resolveAiHiddenPostState(
 }
 
 internal fun resolveAiHiddenPostLimit(postCount: Int): Int {
-    if (postCount <= 1) return 0
-    val percentageLimit = (postCount * AI_HIDDEN_MAX_PERCENT) / 100
-    return percentageLimit
-        .coerceAtLeast(1)
-        .coerceAtMost(AI_HIDDEN_MAX_POSTS)
+    return (postCount - 1).coerceAtLeast(0)
 }
 
 private fun String.normalizeAiHiddenReason(): String {

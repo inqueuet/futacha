@@ -127,7 +127,7 @@ internal fun CatalogScreenOverlayHost(
         val isCreateThreadSubmitEnabled = canSubmitCreateThread(
             bindings.createThreadDraft.title,
             bindings.createThreadDraft.comment
-        )
+        ) && !bindings.isCreateThreadSubmitting
         val createThreadDialogCallbacks = buildCatalogCreateThreadDialogCallbacks(
             currentDraft = { bindings.createThreadDraft },
             setDraft = bindings.setCreateThreadDraft,

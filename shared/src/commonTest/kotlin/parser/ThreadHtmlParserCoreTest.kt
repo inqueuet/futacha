@@ -89,6 +89,31 @@ class ThreadHtmlParserCoreTest {
     }
 
     @Test
+    fun parseThread_marksThreadOwnerDeletedNoticePostsAsDeleted() {
+        val html = """
+            <html>
+            <head><link rel="canonical" href="https://www.example.com/res/600.htm"></head>
+            <body>
+            <div class="thre" data-res="600">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.600</span>
+            <blockquote>OP body</blockquote>
+            </div>
+            <table border=0>
+            <tr><td class=rtd>
+            <span class="cnw">25/01/01(月)00:01:00 ID:DEL</span><span class="cno">No.601</span>
+            <blockquote>スレッドを立てた人によって削除されました</blockquote>
+            </td></tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { ThreadHtmlParserCore.parseThread(html) }
+
+        assertTrue(page.posts[1].isDeleted)
+    }
+
+    @Test
     fun extractOpImageUrl_returnsFirstSrcLinkFromSnippet() {
         val snippet = sampleThreadHtml
             .lineSequence()

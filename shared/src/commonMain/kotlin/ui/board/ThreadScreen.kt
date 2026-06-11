@@ -610,6 +610,7 @@ private fun ThreadScreenContent(
         httpClient = httpClient,
         fileSystem = fileSystem,
         autoSaveEffectState = autoSaveEffectState,
+        lastAutoSaveTimestampMillis = lastAutoSaveTimestamp.value,
         onStartAutoSave = autoSaveBindings.startAutoSave
     )
 

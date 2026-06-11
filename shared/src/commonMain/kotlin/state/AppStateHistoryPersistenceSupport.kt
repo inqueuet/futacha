@@ -115,9 +115,8 @@ internal suspend fun persistAppStateHistory(
         while (true) {
             passCount += 1
             if (passCount > maxPasses) {
-                throw IllegalStateException(
-                    "History persistence exceeded $maxPasses passes; aborting to prevent lock starvation"
-                )
+                writeHistoryJson(targetHistory)
+                break
             }
             writeHistoryJson(targetHistory)
             val continuation = readLatestHistoryContinuation(targetRevision) ?: break

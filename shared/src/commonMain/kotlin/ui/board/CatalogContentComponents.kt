@@ -71,18 +71,28 @@ internal fun CatalogSuccessContent(
             modifier = modifier
         )
     } else {
+        val resolvedHeadTitles = rememberCatalogHeadMetadataTitles(
+            items = items,
+            embeddedHtml = embeddedHtml,
+            boardUrl = board?.url,
+            repository = repository,
+            displayStyle = displayStyle,
+            gridState = gridState,
+            listState = listState,
+            resolveHeadMetadata = resolveHeadMetadata
+        )
         when (displayStyle) {
             CatalogDisplayStyle.Grid -> CatalogGrid(
                 items = items,
                 embeddedHtml = embeddedHtml,
                 board = board,
-                repository = repository,
                 watchWords = watchWords,
                 onThreadSelected = onThreadSelected,
                 onRefresh = onRefresh,
                 isRefreshing = isRefreshing,
                 gridColumns = gridColumns,
                 gridState = gridState,
+                resolvedHeadTitles = resolvedHeadTitles,
                 resolveHeadMetadata = resolveHeadMetadata,
                 modifier = modifier
             )
@@ -91,12 +101,12 @@ internal fun CatalogSuccessContent(
                 items = items,
                 embeddedHtml = embeddedHtml,
                 board = board,
-                repository = repository,
                 watchWords = watchWords,
                 onThreadSelected = onThreadSelected,
                 onRefresh = onRefresh,
                 isRefreshing = isRefreshing,
                 listState = listState,
+                resolvedHeadTitles = resolvedHeadTitles,
                 resolveHeadMetadata = resolveHeadMetadata,
                 modifier = modifier
             )

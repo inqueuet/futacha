@@ -273,6 +273,7 @@ class CatalogScreenSupportTest {
         )
         var image: ImageData? = ImageData(byteArrayOf(1, 2, 3), "sample.jpg")
         var showDialog = true
+        var isSubmitting = false
         var savedDeleteKey = ""
         var snackbarMessage: String? = null
         var refreshCount = 0
@@ -283,6 +284,8 @@ class CatalogScreenSupportTest {
             currentBoard = { board },
             currentDraft = { draft },
             currentImage = { image },
+            currentIsSubmitting = { isSubmitting },
+            setIsSubmitting = { isSubmitting = it },
             setCreateThreadDraft = { draft = it },
             setCreateThreadImage = { image = it },
             setShowCreateThreadDialog = { showDialog = it },
@@ -298,6 +301,7 @@ class CatalogScreenSupportTest {
         assertEquals("delete-key", savedDeleteKey)
         assertEquals(emptyCreateThreadDraft(), draft)
         assertEquals(null, image)
+        assertFalse(isSubmitting)
         assertEquals("スレッドを作成しました (ID: 1234567890)", snackbarMessage)
         assertEquals(1, refreshCount)
     }
@@ -321,6 +325,8 @@ class CatalogScreenSupportTest {
                 )
             },
             currentImage = { null },
+            currentIsSubmitting = { false },
+            setIsSubmitting = {},
             setCreateThreadDraft = {},
             setCreateThreadImage = {},
             setShowCreateThreadDialog = { showDialog = it },
@@ -416,6 +422,8 @@ class CatalogScreenSupportTest {
             activeRepository = FakeBoardRepository(),
             currentCreateThreadDraft = { emptyCreateThreadDraft() },
             currentCreateThreadImage = { null },
+            currentIsCreateThreadSubmitting = { false },
+            setIsCreateThreadSubmitting = {},
             setCreateThreadDraft = {},
             setCreateThreadImage = {},
             setShowCreateThreadDialog = {},
@@ -538,6 +546,7 @@ class CatalogScreenSupportTest {
             setCreateThreadDraft = setDraft,
             createThreadImage = null,
             setCreateThreadImage = setImage,
+            isCreateThreadSubmitting = false,
             setCreateThreadDialogVisible = setDialogVisible,
             board = board,
             archiveSearchQuery = "foo",

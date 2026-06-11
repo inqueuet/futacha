@@ -19,7 +19,6 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.model.matchesWatchWords
-import com.valoser.futacha.shared.repo.BoardRepository
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -27,13 +26,13 @@ internal fun CatalogGrid(
     items: List<CatalogItem>,
     embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
-    repository: BoardRepository,
     watchWords: List<String>,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     gridColumns: Int,
     gridState: LazyGridState,
+    resolvedHeadTitles: Map<String, String>,
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -79,7 +78,9 @@ internal fun CatalogGrid(
             CatalogCard(
                 item = catalogItem,
                 boardUrl = board?.url,
-                repository = repository,
+                resolvedDisplayTitle = resolvedHeadTitles[
+                    buildCatalogHeadMetadataCacheKey(board?.url, catalogItem)
+                ],
                 resolveHeadMetadata = resolveHeadMetadata,
                 isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
                 onClick = { onThreadSelected(catalogItem) }
@@ -106,12 +107,12 @@ internal fun CatalogList(
     items: List<CatalogItem>,
     embeddedHtml: List<EmbeddedHtmlContent>,
     board: BoardSummary?,
-    repository: BoardRepository,
     watchWords: List<String>,
     onThreadSelected: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
     listState: LazyListState,
+    resolvedHeadTitles: Map<String, String>,
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -151,7 +152,9 @@ internal fun CatalogList(
             CatalogListItem(
                 item = catalogItem,
                 boardUrl = board?.url,
-                repository = repository,
+                resolvedDisplayTitle = resolvedHeadTitles[
+                    buildCatalogHeadMetadataCacheKey(board?.url, catalogItem)
+                ],
                 resolveHeadMetadata = resolveHeadMetadata,
                 isWatchWordMatch = catalogItem.matchesWatchWords(watchWords),
                 onClick = { onThreadSelected(catalogItem) }

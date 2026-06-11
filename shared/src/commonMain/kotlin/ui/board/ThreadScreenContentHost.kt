@@ -23,7 +23,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.lazy.LazyListState
 
 private const val THREAD_AI_SUMMARY_UI_TIMEOUT_MS = 20_000L
-private const val THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS = 12_000L
+private const val THREAD_AI_POST_MODERATION_BATCH_TIMEOUT_MS = 25_000L
+private const val THREAD_AI_POST_MODERATION_BATCH_SIZE = 1
+private const val THREAD_AI_POST_MODERATION_BATCH_DELAY_MS = 120L
+private const val THREAD_AI_POST_MODERATION_START_DELAY_MS = 1_500L
 private const val THREAD_AI_SUMMARY_START_DELAY_MS = 120L
 
 internal data class ThreadScreenContentHostBindings(
@@ -194,8 +197,8 @@ internal fun ThreadScreenContentHost(
             val platformContext = LocalPlatformContext.current
             val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
             val aiInferenceMutex = remember { Mutex() }
-            val threadSummaryCache = remember { linkedMapOf<ThreadAiCacheKey, ThreadSummaryUiState.Ready>() }
-            val threadPostModerationCache = remember { linkedMapOf<ThreadAiCacheKey, List<PostModerationResult>>() }
+            val threadSummaryCache = remember { linkedMapOf<ThreadSummaryCacheKey, ThreadSummaryUiState.Ready>() }
+            val threadPostModerationCache = remember { linkedMapOf<ThreadPostModerationCacheKey, PostModerationResult>() }
             val aiSourcePosts = remember(state.page) { resolveThreadAiSourcePosts(state.page) }
             val aiCacheKey = remember(
                 state.page.threadId,
@@ -208,16 +211,25 @@ internal fun ThreadScreenContentHost(
                     providerLabel = bindings.preferencesState.aiAvailability.providerLabel
                 )
             }
+            val threadSummaryCacheKey = remember(
+                state.page.threadId,
+                bindings.preferencesState.aiAvailability.providerLabel
+            ) {
+                buildThreadSummaryCacheKey(
+                    threadId = state.page.threadId,
+                    providerLabel = bindings.preferencesState.aiAvailability.providerLabel
+                )
+            }
             val summaryState by produceState<ThreadSummaryUiState?>(
                 initialValue = resolveInitialThreadSummaryUiState(shouldShowThreadSummary),
                 key1 = shouldShowThreadSummary,
-                key2 = aiCacheKey
+                key2 = threadSummaryCacheKey
             ) {
                 if (!shouldShowThreadSummary) {
                     value = null
                     return@produceState
                 }
-                threadSummaryCache[aiCacheKey]?.let {
+                threadSummaryCache[threadSummaryCacheKey]?.let {
                     value = it
                     return@produceState
                 }
@@ -229,14 +241,21 @@ internal fun ThreadScreenContentHost(
                     posts = aiSourcePosts
                 )
                 val summaryResult = withTimeoutOrNull(THREAD_AI_SUMMARY_UI_TIMEOUT_MS) {
-                    aiInferenceMutex.withLock {
-                        aiService.summarizeThread(summaryInput)
+                    withContext(AppDispatchers.io) {
+                        aiInferenceMutex.withLock {
+                            aiService.summarizeThread(summaryInput)
+                        }
                     }
                 }
                 value = summaryResult?.fold(
                     onSuccess = {
                         ThreadSummaryUiState.Ready(it).also { readyState ->
-                            putThreadAiCacheEntry(threadSummaryCache, aiCacheKey, readyState)
+                            putBoundedAiCacheEntry(
+                                cache = threadSummaryCache,
+                                key = threadSummaryCacheKey,
+                                value = readyState,
+                                maxEntries = THREAD_AI_CACHE_MAX_ENTRIES
+                            )
                         }
                     },
                     onFailure = {
@@ -246,8 +265,8 @@ internal fun ThreadScreenContentHost(
                     }
                 ) ?: ThreadSummaryUiState.Unavailable("スレ要約がタイムアウトしました。")
             }
-            val aiPostModerationResults by produceState<List<PostModerationResult>>(
-                initialValue = emptyList(),
+            val aiPostModerationUiState by produceState(
+                initialValue = AiPostModerationUiState(isEnabled = shouldApplyAiPostFilter),
                 key1 = shouldApplyAiPostFilter,
                 key2 = aiCacheKey,
                 key3 = summaryState
@@ -259,44 +278,125 @@ internal fun ThreadScreenContentHost(
                         summaryState = summaryState
                     )
                 ) {
-                    value = emptyList()
-                    return@produceState
-                }
-                threadPostModerationCache[aiCacheKey]?.let {
-                    value = it
+                    value = AiPostModerationUiState(isEnabled = shouldApplyAiPostFilter)
                     return@produceState
                 }
                 val input = PostModerationInput(
                     threadId = state.page.threadId,
                     posts = aiSourcePosts
                 )
-                val moderationResult = withTimeoutOrNull(THREAD_AI_POST_MODERATION_UI_TIMEOUT_MS) {
-                    aiInferenceMutex.withLock {
-                        aiService.classifyPosts(input)
+                val cachedResults = linkedMapOf<String, PostModerationResult>()
+                val uncachedPosts = mutableListOf<Post>()
+                input.posts.forEach { post ->
+                    val postCacheKey = buildThreadPostModerationCacheKey(
+                        threadId = input.threadId,
+                        post = post,
+                        providerLabel = bindings.preferencesState.aiAvailability.providerLabel
+                    )
+                    val cachedResult = threadPostModerationCache[postCacheKey]
+                    if (cachedResult != null) {
+                        cachedResults[post.id] = cachedResult
+                    } else {
+                        uncachedPosts += post
                     }
                 }
-                val moderation = moderationResult?.getOrDefault(emptyList()).orEmpty()
-                value = moderation
-                if (moderationResult != null) {
-                    putThreadAiCacheEntry(threadPostModerationCache, aiCacheKey, moderation)
+                if (uncachedPosts.isEmpty()) {
+                    value = AiPostModerationUiState(
+                        isEnabled = true,
+                        isRunning = false,
+                        processedPosts = input.posts.size,
+                        totalPosts = input.posts.size,
+                        results = cachedResults.values.toList()
+                    )
+                    return@produceState
                 }
-            }
-            val aiHiddenPostState = remember(
-                filteredPage.posts,
-                aiPostModerationResults,
-                bindings.selfPostIdentifierSet
-            ) {
-                resolveAiHiddenPostState(
-                    posts = filteredPage.posts,
-                    moderationResults = aiPostModerationResults,
-                    selfPostIdentifiers = bindings.selfPostIdentifierSet
+                val postBatches = withContext(AppDispatchers.parsing) {
+                    uncachedPosts.chunked(THREAD_AI_POST_MODERATION_BATCH_SIZE)
+                }
+                val mergedModeration = linkedMapOf<String, PostModerationResult>().apply {
+                    putAll(cachedResults)
+                }
+                var processedPosts = cachedResults.size
+                var failedBatchCount = 0
+                value = AiPostModerationUiState(
+                    isEnabled = true,
+                    isRunning = postBatches.isNotEmpty(),
+                    processedPosts = processedPosts,
+                    totalPosts = input.posts.size
                 )
+                delay(THREAD_AI_POST_MODERATION_START_DELAY_MS)
+                postBatches.forEachIndexed { index, posts ->
+                    val batchInput = input.copy(posts = posts)
+                    val moderationResult = withTimeoutOrNull(THREAD_AI_POST_MODERATION_BATCH_TIMEOUT_MS) {
+                        withContext(AppDispatchers.io) {
+                            aiInferenceMutex.withLock {
+                                aiService.classifyPosts(batchInput)
+                            }
+                        }
+                    }
+                    val moderation = moderationResult?.getOrNull()
+                    processedPosts += posts.size
+                    if (moderationResult == null || moderation == null) {
+                        failedBatchCount += 1
+                    } else {
+                        moderation.forEach { result ->
+                            mergedModeration[result.postId] = result
+                            posts.firstOrNull { it.id == result.postId }?.let { post ->
+                                putBoundedAiCacheEntry(
+                                    cache = threadPostModerationCache,
+                                    key = buildThreadPostModerationCacheKey(
+                                        threadId = input.threadId,
+                                        post = post,
+                                        providerLabel = bindings.preferencesState.aiAvailability.providerLabel
+                                    ),
+                                    value = result,
+                                    maxEntries = THREAD_AI_POST_MODERATION_CACHE_MAX_ENTRIES
+                                )
+                            }
+                        }
+                    }
+                    value = AiPostModerationUiState(
+                        isEnabled = true,
+                        isRunning = index != postBatches.lastIndex,
+                        processedPosts = processedPosts,
+                        totalPosts = input.posts.size,
+                        failedBatchCount = failedBatchCount,
+                        results = mergedModeration.values.toList()
+                    )
+                    if (index != postBatches.lastIndex) {
+                        delay(THREAD_AI_POST_MODERATION_BATCH_DELAY_MS)
+                    }
+                }
+                val moderation = mergedModeration.values.toList()
+                value = AiPostModerationUiState(
+                    isEnabled = true,
+                    isRunning = false,
+                    processedPosts = input.posts.size,
+                    totalPosts = input.posts.size,
+                    failedBatchCount = failedBatchCount,
+                    results = moderation
+                )
+            }
+            val aiHiddenPostState by produceState(
+                initialValue = AiHiddenPostState(),
+                key1 = filteredPage.posts,
+                key2 = aiPostModerationUiState.results,
+                key3 = bindings.selfPostIdentifierSet
+            ) {
+                value = withContext(AppDispatchers.parsing) {
+                    resolveAiHiddenPostState(
+                        posts = filteredPage.posts,
+                        moderationResults = aiPostModerationUiState.results,
+                        selfPostIdentifiers = bindings.selfPostIdentifierSet
+                    )
+                }
             }
             when (bindings.threadDisplayMode) {
                 ThreadDisplayMode.Flat -> ThreadContent(
                     page = filteredPage,
                     embeddedHtml = state.embeddedHtml,
                     summaryState = summaryState,
+                    aiPostModerationUiState = aiPostModerationUiState,
                     aiHiddenPostIds = aiHiddenPostState.postIds,
                     aiHiddenPostReasons = aiHiddenPostState.reasons,
                     listState = bindings.lazyListState,
@@ -318,6 +418,7 @@ internal fun ThreadScreenContentHost(
                     page = filteredPage,
                     embeddedHtml = state.embeddedHtml,
                     summaryState = summaryState,
+                    aiPostModerationUiState = aiPostModerationUiState,
                     aiHiddenPostIds = aiHiddenPostState.postIds,
                     aiHiddenPostReasons = aiHiddenPostState.reasons,
                     listState = bindings.lazyListState,

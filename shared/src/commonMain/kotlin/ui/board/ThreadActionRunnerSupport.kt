@@ -107,8 +107,8 @@ internal fun <T> CoroutineScope.launchManagedThreadAction(
             nextLastBusyNoticeAtMillis = launchState.nextLastBusyNoticeAtMillis
         )
     }
+    callbacks.onActionInProgressChanged(true)
     val launchedJob = launch {
-        callbacks.onActionInProgressChanged(true)
         try {
             callbacks.onDebugLog(
                 buildThreadActionStartLogMessage(

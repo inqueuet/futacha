@@ -40,6 +40,17 @@ class ThreadAiCacheSupportTest {
     }
 
     @Test
+    fun putBoundedAiCacheEntryKeepsConfiguredLimit() {
+        val cache = linkedMapOf<Int, String>()
+
+        putBoundedAiCacheEntry(cache, 1, "one", maxEntries = 2)
+        putBoundedAiCacheEntry(cache, 2, "two", maxEntries = 2)
+        putBoundedAiCacheEntry(cache, 3, "three", maxEntries = 2)
+
+        assertEquals(mapOf(2 to "two", 3 to "three"), cache)
+    }
+
+    @Test
     fun shouldComputeFullFingerprintWhenAiFeaturesNeedFreshContent() {
         assertFalse(
             shouldComputeFullThreadPostFingerprint(
@@ -76,6 +87,35 @@ class ThreadAiCacheSupportTest {
         )
 
         assertEquals(posts, resolveThreadAiSourcePosts(page))
+    }
+
+    @Test
+    fun buildThreadPostModerationCacheKeyChangesOnlyForPostContentOrProvider() {
+        val original = post("1")
+        val same = post("1")
+        val changed = original.copy(messageHtml = "changed")
+
+        assertEquals(
+            buildThreadPostModerationCacheKey("100", original, "AI"),
+            buildThreadPostModerationCacheKey("100", same, "AI")
+        )
+        assertFalse(
+            buildThreadPostModerationCacheKey("100", original, "AI") ==
+                buildThreadPostModerationCacheKey("100", changed, "AI")
+        )
+        assertFalse(
+            buildThreadPostModerationCacheKey("100", original, "AI") ==
+                buildThreadPostModerationCacheKey("100", original, "Other")
+        )
+    }
+
+    @Test
+    fun buildThreadSummaryCacheKeyIgnoresPostFingerprintForThreadLevelReuse() {
+        assertEquals(
+            buildThreadSummaryCacheKey("100", "AI"),
+            buildThreadSummaryCacheKey("100", "AI")
+        )
+        assertFalse(buildThreadSummaryCacheKey("100", "AI") == buildThreadSummaryCacheKey("101", "AI"))
     }
 
     private fun cacheKey(index: Int): ThreadAiCacheKey {

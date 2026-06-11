@@ -127,7 +127,7 @@ internal fun rememberEdgeSwipeRefreshVisualState(
     val overscrollOffset by animateFloatAsState(
         targetValue = overscrollTarget,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = Spring.StiffnessMedium
         ),
         label = animationLabel

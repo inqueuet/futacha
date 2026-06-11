@@ -52,7 +52,7 @@ private const val AICORE_PACKAGE = "com.google.android.aicore"
 private const val AI_STATUS_TIMEOUT_MILLIS = 10_000L
 private const val AI_SUMMARY_INFERENCE_TIMEOUT_MILLIS = 35_000L
 private const val AI_POST_MODERATION_TIMEOUT_MILLIS = 20_000L
-private const val AI_REMOTE_REQUEST_TIMEOUT_MILLIS = 45_000L
+private const val AI_REMOTE_REQUEST_TIMEOUT_MILLIS = 180_000L
 private const val AI_REMOTE_AVAILABILITY_TIMEOUT_MILLIS = 90_000L
 private const val AI_REMOTE_DOWNLOAD_TIMEOUT_MILLIS = 15 * 60 * 1_000L
 
@@ -87,8 +87,9 @@ private const val KEY_AVAILABILITY_DOWNLOADED = "availability_downloaded"
 private const val KEY_AVAILABILITY_TOTAL = "availability_total"
 
 private const val AI_IPC_SUMMARY_MAX_POSTS = 80
-private const val AI_IPC_MODERATION_MAX_POSTS = 24
+private const val AI_IPC_MODERATION_MAX_POSTS_PER_REQUEST = 256
 private const val AI_IPC_MAX_MESSAGE_CHARS = 500
+private const val AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS = 120_000
 private const val AI_IPC_SUMMARY_MAX_MESSAGE_CHARS = 10_000
 private const val AI_IPC_SUMMARY_MAX_TOTAL_MESSAGE_CHARS = 10_000
 
@@ -185,14 +186,14 @@ private class AndroidOnDeviceAiService(
         return Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
     }
 
-    override suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>> {
+    override suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>> = withContext(AppDispatchers.io) {
         val appContext = context?.applicationContext
         if (appContext != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             requestRemotePostModeration(appContext, input)?.let {
-                return it
+                return@withContext it
             }
         }
-        return Result.success(emptyList())
+        Result.success(emptyList())
     }
 }
 
@@ -359,10 +360,38 @@ private suspend fun requestRemotePostModeration(
     context: Context,
     input: PostModerationInput
 ): Result<List<PostModerationResult>>? {
+    val postChunks = chunkModerationIpcPosts(input.posts)
+    if (postChunks.isEmpty()) {
+        return Result.success(emptyList())
+    }
+    val mergedResults = linkedMapOf<String, PostModerationResult>()
+    for (posts in postChunks) {
+        val chunkResult = requestRemotePostModerationChunk(
+            context = context,
+            threadId = input.threadId,
+            posts = posts
+        ) ?: return null
+        chunkResult.getOrElse { return Result.failure(it) }
+            .forEach { result ->
+                mergedResults[result.postId] = result
+            }
+    }
+    return Result.success(mergedResults.values.toList())
+}
+
+private suspend fun requestRemotePostModerationChunk(
+    context: Context,
+    threadId: String,
+    posts: List<Post>
+): Result<List<PostModerationResult>>? {
     val bundle = Bundle().apply {
         putInt(KEY_REQUEST_ID, aiRequestIds.getAndIncrement())
-        putString(KEY_THREAD_ID, input.threadId)
-        putPosts(input.posts.take(AI_IPC_MODERATION_MAX_POSTS))
+        putString(KEY_THREAD_ID, threadId)
+        putPosts(
+            posts = posts,
+            maxMessageChars = AI_IPC_MAX_MESSAGE_CHARS,
+            maxTotalMessageChars = AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS
+        )
     }
     val response = requestRemoteAi(
         context = context,
@@ -389,6 +418,30 @@ private suspend fun requestRemotePostModeration(
             )
         }
     )
+}
+
+private fun chunkModerationIpcPosts(posts: List<Post>): List<List<Post>> {
+    if (posts.isEmpty()) return emptyList()
+    val chunks = mutableListOf<List<Post>>()
+    val current = mutableListOf<Post>()
+    var currentChars = 0
+    posts.forEach { post ->
+        val messageChars = minOf(post.messageHtml.length, AI_IPC_MAX_MESSAGE_CHARS)
+        val exceedsPostLimit = current.size >= AI_IPC_MODERATION_MAX_POSTS_PER_REQUEST
+        val exceedsCharLimit = current.isNotEmpty() &&
+            currentChars + messageChars > AI_IPC_MODERATION_MAX_TOTAL_MESSAGE_CHARS
+        if (exceedsPostLimit || exceedsCharLimit) {
+            chunks += current.toList()
+            current.clear()
+            currentChars = 0
+        }
+        current += post
+        currentChars += messageChars
+    }
+    if (current.isNotEmpty()) {
+        chunks += current.toList()
+    }
+    return chunks
 }
 
 private suspend fun requestRemoteAi(
@@ -798,8 +851,8 @@ private suspend fun performLocalPostModeration(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || input.posts.isEmpty()) {
             return Result.success(emptyList())
         }
-        val sourceText = buildPostModerationSourceText(input)
-        if (sourceText.isBlank()) {
+        val sourceChunks = buildPostModerationSourceChunks(input)
+        if (sourceChunks.isEmpty()) {
             return Result.success(emptyList())
         }
         return withContext(AppDispatchers.io) {
@@ -815,11 +868,16 @@ private suspend fun performLocalPostModeration(
                 if (status != FeatureStatus.AVAILABLE) {
                     return@withContext Result.success(emptyList())
                 }
-                val response = withTimeoutOrNull(AI_POST_MODERATION_TIMEOUT_MILLIS) {
-                    promptModel.generateContent(buildPostModerationPrompt(sourceText))
-                } ?: return@withContext Result.success(emptyList())
-                val responseText = response.candidates.firstOrNull()?.text.orEmpty()
-                val detected = parsePostModerationResponse(responseText)
+                val detected = linkedMapOf<String, PostModerationResult>()
+                sourceChunks.forEach { sourceText ->
+                    val response = withTimeoutOrNull(AI_POST_MODERATION_TIMEOUT_MILLIS) {
+                        promptModel.generateContent(buildPostModerationPrompt(sourceText))
+                    } ?: return@forEach
+                    val responseText = response.candidates.firstOrNull()?.text.orEmpty()
+                    parsePostModerationResponse(responseText).forEach { (postId, result) ->
+                        detected[postId] = result
+                    }
+                }
                 Result.success(detected.values.toList())
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
@@ -1018,9 +1076,9 @@ private fun buildSummarizerOptions(context: Context): SummarizerOptions {
 private fun buildPostModerationPrompt(posts: String): String {
     return """
         You are a local moderation assistant for a Japanese imageboard thread.
-        Hide only posts that are clearly disruptive spam, harassment, repeated flooding, threats, aggressive attacks or abusive content targeting a person or group, or unrelated vandalism.
-        Do not hide ordinary disagreement, jokes, criticism, short replies, quoted text, or rough tone alone.
-        Do not hide the opening post. Prefer hiding no posts when uncertain. Return at most 8 hidden posts.
+        Hide posts that are disruptive to reading the thread: repeated flooding, copy-paste spam, harassment, threats, abusive personal attacks, slurs, unrelated vandalism, or bait that repeatedly derails discussion.
+        Do not hide ordinary disagreement, normal jokes, useful criticism, quoted text, or rough tone alone.
+        When a post is more likely disruptive than useful, hide it. Return every matching hidden post in this batch.
         Return one line per hidden post only.
         Format exactly: postId<TAB>HIDE<TAB>short Japanese reason
         Posts:

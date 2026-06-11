@@ -147,6 +147,11 @@ internal object ThreadHtmlParserCore {
     private val deletedRegex = Regex("class\\s*=\\s*\"?deleted\"?", RegexOption.IGNORE_CASE)
     private val brTagRegex = Regex("(?i)<br\\s*/?>")
     private val whitespaceRegex = Regex("\\s+")
+    private val deletedPostNoticeTexts = listOf(
+        "スレッドを立てた人によって削除されました",
+        "書き込みをした人によって削除されました",
+        "管理者によって削除されました"
+    )
     
     // FIX: よく使われるクラス名のRegexをキャッシュして再生成を防止
     // FIX: ReDoS対策 - [^>]*に長さ制限を追加（最大200文字）
@@ -369,7 +374,8 @@ internal object ThreadHtmlParserCore {
             ?.let(::stripTags)
             ?.trim()
             ?.ifBlank { null }
-        val isDeleted = deletedRegex.containsMatchIn(block)
+        val isDeleted = deletedRegex.containsMatchIn(block) ||
+            containsDeletedPostNotice(normalizedMessageText)
 
         return Post(
             id = postId,
@@ -406,6 +412,11 @@ internal object ThreadHtmlParserCore {
         val raw = block.substring(contentStartIndex, endIndex)
         val cleaned = decodeHtmlEntities(stripTags(raw)).trim()
         return cleaned.ifBlank { null }
+    }
+
+    private fun containsDeletedPostNotice(text: String): Boolean {
+        if (text.isBlank()) return false
+        return deletedPostNoticeTexts.any { notice -> text.contains(notice) }
     }
 
     private fun cleanMessageHtml(raw: String): String {

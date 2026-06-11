@@ -24,8 +24,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,17 +33,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.CatalogItem
-import com.valoser.futacha.shared.repo.BoardRepository
-import com.valoser.futacha.shared.util.shouldResolveCatalogThreadTitleFromHead
-import kotlinx.coroutines.withTimeoutOrNull
-
-private const val CATALOG_HEAD_METADATA_TIMEOUT_MS = 3_000L
 
 @Composable
 internal fun CatalogCard(
     item: CatalogItem,
     boardUrl: String?,
-    repository: BoardRepository,
+    resolvedDisplayTitle: String?,
     resolveHeadMetadata: Boolean,
     isWatchWordMatch: Boolean,
     onClick: () -> Unit,
@@ -54,10 +47,10 @@ internal fun CatalogCard(
     val density = LocalDensity.current
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
     val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
-    val displayTitle = rememberCatalogDisplayTitle(
+    val displayTitle = resolveCatalogDisplayTitle(
         item = item,
         boardUrl = boardUrl,
-        repository = repository,
+        resolvedDisplayTitle = resolvedDisplayTitle,
         resolveHeadMetadata = resolveHeadMetadata
     )
 
@@ -128,7 +121,7 @@ internal fun CatalogCard(
 internal fun CatalogListItem(
     item: CatalogItem,
     boardUrl: String?,
-    repository: BoardRepository,
+    resolvedDisplayTitle: String?,
     resolveHeadMetadata: Boolean,
     isWatchWordMatch: Boolean,
     onClick: () -> Unit,
@@ -137,10 +130,10 @@ internal fun CatalogListItem(
     val density = LocalDensity.current
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
     val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
-    val displayTitle = rememberCatalogDisplayTitle(
+    val displayTitle = resolveCatalogDisplayTitle(
         item = item,
         boardUrl = boardUrl,
-        repository = repository,
+        resolvedDisplayTitle = resolvedDisplayTitle,
         resolveHeadMetadata = resolveHeadMetadata
     )
 
@@ -209,37 +202,18 @@ internal fun CatalogListItem(
     }
 }
 
-@Composable
-private fun rememberCatalogDisplayTitle(
+private fun resolveCatalogDisplayTitle(
     item: CatalogItem,
     boardUrl: String?,
-    repository: BoardRepository,
+    resolvedDisplayTitle: String?,
     resolveHeadMetadata: Boolean
 ): String {
-    val fallbackTitle = item.title?.takeIf { it.isNotBlank() } ?: "無題"
-    val resolvedTitle by produceState(
-        fallbackTitle,
-        boardUrl,
-        item.id,
-        item.title,
-        item.replyCount,
-        repository,
-        resolveHeadMetadata
-    ) {
-        if (!resolveHeadMetadata ||
-            boardUrl.isNullOrBlank() ||
-            !shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)
-        ) {
-            value = fallbackTitle
-            return@produceState
-        }
-        value = withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
-            repository.resolveCatalogDisplayTitle(boardUrl, item)
-        }
-            ?.takeIf { it.isNotBlank() }
-            ?: fallbackTitle
+    val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
+    return if (resolveHeadMetadata && !boardUrl.isNullOrBlank()) {
+        resolvedDisplayTitle ?: fallbackTitle
+    } else {
+        fallbackTitle
     }
-    return resolvedTitle
 }
 
 @Composable

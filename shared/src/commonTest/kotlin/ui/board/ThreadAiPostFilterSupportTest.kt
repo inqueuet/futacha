@@ -63,7 +63,7 @@ class ThreadAiPostFilterSupportTest {
     }
 
     @Test
-    fun resolveAiHiddenPostStateLimitsHiddenPostCount() {
+    fun resolveAiHiddenPostStateKeepsAllAiHiddenPostsExceptOp() {
         val posts = (1..50).map { post(it.toString()) }
         val results = (2..50).map { index ->
             PostModerationResult(
@@ -78,16 +78,16 @@ class ThreadAiPostFilterSupportTest {
             moderationResults = results
         )
 
-        assertEquals(8, state.postIds.size)
-        assertEquals((2..9).map { it.toString() }.toSet(), state.postIds)
+        assertEquals(49, state.postIds.size)
+        assertEquals((2..50).map { it.toString() }.toSet(), state.postIds)
     }
 
     @Test
-    fun resolveAiHiddenPostLimitUsesPercentageAndAbsoluteCaps() {
+    fun resolveAiHiddenPostLimitAllowsEveryNonOpPost() {
         assertEquals(0, resolveAiHiddenPostLimit(1))
         assertEquals(1, resolveAiHiddenPostLimit(2))
-        assertEquals(4, resolveAiHiddenPostLimit(20))
-        assertEquals(8, resolveAiHiddenPostLimit(100))
+        assertEquals(19, resolveAiHiddenPostLimit(20))
+        assertEquals(99, resolveAiHiddenPostLimit(100))
     }
 
     @Test

@@ -37,6 +37,7 @@ internal fun ThreadContent(
     page: ThreadPage,
     embeddedHtml: List<EmbeddedHtmlContent>,
     summaryState: ThreadSummaryUiState?,
+    aiPostModerationUiState: AiPostModerationUiState = AiPostModerationUiState(),
     aiHiddenPostIds: Set<String> = emptySet(),
     aiHiddenPostReasons: Map<String, String> = emptyMap(),
     listState: LazyListState,
@@ -97,7 +98,7 @@ internal fun ThreadContent(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 contentPadding = PaddingValues(
-                    top = 8.dp,
+                    top = if (summaryState != null) 0.dp else 8.dp,
                     bottom = 24.dp
                 )
             ) {
@@ -105,6 +106,15 @@ internal fun ThreadContent(
                     item(key = "thread-summary") {
                         ThreadSummaryCard(
                             state = state,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                if (aiPostModerationUiState.isEnabled) {
+                    item(key = "thread-ai-post-moderation-progress") {
+                        AiPostModerationProgressCard(
+                            state = aiPostModerationUiState,
+                            hiddenPostCount = aiHiddenPostIds.size,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -181,6 +191,11 @@ internal fun ThreadContent(
                             onMediaClick = postCardCallbacks.onMediaClick,
                             onMediaLongPress = postCardCallbacks.onMediaLongPress,
                             onLongPress = postCardCallbacks.onLongPress,
+                            onAiHideAgain = if (post.id in aiHiddenPostIds) {
+                                { revealedAiHiddenPostIds.remove(post.id) }
+                            } else {
+                                null
+                            },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

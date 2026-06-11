@@ -201,6 +201,7 @@ private fun CatalogScreenContent(
     var overlayState by searchOverlayStateRefs.overlayState
     var createThreadDraft by draftDisplayStateRefs.createThreadDraft
     var createThreadImage by draftDisplayStateRefs.createThreadImage
+    var isCreateThreadSubmitting by remember(board?.id) { mutableStateOf(false) }
     var archiveSearchQuery by searchOverlayStateRefs.archiveSearchQuery
     var catalogNgFilteringEnabled by searchOverlayStateRefs.catalogNgFilteringEnabled
     val catalogNgWords = persistentBindings.catalogNgWords
@@ -308,6 +309,8 @@ private fun CatalogScreenContent(
             activeRepository = activeRepository,
             currentCreateThreadDraft = { createThreadDraft },
             currentCreateThreadImage = { createThreadImage },
+            currentIsCreateThreadSubmitting = { isCreateThreadSubmitting },
+            setIsCreateThreadSubmitting = { isCreateThreadSubmitting = it },
             setCreateThreadDraft = { createThreadDraft = it },
             setCreateThreadImage = { createThreadImage = it },
             setShowCreateThreadDialog = { isVisible ->
@@ -538,6 +541,7 @@ private fun CatalogScreenContent(
             setCreateThreadDraft = { createThreadDraft = it },
             createThreadImage = createThreadImage,
             setCreateThreadImage = { createThreadImage = it },
+            isCreateThreadSubmitting = isCreateThreadSubmitting,
             setCreateThreadDialogVisible = { isVisible ->
                 overlayState = setCatalogCreateThreadDialogVisible(overlayState, isVisible)
             },

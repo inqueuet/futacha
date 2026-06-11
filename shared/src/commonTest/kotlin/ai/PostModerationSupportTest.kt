@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
 
 class PostModerationSupportTest {
     @Test
-    fun buildPostModerationSourceTextStripsHtmlAndLimitsPosts() {
-        val posts = (1..45).map { index ->
+    fun buildPostModerationSourceTextStripsHtmlAndKeepsAllPosts() {
+        val posts = (1..100).map { index ->
             post(
                 id = index.toString(),
                 messageHtml = "<b>本文$index</b><br>  test   value"
@@ -21,11 +21,33 @@ class PostModerationSupportTest {
         )
         val lines = source.lines()
 
-        assertEquals(24, lines.size)
+        assertEquals(100, lines.size)
         assertEquals("1\t本文1 test value", lines.first())
-        assertEquals("24\t本文24 test value", lines.last())
+        assertEquals("100\t本文100 test value", lines.last())
+        assertTrue(source.contains("2\t本文2 test value"))
+        assertTrue(source.contains("22\t本文22 test value"))
         assertFalse(source.contains("<b>"))
         assertFalse(source.contains("<br>"))
+    }
+
+    @Test
+    fun buildPostModerationSourceChunksSplitsWithoutDroppingPosts() {
+        val sourceChunks = buildPostModerationSourceChunks(
+            input = PostModerationInput(
+                threadId = "100",
+                posts = (1..10).map { index ->
+                    post(
+                        id = index.toString(),
+                        messageHtml = "本文$index ".repeat(12)
+                    )
+                }
+            ),
+            maxChunkChars = 80
+        )
+        val combinedLines = sourceChunks.flatMap { it.lines() }
+
+        assertTrue(sourceChunks.size > 1)
+        assertEquals((1..10).map { it.toString() }, combinedLines.map { it.substringBefore('\t') })
     }
 
     @Test

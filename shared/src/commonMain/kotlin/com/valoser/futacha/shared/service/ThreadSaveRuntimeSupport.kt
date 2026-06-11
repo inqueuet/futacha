@@ -120,9 +120,22 @@ internal fun resolveThreadSaveFileName(
         .substringBefore('#')
         .substringBefore('?')
         .substringAfterLast('/')
+        .sanitizeThreadSaveFileNameCandidate()
         .takeIf { it.isNotBlank() }
-    return candidate ?: "${postId}_${timestampMillis}.$extension"
+    val fileName = candidate ?: "${postId}_${timestampMillis}.$extension"
+    val hasExtension = fileName.substringAfterLast('.', "").isNotBlank()
+    return if (hasExtension) fileName else "$fileName.$extension"
 }
+
+private fun String.sanitizeThreadSaveFileNameCandidate(): String {
+    return replace(THREAD_SAVE_INVALID_FILENAME_SEGMENT_REGEX, "_")
+        .trim('.', '_', '-')
+        .take(THREAD_SAVE_MAX_FILENAME_LENGTH)
+}
+
+private const val THREAD_SAVE_MAX_FILENAME_LENGTH = 96
+
+private val THREAD_SAVE_INVALID_FILENAME_SEGMENT_REGEX = Regex("""[^A-Za-z0-9._-]""")
 
 internal fun enforceThreadSaveBudget(
     totalSizeBytes: Long,

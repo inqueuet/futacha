@@ -151,6 +151,8 @@ internal fun buildCatalogCreateThreadBindings(
     stateStore: AppStateStore?,
     currentDraft: () -> CreateThreadDraft,
     currentImage: () -> ImageData?,
+    currentIsSubmitting: () -> Boolean,
+    setIsSubmitting: (Boolean) -> Unit,
     setCreateThreadDraft: (CreateThreadDraft) -> Unit,
     setCreateThreadImage: (ImageData?) -> Unit,
     setShowCreateThreadDialog: (Boolean) -> Unit,
@@ -168,6 +170,12 @@ internal fun buildCatalogCreateThreadBindings(
     return CatalogCreateThreadBindings(
         resetCreateThreadDraft = resetDraft,
         submitCreateThread = submit@{
+            if (currentIsSubmitting()) {
+                coroutineScope.launch {
+                    showSnackbar("スレ立て処理中です…")
+                }
+                return@submit
+            }
             val board = currentBoard()
             if (board == null) {
                 setShowCreateThreadDialog(false)
@@ -182,6 +190,7 @@ internal fun buildCatalogCreateThreadBindings(
                 updateLastUsedDeleteKey(trimmedPassword)
             }
             val imageData = currentImage()
+            setIsSubmitting(true)
             coroutineScope.launch {
                 try {
                     val needsPostingNotice = stateStore?.hasShownPostingNotice?.first() == false
@@ -211,6 +220,8 @@ internal fun buildCatalogCreateThreadBindings(
                     throw e
                 } catch (e: Exception) {
                     showCreateThreadFailure(e)
+                } finally {
+                    setIsSubmitting(false)
                 }
             }
         }

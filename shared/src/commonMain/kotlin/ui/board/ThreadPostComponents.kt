@@ -16,10 +16,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,6 +64,7 @@ internal fun ThreadPostCard(
     onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
     onSaidaneClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
+    onAiHideAgain: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
@@ -69,6 +73,7 @@ internal fun ThreadPostCard(
         else -> MaterialTheme.colorScheme.surface
     }
     val saidaneLabel = saidaneLabelOverride ?: post.saidaneLabel
+    var showDeletedBody by remember(post.id, post.messageHtml, post.isDeleted) { mutableStateOf(false) }
     val cardModifier = if (onLongPress != null) {
         modifier.pointerInput(onLongPress) {
             detectTapGestures(onLongPress = { onLongPress() })
@@ -99,7 +104,11 @@ internal fun ThreadPostCard(
             onMediaClick = onMediaClick,
             onMediaLongPress = onMediaLongPress
         )
-        val thumbnailForDisplay = resolvePostDisplayMediaUrl(post)
+        onAiHideAgain?.let { hideAgain ->
+            AiHiddenPostRestoreAction(onClick = hideAgain)
+        }
+        val shouldCollapseDeletedBody = post.isDeleted && !showDeletedBody
+        val thumbnailForDisplay = if (shouldCollapseDeletedBody) null else resolvePostDisplayMediaUrl(post)
         thumbnailForDisplay?.let { displayUrl ->
             val imageLoader = LocalFutachaImageLoader.current
             val thumbnailRequest = remember(platformContext, displayUrl) {
@@ -158,14 +167,60 @@ internal fun ThreadPostCard(
                 }
             }
         }
-        ThreadMessageText(
-            messageHtml = post.messageHtml,
-            isDeleted = post.isDeleted,
-            quoteReferences = post.quoteReferences,
-            onQuoteClick = onQuoteClick,
-            onUrlClick = onUrlClick,
-            highlightRanges = highlightRanges
+        if (shouldCollapseDeletedBody) {
+            DeletedPostBodyPlaceholder(
+                hasBody = post.messageHtml.isNotBlank(),
+                onReveal = { showDeletedBody = true }
+            )
+        } else {
+            ThreadMessageText(
+                messageHtml = post.messageHtml,
+                isDeleted = post.isDeleted,
+                quoteReferences = post.quoteReferences,
+                onQuoteClick = onQuoteClick,
+                onUrlClick = onUrlClick,
+                highlightRanges = highlightRanges
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiHiddenPostRestoreAction(
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = onClick) {
+            Text("AI非表示に戻す")
+        }
+    }
+}
+
+@Composable
+private fun DeletedPostBodyPlaceholder(
+    hasBody: Boolean,
+    onReveal: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "削除されたレスです",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
         )
+        if (hasBody) {
+            TextButton(onClick = onReveal) {
+                Text("本文を表示")
+            }
+        }
     }
 }
 

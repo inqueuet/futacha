@@ -3,7 +3,6 @@ package com.valoser.futacha.shared.ui.board
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
@@ -155,7 +154,6 @@ internal suspend fun collectThreadScrollPositionPersistence(
         }
 }
 
-@Composable
 internal fun rememberThreadAutoSaveEffectState(
     currentPageForAutoSave: ThreadPage?,
     threadId: String,
@@ -166,29 +164,41 @@ internal fun rememberThreadAutoSaveEffectState(
     autoSaveJob: Job?,
     lastAutoSaveTimestampMillis: Long
 ): ThreadAutoSaveEffectState {
-    return remember(
-        currentPageForAutoSave,
-        threadId,
-        isShowingOfflineCopy,
-        autoSaveRepository,
-        httpClient,
-        fileSystem,
-        autoSaveJob,
-        lastAutoSaveTimestampMillis
-    ) {
-        resolveThreadAutoSaveEffectState(
-            page = currentPageForAutoSave,
-            expectedThreadId = threadId,
-            isShowingOfflineCopy = isShowingOfflineCopy,
-            hasAutoSaveRepository = autoSaveRepository != null,
-            hasHttpClient = httpClient != null,
-            hasFileSystem = fileSystem != null,
-            isAutoSaveInProgress = autoSaveJob?.isActive == true,
-            lastAutoSaveTimestampMillis = lastAutoSaveTimestampMillis,
-            nowMillis = Clock.System.now().toEpochMilliseconds(),
-            minIntervalMillis = AUTO_SAVE_INTERVAL_MS
-        )
-    }
+    return resolveThreadAutoSaveEffectState(
+        page = currentPageForAutoSave,
+        expectedThreadId = threadId,
+        isShowingOfflineCopy = isShowingOfflineCopy,
+        hasAutoSaveRepository = autoSaveRepository != null,
+        hasHttpClient = httpClient != null,
+        hasFileSystem = fileSystem != null,
+        isAutoSaveInProgress = autoSaveJob?.isActive == true,
+        lastAutoSaveTimestampMillis = lastAutoSaveTimestampMillis,
+        nowMillis = Clock.System.now().toEpochMilliseconds(),
+        minIntervalMillis = AUTO_SAVE_INTERVAL_MS
+    )
+}
+
+internal fun isThreadAutoSaveReadyNow(
+    page: ThreadPage?,
+    threadId: String,
+    isShowingOfflineCopy: Boolean,
+    httpClient: HttpClient?,
+    fileSystem: FileSystem?,
+    lastAutoSaveTimestampMillis: Long,
+    nowMillis: Long
+): Boolean {
+    return resolveThreadAutoSaveAvailability(
+        pageThreadId = page?.threadId,
+        expectedThreadId = threadId,
+        isShowingOfflineCopy = isShowingOfflineCopy,
+        hasAutoSaveRepository = true,
+        hasHttpClient = httpClient != null,
+        hasFileSystem = fileSystem != null,
+        isAutoSaveInProgress = false,
+        lastAutoSaveTimestampMillis = lastAutoSaveTimestampMillis,
+        nowMillis = nowMillis,
+        minIntervalMillis = AUTO_SAVE_INTERVAL_MS
+    ) == ThreadAutoSaveAvailability.Ready
 }
 
 @Composable
@@ -301,17 +311,19 @@ internal fun ThreadAutoSaveLaunchEffect(
     httpClient: HttpClient?,
     fileSystem: FileSystem?,
     autoSaveEffectState: ThreadAutoSaveEffectState,
+    lastAutoSaveTimestampMillis: Long,
     onStartAutoSave: (ThreadPage) -> Unit
 ) {
     val currentOnStartAutoSave = rememberUpdatedState(onStartAutoSave)
     val latestPageForAutoSave = rememberUpdatedState(currentPageForAutoSave)
-    val latestAutoSaveEffectState = rememberUpdatedState(autoSaveEffectState)
+    val latestLastAutoSaveTimestampMillis = rememberUpdatedState(lastAutoSaveTimestampMillis)
     LaunchedEffect(
         threadId,
         isShowingOfflineCopy,
         httpClient,
         fileSystem,
-        autoSaveEffectState
+        autoSaveEffectState,
+        lastAutoSaveTimestampMillis
     ) {
         when (autoSaveEffectState.availability) {
             ThreadAutoSaveAvailability.Ready -> {
@@ -322,9 +334,19 @@ internal fun ThreadAutoSaveLaunchEffect(
             }
             ThreadAutoSaveAvailability.Throttled -> {
                 delay(autoSaveEffectState.retryDelayMillis.coerceAtLeast(1_000L))
-                val latestState = latestAutoSaveEffectState.value
-                if (shouldStartThreadAutoSaveAfterThrottle(latestState.availability)) {
-                    (latestState.page ?: latestPageForAutoSave.value)?.let { targetPage ->
+                val page = latestPageForAutoSave.value
+                if (
+                    isThreadAutoSaveReadyNow(
+                        page = page,
+                        threadId = threadId,
+                        isShowingOfflineCopy = isShowingOfflineCopy,
+                        httpClient = httpClient,
+                        fileSystem = fileSystem,
+                        lastAutoSaveTimestampMillis = latestLastAutoSaveTimestampMillis.value,
+                        nowMillis = Clock.System.now().toEpochMilliseconds()
+                    )
+                ) {
+                    page?.let { targetPage ->
                         currentOnStartAutoSave.value(targetPage)
                     }
                 }

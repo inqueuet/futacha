@@ -58,10 +58,10 @@ private val CurrentDarkColors = darkColorScheme(
 )
 
 private val ClassicLightColors = lightColorScheme(
-    primary = Color(0xFFF0E0D6),
-    onPrimary = Color(0xFF800000),
+    primary = Color(0xFF800000),
+    onPrimary = Color(0xFFFFF8EF),
     primaryContainer = Color(0xFFEEAA88),
-    onPrimaryContainer = Color(0xFF800000),
+    onPrimaryContainer = Color(0xFF5E0000),
     secondary = Color(0xFF117743),
     onSecondary = Color(0xFFFFF8EF),
     secondaryContainer = Color(0xFFE7F2E4),

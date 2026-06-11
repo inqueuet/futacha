@@ -208,7 +208,8 @@ internal fun buildThreadSaveRelativePath(
     val boardPrefix = boardPath.trim('/').takeIf { it.isNotEmpty() }?.let { "$it/" } ?: ""
     val subDir = when (fileType) {
         FileType.THUMBNAIL -> "${boardPrefix}thumb"
-        FileType.FULL_IMAGE, FileType.VIDEO -> "${boardPrefix}src"
+        FileType.FULL_IMAGE -> "${boardPrefix}src"
+        FileType.VIDEO -> "${boardPrefix}videos"
     }
     return "$subDir/$fileName"
 }

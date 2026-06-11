@@ -1,8 +1,10 @@
 package com.valoser.futacha.shared.ai
 
-private const val POST_MODERATION_MAX_POSTS = 24
-private const val POST_MODERATION_MAX_BODY_CHARS = 120
+import com.valoser.futacha.shared.model.Post
+
+private const val POST_MODERATION_MAX_BODY_CHARS = 220
 private const val POST_MODERATION_MAX_REASON_CHARS = 80
+private const val POST_MODERATION_MAX_SOURCE_CHARS = 12_000
 
 private val moderationHtmlBreakRegex = Regex("(?i)<br\\s*/?>|</p>")
 private val moderationHtmlTagRegex = Regex("<[^>]+>")
@@ -12,15 +14,40 @@ private val moderationUrlRegex = Regex("""https?://\S+|www\.\S+""", RegexOption.
 private val moderationFallbackLineRegex = Regex("""^\s*(\S+)\s+HIDE(?:\s+(.+))?\s*$""", RegexOption.IGNORE_CASE)
 
 fun buildPostModerationSourceText(input: PostModerationInput): String {
-    return input.posts
-        .asSequence()
-        .take(POST_MODERATION_MAX_POSTS)
-        .mapNotNull { post ->
-            val body = buildPostModerationBody(post.messageHtml)
-            body.takeIf { it.isNotBlank() }?.let { "${post.id}\t$it" }
-        }
+    return buildPostModerationSourceLines(input.posts)
         .joinToString(separator = "\n")
         .trim()
+}
+
+internal fun buildPostModerationSourceChunks(
+    input: PostModerationInput,
+    maxChunkChars: Int = POST_MODERATION_MAX_SOURCE_CHARS
+): List<String> {
+    val limit = maxChunkChars.coerceAtLeast(1)
+    val chunks = mutableListOf<String>()
+    val current = StringBuilder()
+    buildPostModerationSourceLines(input.posts).forEach { line ->
+        val extraChars = line.length + if (current.isEmpty()) 0 else 1
+        if (current.isNotEmpty() && current.length + extraChars > limit) {
+            chunks += current.toString()
+            current.clear()
+        }
+        if (current.isNotEmpty()) {
+            current.append('\n')
+        }
+        current.append(line)
+    }
+    if (current.isNotEmpty()) {
+        chunks += current.toString()
+    }
+    return chunks
+}
+
+private fun buildPostModerationSourceLines(posts: List<Post>): Sequence<String> {
+    return posts.asSequence().mapNotNull { post ->
+        val body = buildPostModerationBody(post.messageHtml)
+        body.takeIf { it.isNotBlank() }?.let { "${post.id}\t$it" }
+    }
 }
 
 fun parsePostModerationResponse(response: String): Map<String, PostModerationResult> {

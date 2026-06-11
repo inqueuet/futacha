@@ -618,7 +618,7 @@ class ThreadSaveSupportTest {
             buildThreadSaveRelativePath("b", FileType.THUMBNAIL, "123.jpg")
         )
         assertEquals(
-            "b/src/123.webm",
+            "b/videos/123.webm",
             buildThreadSaveRelativePath("b", FileType.VIDEO, "123.webm")
         )
     }

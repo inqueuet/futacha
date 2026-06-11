@@ -1701,6 +1701,8 @@ class ThreadScreenBindingsLogicTest {
         callbacks.onDeleteDialogImageOnlyChange(false)
         callbacks.onQuoteSelectionDismiss()
         callbacks.onDeleteDialogConfirm(targetPost)
+        yield()
+        yield()
         callbacks.onReplySubmit()
         yield()
         yield()

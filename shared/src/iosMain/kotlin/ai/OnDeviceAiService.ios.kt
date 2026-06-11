@@ -91,17 +91,22 @@ private class IosOnDeviceAiService : OnDeviceAiService {
         if (input.posts.isEmpty()) {
             return Result.success(emptyList())
         }
-        val sourceText = withContext(AppDispatchers.parsing) {
-            buildPostModerationSourceText(input)
+        val sourceChunks = withContext(AppDispatchers.parsing) {
+            buildPostModerationSourceChunks(input)
         }
-        if (sourceText.isBlank()) {
+        if (sourceChunks.isEmpty()) {
             return Result.success(emptyList())
         }
-        val responseText = requestFoundationModelsPostModeration(sourceText).getOrElse {
-            return Result.success(emptyList())
-        }
-        val detected = withContext(AppDispatchers.parsing) {
-            parsePostModerationResponse(responseText)
+        val detected = linkedMapOf<String, PostModerationResult>()
+        sourceChunks.forEach { sourceText ->
+            val responseText = requestFoundationModelsPostModeration(sourceText).getOrElse {
+                return@forEach
+            }
+            withContext(AppDispatchers.parsing) {
+                parsePostModerationResponse(responseText)
+            }.forEach { (postId, result) ->
+                detected[postId] = result
+            }
         }
         return Result.success(detected.values.toList())
     }

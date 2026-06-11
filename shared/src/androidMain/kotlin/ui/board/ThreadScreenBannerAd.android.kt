@@ -8,6 +8,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,8 +24,10 @@ import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.LoadAdError
+import kotlinx.coroutines.delay
 
 private const val THREAD_SCREEN_BANNER_AD_UNIT_ID = "ca-app-pub-6403856201304924/8151063815"
+private const val THREAD_SCREEN_BANNER_AD_LOAD_DELAY_MS = 1_200L
 
 @Composable
 internal actual fun ThreadScreenBannerAd(
@@ -61,8 +64,12 @@ internal actual fun ThreadScreenBannerAd(
                     isBannerVisible = false
                 }
             }
-            loadAd(AdRequest.Builder().build())
         }
+    }
+
+    LaunchedEffect(adView) {
+        delay(THREAD_SCREEN_BANNER_AD_LOAD_DELAY_MS)
+        adView.loadAd(AdRequest.Builder().build())
     }
 
     if (isBannerVisible) {
