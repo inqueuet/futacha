@@ -38,6 +38,13 @@ class CatalogThreadTitleParserTest {
     }
 
     @Test
+    fun extractCatalogDisplayTitleFromThreadHead_decodesNamedSymbolEntities() {
+        val html = "<blockquote>テスト&hearts;</blockquote>"
+
+        assertEquals("テスト♥", extractCatalogDisplayTitleFromThreadHead(html))
+    }
+
+    @Test
     fun extractCatalogDisplayTitleFromThreadHead_returnsNullForBlankContent() {
         val html = "<blockquote><br></blockquote>"
 

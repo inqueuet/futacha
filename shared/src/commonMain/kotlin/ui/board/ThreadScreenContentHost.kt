@@ -13,13 +13,13 @@ import com.valoser.futacha.shared.ai.PostModerationInput
 import com.valoser.futacha.shared.ai.PostModerationResult
 import com.valoser.futacha.shared.ai.ThreadSummaryInput
 import com.valoser.futacha.shared.ai.createOnDeviceAiService
+import com.valoser.futacha.shared.ai.normalizeThreadSummary
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.lazy.LazyListState
@@ -253,7 +253,7 @@ internal fun ThreadScreenContentHost(
                 }
                 value = summaryResult?.fold(
                     onSuccess = {
-                        ThreadSummaryUiState.Ready(it).also { readyState ->
+                        ThreadSummaryUiState.Ready(normalizeThreadSummary(it)).also { readyState ->
                             putBoundedAiCacheEntry(
                                 cache = threadSummaryCache,
                                 key = threadSummaryCacheKey,
@@ -470,19 +470,31 @@ private suspend fun <T> runThreadAiInferenceWithTimeout(
     aiService: OnDeviceAiService,
     block: suspend () -> T
 ): T? {
-    val result = withTimeoutOrNull(timeoutMillis) {
-        ThreadAiInferenceTimeoutResult(
-            value = withContext(AppDispatchers.io) {
-                aiInferenceMutex.withLock {
+    val didLock = withTimeoutOrNull(timeoutMillis) {
+        aiInferenceMutex.lock()
+        true
+    } ?: false
+    if (!didLock) {
+        aiService.cancelActiveRequests()
+        return null
+    }
+    return try {
+        val result = withTimeoutOrNull(timeoutMillis) {
+            ThreadAiInferenceTimeoutResult(
+                value = withContext(AppDispatchers.io) {
+                    // Platform AI calls must cooperate with cancellation. If they stop doing so,
+                    // cancelActiveRequests() is the escape hatch before another request waits here.
                     block()
                 }
-            }
-        )
+            )
+        }
+        if (result == null) {
+            aiService.cancelActiveRequests()
+        }
+        result?.value
+    } finally {
+        aiInferenceMutex.unlock()
     }
-    if (result == null) {
-        aiService.cancelActiveRequests()
-    }
-    return result?.value
 }
 
 private class ThreadAiInferenceTimeoutResult<out T>(

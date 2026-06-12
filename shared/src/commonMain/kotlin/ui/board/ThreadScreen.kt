@@ -471,7 +471,12 @@ private fun ThreadScreenContent(
                     listState = lazyListState,
                     savedIndex = savedIndex,
                     savedOffset = savedOffset,
-                    totalItems = successUiState.page.posts.size,
+                    totalItems = countThreadContentItems(
+                        page = successUiState.page,
+                        embeddedHtml = successUiState.embeddedHtml,
+                        hasSummary = isThreadSummaryFeatureEnabled(preferencesState),
+                        hasAiPostModeration = isAiPostFilterFeatureEnabled(preferencesState)
+                    ),
                     onFailure = { message, _ ->
                         Logger.w(THREAD_SCREEN_TAG, message)
                     }
@@ -711,7 +716,12 @@ private fun ThreadScreenContent(
     val initialScrollRestoreState = rememberThreadInitialScrollRestoreState(
         hasRestoredInitialScroll,
         initialHistoryEntry,
-        currentPage?.posts?.size
+        countThreadContentItems(
+            page = currentPage,
+            embeddedHtml = currentSuccessState?.embeddedHtml.orEmpty(),
+            hasSummary = isThreadSummaryFeatureEnabled(preferencesState),
+            hasAiPostModeration = isAiPostFilterFeatureEnabled(preferencesState)
+        ).takeIf { it > 0 }
     )
     ThreadInitialScrollRestoreEffect(
         threadId = threadId,

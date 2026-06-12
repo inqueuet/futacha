@@ -79,10 +79,11 @@ private final class FutachaAiDeepLinkSubmitter {
     @discardableResult
     func submit(_ raw: String) -> Bool {
         if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                _ = self?.submit(raw)
+            var result = false
+            DispatchQueue.main.sync { [weak self] in
+                result = self?.submit(raw) ?? false
             }
-            return true
+            return result
         }
 
         if FutachaAiCommandBridge.shared.enqueueDeepLink(raw: raw, source: "ios") {

@@ -50,6 +50,33 @@ class ThreadContentSupportTest {
     }
 
     @Test
+    fun countThreadContentItemsIncludesInsertedChromePostsAndFooter() {
+        val page = threadPage(
+            deletedNotice = "このスレは削除されました",
+            expiresAtLabel = "12:34頃消えます",
+            posts = listOf(
+                post(id = "1", subject = null, messageHtml = "本文1"),
+                post(id = "2", subject = null, messageHtml = "本文2")
+            )
+        )
+        val embeddedHtml = listOf(
+            embeddedHtml(id = "header", placement = EmbeddedHtmlPlacement.Header),
+            embeddedHtml(id = "footer", placement = EmbeddedHtmlPlacement.Footer)
+        )
+
+        assertEquals(
+            8,
+            countThreadContentItems(
+                page = page,
+                embeddedHtml = embeddedHtml,
+                hasSummary = true,
+                hasAiPostModeration = true,
+                hasAiHiddenPostsSummary = false
+            )
+        )
+    }
+
+    @Test
     fun resolveThreadLazyListIndexForPostOffsetsPostIndexByInsertedContent() {
         val page = threadPage(deletedNotice = "deleted")
         val embeddedHtml = listOf(embeddedHtml(id = "header", placement = EmbeddedHtmlPlacement.Header))
@@ -101,13 +128,17 @@ class ThreadContentSupportTest {
         assertNotEquals(fingerprint, buildThreadPostListFingerprint(changedImage))
     }
 
-    private fun threadPage(deletedNotice: String?): ThreadPage {
+    private fun threadPage(
+        deletedNotice: String?,
+        expiresAtLabel: String? = null,
+        posts: List<Post> = emptyList()
+    ): ThreadPage {
         return ThreadPage(
             threadId = "100",
             boardTitle = "may/b",
-            expiresAtLabel = null,
+            expiresAtLabel = expiresAtLabel,
             deletedNotice = deletedNotice,
-            posts = emptyList()
+            posts = posts
         )
     }
 

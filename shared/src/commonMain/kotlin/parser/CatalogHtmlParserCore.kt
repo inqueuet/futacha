@@ -135,7 +135,13 @@ internal object CatalogHtmlParserCore {
                     ensureActive()  // コルーチンがキャンセルされたら例外をスロー
                 }
 
-                if (loopIterations > maxIterations) break
+                if (loopIterations > maxIterations) {
+                    Logger.w(
+                        "CatalogHtmlParserCore",
+                        "Stopped catalog parsing after reaching maximum iteration limit ($maxIterations)"
+                    )
+                    break
+                }
 
                 val cellStartIndex = normalized.indexOf(tdStart, searchStart, ignoreCase = true)
                 if (cellStartIndex == -1 || cellStartIndex >= tableEndIndex) break

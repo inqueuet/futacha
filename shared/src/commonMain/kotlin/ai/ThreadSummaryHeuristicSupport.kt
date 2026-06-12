@@ -102,12 +102,22 @@ fun parseGeneratedThreadSummary(
     )
 }
 
+fun normalizeThreadSummary(summary: ThreadSummary): ThreadSummary {
+    return buildLimitedThreadSummary(
+        headline = summary.headline,
+        bullets = summary.bullets,
+        providerLabel = summary.providerLabel
+    )
+}
+
 private fun buildLimitedThreadSummary(
     headline: String,
     bullets: List<String>,
     providerLabel: String
 ): ThreadSummary {
-    val limitedHeadline = headline.limitSummaryText(SUMMARY_MAX_HEADLINE_CHARS)
+    val limitedHeadline = headline
+        .limitSummaryText(SUMMARY_MAX_HEADLINE_CHARS)
+        .ifBlank { "このスレの要約" }
     var remainingChars = (SUMMARY_MAX_OUTPUT_CHARS - limitedHeadline.length).coerceAtLeast(0)
     val limitedBullets = bullets
         .mapNotNull { bullet ->

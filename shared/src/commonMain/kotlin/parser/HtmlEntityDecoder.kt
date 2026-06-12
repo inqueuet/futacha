@@ -29,6 +29,10 @@ internal object HtmlEntityDecoder {
         "para" to "¶",
         "dagger" to "†",
         "Dagger" to "‡",
+        "spades" to "♠",
+        "clubs" to "♣",
+        "hearts" to "♥",
+        "diams" to "♦",
         "permil" to "‰",
         "euro" to "€",
         // 追加: 矢印
@@ -136,7 +140,8 @@ internal object HtmlEntityDecoder {
     fun decode(value: String): String {
         var result = value
         result = namedEntityRegex.replace(result) { match ->
-            namedEntityMap[match.groupValues[1].lowercase()] ?: match.value
+            val entityName = match.groupValues[1]
+            namedEntityMap[entityName] ?: namedEntityMap[entityName.lowercase()] ?: match.value
         }
         result = hexEntityRegex.replace(result) { match ->
             decodeCodePoint(match, radix = 16)

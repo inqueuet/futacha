@@ -164,6 +164,10 @@ private object IosWatchSnapshotBridge {
                 json.decodeFromString(WatchSnapshot.serializer(), snapshotJson)
             }.getOrNull() ?: return@launch
             withReplyCountLock {
+                val activeKeys = snapshot.threads.mapTo(mutableSetOf()) { thread ->
+                    WatchThreadKey(thread.boardId, thread.boardUrl, thread.threadId)
+                }
+                previousReplyCounts.keys.retainAll(activeKeys)
                 snapshot.threads.forEach { thread ->
                     previousReplyCounts[WatchThreadKey(thread.boardId, thread.boardUrl, thread.threadId)] = thread.replyCount
                 }

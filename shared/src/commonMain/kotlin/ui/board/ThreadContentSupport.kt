@@ -52,6 +52,35 @@ internal fun countThreadContentItemsBeforePosts(
     return count
 }
 
+internal fun countThreadContentItems(
+    page: ThreadPage?,
+    embeddedHtml: List<EmbeddedHtmlContent>,
+    hasSummary: Boolean = false,
+    hasAiPostModeration: Boolean = false,
+    hasAiHiddenPostsSummary: Boolean = false
+): Int {
+    if (page == null) return 0
+    var count = countThreadContentItemsBeforePosts(
+        page = page,
+        embeddedHtml = embeddedHtml,
+        hasSummary = hasSummary
+    )
+    if (hasAiPostModeration) {
+        count += 1
+    }
+    if (hasAiHiddenPostsSummary) {
+        count += 1
+    }
+    count += page.posts.size
+    if (!page.expiresAtLabel.isNullOrBlank()) {
+        count += 1
+    }
+    if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Footer }) {
+        count += 1
+    }
+    return count
+}
+
 internal fun resolveThreadLazyListIndexForPost(
     postIndex: Int,
     page: ThreadPage?,

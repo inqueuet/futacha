@@ -537,13 +537,13 @@ class ThreadScreenRuntimeLogicTest {
 
     @Test
     fun threadHtmlTextSupport_decodesTagsBreaksAndEntities() {
-        val html = "<p>abc&lt;1&gt;<br>line2 &#x1F600;</p><span>&amp; &#39;x&#39;</span>"
+        val html = "<p>abc&lt;1&gt;<br>line2 &#x1F600; &hearts;</p><span>&amp; &#39;x&#39;</span>"
 
         assertEquals(
-            listOf("abc<1>", "line2 😀", "", "& 'x'"),
+            listOf("abc<1>", "line2 😀 ♥", "", "& 'x'"),
             messageHtmlToLines(html)
         )
-        assertEquals("abc<1>\nline2 😀\n\n& 'x'", messageHtmlToPlainText(html))
+        assertEquals("abc<1>\nline2 😀 ♥\n\n& 'x'", messageHtmlToPlainText(html))
     }
 
     @Test

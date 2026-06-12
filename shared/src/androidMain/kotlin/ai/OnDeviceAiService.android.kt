@@ -332,10 +332,12 @@ private suspend fun requestRemoteThreadSummary(
         return Result.failure(IllegalStateException(response.getString(KEY_ERROR) ?: "Gemini Nano 要約に失敗しました。"))
     }
     return Result.success(
-        ThreadSummary(
-            headline = response.getString(KEY_SUMMARY_HEADLINE).orEmpty(),
-            bullets = response.getStringArrayList(KEY_SUMMARY_BULLETS).orEmpty(),
-            providerLabel = response.getString(KEY_PROVIDER_LABEL) ?: "Gemini Nano"
+        normalizeThreadSummary(
+            ThreadSummary(
+                headline = response.getString(KEY_SUMMARY_HEADLINE).orEmpty(),
+                bullets = response.getStringArrayList(KEY_SUMMARY_BULLETS).orEmpty(),
+                providerLabel = response.getString(KEY_PROVIDER_LABEL) ?: "Gemini Nano"
+            )
         )
     )
 }

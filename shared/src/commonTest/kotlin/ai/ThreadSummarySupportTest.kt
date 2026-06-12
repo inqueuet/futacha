@@ -147,6 +147,26 @@ class ThreadSummarySupportTest {
         assertTrue(visibleSummaryLength <= 1_000)
     }
 
+    @Test
+    fun normalizeThreadSummaryCompactsRemoteSummaryText() {
+        val summary = normalizeThreadSummary(
+            ThreadSummary(
+                headline = "\n\n  見出しです  \n\n",
+                bullets = listOf(
+                    "   ",
+                    "\n  1つ目の要点です  \n",
+                    "あ".repeat(500)
+                ),
+                providerLabel = "Gemini Nano"
+            )
+        )
+
+        assertEquals("見出しです", summary.headline)
+        assertEquals(2, summary.bullets.size)
+        assertEquals("1つ目の要点です", summary.bullets.first())
+        assertTrue(summary.bullets.last().length <= 300)
+    }
+
     private fun input(title: String?): ThreadSummaryInput {
         return ThreadSummaryInput(
             threadId = "100",
