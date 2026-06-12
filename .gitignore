@@ -30,6 +30,11 @@ local.properties
 ### Misc ###
 *.keystore
 *.jks
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.pem
+AuthKey_*.p8
 /futacha
 
 ### Claude ###
