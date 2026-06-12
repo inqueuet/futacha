@@ -491,8 +491,8 @@ private class AndroidAiRemoteServiceSession {
         data: Bundle,
         timeoutMillis: Long,
         onProgress: ((Bundle) -> Unit)?
-    ): Bundle? = withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
-        requestMutex.withLock {
+    ): Bundle? = requestMutex.withLock {
+        withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
             suspendCancellableCoroutine { continuation ->
                 val appContext = context.applicationContext
                 val requestId = data.getInt(KEY_REQUEST_ID)

@@ -471,17 +471,23 @@ private suspend fun <T> runThreadAiInferenceWithTimeout(
     block: suspend () -> T
 ): T? {
     val result = withTimeoutOrNull(timeoutMillis) {
-        withContext(AppDispatchers.io) {
-            aiInferenceMutex.withLock {
-                block()
+        ThreadAiInferenceTimeoutResult(
+            value = withContext(AppDispatchers.io) {
+                aiInferenceMutex.withLock {
+                    block()
+                }
             }
-        }
+        )
     }
     if (result == null) {
         aiService.cancelActiveRequests()
     }
-    return result
+    return result?.value
 }
+
+private class ThreadAiInferenceTimeoutResult<out T>(
+    val value: T
+)
 
 internal fun shouldDeferAiPostModeration(
     shouldApplyAiPostFilter: Boolean,

@@ -312,9 +312,11 @@ suspend fun pickMediaFromDocuments(
     retainPickerDelegate(delegate)
     continuation.invokeOnCancellation {
         if (resumeGate.tryOpen()) {
-            loadTimeout?.cancel()
-            loadTimeout = null
-            releasePickerDelegate(delegateRef)
+            dispatch_async(dispatch_get_main_queue()) {
+                loadTimeout?.cancel()
+                loadTimeout = null
+                releasePickerDelegate(delegateRef)
+            }
         }
     }
     resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
@@ -411,7 +413,9 @@ private fun pickFromPhotoLibrary(
                             "ImagePicker.ios",
                             "Failed to load selected $logLabel as file or data: ${fileError?.localizedDescription ?: dataError?.localizedDescription.orEmpty()}"
                         )
-                        complete(null)
+                        dispatch_async(dispatch_get_main_queue()) {
+                            complete(null)
+                        }
                         return@loadDataRepresentationForTypeIdentifier
                     }
                     val dataLength = data.length.toLong()
@@ -424,7 +428,9 @@ private fun pickFromPhotoLibrary(
                                 "Selected $logLabel payload is empty"
                             }
                         )
-                        complete(null)
+                        dispatch_async(dispatch_get_main_queue()) {
+                            complete(null)
+                        }
                         return@loadDataRepresentationForTypeIdentifier
                     }
 
@@ -433,7 +439,10 @@ private fun pickFromPhotoLibrary(
                         memcpy(pinned.addressOf(0), data.bytes, data.length)
                     }
 
-                    complete(buildPickedImageData(bytes, null, fallbackFileName))
+                    val selected = buildPickedImageData(bytes, null, fallbackFileName)
+                    dispatch_async(dispatch_get_main_queue()) {
+                        complete(selected)
+                    }
                 }
             }
         }
@@ -443,10 +452,12 @@ private fun pickFromPhotoLibrary(
     retainPickerDelegate(delegate)
     continuation.invokeOnCancellation {
         if (resumeGate.tryOpen()) {
-            loadTimeout?.cancel()
-            loadTimeout = null
-            dismissPresentedPicker(picker) {
-                releasePickerDelegate(delegateRef)
+            dispatch_async(dispatch_get_main_queue()) {
+                loadTimeout?.cancel()
+                loadTimeout = null
+                dismissPresentedPicker(picker) {
+                    releasePickerDelegate(delegateRef)
+                }
             }
         }
     }

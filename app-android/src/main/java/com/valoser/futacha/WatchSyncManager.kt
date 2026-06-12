@@ -30,6 +30,7 @@ import com.valoser.futacha.shared.watch.WatchSnapshotBuilder
 import com.valoser.futacha.shared.watch.WatchThreadKey
 import com.valoser.futacha.shared.watch.WatchThreadSummary
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -55,6 +56,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.resume
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
 class WatchSyncManager(
@@ -515,9 +517,14 @@ class WatchSyncManager(
     private suspend fun <T> Task<T>.awaitOrNull(timeoutMillis: Long): T? {
         return withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
             suspendCancellableCoroutine { continuation ->
+                val continuationRef = AtomicReference<CancellableContinuation<T?>?>(continuation)
+                continuation.invokeOnCancellation {
+                    continuationRef.set(null)
+                }
                 addOnCompleteListener { task ->
-                    if (!continuation.isActive) return@addOnCompleteListener
-                    continuation.resume(
+                    val activeContinuation = continuationRef.getAndSet(null) ?: return@addOnCompleteListener
+                    if (!activeContinuation.isActive) return@addOnCompleteListener
+                    activeContinuation.resume(
                         if (task.isSuccessful) task.result else null
                     )
                 }
