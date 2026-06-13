@@ -2973,6 +2973,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 8SQY3SQ2M3;
 				ENABLE_PREVIEWS = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iosApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = futacha;
@@ -3011,6 +3012,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 8SQY3SQ2M3;
 				ENABLE_PREVIEWS = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = iosApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = futacha;
@@ -3108,6 +3110,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = 8SQY3SQ2M3;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Configuration/watchApp-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = futacha;
 				INFOPLIST_KEY_CFBundleIconName = WatchAppIcon;
 				INFOPLIST_KEY_WKApplication = YES;
@@ -3144,6 +3147,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=watchos*]" = 8SQY3SQ2M3;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Configuration/watchApp-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = futacha;
 				INFOPLIST_KEY_CFBundleIconName = WatchAppIcon;
 				INFOPLIST_KEY_WKApplication = YES;
