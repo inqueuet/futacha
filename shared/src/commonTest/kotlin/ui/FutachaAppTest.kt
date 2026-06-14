@@ -1801,7 +1801,7 @@ class FutachaAppTest {
     }
 
     @Test
-    fun dismissHistoryEntry_preservesStoreStateWhenAutoSavedDeleteFails() = runBlocking {
+    fun dismissHistoryEntry_removesStoreStateWhenAutoSavedDeleteFails() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val repository = SavedThreadRepository(
             DeleteRecursivelyFailingFileSystem(InMemoryFileSystem()),
@@ -1819,8 +1819,8 @@ class FutachaAppTest {
             onAutoSavedThreadDeleteFailure = { failureCount += 1 }
         )
 
-        assertEquals(listOf(entry), store.history.first())
-        assertEquals(mapOf("img::123" to listOf("ID:abc")), store.selfPostIdentifiersByThread.first())
+        assertEquals(emptyList(), store.history.first())
+        assertEquals(emptyMap(), store.selfPostIdentifiersByThread.first())
         assertEquals(1, failureCount)
     }
 
@@ -1851,7 +1851,7 @@ class FutachaAppTest {
     }
 
     @Test
-    fun clearHistory_reportsAutoSavedDeleteFailureAndPreservesStoreState() = runBlocking {
+    fun clearHistory_reportsAutoSavedDeleteFailureAndClearsStoreState() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val repository = SavedThreadRepository(
             DeleteRecursivelyFailingFileSystem(InMemoryFileSystem()),
@@ -1862,16 +1862,18 @@ class FutachaAppTest {
         store.addSelfPostIdentifier(threadId = "123", identifier = "ID:abc", boardId = "img")
         repository.addThreadToIndex(savedThread(threadId = "123", boardId = "img")).getOrThrow()
         var failureCount = 0
+        var clearedCount = 0
         clearHistory(
             stateStore = store,
             autoSavedThreadRepository = repository,
-            onSkippedThreadsCleared = {},
+            onSkippedThreadsCleared = { clearedCount += 1 },
             onAutoSavedThreadDeleteFailure = { failureCount += 1 }
         )
 
-        assertEquals(listOf(entry), store.history.first())
-        assertEquals(mapOf("img::123" to listOf("ID:abc")), store.selfPostIdentifiersByThread.first())
+        assertEquals(emptyList(), store.history.first())
+        assertEquals(emptyMap(), store.selfPostIdentifiersByThread.first())
         assertEquals(1, failureCount)
+        assertEquals(1, clearedCount)
     }
 
     private fun board(

@@ -31,8 +31,6 @@ class IosFileSystem : FileSystem {
     private val fileManager = NSFileManager.defaultManager
     private val cleanupMaxAgeMillis = 60 * 60 * 1000L
     private val streamWriteChunkBytes = 64 * 1024
-    private val recursiveDeleteMaxDurationMillis = 30_000L
-    private val recursiveDeleteMaxItems = 10_000
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
 
@@ -43,10 +41,6 @@ class IosFileSystem : FileSystem {
     private fun isNoSuchFileError(error: NSError?): Boolean {
         // NSFileNoSuchFileError
         return error?.code == 4L
-    }
-
-    private fun currentTimeMillis(): Long {
-        return (NSDate().timeIntervalSince1970 * 1000.0).toLong()
     }
 
     private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
@@ -248,56 +242,21 @@ class IosFileSystem : FileSystem {
         runFsCatching {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
-            val deadlineMillis = currentTimeMillis() + recursiveDeleteMaxDurationMillis
-            deleteRecursivelyBounded(
-                absolutePath = absolutePath,
-                deadlineMillis = deadlineMillis,
-                counter = RecursiveDeleteCounter()
-            )
-            Unit
-        }
-    }
-
-    private suspend fun deleteRecursivelyBounded(
-        absolutePath: String,
-        deadlineMillis: Long,
-        counter: RecursiveDeleteCounter
-    ) {
-        coroutineContext.ensureActive()
-        if (currentTimeMillis() > deadlineMillis) {
-            throw Exception("Timed out while deleting recursively: $absolutePath")
-        }
-        counter.count += 1
-        if (counter.count > recursiveDeleteMaxItems) {
-            throw Exception("Too many files while deleting recursively: $absolutePath")
-        }
-
-        memScoped {
-            val isDirectory = alloc<BooleanVar>()
-            val exists = fileManager.fileExistsAtPath(absolutePath, isDirectory.ptr)
-            if (!exists) return
-            if (isDirectory.value) {
-                val children = fileManager.contentsOfDirectoryAtPath(absolutePath, error = null)
-                    ?.filterIsInstance<String>()
-                    .orEmpty()
-                for (child in children) {
-                    deleteRecursivelyBounded(
-                        absolutePath = joinPathSegments(absolutePath, child),
-                        deadlineMillis = deadlineMillis,
-                        counter = counter
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
+                if (!success) {
+                    val nsError = error.value
+                    if (isNoSuchFileError(nsError)) {
+                        return@runFsCatching Unit
+                    }
+                    throw Exception(
+                        "Failed to delete recursively: ${nsError?.localizedDescription ?: "Unknown error"}"
                     )
                 }
             }
-            val error = alloc<ObjCObjectVar<NSError?>>()
-            val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
-            if (!success && !isNoSuchFileError(error.value)) {
-                throw Exception("Failed to delete recursively: ${error.value?.localizedDescription ?: "Unknown error"}")
-            }
+            Unit
         }
-    }
-
-    private class RecursiveDeleteCounter {
-        var count: Int = 0
     }
 
     override suspend fun exists(path: String): Boolean = withContext(AppDispatchers.io) {

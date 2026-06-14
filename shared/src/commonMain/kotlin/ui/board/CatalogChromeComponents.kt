@@ -183,7 +183,15 @@ internal fun CatalogNavigationBar(
                         contentDescription = meta.label
                     )
                 },
-                label = { Text(meta.label) }
+                label = {
+                    Text(
+                        text = meta.label,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
             )
         }
     }

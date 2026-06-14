@@ -23,11 +23,10 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,9 +41,6 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.take
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -165,6 +161,7 @@ private fun HistoryBottomIcon(
     }
 }
 
+@Suppress("DEPRECATION")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DismissibleHistoryEntry(
@@ -172,16 +169,16 @@ private fun DismissibleHistoryEntry(
     onDismissed: (ThreadHistoryEntry) -> Unit,
     onClicked: () -> Unit
 ) {
-    val dismissState = rememberSwipeToDismissBoxState()
-    LaunchedEffect(entry, dismissState) {
-        snapshotFlow { dismissState.currentValue }
-            .distinctUntilChanged()
-            .filter { it == SwipeToDismissBoxValue.StartToEnd }
-            .take(1)
-            .collect {
-                onDismissed(entry)
+    val latestEntry by rememberUpdatedState(entry)
+    val latestOnDismissed by rememberUpdatedState(onDismissed)
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.StartToEnd) {
+                latestOnDismissed(latestEntry)
             }
-    }
+            true
+        }
+    )
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromEndToStart = false,

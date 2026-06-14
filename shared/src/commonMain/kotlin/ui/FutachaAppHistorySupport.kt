@@ -247,7 +247,6 @@ internal suspend fun dismissHistoryEntry(
     )
     if (deleteResult?.isFailure == true) {
         deleteResult.exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
-        return
     }
     stateStore.removeSelfPostIdentifiersForThread(
         threadId = entry.threadId,
@@ -265,7 +264,6 @@ internal suspend fun clearHistory(
     val deleteResult = autoSavedThreadRepository?.deleteAllThreads()
     if (deleteResult?.isFailure == true) {
         deleteResult.exceptionOrNull()?.let(onAutoSavedThreadDeleteFailure)
-        return
     }
     stateStore.clearSelfPostIdentifiers()
     stateStore.setHistory(emptyList())
