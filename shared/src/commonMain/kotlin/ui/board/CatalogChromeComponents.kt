@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -19,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -44,6 +46,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryId
+import com.valoser.futacha.shared.util.isAndroid
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -171,7 +174,10 @@ internal fun CatalogNavigationBar(
     val visibleEntries = remember(menuEntries) {
         resolveCatalogNavBarEntries(menuEntries)
     }
-    NavigationBar(modifier = modifier) {
+    NavigationBar(
+        modifier = modifier,
+        windowInsets = if (isAndroid()) NavigationBarDefaults.windowInsets else WindowInsets()
+    ) {
         visibleEntries.forEach { entry ->
             val meta = entry.id.toMeta()
             NavigationBarItem(
