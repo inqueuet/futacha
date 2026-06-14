@@ -38,6 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.wearable.Wearable
+import com.valoser.futacha.shared.watch.WatchBoard
+import com.valoser.futacha.shared.watch.WatchPostPreview
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchThreadSummary
@@ -69,6 +72,8 @@ private fun FutachaWearApp() {
     val context = LocalContext.current
     val commandClient = remember(context) { PhoneCommandClient(context.applicationContext) }
     val snapshot by WatchSnapshotStore.observe().collectAsState()
+    var isPhoneReachable by remember { mutableStateOf<Boolean?>(null) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(context) {
         WatchSnapshotStore.loadPersisted(context.applicationContext)
@@ -76,14 +81,61 @@ private fun FutachaWearApp() {
         commandClient.requestSnapshot()
     }
 
+    LaunchedEffect(context) {
+        while (true) {
+            Wearable.getNodeClient(context.applicationContext)
+                .connectedNodes
+                .addOnSuccessListener { nodes ->
+                    isPhoneReachable = nodes.isNotEmpty()
+                }
+                .addOnFailureListener {
+                    isPhoneReachable = false
+                }
+            delay(WATCH_NOW_TICK_MILLIS)
+        }
+    }
+
     MaterialTheme {
         FutachaWearContent(
             snapshot = snapshot,
-            onRefresh = commandClient::requestRefresh,
-            onRequestSync = commandClient::requestSnapshot,
-            onStartReadAloudOnPhone = commandClient::startReadAloudOnPhone,
-            onPauseReadAloudOnPhone = commandClient::pauseReadAloudOnPhone,
-            onStopReadAloudOnPhone = commandClient::stopReadAloudOnPhone
+            isPhoneReachable = isPhoneReachable,
+            statusMessage = statusMessage,
+            onRefresh = {
+                statusMessage = "スマホで更新を要求しました"
+                commandClient.requestRefresh()
+            },
+            onRequestSync = {
+                statusMessage = "同期を要求しました"
+                commandClient.requestSnapshot()
+            },
+            onOpenBoardOnPhone = { board ->
+                statusMessage = "スマホで板を開きます"
+                commandClient.openBoardOnPhone(board.id, board.url)
+            },
+            onOpenThreadOnPhone = { thread ->
+                statusMessage = "スマホでスレを開きます"
+                commandClient.openThreadOnPhone(thread.boardId, thread.boardUrl, thread.threadId)
+            },
+            onStartReadAloudOnPhone = { thread ->
+                statusMessage = "読み上げ開始を要求しました"
+                commandClient.startReadAloudOnPhone(thread)
+            },
+            onPauseReadAloudOnPhone = { thread ->
+                statusMessage = "一時停止を要求しました"
+                commandClient.pauseReadAloudOnPhone(thread)
+            },
+            onStopReadAloudOnPhone = { thread ->
+                statusMessage = "停止を要求しました"
+                commandClient.stopReadAloudOnPhone(thread)
+            },
+            onNextReadAloudOnPhone = { thread ->
+                statusMessage = "次へ移動を要求しました"
+                commandClient.nextReadAloudOnPhone(thread)
+            },
+            onPreviousReadAloudOnPhone = { thread ->
+                statusMessage = "前へ移動を要求しました"
+                commandClient.previousReadAloudOnPhone(thread)
+            }
         )
     }
 }
@@ -91,14 +143,24 @@ private fun FutachaWearApp() {
 @Composable
 private fun FutachaWearContent(
     snapshot: WatchSnapshot?,
+    isPhoneReachable: Boolean?,
+    statusMessage: String?,
     onRefresh: () -> Unit,
     onRequestSync: () -> Unit,
+    onOpenBoardOnPhone: (WatchBoard) -> Unit,
+    onOpenThreadOnPhone: (WatchThreadSummary) -> Unit,
     onStartReadAloudOnPhone: (WatchThreadSummary) -> Unit,
     onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit
+    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onNextReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onPreviousReadAloudOnPhone: (WatchThreadSummary) -> Unit
 ) {
-    var selectedThreadId by remember { mutableStateOf<String?>(null) }
-    val selectedThread = snapshot?.threads?.firstOrNull { it.threadId == selectedThreadId }
+    var selectedBoardId by remember { mutableStateOf<String?>(null) }
+    var selectedThreadKey by remember { mutableStateOf<WearThreadKey?>(null) }
+    val selectedBoard = snapshot?.boards?.firstOrNull { it.id == selectedBoardId }
+    val selectedThread = snapshot?.threads?.firstOrNull {
+        it.boardId == selectedThreadKey?.boardId && it.threadId == selectedThreadKey?.threadId
+    }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(Unit) {
@@ -115,19 +177,40 @@ private fun FutachaWearContent(
     ) {
         when {
             snapshot == null -> EmptySnapshotView(onRequestSync = onRequestSync)
-            selectedThread != null -> ReadAloudControlView(
+            selectedThread != null -> ThreadDetailView(
                 thread = selectedThread,
                 nowMillis = nowMillis,
-                onBack = { selectedThreadId = null },
+                isPhoneReachable = isPhoneReachable,
+                statusMessage = statusMessage,
+                onBack = { selectedThreadKey = null },
+                onRequestSync = onRequestSync,
+                onOpenThreadOnPhone = onOpenThreadOnPhone,
                 onStartReadAloudOnPhone = onStartReadAloudOnPhone,
                 onPauseReadAloudOnPhone = onPauseReadAloudOnPhone,
-                onStopReadAloudOnPhone = onStopReadAloudOnPhone
+                onStopReadAloudOnPhone = onStopReadAloudOnPhone,
+                onNextReadAloudOnPhone = onNextReadAloudOnPhone,
+                onPreviousReadAloudOnPhone = onPreviousReadAloudOnPhone
+            )
+            selectedBoard != null -> BoardThreadsView(
+                board = selectedBoard,
+                snapshot = snapshot,
+                nowMillis = nowMillis,
+                isPhoneReachable = isPhoneReachable,
+                statusMessage = statusMessage,
+                onBack = { selectedBoardId = null },
+                onRequestSync = onRequestSync,
+                onOpenBoardOnPhone = onOpenBoardOnPhone,
+                onThreadSelected = { selectedThreadKey = it.toWearThreadKey() }
             )
             else -> HomeView(
                 snapshot = snapshot,
                 nowMillis = nowMillis,
-                onThreadSelected = { selectedThreadId = it.threadId },
-                onRefresh = onRefresh
+                isPhoneReachable = isPhoneReachable,
+                statusMessage = statusMessage,
+                onBoardSelected = { selectedBoardId = it.id },
+                onThreadSelected = { selectedThreadKey = it.toWearThreadKey() },
+                onRefresh = onRefresh,
+                onRequestSync = onRequestSync
             )
         }
     }
@@ -146,7 +229,9 @@ private fun EmptySnapshotView(
         Spacer(Modifier.height(10.dp))
         Text(
             text = "スマホと同期してください",
-            fontSize = 13.sp
+            fontSize = 13.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(14.dp))
         ActionRow(label = "同期を要求", onClick = onRequestSync)
@@ -157,8 +242,12 @@ private fun EmptySnapshotView(
 private fun HomeView(
     snapshot: WatchSnapshot,
     nowMillis: Long,
+    isPhoneReachable: Boolean?,
+    statusMessage: String?,
+    onBoardSelected: (WatchBoard) -> Unit,
     onThreadSelected: (WatchThreadSummary) -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onRequestSync: () -> Unit
 ) {
     val watchMatches = snapshot.threads.filter { it.isWatchWordMatch }
     val unreadThreads = snapshot.threads.filter { it.newReplyCount > 0 }
@@ -170,23 +259,49 @@ private fun HomeView(
         Text(
             text = "futacha",
             fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = "新着 ${snapshot.unreadTotal} / 監視 ${snapshot.watchMatchTotal}",
-            fontSize = 12.sp
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = "$syncLabel / ${snapshot.threads.size}スレ",
+            text = "$syncLabel / ${snapshot.boards.size}板 / ${snapshot.threads.size}スレ",
             fontSize = 10.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        WatchStatusText(
+            connectionLabel = buildPhoneConnectionLabel(isPhoneReachable),
+            statusMessage = statusMessage
+        )
         Spacer(Modifier.height(10.dp))
-        ActionRow(label = "更新", onClick = onRefresh)
+        ActionRow(label = "スマホで更新", onClick = onRefresh)
+        Spacer(Modifier.height(6.dp))
+        ActionRow(label = "同期を要求", onClick = onRequestSync)
         activeReadAloudThread?.let { thread ->
             SectionTitle("読み上げ中")
             ThreadRow(thread = thread, nowMillis = nowMillis, onClick = { onThreadSelected(thread) })
+        }
+        SectionTitle("板")
+        if (snapshot.boards.isEmpty()) {
+            MutedText("板なし")
+        } else {
+            snapshot.boards.forEach { board ->
+                BoardRow(board = board, snapshot = snapshot, onClick = { onBoardSelected(board) })
+            }
+        }
+        SectionTitle("スレ")
+        if (snapshot.threads.isEmpty()) {
+            MutedText("履歴なし")
+        } else {
+            snapshot.threads.forEach { thread ->
+                ThreadRow(thread = thread, nowMillis = nowMillis, onClick = { onThreadSelected(thread) })
+            }
         }
         SectionTitle("監視")
         if (watchMatches.isEmpty()) {
@@ -208,16 +323,62 @@ private fun HomeView(
 }
 
 @Composable
-private fun ReadAloudControlView(
+private fun BoardThreadsView(
+    board: WatchBoard,
+    snapshot: WatchSnapshot,
+    nowMillis: Long,
+    isPhoneReachable: Boolean?,
+    statusMessage: String?,
+    onBack: () -> Unit,
+    onRequestSync: () -> Unit,
+    onOpenBoardOnPhone: (WatchBoard) -> Unit,
+    onThreadSelected: (WatchThreadSummary) -> Unit
+) {
+    val threads = snapshot.threads.filter { it.boardId == board.id }
+    WatchScreen {
+        TopBackRow(title = board.name, onBack = onBack)
+        Text(
+            text = "${threads.size}スレ",
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        WatchStatusText(
+            connectionLabel = buildPhoneConnectionLabel(isPhoneReachable),
+            statusMessage = statusMessage
+        )
+        Spacer(Modifier.height(8.dp))
+        ActionRow(label = "スマホで板を開く", onClick = { onOpenBoardOnPhone(board) })
+        Spacer(Modifier.height(6.dp))
+        ActionRow(label = "同期を要求", onClick = onRequestSync)
+        SectionTitle("スレ")
+        if (threads.isEmpty()) {
+            MutedText("履歴なし")
+        } else {
+            threads.forEach { thread ->
+                ThreadRow(thread = thread, nowMillis = nowMillis, onClick = { onThreadSelected(thread) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadDetailView(
     thread: WatchThreadSummary,
     nowMillis: Long,
+    isPhoneReachable: Boolean?,
+    statusMessage: String?,
     onBack: () -> Unit,
+    onRequestSync: () -> Unit,
+    onOpenThreadOnPhone: (WatchThreadSummary) -> Unit,
     onStartReadAloudOnPhone: (WatchThreadSummary) -> Unit,
     onPauseReadAloudOnPhone: (WatchThreadSummary) -> Unit,
-    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit
+    onStopReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onNextReadAloudOnPhone: (WatchThreadSummary) -> Unit,
+    onPreviousReadAloudOnPhone: (WatchThreadSummary) -> Unit
 ) {
     WatchScreen {
-        TopBackRow(title = "読み上げ", onBack = onBack)
+        TopBackRow(title = thread.boardName, onBack = onBack)
         Text(
             text = thread.title,
             fontSize = 15.sp,
@@ -227,13 +388,19 @@ private fun ReadAloudControlView(
         )
         Text(
             text = "レス ${thread.replyCount} / 新着 ${thread.newReplyCount}",
-            fontSize = 12.sp
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = thread.boardName,
             fontSize = 10.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
+        )
+        WatchStatusText(
+            connectionLabel = buildPhoneConnectionLabel(isPhoneReachable),
+            statusMessage = statusMessage
         )
         thread.freshReadAloudStatus(nowMillis)?.let { status ->
             Text(
@@ -250,12 +417,27 @@ private fun ReadAloudControlView(
             )
         }
         Spacer(Modifier.height(10.dp))
+        ActionRow(label = "スマホで開く", onClick = { onOpenThreadOnPhone(thread) })
+        Spacer(Modifier.height(6.dp))
+        ActionRow(label = "同期を要求", onClick = onRequestSync)
         SectionTitle("読み上げ")
         ControlRow(
             icon = "▶",
             label = "再生 / 再開",
             backgroundColor = Color(0xFF245C34),
             onClick = { onStartReadAloudOnPhone(thread) }
+        )
+        ControlRow(
+            icon = "<",
+            label = "前へ",
+            backgroundColor = Color(0xFF333F51),
+            onClick = { onPreviousReadAloudOnPhone(thread) }
+        )
+        ControlRow(
+            icon = ">",
+            label = "次へ",
+            backgroundColor = Color(0xFF333F51),
+            onClick = { onNextReadAloudOnPhone(thread) }
         )
         ControlRow(
             icon = "Ⅱ",
@@ -269,6 +451,14 @@ private fun ReadAloudControlView(
             backgroundColor = Color(0xFF6A2D2D),
             onClick = { onStopReadAloudOnPhone(thread) }
         )
+        SectionTitle("プレビュー")
+        if (thread.previewPosts.isEmpty()) {
+            MutedText("保存済みプレビューなし")
+        } else {
+            thread.previewPosts.forEach { post ->
+                PreviewPostRow(post)
+            }
+        }
     }
 }
 
@@ -335,6 +525,31 @@ private fun TopBackRow(
 }
 
 @Composable
+private fun BoardRow(
+    board: WatchBoard,
+    snapshot: WatchSnapshot,
+    onClick: () -> Unit
+) {
+    val threadCount = snapshot.threads.count { it.boardId == board.id }
+    val unreadCount = snapshot.threads.count { it.boardId == board.id && it.newReplyCount > 0 }
+    RowCard(onClick = onClick) {
+        Text(
+            text = board.name,
+            fontSize = 13.sp,
+            fontWeight = if (board.pinned) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = if (unreadCount > 0) "${threadCount}スレ / +$unreadCount" else "${threadCount}スレ",
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
 private fun ThreadRow(
     thread: WatchThreadSummary,
     nowMillis: Long,
@@ -354,6 +569,16 @@ private fun ThreadRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        if (thread.isWatchWordMatch) {
+            Text(
+                text = "監視ワード",
+                fontSize = 10.sp,
+                color = Color(0xFFFFD56A),
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         thread.freshReadAloudStatus(nowMillis)?.let { status ->
             Text(
                 text = buildReadAloudStatusLabel(
@@ -368,6 +593,45 @@ private fun ThreadRow(
                 overflow = TextOverflow.Ellipsis
             )
         }
+    }
+}
+
+@Composable
+private fun PreviewPostRow(post: WatchPostPreview) {
+    RowCard(onClick = {}) {
+        Text(
+            text = "No.${post.postId}",
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = post.text,
+            fontSize = 12.sp,
+            maxLines = 5,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun WatchStatusText(
+    connectionLabel: String,
+    statusMessage: String?
+) {
+    Text(
+        text = connectionLabel,
+        fontSize = 10.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+    statusMessage?.let { message ->
+        Text(
+            text = message,
+            fontSize = 10.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -423,7 +687,9 @@ private fun ControlRow(
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 10.dp)
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 10.dp)
         )
     }
 }
@@ -443,7 +709,13 @@ private fun ActionRow(
             .padding(horizontal = 12.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(text = label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -464,6 +736,8 @@ private fun MutedText(text: String) {
     Text(
         text = text,
         fontSize = 12.sp,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(vertical = 8.dp)
     )
 }
@@ -501,6 +775,14 @@ private fun buildSnapshotSyncLabel(
     }
 }
 
+private fun buildPhoneConnectionLabel(isPhoneReachable: Boolean?): String {
+    return when (isPhoneReachable) {
+        true -> "スマホ接続中"
+        false -> "キャッシュ表示"
+        null -> "接続確認中"
+    }
+}
+
 private fun WatchThreadSummary.freshReadAloudStatus(
     nowMillis: Long = System.currentTimeMillis()
 ): WatchReadAloudStatus? {
@@ -511,3 +793,11 @@ private fun WatchThreadSummary.freshReadAloudStatus(
             ageMillis in 0..WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
     }
 }
+
+private fun WatchThreadSummary.toWearThreadKey(): WearThreadKey =
+    WearThreadKey(boardId = boardId, threadId = threadId)
+
+private data class WearThreadKey(
+    val boardId: String,
+    val threadId: String
+)
