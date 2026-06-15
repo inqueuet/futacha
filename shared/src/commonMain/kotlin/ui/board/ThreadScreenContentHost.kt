@@ -104,7 +104,7 @@ internal fun ThreadScreenContentHost(
             ) {
                 value = if (shouldComputeFullPostFingerprint) {
                     withContext(AppDispatchers.parsing) {
-                        buildThreadPostListFingerprint(state.page.posts)
+                        buildThreadPostListFingerprintCancellable(state.page.posts)
                     }
                 } else {
                     buildLightweightThreadPostListFingerprint(state.page.posts)
@@ -475,7 +475,6 @@ private suspend fun <T> runThreadAiInferenceWithTimeout(
         true
     } ?: false
     if (!didLock) {
-        aiService.cancelActiveRequests()
         return null
     }
     return try {

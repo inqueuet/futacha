@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.state.verifyAppLockPassword
+import com.valoser.futacha.shared.ui.board.rememberStableTextInputState
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
 
@@ -53,6 +54,13 @@ internal fun FutachaAppLockScreen(
     val nowMillis = Clock.System.now().toEpochMilliseconds()
     val isTemporarilyLocked = lockoutUntilMillis > nowMillis
     val lockoutRemainingSeconds = ((lockoutUntilMillis - nowMillis + 999L) / 1_000L).coerceAtLeast(0L)
+    val inputState = rememberStableTextInputState(
+        text = input,
+        onTextChange = {
+            input = it
+            isError = false
+        }
+    )
 
     LaunchedEffect(lockoutUntilMillis, lockoutRefreshToken) {
         val delayMillis = lockoutUntilMillis - Clock.System.now().toEpochMilliseconds()
@@ -112,11 +120,8 @@ internal fun FutachaAppLockScreen(
                     style = MaterialTheme.typography.headlineSmall
                 )
                 OutlinedTextField(
-                    value = input,
-                    onValueChange = {
-                        input = it
-                        isError = false
-                    },
+                    value = inputState.value,
+                    onValueChange = inputState.onValueChange,
                     label = { Text("パスワード") },
                     singleLine = true,
                     isError = isError,

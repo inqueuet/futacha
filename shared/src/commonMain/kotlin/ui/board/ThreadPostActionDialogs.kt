@@ -122,6 +122,7 @@ internal fun DeleteByUserDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    val passwordInputState = rememberStableTextInputState(password, onPasswordChange)
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -138,8 +139,8 @@ internal fun DeleteByUserDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
-                    value = password,
-                    onValueChange = onPasswordChange,
+                    value = passwordInputState.value,
+                    onValueChange = passwordInputState.onValueChange,
                     label = { Text("削除キー") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),

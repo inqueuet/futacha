@@ -16,6 +16,9 @@ import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
 
 internal data class ThreadPostDerivedData(
     val posterIdLabels: Map<String, PosterIdLabel> = emptyMap(),
@@ -30,6 +33,28 @@ internal fun buildThreadPostDerivedData(posts: List<Post>): ThreadPostDerivedDat
         postIndex = posts.associateBy { it.id },
         referencedByMap = buildReferencedPostsMap(posts),
         postsByPosterId = buildPostsByPosterId(posts)
+    )
+}
+
+internal suspend fun buildThreadPostDerivedDataCancellable(posts: List<Post>): ThreadPostDerivedData {
+    coroutineContext.ensureActive()
+    if (posts.isEmpty()) return ThreadPostDerivedData()
+    val posterIdLabels = buildPosterIdLabels(posts)
+    coroutineContext.ensureActive()
+    yield()
+    val postIndex = posts.associateBy { it.id }
+    coroutineContext.ensureActive()
+    yield()
+    val referencedByMap = buildReferencedPostsMap(posts)
+    coroutineContext.ensureActive()
+    yield()
+    val postsByPosterId = buildPostsByPosterId(posts)
+    coroutineContext.ensureActive()
+    return ThreadPostDerivedData(
+        posterIdLabels = posterIdLabels,
+        postIndex = postIndex,
+        referencedByMap = referencedByMap,
+        postsByPosterId = postsByPosterId
     )
 }
 
@@ -98,6 +123,7 @@ internal data class ThreadPostListFingerprint(
 )
 
 private const val THREAD_POST_FINGERPRINT_TEXT_SAMPLE_CHARS = 512
+private const val THREAD_POST_FINGERPRINT_CANCELLATION_CHECK_INTERVAL = 64
 
 internal data class ThreadFilterCacheKey(
     val postsFingerprint: ThreadPostListFingerprint,
@@ -141,6 +167,42 @@ internal fun buildThreadPostListFingerprint(posts: List<Post>): ThreadPostListFi
         rollingHash = mixThreadPostFingerprintHash(rollingHash, post.referencedCount)
         rollingHash = mixThreadPostFingerprintHash(rollingHash, if (post.isDeleted) 1 else 0)
     }
+    return ThreadPostListFingerprint(
+        size = posts.size,
+        firstPostId = posts.first().id,
+        lastPostId = posts.last().id,
+        rollingHash = rollingHash
+    )
+}
+
+internal suspend fun buildThreadPostListFingerprintCancellable(posts: List<Post>): ThreadPostListFingerprint {
+    if (posts.isEmpty()) {
+        return buildLightweightThreadPostListFingerprint(posts)
+    }
+    coroutineContext.ensureActive()
+    var rollingHash = 1_469_598_103_934_665_603L
+    posts.forEachIndexed { index, post ->
+        if (index % THREAD_POST_FINGERPRINT_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.id)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.author)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.subject)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.posterId)
+        rollingHash = mixThreadPostFingerprintHash(
+            rollingHash,
+            post.messageHtml.take(THREAD_POST_FINGERPRINT_TEXT_SAMPLE_CHARS)
+        )
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.messageHtml.length)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.imageUrl)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.thumbnailUrl)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.saidaneLabel)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.quoteReferences.size)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, post.referencedCount)
+        rollingHash = mixThreadPostFingerprintHash(rollingHash, if (post.isDeleted) 1 else 0)
+    }
+    coroutineContext.ensureActive()
     return ThreadPostListFingerprint(
         size = posts.size,
         firstPostId = posts.first().id,

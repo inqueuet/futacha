@@ -43,6 +43,36 @@ class IosFileSystem : FileSystem {
         return error?.code == 4L
     }
 
+    private fun readFileHandleChunk(fileHandle: NSFileHandle, length: Int): NSData {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val data = fileHandle.readDataUpToLength(length.toULong(), error = error.ptr)
+            return data ?: throw Exception(
+                "Failed to read file: ${error.value?.localizedDescription ?: "Unknown error"}"
+            )
+        }
+    }
+
+    private fun writeFileHandleChunk(fileHandle: NSFileHandle, data: NSData) {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileHandle.writeData(data, error = error.ptr)
+            if (!success) {
+                throw Exception("Failed to write file: ${error.value?.localizedDescription ?: "Unknown error"}")
+            }
+        }
+    }
+
+    private fun closeFileHandle(fileHandle: NSFileHandle) {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileHandle.closeAndReturnError(error.ptr)
+            if (!success) {
+                throw Exception("Failed to close file: ${error.value?.localizedDescription ?: "Unknown error"}")
+            }
+        }
+    }
+
     private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
         val resolvedBase = resolveAbsolutePath(basePath)
         return joinPathSegments(resolvedBase, relativePath)
@@ -178,7 +208,7 @@ class IosFileSystem : FileSystem {
                 while (offset < lengthInt) {
                     coroutineContext.ensureActive()
                     val requested = minOf(streamWriteChunkBytes, lengthInt - offset)
-                    val data = fileHandle.readDataOfLength(requested.toULong())
+                    val data = readFileHandleChunk(fileHandle, requested)
                     val readLength = data.length.toInt()
                     if (readLength <= 0) break
                     bytes.usePinned { pinned ->
@@ -187,7 +217,7 @@ class IosFileSystem : FileSystem {
                     offset += readLength
                 }
             } finally {
-                fileHandle.closeFile()
+                closeFileHandle(fileHandle)
             }
             coroutineContext.ensureActive()
             if (offset == bytes.size) bytes else bytes.copyOf(offset)
@@ -399,13 +429,13 @@ class IosFileSystem : FileSystem {
                             bytes = pinned.addressOf(written),
                             length = chunkLength.toULong()
                         )
-                        fileHandle.writeData(chunk)
+                        writeFileHandleChunk(fileHandle, chunk)
                         written += chunkLength
                         coroutineContext.ensureActive()
                     }
                 }
             } finally {
-                fileHandle.closeFile()
+                closeFileHandle(fileHandle)
             }
             Unit
         }
@@ -462,7 +492,7 @@ class IosFileSystem : FileSystem {
                                     bytes = pinned.addressOf(offset + written),
                                     length = chunkLength.toULong()
                                 )
-                                fileHandle.writeData(chunk)
+                                writeFileHandleChunk(fileHandle, chunk)
                                 written += chunkLength
                                 totalWritten += chunkLength
                                 coroutineContext.ensureActive()
@@ -472,7 +502,7 @@ class IosFileSystem : FileSystem {
                 }
                 block(sink)
             } finally {
-                fileHandle.closeFile()
+                closeFileHandle(fileHandle)
             }
             Result.success(Unit)
         } catch (e: CancellationException) {

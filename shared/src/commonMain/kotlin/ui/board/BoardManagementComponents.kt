@@ -73,6 +73,14 @@ internal fun AddBoardDialog(
 ) {
     var name by rememberSaveable { mutableStateOf("") }
     var url by rememberSaveable { mutableStateOf("") }
+    val nameInputState = rememberStableTextInputState(
+        text = name,
+        onTextChange = { name = it }
+    )
+    val urlInputState = rememberStableTextInputState(
+        text = url,
+        onTextChange = { url = it }
+    )
     val validationState = remember(name, url, existingBoards) {
         buildAddBoardValidationState(
             name = name,
@@ -97,8 +105,8 @@ internal fun AddBoardDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
+                    value = nameInputState.value,
+                    onValueChange = nameInputState.onValueChange,
                     label = { Text("板の名前") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -106,8 +114,8 @@ internal fun AddBoardDialog(
                     colors = textFieldColors
                 )
                 OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
+                    value = urlInputState.value,
+                    onValueChange = urlInputState.onValueChange,
                     label = { Text("板のURL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),

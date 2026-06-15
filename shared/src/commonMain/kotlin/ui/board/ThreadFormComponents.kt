@@ -90,6 +90,11 @@ internal fun ThreadFormDialog(
         focusedIndicatorColor = MaterialTheme.colorScheme.primary,
         unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
     )
+    val commentInputState = rememberStableTextInputState(comment, onCommentChange)
+    val nameInputState = rememberStableTextInputState(name, onNameChange)
+    val emailInputState = rememberStableTextInputState(email, onEmailChange)
+    val subjectInputState = rememberStableTextInputState(subject, onSubjectChange)
+    val passwordInputState = rememberStableTextInputState(password, onPasswordChange)
     val imagePickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
         preferredFileManagerPackage = preferredFileManagerPackage,
@@ -179,8 +184,8 @@ internal fun ThreadFormDialog(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         TextField(
-                            value = comment,
-                            onValueChange = onCommentChange,
+                            value = commentInputState.value,
+                            onValueChange = commentInputState.onValueChange,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusProperties {
@@ -218,8 +223,8 @@ internal fun ThreadFormDialog(
                     }
 
                     TextField(
-                        value = name,
-                        onValueChange = onNameChange,
+                        value = nameInputState.value,
+                        onValueChange = nameInputState.onValueChange,
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("おなまえ") },
                         singleLine = true,
@@ -230,8 +235,8 @@ internal fun ThreadFormDialog(
 
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         TextField(
-                            value = email,
-                            onValueChange = onEmailChange,
+                            value = emailInputState.value,
+                            onValueChange = emailInputState.onValueChange,
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("メール") },
                             singleLine = true,
@@ -258,8 +263,8 @@ internal fun ThreadFormDialog(
 
                     if (showSubject) {
                         TextField(
-                            value = subject,
-                            onValueChange = onSubjectChange,
+                            value = subjectInputState.value,
+                            onValueChange = subjectInputState.onValueChange,
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("題名") },
                             singleLine = true,
@@ -271,8 +276,8 @@ internal fun ThreadFormDialog(
 
                     if (showPassword) {
                         TextField(
-                            value = password,
-                            onValueChange = onPasswordChange,
+                            value = passwordInputState.value,
+                            onValueChange = passwordInputState.onValueChange,
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("削除キー") },
                             singleLine = true,
@@ -330,8 +335,7 @@ internal fun ThreadFormDialog(
                             .fillMaxWidth()
                             .heightIn(min = 56.dp)
                             .padding(horizontal = 4.dp)
-                            .navigationBarsPadding()
-                            .imePadding(),
+                            .navigationBarsPadding(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {

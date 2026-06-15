@@ -51,6 +51,10 @@ internal fun GlobalSettingsSaveSection(
     val state = bindings.state
     val callbacks = bindings.callbacks
     val text = state.text
+    val manualSaveInputState = rememberStableTextInputState(
+        text = state.manualSaveInput,
+        onTextChange = callbacks.onManualSaveInputChanged
+    )
 
     SettingsSection(
         title = text.sectionTitle,
@@ -167,8 +171,8 @@ internal fun GlobalSettingsSaveSection(
                     when (state.effectiveSaveDirectorySelection) {
                         SaveDirectorySelection.MANUAL_INPUT -> {
                             OutlinedTextField(
-                                value = state.manualSaveInput,
-                                onValueChange = callbacks.onManualSaveInputChanged,
+                                value = manualSaveInputState.value,
+                                onValueChange = manualSaveInputState.onValueChange,
                                 singleLine = true,
                                 placeholder = { Text(DEFAULT_MANUAL_SAVE_ROOT) },
                                 modifier = Modifier.fillMaxWidth(),

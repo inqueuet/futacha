@@ -74,6 +74,7 @@ internal fun ThreadTopBar(
 ) {
     val searchQuery = searchQueryState.value
     val focusRequester = remember { FocusRequester() }
+    val searchInputState = rememberStableTextInputState(searchQuery, onSearchQueryChange)
     LaunchedEffect(isSearchActive) {
         if (isSearchActive) {
             focusRequester.requestFocus()
@@ -107,8 +108,8 @@ internal fun ThreadTopBar(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         TextField(
-                            value = searchQuery,
-                            onValueChange = onSearchQueryChange,
+                            value = searchInputState.value,
+                            onValueChange = searchInputState.onValueChange,
                             placeholder = { Text("スレ内検索") },
                             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                             singleLine = true,

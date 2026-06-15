@@ -83,6 +83,10 @@ internal fun WatchWordsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var input by remember { mutableStateOf("") }
+    val inputState = rememberStableTextInputState(
+        text = input,
+        onTextChange = { input = it }
+    )
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -116,8 +120,8 @@ internal fun WatchWordsSheet(
             }
 
             OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
+                value = inputState.value,
+                onValueChange = inputState.onValueChange,
                 label = { Text("追加するワード") },
                 placeholder = { Text("例: 夏休み") },
                 singleLine = true,

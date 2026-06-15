@@ -63,7 +63,7 @@ internal fun ThreadContent(
         key1 = page.posts
     ) {
         value = withContext(AppDispatchers.parsing) {
-            buildThreadPostDerivedData(page.posts)
+            buildThreadPostDerivedDataCancellable(page.posts)
         }
     }
     val posterIdLabels = derivedPostData.posterIdLabels

@@ -211,9 +211,10 @@ private fun CatalogSearchTextField(
     modifier: Modifier = Modifier
 ) {
     val focusManager = LocalFocusManager.current
+    val queryInputState = rememberStableTextInputState(query, onQueryChange)
     TextField(
-        value = query,
-        onValueChange = onQueryChange,
+        value = queryInputState.value,
+        onValueChange = queryInputState.onValueChange,
         modifier = modifier
             .padding(end = 8.dp)
             .focusRequester(focusRequester),

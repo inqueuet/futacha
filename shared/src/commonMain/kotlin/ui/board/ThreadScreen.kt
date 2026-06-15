@@ -713,6 +713,7 @@ private fun ThreadScreenContent(
     val currentPage = derivedUiState.currentPage
     val searchMatches = derivedRuntimeState.searchMatches
     val postHighlightRanges = derivedRuntimeState.postHighlightRanges
+    var searchScrollJob by remember(threadId) { mutableStateOf<Job?>(null) }
     val initialScrollRestoreState = rememberThreadInitialScrollRestoreState(
         hasRestoredInitialScroll,
         initialHistoryEntry,
@@ -773,7 +774,8 @@ private fun ThreadScreenContent(
             replyDialogBinding = replyDialogBinding,
             currentIsRefreshing = { isRefreshing },
             onScrollToPostIndex = { postIndex ->
-                coroutineScope.launch {
+                searchScrollJob?.cancel()
+                searchScrollJob = coroutineScope.launch {
                     lazyListState.animateScrollToItem(
                         resolveThreadLazyListIndexForPost(
                             postIndex = postIndex,

@@ -106,6 +106,10 @@ internal fun PastThreadSearchDialog(
     onSearch: (query: String) -> Unit
 ) {
     var query by rememberSaveable(initialQuery) { mutableStateOf(initialQuery) }
+    val queryInputState = rememberStableTextInputState(
+        text = query,
+        onTextChange = { query = it }
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -122,8 +126,8 @@ internal fun PastThreadSearchDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
+                    value = queryInputState.value,
+                    onValueChange = queryInputState.onValueChange,
                     label = { Text("検索ワード") },
                     placeholder = { Text("例: ふたば (空欄で全件取得)") },
                     singleLine = true,

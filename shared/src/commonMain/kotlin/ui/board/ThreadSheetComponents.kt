@@ -96,6 +96,7 @@ internal fun ThreadFilterSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
+    val keywordInputState = rememberStableTextInputState(keyword, onKeywordChange)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -163,8 +164,8 @@ internal fun ThreadFilterSheet(
                     }
                     if (option == ThreadFilterOption.Keyword && selected) {
                         OutlinedTextField(
-                            value = keyword,
-                            onValueChange = onKeywordChange,
+                            value = keywordInputState.value,
+                            onValueChange = keywordInputState.onValueChange,
                             label = { Text("キーワード") },
                             placeholder = { Text("表示したいキーワードをカンマ区切りで") },
                             singleLine = true,

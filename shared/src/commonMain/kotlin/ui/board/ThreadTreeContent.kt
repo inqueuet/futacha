@@ -30,21 +30,44 @@ import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+import kotlin.coroutines.coroutineContext
+
+private const val THREAD_TREE_CANCELLATION_CHECK_INTERVAL = 64
 
 internal data class ThreadTreeNode(
     val post: Post,
     val depth: Int
 )
 
-internal fun buildThreadTreeNodes(posts: List<Post>): List<ThreadTreeNode> {
+internal data class ThreadTreeComputedData(
+    val derivedPostData: ThreadPostDerivedData = ThreadPostDerivedData(),
+    val treeNodes: List<ThreadTreeNode> = emptyList()
+)
+
+internal suspend fun buildThreadTreeComputedData(posts: List<Post>): ThreadTreeComputedData {
+    return ThreadTreeComputedData(
+        derivedPostData = buildThreadPostDerivedDataCancellable(posts),
+        treeNodes = buildThreadTreeNodes(posts)
+    )
+}
+
+internal suspend fun buildThreadTreeNodes(posts: List<Post>): List<ThreadTreeNode> {
     if (posts.isEmpty()) return emptyList()
+    coroutineContext.ensureActive()
     val orderIndex = posts.mapIndexed { index, post -> post.id to index }.toMap()
+    coroutineContext.ensureActive()
     val postIndex = posts.associateBy { it.id }
     val parentByPostId = mutableMapOf<String, String?>()
     val childrenByParentId = linkedMapOf<String, MutableList<Post>>()
 
-    posts.forEach { post ->
+    posts.forEachIndexed { index, post ->
+        if (index % THREAD_TREE_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
         val primaryParentId = post.quoteReferences
             .asSequence()
             .flatMap { it.targetPostIds.asSequence() }
@@ -68,8 +91,13 @@ internal fun buildThreadTreeNodes(posts: List<Post>): List<ThreadTreeNode> {
     val roots = posts.filter { parentByPostId[it.id] == null }
     val visited = linkedSetOf<String>()
     val result = mutableListOf<ThreadTreeNode>()
+    var visitCount = 0
 
-    fun visit(post: Post, depth: Int) {
+    suspend fun visit(post: Post, depth: Int) {
+        if (visitCount++ % THREAD_TREE_CANCELLATION_CHECK_INTERVAL == 0) {
+            coroutineContext.ensureActive()
+            yield()
+        }
         if (!visited.add(post.id)) return
         result += ThreadTreeNode(post = post, depth = depth)
         childrenByParentId[post.id]
@@ -110,22 +138,16 @@ internal fun ThreadTreeContent(
     isRefreshing: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val derivedPostData by produceState(
-        initialValue = ThreadPostDerivedData(),
+    val computedData by produceState(
+        initialValue = ThreadTreeComputedData(),
         key1 = page.posts
     ) {
         value = withContext(AppDispatchers.parsing) {
-            buildThreadPostDerivedData(page.posts)
+            buildThreadTreeComputedData(page.posts)
         }
     }
-    val treeNodes by produceState(
-        initialValue = emptyList<ThreadTreeNode>(),
-        key1 = page.posts
-    ) {
-        value = withContext(AppDispatchers.parsing) {
-            buildThreadTreeNodes(page.posts)
-        }
-    }
+    val derivedPostData = computedData.derivedPostData
+    val treeNodes = computedData.treeNodes
     val posterIdLabels = derivedPostData.posterIdLabels
     val postIndex = derivedPostData.postIndex
     val referencedByMap = derivedPostData.referencedByMap

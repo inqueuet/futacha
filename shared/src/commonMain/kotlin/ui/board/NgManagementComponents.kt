@@ -108,6 +108,10 @@ internal fun NgManagementSheet(
             NgManagementSection.Word -> ""
         }
     }
+    val inputState = rememberStableTextInputState(
+        text = input,
+        onTextChange = { input = it }
+    )
     val entries = when (section) {
         NgManagementSection.Header -> ngHeaders
         NgManagementSection.Word -> ngWords
@@ -170,8 +174,8 @@ internal fun NgManagementSheet(
             }
 
             OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
+                value = inputState.value,
+                onValueChange = inputState.onValueChange,
                 label = { Text("$sectionLabel を追加") },
                 placeholder = { Text(hint) },
                 singleLine = true,

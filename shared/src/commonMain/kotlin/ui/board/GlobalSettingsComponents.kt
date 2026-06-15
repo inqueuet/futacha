@@ -478,6 +478,20 @@ private fun GlobalSettingsAppLockControls(
     var password by rememberSaveable(isAppLockEnabled) { mutableStateOf("") }
     var confirmation by rememberSaveable(isAppLockEnabled) { mutableStateOf("") }
     var errorMessage by rememberSaveable(isAppLockEnabled) { mutableStateOf<String?>(null) }
+    val passwordInputState = rememberStableTextInputState(
+        text = password,
+        onTextChange = {
+            password = it
+            errorMessage = null
+        }
+    )
+    val confirmationInputState = rememberStableTextInputState(
+        text = confirmation,
+        onTextChange = {
+            confirmation = it
+            errorMessage = null
+        }
+    )
     val actionLabel = if (isAppLockEnabled) "変更" else "有効にする"
 
     fun submitPassword() {
@@ -534,11 +548,8 @@ private fun GlobalSettingsAppLockControls(
         modifier = Modifier.fillMaxWidth()
     )
     OutlinedTextField(
-        value = password,
-        onValueChange = {
-            password = it
-            errorMessage = null
-        },
+        value = passwordInputState.value,
+        onValueChange = passwordInputState.onValueChange,
         label = { Text(if (isAppLockEnabled) "新しいパスワード" else "パスワード") },
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
@@ -546,11 +557,8 @@ private fun GlobalSettingsAppLockControls(
         modifier = Modifier.fillMaxWidth()
     )
     OutlinedTextField(
-        value = confirmation,
-        onValueChange = {
-            confirmation = it
-            errorMessage = null
-        },
+        value = confirmationInputState.value,
+        onValueChange = confirmationInputState.onValueChange,
         label = { Text("確認") },
         singleLine = true,
         isError = errorMessage != null,

@@ -21,6 +21,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.cancellation.CancellationException
 
 private const val CATALOG_HEAD_METADATA_TIMEOUT_MS = 3_000L
 private const val MAX_CATALOG_HEAD_METADATA_BATCH_SIZE = 24
@@ -118,11 +119,17 @@ internal fun rememberCatalogHeadMetadataTitles(
                                 val cacheKey = activeCacheKeysByItemId[item.id]
                                     ?: buildCatalogHeadMetadataCacheKey(boardUrl, item)
                                 val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
-                                val title = withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
-                                    repository.resolveCatalogDisplayTitle(boardUrl, item)
+                                val title = try {
+                                    withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
+                                        repository.resolveCatalogDisplayTitle(boardUrl, item)
+                                    }
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?: fallbackTitle
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (_: Throwable) {
+                                    fallbackTitle
                                 }
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?: fallbackTitle
                                 CatalogHeadMetadataResult(
                                     itemId = item.id,
                                     cacheKey = cacheKey,

@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -275,13 +276,18 @@ class ThreadSaveService(
                 )
             })
         } catch (e: CancellationException) {
-            runCatching {
-                cleanupThreadSaveFailedOutput(
-                    fileSystem = fileSystem,
-                    target = storageTarget
-                )
-            }.onFailure { cleanupError ->
-                Logger.w("ThreadSaveService", "Failed to cleanup canceled save for $storageId: ${cleanupError.message}")
+            withContext(NonCancellable) {
+                runCatching {
+                    cleanupThreadSaveFailedOutput(
+                        fileSystem = fileSystem,
+                        target = storageTarget
+                    )
+                }.onFailure { cleanupError ->
+                    Logger.w(
+                        "ThreadSaveService",
+                        "Failed to cleanup canceled save for $storageId: ${cleanupError.message}"
+                    )
+                }
             }
             throw e
         } catch (t: Throwable) {
