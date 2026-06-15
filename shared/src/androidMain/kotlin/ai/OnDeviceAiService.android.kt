@@ -493,8 +493,8 @@ private class AndroidAiRemoteServiceSession {
         data: Bundle,
         timeoutMillis: Long,
         onProgress: ((Bundle) -> Unit)?
-    ): Bundle? = requestMutex.withLock {
-        withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+    ): Bundle? = withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+        requestMutex.withLock {
             suspendCancellableCoroutine { continuation ->
                 val appContext = context.applicationContext
                 val requestId = data.getInt(KEY_REQUEST_ID)
@@ -1026,16 +1026,28 @@ private suspend fun performLocalPostModeration(
 private suspend fun <T> ListenableFuture<T>.awaitOrNull(timeoutMillis: Long): T? {
     return withTimeoutOrNull(timeoutMillis) {
         suspendCancellableCoroutine { continuation ->
+            val completed = AtomicBoolean(false)
             addListener(
                 {
+                    if (!completed.compareAndSet(false, true)) return@addListener
                     runCatching { get() }
-                        .onSuccess { continuation.resume(it) }
-                        .onFailure { continuation.resumeWithException(it) }
+                        .onSuccess {
+                            if (continuation.isActive) {
+                                continuation.resume(it)
+                            }
+                        }
+                        .onFailure {
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(it)
+                            }
+                        }
                 },
                 MoreExecutors.directExecutor()
             )
             continuation.invokeOnCancellation {
-                cancel(true)
+                if (completed.compareAndSet(false, true)) {
+                    cancel(true)
+                }
             }
         }
     }

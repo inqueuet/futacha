@@ -18,6 +18,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.ArrayDeque
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -41,6 +42,8 @@ class AndroidFileSystem(
         private const val SAF_TREE_NAVIGATION_MAX_DEPTH = 32
         private const val SAF_TREE_DELETE_MAX_ITEMS = 10_000
         private const val SAF_TREE_DELETE_MAX_DURATION_MILLIS = 30_000L
+        private const val FILE_TREE_DELETE_MAX_ITEMS = 10_000
+        private const val FILE_TREE_DELETE_MAX_DURATION_MILLIS = 30_000L
         private const val SAF_WRITE_CHUNK_BYTES = 64 * 1024
     }
 
@@ -215,17 +218,52 @@ class AndroidFileSystem(
     }
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runFsCatching {
+        try {
             validatePath(path, "path") // FIX: 入力検証
             val file = File(resolveAbsolutePath(path))
             if (!file.exists()) {
-                return@runFsCatching Unit
+                return@withContext Result.success(Unit)
             }
-            if (!file.deleteRecursively() && file.exists()) {
+            if (!deleteFileRecursivelyBounded(file) && file.exists()) {
                 throw IllegalStateException("Failed to delete recursively: ${file.absolutePath}")
             }
-            Unit
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
+    }
+
+    private suspend fun deleteFileRecursivelyBounded(root: File): Boolean {
+        val deadlineMillis = System.currentTimeMillis() + FILE_TREE_DELETE_MAX_DURATION_MILLIS
+        val stack = ArrayDeque<Pair<File, Boolean>>()
+        stack.add(root to false)
+        var count = 0
+        while (!stack.isEmpty()) {
+            coroutineContext.ensureActive()
+            if (System.currentTimeMillis() > deadlineMillis) {
+                throw IllegalStateException("Timed out while deleting file tree item: ${root.absolutePath}")
+            }
+            count += 1
+            if (count > FILE_TREE_DELETE_MAX_ITEMS) {
+                throw IllegalStateException("Too many files while deleting file tree item: ${root.absolutePath}")
+            }
+            val (file, visitedChildren) = stack.removeLast()
+            if (!file.exists()) continue
+            if (file.isDirectory && !visitedChildren) {
+                stack.add(file to true)
+                val children = runInterruptible { file.listFiles() }.orEmpty()
+                children.forEach { child ->
+                    stack.add(child to false)
+                }
+                continue
+            }
+            if (!runInterruptible { file.delete() } && runInterruptible { file.exists() }) {
+                return false
+            }
+        }
+        return true
     }
 
     override suspend fun exists(path: String): Boolean = withContext(Dispatchers.IO) {

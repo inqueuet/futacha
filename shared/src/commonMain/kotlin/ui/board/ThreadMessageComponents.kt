@@ -21,6 +21,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val QUOTE_ANNOTATION_TAG = "quote"
@@ -61,14 +63,17 @@ private class ThreadMessageAnnotationCache(
 ) {
     private val entries = LinkedHashMap<ThreadMessageAnnotationCacheKey, AnnotatedString>()
     private var estimatedBytes = 0
+    private val mutex = Mutex()
 
-    fun get(key: ThreadMessageAnnotationCacheKey): AnnotatedString? {
-        val value = entries.remove(key) ?: return null
-        entries[key] = value
-        return value
+    suspend fun get(key: ThreadMessageAnnotationCacheKey): AnnotatedString? = mutex.withLock {
+        val value = entries.remove(key)
+        if (value != null) {
+            entries[key] = value
+        }
+        value
     }
 
-    fun put(key: ThreadMessageAnnotationCacheKey, value: AnnotatedString) {
+    suspend fun put(key: ThreadMessageAnnotationCacheKey, value: AnnotatedString) = mutex.withLock {
         entries.remove(key)?.let { removed ->
             estimatedBytes -= estimateEntryBytes(key, removed)
         }
@@ -116,7 +121,7 @@ internal fun ThreadMessageText(
         buildThreadMessageAnnotationCacheKey(messageHtml, quoteReferences)
     }
     val baseAnnotated: AnnotatedString by produceState(
-        initialValue = threadMessageAnnotationBaseCache.get(annotationCacheKey) ?: AnnotatedString(""),
+        initialValue = AnnotatedString(""),
         key1 = annotationCacheKey,
         key2 = messageHtml,
         key3 = quoteReferences

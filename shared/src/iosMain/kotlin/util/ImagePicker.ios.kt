@@ -55,6 +55,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 private val activePickerDelegates = AtomicReference<List<NSObject>>(emptyList())
 private const val DEFAULT_PICKED_VIDEO_FILE_NAME = "video.mov"
 private const val PICKED_MEDIA_LOAD_TIMEOUT_MILLIS = 30_000L
+private const val PICKED_MEDIA_READ_CHUNK_BYTES = 64 * 1024
 private const val MILLIS_PER_SECOND = 1_000.0
 
 private class ResumeGate {
@@ -160,30 +161,12 @@ private fun loadPickedMediaFromUrl(
         }
     }
 
-    val data = NSData.dataWithContentsOfURL(url)
-    if (data == null) {
-        Logger.w("ImagePicker.ios", "Failed to load $mediaLabel from ${url.path}")
-        return null
+    readPickedMediaBytesFromUnknownSizeFileUrl(url, mediaLabel)?.let { bytes ->
+        return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
     }
 
-    val dataLength = data.length.toLong()
-    if (!isPickedImagePayloadSizeValid(dataLength)) {
-        Logger.w(
-            "ImagePicker.ios",
-            if (dataLength > MAX_PICKED_IMAGE_BYTES) {
-                "Selected $mediaLabel is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
-            } else {
-                "Selected $mediaLabel payload is empty"
-            }
-        )
-        return null
-    }
-
-    val bytes = ByteArray(dataLength.toInt())
-    bytes.usePinned { pinned ->
-        memcpy(pinned.addressOf(0), data.bytes, data.length)
-    }
-    return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
+    Logger.w("ImagePicker.ios", "Failed to load $mediaLabel from ${url.path}")
+    return null
 }
 
 private fun readPickedMediaBytesFromFileUrl(
@@ -206,7 +189,7 @@ private fun readPickedMediaBytesFromFileUrl(
                 // readDataOfLength throws ObjC NSException on I/O errors, which
                 // Kotlin/Native cannot catch; use the error-returning variant.
                 readError.value = null
-                val chunk = fileHandle.readDataUpToLength(64UL * 1024UL, error = readError.ptr)
+                val chunk = fileHandle.readDataUpToLength(PICKED_MEDIA_READ_CHUNK_BYTES.toULong(), error = readError.ptr)
                 if (chunk == null) {
                     Logger.w(
                         "ImagePicker.ios",
@@ -238,6 +221,59 @@ private fun readPickedMediaBytesFromFileUrl(
         return null
     }
     return if (totalRead == expectedSize) output else output.copyOf(totalRead)
+}
+
+private fun readPickedMediaBytesFromUnknownSizeFileUrl(
+    url: NSURL,
+    mediaLabel: String
+): ByteArray? {
+    val path = url.path ?: return null
+    val maxBytes = MAX_PICKED_IMAGE_BYTES.toInt()
+    val output = ByteArray(maxBytes)
+    val fileHandle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
+    var totalRead = 0
+
+    try {
+        memScoped {
+            val readError = alloc<ObjCObjectVar<NSError?>>()
+            while (true) {
+                readError.value = null
+                val chunk = fileHandle.readDataUpToLength(PICKED_MEDIA_READ_CHUNK_BYTES.toULong(), error = readError.ptr)
+                if (chunk == null) {
+                    Logger.w(
+                        "ImagePicker.ios",
+                        "Failed to read $mediaLabel: ${readError.value?.localizedDescription}"
+                    )
+                    return null
+                }
+                val chunkLength = chunk.length.toInt()
+                if (chunkLength <= 0) break
+                if (totalRead + chunkLength > maxBytes) {
+                    Logger.w(
+                        "ImagePicker.ios",
+                        "Selected $mediaLabel is too large: ${(totalRead + chunkLength) / 1024}KB " +
+                            "(max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                    )
+                    return null
+                }
+                output.usePinned { pinned ->
+                    memcpy(pinned.addressOf(totalRead), chunk.bytes, chunk.length)
+                }
+                totalRead += chunkLength
+            }
+        }
+    } finally {
+        memScoped {
+            val closeError = alloc<ObjCObjectVar<NSError?>>()
+            fileHandle.closeAndReturnError(closeError.ptr)
+        }
+    }
+
+    if (totalRead <= 0) {
+        Logger.w("ImagePicker.ios", "Selected $mediaLabel payload is empty")
+        return null
+    }
+    return output.copyOf(totalRead)
 }
 
 /**

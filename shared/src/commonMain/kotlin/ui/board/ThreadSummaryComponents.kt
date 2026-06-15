@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.ai.ThreadSummary
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 internal sealed interface ThreadSummaryUiState {
     data object Loading : ThreadSummaryUiState
@@ -52,7 +53,7 @@ internal fun ThreadSummaryCard(
                 }
                 var statusIndex by remember { mutableStateOf(0) }
                 LaunchedEffect(Unit) {
-                    while (true) {
+                    while (isActive) {
                         delay(1_200L)
                         statusIndex = (statusIndex + 1) % statusMessages.size
                     }
