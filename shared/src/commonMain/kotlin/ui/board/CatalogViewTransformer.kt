@@ -39,9 +39,17 @@ internal fun prioritizeWatchWordMatches(
     if (mode == CatalogMode.WatchWords) return items
     val normalizedWatchWords = normalizeWatchWords(watchWords)
     if (normalizedWatchWords.isEmpty()) return items
-    return items.sortedBy { item ->
-        if (item.matchesNormalizedWatchWords(normalizedWatchWords)) 0 else 1
+    val matched = ArrayList<CatalogItem>()
+    val unmatched = ArrayList<CatalogItem>()
+    items.forEach { item ->
+        if (item.matchesNormalizedWatchWords(normalizedWatchWords)) {
+            matched += item
+        } else {
+            unmatched += item
+        }
     }
+    if (matched.isEmpty()) return items
+    return matched + unmatched
 }
 
 internal fun mergeWatchSourceCatalogItems(

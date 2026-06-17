@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
@@ -236,6 +237,18 @@ private fun PastSearchResultRow(
     onClick: () -> Unit
 ) {
     val imageLoader = LocalFutachaImageLoader.current
+    val platformContext = LocalPlatformContext.current
+    val density = LocalDensity.current
+    val thumbnailSizePx = remember(density) {
+        with(density) { 56.dp.roundToPx() }
+    }
+    val thumbnailRequest = remember(platformContext, item.thumbUrl, thumbnailSizePx) {
+        ImageRequest.Builder(platformContext)
+            .data(item.thumbUrl)
+            .crossfade(false)
+            .size(thumbnailSizePx, thumbnailSizePx)
+            .build()
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -251,10 +264,7 @@ private fun PastSearchResultRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             val painter = rememberAsyncImagePainter(
-                model = ImageRequest.Builder(LocalPlatformContext.current)
-                    .data(item.thumbUrl)
-                    .crossfade(true)
-                    .build(),
+                model = thumbnailRequest,
                 imageLoader = imageLoader
             )
             val painterState by painter.state.collectAsState()

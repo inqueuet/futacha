@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
@@ -223,10 +224,15 @@ private fun HistoryEntryCard(
 ) {
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
-    val titleImageRequest = remember(platformContext, entry.titleImageUrl) {
+    val density = LocalDensity.current
+    val titleImageSizePx = remember(density) {
+        with(density) { 48.dp.roundToPx() }
+    }
+    val titleImageRequest = remember(platformContext, entry.titleImageUrl, titleImageSizePx) {
         ImageRequest.Builder(platformContext)
             .data(entry.titleImageUrl)
-            .crossfade(true)
+            .crossfade(false)
+            .size(titleImageSizePx, titleImageSizePx)
             .build()
     }
     val titlePainter = rememberAsyncImagePainter(

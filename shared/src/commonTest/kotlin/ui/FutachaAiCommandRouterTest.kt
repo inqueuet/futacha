@@ -54,6 +54,87 @@ class FutachaAiCommandRouterTest {
     }
 
     @Test
+    fun disabledAiCommandsAllowSafeWearAndWatchOsCommands() {
+        runBlocking {
+            val harness = RouterHarness(isAiCommandEnabled = false)
+
+            val openBoard = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.OpenBoard,
+                    parameters = mapOf("boardId" to "b"),
+                    source = "wear-os"
+                ),
+                inputs = harness.inputs()
+            )
+            val watchOsOpenBoard = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.OpenBoard,
+                    parameters = mapOf("boardId" to "b"),
+                    source = "watchos"
+                ),
+                inputs = harness.inputs()
+            )
+            val openThread = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.OpenThread,
+                    parameters = mapOf(
+                        "boardId" to "b",
+                        "boardUrl" to "https://may.2chan.net/b/",
+                        "threadId" to "123"
+                    ),
+                    source = "wear-os"
+                ),
+                inputs = harness.inputs()
+            )
+            val readAloud = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.StartThreadReadAloud,
+                    parameters = mapOf(
+                        "boardId" to "b",
+                        "boardUrl" to "https://may.2chan.net/b/",
+                        "threadId" to "123"
+                    ),
+                    source = "wear-os"
+                ),
+                inputs = harness.inputs()
+            )
+
+            assertIs<FutachaAiCommandOutcome.Completed>(openBoard)
+            assertIs<FutachaAiCommandOutcome.Completed>(watchOsOpenBoard)
+            assertIs<FutachaAiCommandOutcome.Completed>(openThread)
+            assertIs<FutachaAiCommandOutcome.NeedsForeground>(readAloud)
+            assertEquals("b", harness.navigationState.selectedBoardId)
+            assertEquals("123", harness.navigationState.selectedThreadId)
+        }
+    }
+
+    @Test
+    fun disabledAiCommandsStillRejectNonWearAndUnsafeWearCommands() {
+        runBlocking {
+            val harness = RouterHarness(isAiCommandEnabled = false)
+
+            val nonWearOpenBoard = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.OpenBoard,
+                    parameters = mapOf("boardId" to "b"),
+                    source = "app-function"
+                ),
+                inputs = harness.inputs()
+            )
+            val unsafeWearCommand = executeFutachaAiCommand(
+                command = FutachaAiCommand(
+                    action = FutachaAiAction.EnablePrivacyFilter,
+                    source = "wear-os"
+                ),
+                inputs = harness.inputs()
+            )
+
+            assertIs<FutachaAiCommandOutcome.Failed>(nonWearOpenBoard)
+            assertIs<FutachaAiCommandOutcome.Failed>(unsafeWearCommand)
+        }
+    }
+
+    @Test
     fun confirmRiskCommandReturnsConfirmationBeforeExecution() {
         runBlocking {
             val harness = RouterHarness(

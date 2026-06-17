@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
@@ -140,10 +141,15 @@ private fun GalleryAttachmentItem(
     onPostClick: () -> Unit
 ) {
     val platformContext = LocalPlatformContext.current
-    val previewRequest = remember(platformContext, item.previewUrl) {
+    val density = LocalDensity.current
+    val previewSizePx = remember(density) {
+        with(density) { 180.dp.roundToPx() }
+    }
+    val previewRequest = remember(platformContext, item.previewUrl, previewSizePx) {
         buildThreadAttachmentPreviewRequest(
             platformContext = platformContext,
-            previewUrl = item.previewUrl
+            previewUrl = item.previewUrl,
+            previewSizePx = previewSizePx
         )
     }
     val previewPainter = rememberAsyncImagePainter(

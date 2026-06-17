@@ -33,7 +33,28 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.withContext
 
 internal fun buildThreadPostLazyListKey(index: Int, post: Post): String {
-    return "thread-post-$index-${post.id}"
+    return buildThreadPostStableLazyListKey("thread-post", post)
+}
+
+internal fun buildThreadPostLazyListKeys(posts: List<Post>, prefix: String = "thread-post"): List<String> {
+    val countsById = posts
+        .groupingBy { it.id }
+        .eachCount()
+    val ordinalsById = mutableMapOf<String, Int>()
+    return posts.map { post ->
+        val id = post.id
+        if ((countsById[id] ?: 0) <= 1) {
+            "$prefix-$id"
+        } else {
+            val ordinal = ordinalsById[id] ?: 0
+            ordinalsById[id] = ordinal + 1
+            "$prefix-$id-$ordinal"
+        }
+    }
+}
+
+private fun buildThreadPostStableLazyListKey(prefix: String, post: Post): String {
+    return "$prefix-${post.id}"
 }
 
 @Composable
@@ -70,6 +91,9 @@ internal fun ThreadContent(
     val postIndex = derivedPostData.postIndex
     val referencedByMap = derivedPostData.referencedByMap
     val postsByPosterId = derivedPostData.postsByPosterId
+    val postLazyListKeys = remember(page.posts) {
+        buildThreadPostLazyListKeys(page.posts)
+    }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
@@ -150,7 +174,9 @@ internal fun ThreadContent(
                 }
                 itemsIndexed(
                     items = page.posts,
-                    key = ::buildThreadPostLazyListKey
+                    key = { index, post ->
+                        postLazyListKeys.getOrNull(index) ?: buildThreadPostLazyListKey(index, post)
+                    }
                 ) { index, post ->
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())
                     val isAiHidden = post.id in aiHiddenPostIds && post.id !in revealedAiHiddenPostIds

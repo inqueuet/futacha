@@ -6,6 +6,7 @@
 
 - 共通 UI エントリーポイントは `shared/src/commonMain/kotlin/ui/FutachaApp.kt`
 - Android ホストは `app-android/`
+- Wear OS ホストは `app-wear/`
 - iOS ホストは `iosApp/`
 - 状態管理は `AppStateStore`
 - 通信は Ktor、HTML 解析は shared の parser 実装
@@ -57,6 +58,7 @@
 ```text
 .
 ├── app-android/   Android ホストアプリ
+├── app-wear/      Wear OS ホストアプリ
 ├── iosApp/        iOS ホストアプリ (SwiftUI)
 ├── shared/        共通 UI / 状態 / 通信 / パーサ / 保存 / テスト
 └── AGENTS.md      実装メモと内部向け詳細ドキュメント
@@ -80,7 +82,7 @@
 - Xcode 15 以降
 - CocoaPods
 
-Android 側のビルド設定は `compileSdk 36 / minSdk 24`、iOS 側の deployment target は 15.0 です。
+Android / Wear OS 側のビルド設定は `compileSdk 37 / targetSdk 37 / minSdk 26`、iOS 側の deployment target は 15.0 です。
 
 ## セットアップ
 

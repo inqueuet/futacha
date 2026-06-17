@@ -32,12 +32,14 @@ internal fun buildThreadAttachmentGalleryItems(posts: List<Post>): List<ThreadAt
 
 internal fun buildThreadAttachmentPreviewRequest(
     platformContext: PlatformContext,
-    previewUrl: String?
+    previewUrl: String?,
+    previewSizePx: Int
 ): ImageRequest? {
     val mediaInfo = parseMediaUrlInfo(previewUrl) ?: return null
     return ImageRequest.Builder(platformContext)
         .data(previewUrl)
-        .crossfade(true)
+        .crossfade(false)
+        .size(previewSizePx, previewSizePx)
         .apply {
             if (mediaInfo.isGif) {
                 transformations(StaticGifThumbnailTransformation)

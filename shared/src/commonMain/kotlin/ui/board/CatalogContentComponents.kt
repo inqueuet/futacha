@@ -71,6 +71,8 @@ internal fun CatalogSuccessContent(
             modifier = modifier
         )
     } else {
+        val shouldResolveHeadMetadata = resolveHeadMetadata &&
+            (displayStyle != CatalogDisplayStyle.Grid || gridColumns <= 6)
         val resolvedHeadTitles = rememberCatalogHeadMetadataTitles(
             items = items,
             embeddedHtml = embeddedHtml,
@@ -79,7 +81,7 @@ internal fun CatalogSuccessContent(
             displayStyle = displayStyle,
             gridState = gridState,
             listState = listState,
-            resolveHeadMetadata = resolveHeadMetadata
+            resolveHeadMetadata = shouldResolveHeadMetadata
         )
         when (displayStyle) {
             CatalogDisplayStyle.Grid -> CatalogGrid(
@@ -93,7 +95,7 @@ internal fun CatalogSuccessContent(
                 gridColumns = gridColumns,
                 gridState = gridState,
                 resolvedHeadTitles = resolvedHeadTitles,
-                resolveHeadMetadata = resolveHeadMetadata,
+                resolveHeadMetadata = shouldResolveHeadMetadata,
                 modifier = modifier
             )
 
@@ -107,7 +109,7 @@ internal fun CatalogSuccessContent(
                 isRefreshing = isRefreshing,
                 listState = listState,
                 resolvedHeadTitles = resolvedHeadTitles,
-                resolveHeadMetadata = resolveHeadMetadata,
+                resolveHeadMetadata = shouldResolveHeadMetadata,
                 modifier = modifier
             )
         }

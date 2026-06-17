@@ -5,10 +5,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -51,6 +49,10 @@ private data class ThreadMessageQuoteCacheKey(
     val text: String,
     val targetPostIds: List<String>
 )
+
+private class ThreadMessageTextLayoutHolder {
+    var value: TextLayoutResult? = null
+}
 
 private data class ThreadMessageAnnotationCacheKey(
     val messageHtml: String,
@@ -148,12 +150,12 @@ internal fun ThreadMessageText(
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val textLayoutResult = remember { ThreadMessageTextLayoutHolder() }
     Text(
         modifier = modifier.pointerInput(annotated, quoteReferences, onUrlClick) {
             detectTapGestures(
                 onLongPress = { position ->
-                    val layout = textLayoutResult ?: return@detectTapGestures
+                    val layout = textLayoutResult.value ?: return@detectTapGestures
                     val offset = layout.getOffsetForPosition(position)
                     val quoteIndex = annotated
                         .getStringAnnotations(QUOTE_ANNOTATION_TAG, offset, offset)
@@ -166,7 +168,7 @@ internal fun ThreadMessageText(
                         ?.let(onQuoteClick)
                 },
                 onTap = { position ->
-                    val layout = textLayoutResult ?: return@detectTapGestures
+                    val layout = textLayoutResult.value ?: return@detectTapGestures
                     val offset = layout.getOffsetForPosition(position)
                     val url = annotated
                         .getStringAnnotations(URL_ANNOTATION_TAG, offset, offset)
@@ -190,7 +192,7 @@ internal fun ThreadMessageText(
         },
         text = annotated,
         style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
-        onTextLayout = { textLayoutResult = it }
+        onTextLayout = { textLayoutResult.value = it }
     )
 }
 

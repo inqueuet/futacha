@@ -52,11 +52,12 @@ class ThreadScreenInteractionLogicTest {
             Post(id = "101", author = null, subject = null, timestamp = "now", messageHtml = "next", imageUrl = null, thumbnailUrl = null)
         )
 
-        val keys = posts.mapIndexed(::buildThreadPostLazyListKey)
+        val keys = buildThreadPostLazyListKeys(posts)
 
         assertEquals(keys.distinct(), keys)
-        assertEquals("thread-post-0-100", keys.first())
-        assertEquals("thread-post-1-100", keys[1])
+        assertEquals("thread-post-100-0", keys.first())
+        assertEquals("thread-post-100-1", keys[1])
+        assertEquals("thread-post-101", keys[2])
     }
 
     @Test

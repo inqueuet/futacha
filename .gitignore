@@ -34,6 +34,7 @@ local.properties
 *.provisionprofile
 *.p12
 *.pem
+*.p8
 AuthKey_*.p8
 /futacha
 

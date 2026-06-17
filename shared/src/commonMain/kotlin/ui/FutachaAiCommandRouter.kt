@@ -33,6 +33,7 @@ private const val AI_HISTORY_REFRESH_TIMEOUT_MILLIS = 60_000L
 private const val AI_HISTORY_REFRESH_MAX_THREADS = 12
 private const val AI_HISTORY_REFRESH_AUTO_SAVE_BUDGET_MILLIS = 10_000L
 private const val AI_HISTORY_REFRESH_MAX_AUTO_SAVES = 1
+private val WATCH_AI_COMMAND_SOURCES = setOf("wear-os", "watchos")
 
 internal data class FutachaAiRouterInputs(
     val stateStore: AppStateStore,
@@ -54,7 +55,7 @@ internal suspend fun executeFutachaAiCommand(
     inputs: FutachaAiRouterInputs,
     confirmed: Boolean = false
 ): FutachaAiCommandOutcome {
-    if (!inputs.isAiCommandEnabled && !command.action.isAllowedWhenAiCommandsDisabled()) {
+    if (!inputs.isAiCommandEnabled && !command.isAllowedWhenAiCommandsDisabled()) {
         return FutachaAiCommandOutcome.Failed("AIアプリ操作は設定でOFFです。設定画面から「AIアプリ操作」をONにしてください。")
     }
 
@@ -351,10 +352,26 @@ internal suspend fun executeFutachaAiCommand(
     }
 }
 
-private fun FutachaAiAction.isAllowedWhenAiCommandsDisabled(): Boolean {
+private fun FutachaAiCommand.isAllowedWhenAiCommandsDisabled(): Boolean {
+    return action.isAlwaysAllowedWhenAiCommandsDisabled() ||
+        isAllowedWatchCommandWhenAiCommandsDisabled()
+}
+
+private fun FutachaAiAction.isAlwaysAllowedWhenAiCommandsDisabled(): Boolean {
     return this == FutachaAiAction.OpenGlobalSettings ||
         this == FutachaAiAction.OpenVersionInfo ||
         this == FutachaAiAction.OpenFileManagerSettings
+}
+
+private fun FutachaAiCommand.isAllowedWatchCommandWhenAiCommandsDisabled(): Boolean {
+    if (WATCH_AI_COMMAND_SOURCES.none { it.equals(source, ignoreCase = true) }) return false
+    return action == FutachaAiAction.OpenBoard ||
+        action == FutachaAiAction.OpenThread ||
+        action == FutachaAiAction.StartThreadReadAloud ||
+        action == FutachaAiAction.PauseThreadReadAloud ||
+        action == FutachaAiAction.StopThreadReadAloud ||
+        action == FutachaAiAction.NextThreadReadAloud ||
+        action == FutachaAiAction.PreviousThreadReadAloud
 }
 
 private fun buildFutachaAiConfirmationRequest(command: FutachaAiCommand): FutachaAiConfirmationRequest {

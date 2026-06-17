@@ -152,6 +152,12 @@ internal fun ThreadTreeContent(
     val postIndex = derivedPostData.postIndex
     val referencedByMap = derivedPostData.referencedByMap
     val postsByPosterId = derivedPostData.postsByPosterId
+    val treePostLazyListKeys = remember(treeNodes) {
+        buildThreadPostLazyListKeys(
+            posts = treeNodes.map { it.post },
+            prefix = "tree-post"
+        )
+    }
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
@@ -232,7 +238,9 @@ internal fun ThreadTreeContent(
                 }
                 itemsIndexed(
                     items = treeNodes,
-                    key = { _, node -> "tree-${node.post.id}" }
+                    key = { index, node ->
+                        treePostLazyListKeys.getOrNull(index) ?: "tree-post-${node.post.id}"
+                    }
                 ) { index, node ->
                     val post = node.post
                     val isSelfPost = selfPostIdentifiers.contains(post.id.trim())

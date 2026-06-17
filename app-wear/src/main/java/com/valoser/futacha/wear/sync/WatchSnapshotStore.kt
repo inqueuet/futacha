@@ -10,6 +10,7 @@ import com.google.android.gms.wearable.Wearable
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
+import com.valoser.futacha.wear.live.ReadAloudLiveUpdateNotifier
 import com.valoser.futacha.wear.tile.FutachaTileService
 import androidx.wear.tiles.TileService
 import kotlinx.coroutines.CoroutineScope
@@ -102,6 +103,7 @@ object WatchSnapshotStore {
                 return false
             }
             snapshotState.value = snapshot
+            ReadAloudLiveUpdateNotifier.update(context.applicationContext, snapshot)
             TileService.getUpdater(context.applicationContext)
                 .requestUpdate(FutachaTileService::class.java)
             return true

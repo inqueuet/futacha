@@ -16,8 +16,8 @@ class JsoupHtmlParser : HtmlParser {
         ThreadHtmlParserCore.extractOpImageUrl(html, baseUrl)
 
     override fun extractCatalogEmbeddedHtml(html: String, baseUrl: String?): List<EmbeddedHtmlContent> =
-        PageEmbeddedHtmlParserSupport.extractCatalogEmbeddedHtml(html, baseUrl)
+        emptyList()
 
     override fun extractThreadEmbeddedHtml(html: String, baseUrl: String?): List<EmbeddedHtmlContent> =
-        PageEmbeddedHtmlParserSupport.extractThreadEmbeddedHtml(html, baseUrl)
+        emptyList()
 }
