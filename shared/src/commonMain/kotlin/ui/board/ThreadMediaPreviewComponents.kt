@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,6 +45,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun ThreadMediaPreviewDialog(
@@ -54,17 +57,21 @@ internal fun ThreadMediaPreviewDialog(
     onSave: (MediaPreviewEntry) -> Unit
 ) {
     when (state.entry.mediaType) {
-        MediaType.Image -> ImagePreviewDialog(
-            entry = state.entry,
-            currentIndex = state.currentIndex,
-            totalCount = state.totalCount,
-            onDismiss = onDismiss,
-            onNavigateNext = onNavigateNext,
-            onNavigatePrevious = onNavigatePrevious,
-            onSave = { onSave(state.entry) },
-            isSaveEnabled = state.isSaveEnabled,
-            isSaveInProgress = state.isSaveInProgress
-        )
+        MediaType.Image -> {
+            val displayTitle by rememberMediaPreviewDisplayTitle(state.entry)
+            ImagePreviewDialog(
+                entry = state.entry,
+                displayTitle = displayTitle,
+                currentIndex = state.currentIndex,
+                totalCount = state.totalCount,
+                onDismiss = onDismiss,
+                onNavigateNext = onNavigateNext,
+                onNavigatePrevious = onNavigatePrevious,
+                onSave = { onSave(state.entry) },
+                isSaveEnabled = state.isSaveEnabled,
+                isSaveInProgress = state.isSaveInProgress
+            )
+        }
 
         MediaType.Video -> VideoPreviewDialog(
             entry = state.entry,
@@ -79,6 +86,19 @@ internal fun ThreadMediaPreviewDialog(
         )
     }
 }
+
+@Composable
+private fun rememberMediaPreviewDisplayTitle(entry: MediaPreviewEntry) =
+    produceState(
+        initialValue = entry.title,
+        key1 = entry.url,
+        key2 = entry.postId,
+        key3 = entry.messageHtml
+    ) {
+        value = withContext(AppDispatchers.parsing) {
+            resolveMediaPreviewDisplayTitle(entry)
+        }
+    }
 
 @Composable
 internal fun ThreadMediaPreviewDialogFrame(

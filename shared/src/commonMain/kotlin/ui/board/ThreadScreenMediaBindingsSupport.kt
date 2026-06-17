@@ -8,7 +8,8 @@ internal data class ThreadScreenMediaBindings(
 internal fun buildThreadScreenMediaBindings(
     currentPreviewState: () -> ThreadMediaPreviewState,
     setPreviewState: (ThreadMediaPreviewState) -> Unit,
-    currentEntries: () -> List<MediaPreviewEntry>
+    currentEntries: () -> List<MediaPreviewEntry>,
+    currentIndexByKey: () -> Map<MediaPreviewKey, Int>
 ): ThreadScreenMediaBindings {
     return ThreadScreenMediaBindings(
         normalizePreviewState = {
@@ -21,6 +22,7 @@ internal fun buildThreadScreenMediaBindings(
             resolveThreadMediaClickState(
                 currentState = currentPreviewState(),
                 entries = currentEntries(),
+                indexByKey = currentIndexByKey(),
                 url = url,
                 mediaType = mediaType
             )?.let(setPreviewState)

@@ -351,7 +351,8 @@ class ThreadScreenRuntimeLogicTest {
         val bindings = buildThreadScreenMediaBindings(
             currentPreviewState = { previewState },
             setPreviewState = { previewState = it },
-            currentEntries = { entries }
+            currentEntries = { entries },
+            currentIndexByKey = { buildMediaPreviewIndexByKey(entries) }
         )
 
         bindings.normalizePreviewState()

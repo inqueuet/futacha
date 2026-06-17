@@ -4,12 +4,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import coil3.ComponentRegistry
+import coil3.Extras
 import coil3.ImageLoader
 import coil3.compose.LocalPlatformContext
 import coil3.disk.DiskCache
+import coil3.getExtra
 import coil3.intercept.Interceptor
 import coil3.memory.MemoryCache
 import coil3.request.ErrorResult
+import coil3.request.ImageRequest
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -26,6 +29,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
+import kotlin.time.Clock
 
 private const val DEFAULT_MAX_PARALLELISM = 3
 private const val DEFAULT_IMAGE_MEMORY_CACHE_BYTES = 32L * 1024L * 1024L
@@ -42,6 +46,23 @@ data class ImageCacheConfig(
     val diskCacheBytes: Long,
     val parallelism: Int
 )
+
+data class FutabaExtensionFallbackPolicy(
+    val maxAttempts: Int = 2,
+    val allowVideoFallback: Boolean = true,
+    val preferStaticCandidates: Boolean = false,
+    val maxVideoAttempts: Int = Int.MAX_VALUE,
+    val videoFallbackTimeoutMillis: Long = VIDEO_FALLBACK_TIMEOUT_MILLIS,
+    val negativeCacheTtlMillis: Long = Long.MAX_VALUE
+)
+
+private val FutabaExtensionFallbackPolicyKey = Extras.Key(FutabaExtensionFallbackPolicy())
+
+fun ImageRequest.Builder.futabaExtensionFallbackPolicy(
+    policy: FutabaExtensionFallbackPolicy
+): ImageRequest.Builder = apply {
+    extras[FutabaExtensionFallbackPolicyKey] = policy
+}
 
 val LocalFutachaImageLoader = staticCompositionLocalOf<ImageLoader> {
     error("FutachaImageLoader is not provided")
@@ -102,7 +123,7 @@ fun rememberFutachaImageLoader(
 private class FutabaExtensionFallbackInterceptor : Interceptor {
     private val sourceExtensionRegex = Regex("(?i)\\.([a-z0-9]{3,4})(?=([?#].*)?$)")
     private val exhaustedUrlsMutex = Mutex()
-    private val exhaustedUrls = LinkedHashSet<String>()
+    private val exhaustedUrls = LinkedHashMap<ExhaustedFallbackKey, ExhaustedFallbackEntry>()
     private val exhaustedUrlMaxEntries = 256
     private val recoveredUrlsMutex = Mutex()
     private val recoveredUrls = LinkedHashMap<String, String>()
@@ -113,25 +134,29 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
         val initialRequest = chain.request
         val initialResult = chain.proceed()
+        val policy = initialRequest.getExtra(FutabaExtensionFallbackPolicyKey)
 
         // Retry with alternative extensions for Futaba source media URLs.
         if (initialResult is ErrorResult) {
             val url = initialRequest.data.toString()
-            if (url.contains("/src/")) {
-                if (isExhausted(url)) {
+            if (url.contains("/src/") && policy.maxAttempts > 0) {
+                if (isExhausted(url, policy)) {
                     return initialResult
                 }
                 readRecoveredUrl(url)?.let { recoveredUrl ->
-                    val recoveredResult = proceedWithFallbackUrl(
-                        chain = chain,
-                        initialRequest = initialRequest,
-                        fallbackUrl = recoveredUrl
-                    )
-                    if (recoveredResult is SuccessResult) {
-                        markRecovered(url, recoveredUrl)
-                        return recoveredResult
+                    if (policy.allowsExtension(recoveredUrl.extensionOrNull())) {
+                        val recoveredResult = proceedWithFallbackUrl(
+                            chain = chain,
+                            initialRequest = initialRequest,
+                            fallbackUrl = recoveredUrl,
+                            policy = policy
+                        )
+                        if (recoveredResult is SuccessResult) {
+                            markRecovered(url, recoveredUrl)
+                            return recoveredResult
+                        }
+                        forgetRecoveredUrl(url)
                     }
-                    forgetRecoveredUrl(url)
                 }
                 val normalizedUrl = url.substringBefore('#').substringBefore('?')
                 val currentExtension = sourceExtensionRegex
@@ -139,14 +164,18 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
                     ?.groupValues
                     ?.getOrNull(1)
                     ?.lowercase()
-                val fallbackExtensions = fallbackExtensionsFor(currentExtension)
+                val fallbackExtensions = resolveFutabaExtensionFallbackCandidates(
+                    currentExtension = currentExtension,
+                    policy = policy
+                )
                 for (ext in fallbackExtensions) {
                     val newUrl = replaceOrAppendExtension(url, ext)
                     if (newUrl == url) continue
                     val newResult = proceedWithFallbackUrl(
                         chain = chain,
                         initialRequest = initialRequest,
-                        fallbackUrl = newUrl
+                        fallbackUrl = newUrl,
+                        policy = policy
                     )
 
                     if (newResult is SuccessResult) {
@@ -154,41 +183,31 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
                         return newResult
                     }
                 }
-                rememberExhaustedUrl(url)
+                rememberExhaustedUrl(url, policy)
             }
         }
         return initialResult
     }
 
-    private fun fallbackExtensionsFor(currentExtension: String?): List<String> {
-        val candidates = when (currentExtension) {
-            "jpg", "jpeg" -> listOf("webm", "mp4", "gif", "png")
-            "webm", "mp4" -> listOf("jpg", "jpeg", "png")
-            "gif", "png", "webp" -> listOf("jpg", "jpeg")
-            else -> listOf("jpg", "jpeg", "webm", "mp4")
-        }
-        return candidates
-            .filterNot { it == currentExtension }
-            .take(2)
-    }
-
     private suspend fun proceedWithFallbackUrl(
         chain: Interceptor.Chain,
         initialRequest: coil3.request.ImageRequest,
-        fallbackUrl: String
+        fallbackUrl: String,
+        policy: FutabaExtensionFallbackPolicy
     ): ImageResult? {
         val request = initialRequest.newBuilder().data(fallbackUrl).build()
         val proceed: suspend () -> ImageResult = {
             chain.withRequest(request).proceed()
         }
         return if (fallbackUrl.extensionOrNull() in videoFallbackExtensions) {
+            val timeoutMillis = policy.videoFallbackTimeoutMillis.coerceAtLeast(1L)
             videoFallbackSemaphore.withPermit {
-                withTimeoutOrNull(VIDEO_FALLBACK_TIMEOUT_MILLIS) {
+                withTimeoutOrNull(timeoutMillis) {
                     proceed()
                 } ?: run {
                     Logger.w(
                         "FutabaExtensionFallbackInterceptor",
-                        "Timed out fetching video fallback candidate after ${VIDEO_FALLBACK_TIMEOUT_MILLIS}ms: $fallbackUrl"
+                        "Timed out fetching video fallback candidate after ${timeoutMillis}ms: $fallbackUrl"
                     )
                     null
                 }
@@ -198,8 +217,18 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         }
     }
 
-    private suspend fun isExhausted(url: String): Boolean {
-        return exhaustedUrlsMutex.withLock { url in exhaustedUrls }
+    private suspend fun isExhausted(url: String, policy: FutabaExtensionFallbackPolicy): Boolean {
+        val key = ExhaustedFallbackKey(url = url, policySignature = policy.cacheSignature())
+        val nowMillis = Clock.System.now().toEpochMilliseconds()
+        return exhaustedUrlsMutex.withLock {
+            val entry = exhaustedUrls.remove(key) ?: return@withLock false
+            if (entry.isExpired(nowMillis)) {
+                false
+            } else {
+                exhaustedUrls[key] = entry
+                true
+            }
+        }
     }
 
     private suspend fun readRecoveredUrl(url: String): String? {
@@ -212,7 +241,7 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
 
     private suspend fun markRecovered(url: String, recoveredUrl: String) {
         exhaustedUrlsMutex.withLock {
-            exhaustedUrls.remove(url)
+            removeExhaustedEntriesForUrlLocked(url)
         }
         recoveredUrlsMutex.withLock {
             recoveredUrls.remove(url)
@@ -230,15 +259,27 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         }
     }
 
-    private suspend fun rememberExhaustedUrl(url: String) {
+    private suspend fun rememberExhaustedUrl(url: String, policy: FutabaExtensionFallbackPolicy) {
+        if (policy.negativeCacheTtlMillis <= 0L) return
+        val key = ExhaustedFallbackKey(url = url, policySignature = policy.cacheSignature())
+        val entry = ExhaustedFallbackEntry(
+            timestampMillis = Clock.System.now().toEpochMilliseconds(),
+            ttlMillis = policy.negativeCacheTtlMillis
+        )
         exhaustedUrlsMutex.withLock {
-            exhaustedUrls.remove(url)
-            exhaustedUrls.add(url)
+            exhaustedUrls.remove(key)
+            exhaustedUrls[key] = entry
             while (exhaustedUrls.size > exhaustedUrlMaxEntries) {
-                val eldest = exhaustedUrls.firstOrNull() ?: break
+                val eldest = exhaustedUrls.keys.firstOrNull() ?: break
                 exhaustedUrls.remove(eldest)
             }
         }
+    }
+
+    private fun removeExhaustedEntriesForUrlLocked(url: String) {
+        exhaustedUrls.keys
+            .filter { it.url == url }
+            .forEach(exhaustedUrls::remove)
     }
 
     private fun replaceOrAppendExtension(url: String, extension: String): String {
@@ -256,6 +297,82 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
             ?.getOrNull(1)
             ?.lowercase()
     }
+}
+
+internal fun resolveFutabaExtensionFallbackCandidates(
+    currentExtension: String?,
+    policy: FutabaExtensionFallbackPolicy = FutabaExtensionFallbackPolicy()
+): List<String> {
+    if (policy.maxAttempts <= 0) return emptyList()
+    val normalizedExtension = currentExtension?.lowercase()
+    val candidates = reorderFutabaExtensionFallbackCandidates(
+        candidates = when (normalizedExtension) {
+            "jpg", "jpeg" -> listOf("webm", "mp4", "gif", "png", "webp")
+            "webm", "mp4" -> listOf("jpg", "jpeg", "png", "gif", "webp")
+            "gif" -> listOf("jpg", "jpeg", "png", "webp")
+            "png" -> listOf("jpg", "jpeg", "gif", "webp")
+            "webp" -> listOf("jpg", "jpeg", "gif", "png")
+            else -> listOf("jpg", "jpeg", "gif", "png", "webp", "webm", "mp4")
+        },
+        preferStaticCandidates = policy.preferStaticCandidates
+    )
+    val result = ArrayList<String>(policy.maxAttempts)
+    var videoAttempts = 0
+    for (candidate in candidates) {
+        if (candidate == normalizedExtension) continue
+        if (!policy.allowsExtension(candidate)) continue
+        if (candidate.isFutabaVideoExtension()) {
+            if (videoAttempts >= policy.maxVideoAttempts) continue
+            videoAttempts += 1
+        }
+        result += candidate
+        if (result.size >= policy.maxAttempts) break
+    }
+    return result
+}
+
+private fun FutabaExtensionFallbackPolicy.allowsExtension(extension: String?): Boolean {
+    if (extension == null) return true
+    return allowVideoFallback || !extension.isFutabaVideoExtension()
+}
+
+private fun reorderFutabaExtensionFallbackCandidates(
+    candidates: List<String>,
+    preferStaticCandidates: Boolean
+): List<String> {
+    if (!preferStaticCandidates) return candidates
+    return candidates
+        .filterNot(String::isFutabaVideoExtension) +
+        candidates.filter(String::isFutabaVideoExtension)
+}
+
+private fun String.isFutabaVideoExtension(): Boolean {
+    return this in setOf("webm", "mp4")
+}
+
+private data class ExhaustedFallbackKey(
+    val url: String,
+    val policySignature: String
+)
+
+private data class ExhaustedFallbackEntry(
+    val timestampMillis: Long,
+    val ttlMillis: Long
+) {
+    fun isExpired(nowMillis: Long): Boolean {
+        return ttlMillis != Long.MAX_VALUE && nowMillis - timestampMillis >= ttlMillis
+    }
+}
+
+private fun FutabaExtensionFallbackPolicy.cacheSignature(): String {
+    return listOf(
+        maxAttempts,
+        allowVideoFallback,
+        preferStaticCandidates,
+        maxVideoAttempts,
+        videoFallbackTimeoutMillis,
+        negativeCacheTtlMillis
+    ).joinToString(separator = "|")
 }
 
 fun resolveImageCacheDirectory(platformContext: Any?): Path? = runCatching {

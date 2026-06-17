@@ -65,18 +65,96 @@ class ThreadMediaSupportTest {
         assertNull(resolvePostTargetMediaUrl(post))
     }
 
+    @Test
+    fun buildMediaPreviewEntry_uses_lightweight_fallback_title() {
+        val post = post(
+            imageUrl = "https://example.com/src/sample.jpg",
+            thumbnailUrl = null,
+            subject = "件名",
+            messageHtml = "本文1行目<br>本文2行目"
+        )
+
+        val entry = buildMediaPreviewEntry(post)
+
+        assertEquals("件名", entry?.title)
+        assertEquals("本文1行目<br>本文2行目", entry?.messageHtml)
+    }
+
+    @Test
+    fun resolveMediaPreviewDisplayTitle_uses_message_first_line_lazily() {
+        val post = post(
+            imageUrl = "https://example.com/src/sample.jpg",
+            thumbnailUrl = null,
+            subject = "件名",
+            messageHtml = "本文1行目<br>本文2行目"
+        )
+        val entry = buildMediaPreviewEntry(post)
+
+        assertEquals("本文1行目", entry?.let(::resolveMediaPreviewDisplayTitle))
+    }
+
+    @Test
+    fun resolveMediaPreviewDisplayTitle_falls_back_to_entry_title() {
+        val post = post(
+            imageUrl = "https://example.com/src/sample.jpg",
+            thumbnailUrl = null,
+            subject = "件名",
+            messageHtml = ""
+        )
+        val entry = buildMediaPreviewEntry(post)
+
+        assertEquals("件名", entry?.let(::resolveMediaPreviewDisplayTitle))
+    }
+
+    @Test
+    fun buildMediaPreviewIndexByKey_preserves_first_index_for_duplicate_keys() {
+        val entries = listOf(
+            MediaPreviewEntry(
+                url = "https://example.com/src/sample.jpg",
+                mediaType = MediaType.Image,
+                postId = "1",
+                title = "first"
+            ),
+            MediaPreviewEntry(
+                url = "https://example.com/src/sample.jpg",
+                mediaType = MediaType.Image,
+                postId = "2",
+                title = "second"
+            ),
+            MediaPreviewEntry(
+                url = "https://example.com/src/sample.webm",
+                mediaType = MediaType.Video,
+                postId = "3",
+                title = "video"
+            )
+        )
+
+        val indexByKey = buildMediaPreviewIndexByKey(entries)
+
+        assertEquals(
+            0,
+            indexByKey[MediaPreviewKey("https://example.com/src/sample.jpg", MediaType.Image)]
+        )
+        assertEquals(
+            2,
+            indexByKey[MediaPreviewKey("https://example.com/src/sample.webm", MediaType.Video)]
+        )
+    }
+
     private fun post(
         imageUrl: String?,
-        thumbnailUrl: String?
+        thumbnailUrl: String?,
+        subject: String? = "s",
+        messageHtml: String = "body"
     ): Post {
         return Post(
             id = "1",
             order = 0,
             author = "a",
-            subject = "s",
+            subject = subject,
             timestamp = "t",
             posterId = null,
-            messageHtml = "body",
+            messageHtml = messageHtml,
             imageUrl = imageUrl,
             thumbnailUrl = thumbnailUrl,
             saidaneLabel = null,

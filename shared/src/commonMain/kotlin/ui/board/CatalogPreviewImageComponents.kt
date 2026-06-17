@@ -20,7 +20,9 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.valoser.futacha.shared.ui.image.FutabaExtensionFallbackPolicy
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.futabaExtensionFallbackPolicy
 
 @Composable
 internal fun CatalogPreviewImage(
@@ -50,6 +52,16 @@ internal fun CatalogPreviewImage(
             .size(targetSizePx, targetSizePx)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
+            .futabaExtensionFallbackPolicy(
+                FutabaExtensionFallbackPolicy(
+                    maxAttempts = 5,
+                    allowVideoFallback = true,
+                    preferStaticCandidates = true,
+                    maxVideoAttempts = 2,
+                    videoFallbackTimeoutMillis = CATALOG_VIDEO_FALLBACK_TIMEOUT_MILLIS,
+                    negativeCacheTtlMillis = CATALOG_FALLBACK_NEGATIVE_CACHE_TTL_MILLIS
+                )
+            )
             .build()
     }
     val imagePainter = rememberAsyncImagePainter(
@@ -83,3 +95,6 @@ internal fun CatalogPreviewImage(
         )
     }
 }
+
+private const val CATALOG_VIDEO_FALLBACK_TIMEOUT_MILLIS = 2_500L
+private const val CATALOG_FALLBACK_NEGATIVE_CACHE_TTL_MILLIS = 60_000L

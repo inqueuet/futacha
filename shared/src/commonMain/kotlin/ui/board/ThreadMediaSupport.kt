@@ -26,7 +26,18 @@ internal data class MediaPreviewEntry(
     val url: String,
     val mediaType: MediaType,
     val postId: String,
-    val title: String
+    val title: String,
+    val messageHtml: String = ""
+)
+
+internal data class MediaPreviewKey(
+    val url: String,
+    val mediaType: MediaType
+)
+
+internal data class MediaPreviewCollection(
+    val entries: List<MediaPreviewEntry>,
+    val indexByKey: Map<MediaPreviewKey, Int>
 )
 
 internal data class ThreadAttachmentActionTarget(
@@ -80,7 +91,8 @@ internal fun buildMediaPreviewEntry(
         url = targetUrl,
         mediaType = resolvedMediaType,
         postId = post.id,
-        title = extractPreviewTitle(post)
+        title = buildMediaPreviewFallbackTitle(post),
+        messageHtml = post.messageHtml
     )
 }
 
@@ -104,6 +116,10 @@ internal fun buildThreadAttachmentActionTarget(
 }
 
 internal suspend fun buildMediaPreviewEntries(posts: List<Post>): List<MediaPreviewEntry> {
+    return buildMediaPreviewCollection(posts).entries
+}
+
+internal suspend fun buildMediaPreviewCollection(posts: List<Post>): MediaPreviewCollection {
     val entries = ArrayList<MediaPreviewEntry>()
     posts.forEachIndexed { index, post ->
         if (index % THREAD_MEDIA_PREVIEW_CANCELLATION_CHECK_INTERVAL == 0) {
@@ -112,12 +128,31 @@ internal suspend fun buildMediaPreviewEntries(posts: List<Post>): List<MediaPrev
         }
         buildMediaPreviewEntry(post)?.let(entries::add)
     }
-    return entries
+    return MediaPreviewCollection(
+        entries = entries,
+        indexByKey = buildMediaPreviewIndexByKey(entries)
+    )
 }
 
-private fun extractPreviewTitle(post: Post): String {
-    val firstLine = messageHtmlToLines(post.messageHtml).firstOrNull()?.trim()
+internal fun buildMediaPreviewIndexByKey(entries: List<MediaPreviewEntry>): Map<MediaPreviewKey, Int> {
+    if (entries.isEmpty()) return emptyMap()
+    val indexByKey = LinkedHashMap<MediaPreviewKey, Int>()
+    entries.forEachIndexed { index, entry ->
+        val key = MediaPreviewKey(url = entry.url, mediaType = entry.mediaType)
+        if (key !in indexByKey) {
+            indexByKey[key] = index
+        }
+    }
+    return indexByKey
+}
+
+internal fun resolveMediaPreviewDisplayTitle(entry: MediaPreviewEntry): String {
+    val firstLine = messageHtmlToLines(entry.messageHtml).firstOrNull()?.trim()
     if (!firstLine.isNullOrBlank()) return firstLine
+    return entry.title
+}
+
+private fun buildMediaPreviewFallbackTitle(post: Post): String {
     val subject = post.subject?.trim()
     if (!subject.isNullOrBlank()) return subject
     return "No.${post.id}"

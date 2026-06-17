@@ -73,7 +73,8 @@ internal data class ThreadScreenInteractionUiAggregateRuntimeInputs(
 internal data class ThreadScreenAggregateMediaInputs(
     val currentPreviewState: () -> ThreadMediaPreviewState,
     val setPreviewState: (ThreadMediaPreviewState) -> Unit,
-    val currentMediaEntries: () -> List<MediaPreviewEntry>
+    val currentMediaEntries: () -> List<MediaPreviewEntry>,
+    val currentMediaIndexByKey: () -> Map<MediaPreviewKey, Int>
 )
 
 internal data class ThreadScreenAggregateUiInputs(
@@ -383,7 +384,8 @@ internal fun buildThreadScreenInteractionUiAggregateBundle(
     val mediaBindings = buildThreadScreenMediaBindings(
         currentPreviewState = mediaInputs.currentPreviewState,
         setPreviewState = mediaInputs.setPreviewState,
-        currentEntries = mediaInputs.currentMediaEntries
+        currentEntries = mediaInputs.currentMediaEntries,
+        currentIndexByKey = mediaInputs.currentMediaIndexByKey
     )
     val controllerBindings = buildThreadScreenControllerBindingsBundle(
         actionInputs = controllerActionInputs,
@@ -477,6 +479,7 @@ internal data class ThreadScreenInteractionUiWiringInputs(
     val mediaPreviewState: () -> ThreadMediaPreviewState,
     val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
     val mediaPreviewEntries: () -> List<MediaPreviewEntry>,
+    val mediaPreviewIndexByKey: () -> Map<MediaPreviewKey, Int>,
     val actionStateBindings: ThreadScreenActionStateBindings,
     val actionDependencies: ThreadScreenActionDependencies,
     val historyRefreshStateBindings: ThreadScreenHistoryRefreshStateBindings,
@@ -530,7 +533,8 @@ internal fun buildThreadScreenInteractionUiWiring(
             mediaInputs = ThreadScreenAggregateMediaInputs(
                 currentPreviewState = inputs.mediaPreviewState,
                 setPreviewState = inputs.setMediaPreviewState,
-                currentMediaEntries = inputs.mediaPreviewEntries
+                currentMediaEntries = inputs.mediaPreviewEntries,
+                currentMediaIndexByKey = inputs.mediaPreviewIndexByKey
             ),
             controllerActionInputs = ThreadScreenControllerActionInputs(
                 coroutineScope = inputs.coroutineScope,

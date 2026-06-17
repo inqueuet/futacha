@@ -32,8 +32,24 @@ internal fun openThreadMediaPreview(
     url: String,
     mediaType: MediaType
 ): ThreadMediaPreviewState {
-    val targetIndex = entries.indexOfFirst { it.url == url && it.mediaType == mediaType }
-    if (targetIndex < 0) return currentState
+    return openThreadMediaPreview(
+        currentState = currentState,
+        entries = entries,
+        indexByKey = buildMediaPreviewIndexByKey(entries),
+        url = url,
+        mediaType = mediaType
+    )
+}
+
+internal fun openThreadMediaPreview(
+    currentState: ThreadMediaPreviewState,
+    entries: List<MediaPreviewEntry>,
+    indexByKey: Map<MediaPreviewKey, Int>,
+    url: String,
+    mediaType: MediaType
+): ThreadMediaPreviewState {
+    val targetIndex = indexByKey[MediaPreviewKey(url = url, mediaType = mediaType)] ?: -1
+    if (targetIndex !in entries.indices) return currentState
     return currentState.withPreviewMediaIndex(targetIndex)
 }
 
@@ -54,9 +70,26 @@ internal fun resolveThreadMediaClickState(
     url: String,
     mediaType: MediaType
 ): ThreadMediaPreviewState? {
+    return resolveThreadMediaClickState(
+        currentState = currentState,
+        entries = entries,
+        indexByKey = buildMediaPreviewIndexByKey(entries),
+        url = url,
+        mediaType = mediaType
+    )
+}
+
+internal fun resolveThreadMediaClickState(
+    currentState: ThreadMediaPreviewState,
+    entries: List<MediaPreviewEntry>,
+    indexByKey: Map<MediaPreviewKey, Int>,
+    url: String,
+    mediaType: MediaType
+): ThreadMediaPreviewState? {
     val nextState = openThreadMediaPreview(
         currentState = currentState,
         entries = entries,
+        indexByKey = indexByKey,
         url = url,
         mediaType = mediaType
     )

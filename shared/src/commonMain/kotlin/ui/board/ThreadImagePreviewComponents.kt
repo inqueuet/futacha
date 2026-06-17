@@ -43,6 +43,7 @@ import com.valoser.futacha.shared.util.rememberUrlLauncher
 @Composable
 internal fun ImagePreviewDialog(
     entry: MediaPreviewEntry,
+    displayTitle: String = entry.title,
     currentIndex: Int,
     totalCount: Int,
     onDismiss: () -> Unit,
@@ -160,7 +161,7 @@ internal fun ImagePreviewDialog(
                 }
             }
             ThreadMediaPreviewHeader(
-                title = entry.title,
+                title = displayTitle,
                 currentIndex = currentIndex,
                 totalCount = totalCount,
                 modifier = Modifier.align(Alignment.TopStart)

@@ -45,6 +45,7 @@ internal fun buildThreadScreenDerivedRuntimeSnapshot(
 internal data class ThreadScreenDerivedRuntimeState(
     val derivedUiState: ThreadScreenDerivedUiState,
     val mediaPreviewEntries: List<MediaPreviewEntry>,
+    val mediaPreviewIndexByKey: Map<MediaPreviewKey, Int>,
     val searchMatches: List<ThreadSearchMatch>,
     val postHighlightRanges: Map<String, List<IntRange>>,
     val readAloudSegments: List<ReadAloudSegment>,
@@ -127,12 +128,15 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     }
     val currentPage = derivedUiState.currentPage
     val currentPosts = derivedUiState.currentPosts
-    val mediaPreviewEntries by produceState<List<MediaPreviewEntry>>(
-        initialValue = emptyList(),
+    val mediaPreviewCollection by produceState(
+        initialValue = MediaPreviewCollection(
+            entries = emptyList(),
+            indexByKey = emptyMap()
+        ),
         key1 = currentPosts
     ) {
         value = withContext(AppDispatchers.parsing) {
-            buildMediaPreviewEntries(currentPosts)
+            buildMediaPreviewCollection(currentPosts)
         }
     }
     val searchTargets by produceState<List<ThreadSearchTarget>>(
@@ -207,7 +211,8 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     }
     return ThreadScreenDerivedRuntimeState(
         derivedUiState = derivedUiState,
-        mediaPreviewEntries = mediaPreviewEntries,
+        mediaPreviewEntries = mediaPreviewCollection.entries,
+        mediaPreviewIndexByKey = mediaPreviewCollection.indexByKey,
         searchMatches = searchMatches,
         postHighlightRanges = postHighlightRanges,
         readAloudSegments = readAloudSegments,

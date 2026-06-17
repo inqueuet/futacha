@@ -598,6 +598,7 @@ private fun ThreadScreenContent(
     val derivedUiState = derivedRuntimeState.derivedUiState
     val currentSuccessState = derivedUiState.successState
     val mediaPreviewEntries = derivedRuntimeState.mediaPreviewEntries
+    val mediaPreviewIndexByKey = derivedRuntimeState.mediaPreviewIndexByKey
     var mediaPreviewState by searchStateRefs.mediaPreviewState
     var restoreGalleryAfterMediaPreview by rememberSaveable { mutableStateOf(false) }
     var restoreGalleryAfterAttachmentAction by rememberSaveable { mutableStateOf(false) }
@@ -764,6 +765,7 @@ private fun ThreadScreenContent(
             mediaPreviewState = { mediaPreviewState },
             setMediaPreviewState = setMediaPreviewState,
             mediaPreviewEntries = { mediaPreviewEntries },
+            mediaPreviewIndexByKey = { mediaPreviewIndexByKey },
             actionStateBindings = actionStateBindings,
             actionDependencies = actionDependencies,
             historyRefreshStateBindings = historyRefreshStateBindings,

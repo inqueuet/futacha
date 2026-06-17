@@ -1206,7 +1206,8 @@ class ThreadScreenInteractionLogicTest {
             mediaInputs = ThreadScreenAggregateMediaInputs(
                 currentPreviewState = { previewState },
                 setPreviewState = { previewState = it },
-                currentMediaEntries = { mediaEntries }
+                currentMediaEntries = { mediaEntries },
+                currentMediaIndexByKey = { buildMediaPreviewIndexByKey(mediaEntries) }
             ),
             controllerActionInputs = ThreadScreenControllerActionInputs(
                 coroutineScope = this,
