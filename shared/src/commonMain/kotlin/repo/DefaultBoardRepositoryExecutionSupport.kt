@@ -171,10 +171,17 @@ internal suspend fun enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstim
     ) ?: return error
     val elapsedSeconds = ((nowMillis - posttimeMillis).coerceAtLeast(0L)) / 1000L
     val remainingSeconds = inferredWaitSeconds - elapsedSeconds
-    if (remainingSeconds <= 0L) return error
-    val guidance = "posttime からの推定では約${formatHttpBoardApiPostingWaitLabel(remainingSeconds)}後に再試行できる可能性があります。サーバー応答に秒数がないため目安です"
+    if (remainingSeconds <= 0L) {
+        return NetworkException(
+            message = "投稿用 Cookie が古い可能性があります。Cookie 画面で posttime と ptmt を削除してから、もう一度投稿してください",
+            statusCode = networkError.statusCode,
+            cause = networkError
+        )
+    }
+    val waitLabel = formatHttpBoardApiPostingWaitLabel(remainingSeconds)
+    val guidance = "あと約${waitLabel}投稿できません。時間を置いてから再試行してください"
     return NetworkException(
-        message = "$message $guidance",
+        message = guidance,
         statusCode = networkError.statusCode,
         cause = networkError
     )

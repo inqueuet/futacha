@@ -520,7 +520,7 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
-    fun defaultBoardRepositoryExecutionSupport_appendsEstimatedWaitFromPosttimeForIpRestriction() = runBlocking {
+    fun defaultBoardRepositoryExecutionSupport_replacesIpRestrictionWithEstimatedWaitFromPosttime() = runBlocking {
         val boardUrl = "https://may.2chan.net/b/"
         val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
         val cookieRepository = CookieRepository(storage)
@@ -537,9 +537,9 @@ class DefaultBoardRepositoryTest {
         )
 
         assertTrue(enriched is NetworkException)
-        assertTrue(enriched.message!!.contains("posttime からの推定"))
-        assertTrue(enriched.message!!.contains("約58分20秒後"))
-        assertTrue(enriched.message!!.contains("目安"))
+        assertTrue(enriched.message!!.startsWith("あと約58分20秒投稿できません"))
+        assertFalse(enriched.message!!.contains("あなたのIPからは投稿できません"))
+        assertFalse(enriched.message!!.contains("posttime"))
     }
 
     @Test
@@ -561,6 +561,34 @@ class DefaultBoardRepositoryTest {
         )
 
         assertTrue(enriched === original)
+    }
+
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_suggestsCookieDeletionWhenPosttimeIsTooOld() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1000000000", domain = ".2chan.net", path = "/")
+        )
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "ptmt", value = "token", domain = ".2chan.net", path = "/")
+        )
+
+        val enriched = enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = boardUrl,
+            cookieRepository = cookieRepository,
+            error = NetworkException("返信に失敗しました: あなたのIPからは投稿できません"),
+            nowMillis = 1_004_000_000L
+        )
+
+        assertTrue(enriched is NetworkException)
+        assertEquals(
+            "投稿用 Cookie が古い可能性があります。Cookie 画面で posttime と ptmt を削除してから、もう一度投稿してください",
+            enriched.message
+        )
     }
 
     companion object {
