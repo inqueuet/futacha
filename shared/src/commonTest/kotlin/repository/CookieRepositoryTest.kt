@@ -81,6 +81,24 @@ class CookieRepositoryTest {
         assertEquals(listOf("initial"), repository.listCookies().map { it.name })
     }
 
+    @Test
+    fun commitEvenOnFailure_persistsViaRepository() = runBlocking {
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val repository = CookieRepository(storage)
+
+        assertFailsWith<IllegalStateException> {
+            repository.commitEvenOnFailure {
+                storage.addCookie(
+                    Url("https://dec.2chan.net/b/"),
+                    Cookie(name = "posttime", value = "1", domain = "dec.2chan.net", path = "/")
+                )
+                error("post failed")
+            }
+        }
+
+        assertEquals(listOf("posttime"), repository.listCookies().map { it.name })
+    }
+
     companion object {
         private const val STORAGE_PATH = "private/cookies/repository-test-cookies.json"
     }

@@ -68,6 +68,8 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
     currentCreateThreadPassword: () -> String,
     setCreateThreadPassword: (String) -> Unit,
     scrollCatalogToTop: () -> Unit,
+    isPastThreadSearchNoticeHidden: () -> Boolean,
+    setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     setShowPastThreadSearchDialog: (Boolean) -> Unit,
     setShowModeDialog: (Boolean) -> Unit,
     setShowSettingsMenu: (Boolean) -> Unit
@@ -159,6 +161,8 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
             setShowCreateThreadDialog = setShowCreateThreadDialog,
             scrollCatalogToTop = scrollCatalogToTop,
             performRefresh = executionBindings.performRefresh,
+            isPastThreadSearchNoticeHidden = isPastThreadSearchNoticeHidden,
+            setShowPastThreadSearchNoticeDialog = setShowPastThreadSearchNoticeDialog,
             setShowPastThreadSearchDialog = setShowPastThreadSearchDialog,
             setShowModeDialog = setShowModeDialog,
             setShowSettingsMenu = setShowSettingsMenu

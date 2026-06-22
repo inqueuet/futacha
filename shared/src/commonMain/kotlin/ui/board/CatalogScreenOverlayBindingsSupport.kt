@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 internal data class CatalogScreenOverlayBindingsBundle(
     val modeDialogCallbacks: CatalogModeDialogCallbacks,
     val displayStyleDialogCallbacks: CatalogDisplayStyleDialogCallbacks,
+    val pastThreadSearchNoticeCallbacks: CatalogPastThreadSearchNoticeCallbacks,
     val pastThreadSearchDialogCallbacks: CatalogPastThreadSearchDialogCallbacks,
     val pastThreadSearchResultCallbacks: CatalogPastThreadSearchResultCallbacks,
     val settingsMenuCallbacks: CatalogSettingsMenuCallbacks,
@@ -35,6 +36,7 @@ internal data class CatalogScreenOverlaySearchInputs(
     val currentArchiveSearchScope: () -> ArchiveSearchScope?,
     val setLastArchiveSearchScope: (ArchiveSearchScope?) -> Unit,
     val setArchiveSearchQuery: (String) -> Unit,
+    val setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     val setShowPastThreadSearchDialog: (Boolean) -> Unit,
     val setIsPastSearchSheetVisible: (Boolean) -> Unit,
     val runPastThreadSearch: (String, ArchiveSearchScope?) -> Boolean,
@@ -82,6 +84,12 @@ internal fun buildCatalogScreenOverlayBindingsBundle(
             updateCatalogDisplayStyle = dialogInputs.updateCatalogDisplayStyle,
             updateCatalogGridColumns = dialogInputs.updateCatalogGridColumns,
             setShowDisplayStyleDialog = dialogInputs.setShowDisplayStyleDialog
+        ),
+        pastThreadSearchNoticeCallbacks = buildCatalogPastThreadSearchNoticeCallbacks(
+            stateStore = settingsInputs.stateStore,
+            coroutineScope = settingsInputs.coroutineScope,
+            setShowPastThreadSearchNoticeDialog = searchInputs.setShowPastThreadSearchNoticeDialog,
+            setShowPastThreadSearchDialog = searchInputs.setShowPastThreadSearchDialog
         ),
         pastThreadSearchDialogCallbacks = buildCatalogPastThreadSearchDialogCallbacks(
             currentArchiveSearchScope = searchInputs.currentArchiveSearchScope,

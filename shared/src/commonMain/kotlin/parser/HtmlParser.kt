@@ -6,7 +6,7 @@ import com.valoser.futacha.shared.model.ThreadPage
 
 interface HtmlParser {
     suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem>
-    suspend fun parseThread(html: String): ThreadPage
+    suspend fun parseThread(html: String, baseUrl: String? = null): ThreadPage
     fun extractOpImageUrl(html: String, baseUrl: String? = null): String?
     fun extractCatalogEmbeddedHtml(html: String, baseUrl: String? = null): List<EmbeddedHtmlContent> = emptyList()
     fun extractThreadEmbeddedHtml(html: String, baseUrl: String? = null): List<EmbeddedHtmlContent> = emptyList()

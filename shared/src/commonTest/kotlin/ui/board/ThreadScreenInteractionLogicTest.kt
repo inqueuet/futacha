@@ -15,7 +15,6 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.model.ThreadPageContent
-import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
@@ -37,6 +36,7 @@ import kotlinx.serialization.json.Json
 import androidx.compose.ui.unit.Density
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -44,6 +44,15 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ThreadScreenInteractionLogicTest {
+    @Test
+    fun requireWritableThreadBoard_rejectsInqueuetArchiveUrl() {
+        assertFailsWith<IllegalStateException> {
+            requireWritableThreadBoard("https://may.inqueuet.com/b/res/123.htm")
+        }
+
+        requireWritableThreadBoard("https://may.2chan.net/b/res/123.htm")
+    }
+
     @Test
     fun threadContentLazyListKeys_stayUniqueForDuplicatePostIds() {
         val posts = listOf(
@@ -1764,45 +1773,19 @@ class ThreadScreenInteractionLogicTest {
             )
         )
         assertEquals(
-            "Archive search failed for 123: boom",
-            buildArchiveSearchFailureLogMessage("123", IllegalStateException("boom"))
-        )
-        assertEquals(
             "Archive refresh succeeded for 123",
             buildArchiveRefreshSuccessLogMessage("123")
         )
         assertEquals(
             ThreadArchiveFallbackPlan(
                 scope = ArchiveSearchScope(server = "may", board = "b"),
-                queryCandidates = listOf("123", "thread title")
+                threadUrl = "https://may.inqueuet.com/b/res/123.htm"
             ),
             buildThreadArchiveFallbackPlan(
                 threadId = "123",
                 threadTitle = " thread   title ",
                 boardUrl = "https://dec.2chan.net/img/futaba.php",
                 threadUrlOverride = "https://may.2chan.net/b/res/123.htm"
-            )
-        )
-        assertEquals(
-            "https://may.2chan.net/b/res/123.htm",
-            resolveArchiveFallbackMatchUrl(
-                items = listOf(
-                    ArchiveSearchItem(
-                        threadId = "123",
-                        server = "may",
-                        board = "b",
-                        htmlUrl = "https://may.2chan.net/b/res/123.htm",
-                        uploadedAt = 2L
-                    ),
-                    ArchiveSearchItem(
-                        threadId = "123",
-                        server = "may",
-                        board = "b",
-                        htmlUrl = "https://may.2chan.net/b/res/122.htm",
-                        uploadedAt = 1L
-                    )
-                ),
-                threadId = "123"
             )
         )
         assertEquals(

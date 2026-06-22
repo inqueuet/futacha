@@ -15,7 +15,6 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.model.ThreadPageContent
-import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository

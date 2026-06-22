@@ -21,6 +21,10 @@ class CookieRepository(
         return storage.commitOnSuccess(block)
     }
 
+    suspend fun <T> commitEvenOnFailure(block: suspend () -> T): T {
+        return storage.commitEvenOnFailure(block)
+    }
+
     suspend fun hasValidCookieFor(url: String, preferredNames: Set<String> = emptySet()): Boolean {
         val parsedUrl = runCatching { Url(url) }.getOrElse { return false }
         return storage.hasValidCookieFor(parsedUrl, preferredNames)

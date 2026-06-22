@@ -259,15 +259,16 @@ class DefaultBoardRepository(
 
     override suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent {
         return withRetryOnAuthFailure(board) {
+            val threadUrl = BoardUrlResolver.resolveThreadUrl(board, threadId)
             val html = withContext(AppDispatchers.io) {
                 api.fetchThread(board, threadId)
             }
             withContext(AppDispatchers.parsing) {
                 ThreadPageContent(
-                    page = parser.parseThread(html),
+                    page = parser.parseThread(html, threadUrl),
                     embeddedHtml = parser.extractThreadEmbeddedHtml(
                         html = html,
-                        baseUrl = BoardUrlResolver.resolveThreadUrl(board, threadId)
+                        baseUrl = threadUrl
                     )
                 )
             }
@@ -284,7 +285,7 @@ class DefaultBoardRepository(
         }
         return withContext(AppDispatchers.parsing) {
             ThreadPageContent(
-                page = parser.parseThread(html),
+                page = parser.parseThread(html, threadUrl),
                 embeddedHtml = parser.extractThreadEmbeddedHtml(html, threadUrl)
             )
         }

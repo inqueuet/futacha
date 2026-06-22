@@ -5,6 +5,7 @@ internal data class CatalogOverlayState(
     val showDisplayStyleDialog: Boolean = false,
     val showCreateThreadDialog: Boolean = false,
     val showSettingsMenu: Boolean = false,
+    val showPastThreadSearchNoticeDialog: Boolean = false,
     val showPastThreadSearchDialog: Boolean = false,
     val isGlobalSettingsVisible: Boolean = false,
     val isCookieRecoveryGuideVisible: Boolean = false,
@@ -32,6 +33,10 @@ private fun CatalogOverlayState.withSettingsMenuVisible(isVisible: Boolean): Cat
 
 private fun CatalogOverlayState.withPastThreadSearchDialogVisible(isVisible: Boolean): CatalogOverlayState {
     return copy(showPastThreadSearchDialog = isVisible)
+}
+
+private fun CatalogOverlayState.withPastThreadSearchNoticeDialogVisible(isVisible: Boolean): CatalogOverlayState {
+    return copy(showPastThreadSearchNoticeDialog = isVisible)
 }
 
 private fun CatalogOverlayState.withGlobalSettingsVisible(isVisible: Boolean): CatalogOverlayState {
@@ -107,6 +112,11 @@ internal fun setCatalogPastThreadSearchDialogVisible(
     isVisible: Boolean
 ): CatalogOverlayState = state.withPastThreadSearchDialogVisible(isVisible)
 
+internal fun setCatalogPastThreadSearchNoticeDialogVisible(
+    state: CatalogOverlayState,
+    isVisible: Boolean
+): CatalogOverlayState = state.withPastThreadSearchNoticeDialogVisible(isVisible)
+
 internal fun setCatalogGlobalSettingsVisible(
     state: CatalogOverlayState,
     isVisible: Boolean
@@ -139,6 +149,7 @@ internal fun setCatalogPastSearchSheetVisible(
 
 internal fun resetCatalogPastSearchOverlayState(state: CatalogOverlayState): CatalogOverlayState {
     return state
+        .withPastThreadSearchNoticeDialogVisible(false)
         .withPastThreadSearchDialogVisible(false)
         .withPastSearchSheetVisible(false)
 }

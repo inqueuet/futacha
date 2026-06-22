@@ -56,7 +56,7 @@ internal object ThreadHtmlParserCore {
     private const val MAX_REFERENCE_BUILD_TIME_MS = 1500L
     private const val MAX_SINGLE_BLOCK_SIZE = 300_000 // FIX: 500KB→300KBに削減してより早く異常を検出
     private const val MAX_PARTIAL_MATCH_SCAN_LINES = 300
-    private val TRUSTED_CANONICAL_HOST_SUFFIXES = setOf("2chan.net")
+    private val TRUSTED_CANONICAL_HOST_SUFFIXES = setOf("2chan.net", "inqueuet.com")
 
     // FIX: ReDoS対策 - [^>]+に長さ制限を追加
     private val canonicalRegex = Regex(
@@ -162,23 +162,25 @@ internal object ThreadHtmlParserCore {
     )
 
     // FIX: サスペンド関数に変更し、必ずバックグラウンドで実行
-    suspend fun parseThread(html: String): ThreadPage = kotlinx.coroutines.withContext(AppDispatchers.parsing) {
+    suspend fun parseThread(html: String, baseUrl: String? = null): ThreadPage = kotlinx.coroutines.withContext(AppDispatchers.parsing) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
 
         withTimeoutOrNull(MAX_PARSE_TIME_MS) {
-            parseThreadWithinBudget(html)
+            parseThreadWithinBudget(html, baseUrl)
         } ?: throw ParserException("Thread parse timed out after ${MAX_PARSE_TIME_MS}ms")
     }
 
-    private suspend fun parseThreadWithinBudget(html: String): ThreadPage {
+    private suspend fun parseThreadWithinBudget(html: String, fallbackBaseUrl: String?): ThreadPage {
         return try {
             val normalized = normalizeLineBreaksIfNeeded(html)
             val canonical = sanitizeCanonicalUrl(
                 canonicalRegex.find(normalized)?.groupValues?.getOrNull(1)
             )
-            val baseUrl = canonical?.let(::extractBaseUrl) ?: DEFAULT_BASE_URL
+            val baseUrl = canonical?.let(::extractBaseUrl)
+                ?: fallbackBaseUrl?.takeIf { it.isNotBlank() }
+                ?: DEFAULT_BASE_URL
 
             // Extract threadId with better error handling
             val threadId = runCatching {

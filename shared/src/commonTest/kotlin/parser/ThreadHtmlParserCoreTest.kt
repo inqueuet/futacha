@@ -535,6 +535,32 @@ class ThreadHtmlParserCoreTest {
 
         assertEquals("https://may.2chan.net/b/thumb/702s.jpg?foo=1", url)
     }
+
+    @Test
+    fun parseThread_resolvesRelativeArchiveMediaAgainstFetchUrl() {
+        val html = """
+            <html>
+            <body>
+            <div class="thre" data-res="1415555296">
+            画像ファイル名：<a href="/b/src/1234567890.jpg" target="_blank">1234567890.jpg</a>
+            <img src="/b/thumb/1234567890s.jpg">
+            <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.1415555296</span>
+            <blockquote>archive body</blockquote>
+            </div>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking {
+            ThreadHtmlParserCore.parseThread(
+                html,
+                baseUrl = "https://may.inqueuet.com/b/res/1415555296.htm"
+            )
+        }
+
+        assertEquals("https://may.inqueuet.com/b/src/1234567890.jpg", page.posts.single().imageUrl)
+        assertEquals("https://may.inqueuet.com/b/thumb/1234567890s.jpg", page.posts.single().thumbnailUrl)
+    }
 }
 
 private val sampleThreadHtml = """

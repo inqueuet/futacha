@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -101,6 +102,69 @@ internal fun CreateThreadDialog(
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
+internal fun PastThreadSearchNoticeDialog(
+    onDismiss: () -> Unit,
+    onContinue: (doNotShowAgain: Boolean) -> Unit
+) {
+    var doNotShowAgain by rememberSaveable { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.History,
+                contentDescription = null
+            )
+        },
+        title = { Text(buildPastThreadSearchNoticeTitle()) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    buildPastThreadSearchNoticeMessages().forEach { message ->
+                        Text(
+                            text = "・$message",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { doNotShowAgain = !doNotShowAgain }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Checkbox(
+                        checked = doNotShowAgain,
+                        onCheckedChange = { doNotShowAgain = it }
+                    )
+                    Text(
+                        text = "次回から表示しない",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onContinue(doNotShowAgain) }) {
+                Text("検索へ進む")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("閉じる")
+            }
+        }
+    )
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
 internal fun PastThreadSearchDialog(
     initialQuery: String,
     onDismiss: () -> Unit,
@@ -129,8 +193,8 @@ internal fun PastThreadSearchDialog(
                 OutlinedTextField(
                     value = queryInputState.value,
                     onValueChange = queryInputState.onValueChange,
-                    label = { Text("検索ワード") },
-                    placeholder = { Text("例: ふたば (空欄で全件取得)") },
+                    label = { Text("スレタイ / スレNo.") },
+                    placeholder = { Text("例: テスト") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -217,7 +281,7 @@ internal fun PastThreadSearchResultSheet(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(bottom = 24.dp)
                         ) {
-                            items(state.items, key = { it.threadId }) { item ->
+                            items(state.items, key = { "${it.server}/${it.board}/${it.threadId}" }) { item ->
                                 PastSearchResultRow(
                                     item = item,
                                     onClick = { onItemSelected(item) }
@@ -308,6 +372,13 @@ private fun PastSearchResultRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (item.replyCount > 0 || item.totalBytes != null) {
+                    Text(
+                        text = buildPastSearchResultMetaText(item),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 item.status?.let { status ->
                     Text(
                         text = status,
@@ -330,4 +401,26 @@ private fun PastSearchResultRow(
             )
         }
     }
+}
+
+private fun buildPastSearchResultMetaText(item: ArchiveSearchItem): String {
+    return buildList {
+        if (item.replyCount > 0) add("${item.replyCount}レス")
+        item.totalBytes?.let { add(formatPastSearchBytes(it)) }
+    }.joinToString(" / ")
+}
+
+private fun formatPastSearchBytes(bytes: Long): String {
+    if (bytes < 1024L) return "${bytes}B"
+    val kib = bytes / 1024.0
+    if (kib < 1024.0) return "${kib.toOneDecimalString()}KB"
+    val mib = kib / 1024.0
+    return "${mib.toOneDecimalString()}MB"
+}
+
+private fun Double.toOneDecimalString(): String {
+    val scaled = (this * 10.0).toLong()
+    val whole = scaled / 10L
+    val fraction = scaled % 10L
+    return if (fraction == 0L) "$whole" else "$whole.$fraction"
 }

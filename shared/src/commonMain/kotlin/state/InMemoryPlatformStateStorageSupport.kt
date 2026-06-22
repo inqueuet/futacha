@@ -14,6 +14,7 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val backgroundRefreshState = MutableStateFlow(false)
     val adsEnabledState = MutableStateFlow(true)
     val postingNoticeState = MutableStateFlow(false)
+    val pastThreadSearchNoticeHiddenState = MutableStateFlow(false)
     val lightweightModeState = MutableStateFlow(false)
     val threadSummaryModeState = MutableStateFlow(false)
     val aiPostFilterState = MutableStateFlow(false)
@@ -49,6 +50,7 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override val backgroundRefreshEnabled: Flow<Boolean> = backgroundRefreshState
     override val adsEnabled: Flow<Boolean> = adsEnabledState
     override val hasShownPostingNotice: Flow<Boolean> = postingNoticeState
+    override val pastThreadSearchNoticeHidden: Flow<Boolean> = pastThreadSearchNoticeHiddenState
     override val lightweightModeEnabled: Flow<Boolean> = lightweightModeState
     override val threadSummaryModeEnabled: Flow<Boolean> = threadSummaryModeState
     override val aiPostFilterEnabled: Flow<Boolean> = aiPostFilterState
@@ -84,6 +86,9 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) { backgroundRefreshState.value = enabled }
     override suspend fun updateAdsEnabled(enabled: Boolean) { adsEnabledState.value = enabled }
     override suspend fun updateHasShownPostingNotice(shown: Boolean) { postingNoticeState.value = shown }
+    override suspend fun updatePastThreadSearchNoticeHidden(hidden: Boolean) {
+        pastThreadSearchNoticeHiddenState.value = hidden
+    }
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) { lightweightModeState.value = enabled }
     override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) { threadSummaryModeState.value = enabled }
     override suspend fun updateAiPostFilterEnabled(enabled: Boolean) { aiPostFilterState.value = enabled }

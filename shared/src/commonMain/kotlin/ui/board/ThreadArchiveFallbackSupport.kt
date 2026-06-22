@@ -2,8 +2,9 @@ package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.network.ArchiveSearchScope
+import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrl
+import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrlFromUrl
 import com.valoser.futacha.shared.network.extractArchiveSearchScope
-import com.valoser.futacha.shared.network.fetchArchiveSearchResults
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.AppDispatchers
 import io.ktor.client.HttpClient
@@ -13,7 +14,7 @@ import kotlinx.serialization.json.Json
 
 internal data class ThreadArchiveFallbackPlan(
     val scope: ArchiveSearchScope?,
-    val queryCandidates: List<String>
+    val threadUrl: String?
 )
 
 internal fun buildThreadArchiveFallbackPlan(
@@ -25,10 +26,11 @@ internal fun buildThreadArchiveFallbackPlan(
     val sourceUrl = threadUrlOverride?.trim()?.takeIf { it.isNotBlank() } ?: boardUrl
     return ThreadArchiveFallbackPlan(
         scope = extractArchiveSearchScope(sourceUrl),
-        queryCandidates = buildArchiveFallbackQueryCandidates(
-            threadId = threadId,
-            threadTitle = threadTitle
-        )
+        threadUrl = threadUrlOverride
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { buildInqueuetArchiveThreadUrlFromUrl(it) }
+            ?: buildInqueuetArchiveThreadUrl(boardUrl, threadId)
     )
 }
 
@@ -43,49 +45,33 @@ internal suspend fun performThreadArchiveFallback(
     onSearchFailure: (String) -> Unit = {},
     onSuccessLog: (String) -> Unit = {}
 ): ArchiveFallbackOutcome {
-    val client = httpClient ?: return ArchiveFallbackOutcome.NoMatch
+    if (httpClient == null) return ArchiveFallbackOutcome.NoMatch
     val plan = buildThreadArchiveFallbackPlan(
         threadId = threadId,
         threadTitle = threadTitle,
         boardUrl = boardUrl,
         threadUrlOverride = threadUrlOverride
     )
-    if (plan.queryCandidates.isEmpty()) return ArchiveFallbackOutcome.NoMatch
-    for (query in plan.queryCandidates) {
-        val results = try {
+    val matchUrl = plan.threadUrl ?: return ArchiveFallbackOutcome.NoMatch
+    val pageResult = try {
+        Result.success(
             withContext(AppDispatchers.io) {
-                fetchArchiveSearchResults(client, query, plan.scope, archiveSearchJson)
+                repository.getThreadContentByUrl(matchUrl)
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (error: Throwable) {
-            onSearchFailure(buildArchiveSearchFailureLogMessage(threadId, error))
-            continue
-        }
-        val matchUrl = resolveArchiveFallbackMatchUrl(results, threadId) ?: continue
-        val pageResult = try {
-            Result.success(
-                withContext(AppDispatchers.io) {
-                    repository.getThreadContentByUrl(matchUrl)
-                }
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (error: Throwable) {
-            Result.failure(error)
-        }
-        val content = pageResult.getOrNull()
-        val attemptState = resolveArchiveFallbackAttemptState(
-            threadId = threadId,
-            threadUrl = matchUrl,
-            page = content?.page,
-            embeddedHtml = content?.embeddedHtml.orEmpty(),
-            error = pageResult.exceptionOrNull()
         )
-        attemptState.successLogMessage?.let(onSuccessLog)
-        if (attemptState.outcome !is ArchiveFallbackOutcome.NoMatch) {
-            return attemptState.outcome
-        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (error: Throwable) {
+        Result.failure(error)
     }
-    return ArchiveFallbackOutcome.NoMatch
+    val content = pageResult.getOrNull()
+    val attemptState = resolveArchiveFallbackAttemptState(
+        threadId = threadId,
+        threadUrl = matchUrl,
+        page = content?.page,
+        embeddedHtml = content?.embeddedHtml.orEmpty(),
+        error = pageResult.exceptionOrNull()
+    )
+    attemptState.successLogMessage?.let(onSuccessLog)
+    return attemptState.outcome
 }

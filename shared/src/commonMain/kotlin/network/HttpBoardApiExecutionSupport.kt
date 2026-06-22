@@ -79,7 +79,7 @@ internal suspend fun getOrLoadHttpBoardApiPostingConfig(
             cache.get(board)?.let { return@withLock it }
             try {
                 val fetched = fetchPostingConfig()
-                if (!fetched.fromFallback) {
+                if (!fetched.fromFallback && fetched.cacheable) {
                     cache.put(board, fetched)
                 }
                 fetched
@@ -109,6 +109,7 @@ internal suspend fun getOrLoadHttpBoardApiPostingConfig(
 internal suspend fun fetchHttpBoardApiPostingConfig(
     client: HttpClient,
     board: String,
+    threadId: String?,
     userAgent: String,
     accept: String,
     acceptLanguage: String,
@@ -119,11 +120,13 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
     readResponseBodyAsString: suspend (HttpResponse) -> String
 ): HttpBoardApiPostingConfig {
     val boardBase = BoardUrlResolver.resolveBoardBaseUrl(board)
-    val url = buildString {
-        append(boardBase)
-        if (!boardBase.endsWith("/")) append('/')
-        append("futaba.htm")
-    }
+    val url = threadId
+        ?.let { BoardUrlResolver.resolveThreadUrl(board, it) }
+        ?: buildString {
+            append(boardBase)
+            if (!boardBase.endsWith("/")) append('/')
+            append("futaba.htm")
+        }
     val response = client.get(url) {
         headers[HttpHeaders.UserAgent] = userAgent
         headers[HttpHeaders.Accept] = accept
@@ -138,12 +141,17 @@ internal suspend fun fetchHttpBoardApiPostingConfig(
         }
         val html = readResponseBodyAsString(response)
         val chrencValue = parseHttpBoardApiChrencValue(html)
+        val hashValue = parseHttpBoardApiInputValue(html, "hash")
+        val ptuaValue = parseHttpBoardApiInputValue(html, "ptua")
         if (chrencValue == null) {
             Logger.w(logTag, "chrenc not found in posting config response for '$board'; using temporary fallback")
         }
         return resolveHttpBoardApiPostingConfig(
             chrencValue = chrencValue,
-            fallbackChrencValue = fallbackChrencValue
+            fallbackChrencValue = fallbackChrencValue,
+            hashValue = hashValue,
+            ptuaValue = ptuaValue,
+            cacheable = hashValue == null && ptuaValue == null
         )
     } finally {
         // Body lifecycle is managed in readResponseBodyAsString.

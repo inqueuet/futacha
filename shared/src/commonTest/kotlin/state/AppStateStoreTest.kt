@@ -197,6 +197,7 @@ class AppStateStoreTest {
 
         store.setLastUsedDeleteKey(" 1234567890 ")
         store.setAdsEnabled(false)
+        store.setPastThreadSearchNoticeHidden(true)
         store.setManualSaveDirectory("./saved_threads")
         store.setCatalogGridColumns(99)
         store.setAttachmentPickerPreference(AttachmentPickerPreference.ALWAYS_ASK)
@@ -204,6 +205,7 @@ class AppStateStoreTest {
 
         assertEquals("12345678", store.lastUsedDeleteKey.first())
         assertEquals(false, store.isAdsEnabled.first())
+        assertEquals(true, store.isPastThreadSearchNoticeHidden.first())
         assertEquals(DEFAULT_MANUAL_SAVE_ROOT, store.manualSaveDirectory.first())
         assertEquals(8, store.catalogGridColumns.first())
         assertEquals(AttachmentPickerPreference.ALWAYS_ASK, store.attachmentPickerPreference.first())

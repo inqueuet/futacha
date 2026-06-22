@@ -195,8 +195,7 @@ class GlobalSettingsSupportTest {
             ),
             state.barEntries.take(3).map { it.id }
         )
-        assertEquals(1, state.hiddenEntries.size)
-        assertEquals(CatalogNavEntryId.PastThreadSearch, state.hiddenEntries.single().id)
+        assertTrue(state.hiddenEntries.isEmpty())
     }
 
     @Test
@@ -205,7 +204,6 @@ class GlobalSettingsSupportTest {
             it.copy(placement = CatalogNavEntryPlacement.HIDDEN)
         }
         val state = resolveCatalogMenuConfigState(hiddenAll)
-        assertTrue(state.barEntries.isNotEmpty())
         assertEquals(CatalogNavEntryId.Settings, state.barEntries.single().id)
     }
 
@@ -276,7 +274,7 @@ class GlobalSettingsSupportTest {
             resolveCatalogMenuConfigState(localEntries).barEntries.take(3).map { it.id }
         )
 
-        callbacks.setPlacement(CatalogNavEntryId.PastThreadSearch, CatalogNavEntryPlacement.BAR)
+        callbacks.setPlacement(CatalogNavEntryId.PastThreadSearch, CatalogNavEntryPlacement.HIDDEN)
         assertTrue(resolveCatalogMenuConfigState(localEntries).hiddenEntries.any { it.id == CatalogNavEntryId.PastThreadSearch })
 
         callbacks.resetEntries()

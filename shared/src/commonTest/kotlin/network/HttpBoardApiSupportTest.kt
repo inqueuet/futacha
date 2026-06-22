@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.network
 
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.http.ContentType
+import io.ktor.http.content.PartData
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlin.coroutines.cancellation.CancellationException
@@ -56,6 +57,18 @@ class HttpBoardApiSupportTest {
             "エラー: 時間を置いてください",
             extractHttpBoardApiServerError("\n\nエラー: 時間を置いてください\n")
         )
+        assertEquals(
+            "IP制限により あと3500秒書き込みができません",
+            extractHttpBoardApiServerError(
+                """<html><body><b>IP制限</b>により<br>あと3500秒書き込みができません</body></html>"""
+            )
+        )
+        assertEquals(
+            "Cookieを新規作成しました。もう一度書き込みしてください",
+            extractHttpBoardApiServerError(
+                """<html><body>Cookieを新規作成しました。もう一度書き込みしてください</body></html>"""
+            )
+        )
         assertNull(extractHttpBoardApiServerError("""{"status":"ok","thisno":10}"""))
     }
 
@@ -67,14 +80,56 @@ class HttpBoardApiSupportTest {
         assertTrue(
             requiresHttpBoardApiCookieResetRecovery("Cookie を削除して書き込み可能なIPから再生成してください")
         )
+        assertTrue(
+            requiresHttpBoardApiCookieResetRecovery("cookieを有効にしてもう一度送信してください")
+        )
         assertFalse(
             requiresHttpBoardApiCookieResetRecovery("規制中です")
         )
         assertEquals(
-            "返信に失敗しました: posttime の期限切れです Cookie を削除し、ふたばちゃんねるに書き込み可能なIPからブラウザ等で一度書き込んで、新しい Cookie を生成してください",
+            "返信に失敗しました: posttime の期限切れです 今回の投稿試行で投稿用 Cookie が保存された可能性があります。Cookie を保持したままもう一度投稿してください。残り秒数が表示された場合は、その時間まで待ってください",
             buildHttpBoardApiPostingFailureMessage(
                 prefix = "返信に失敗しました",
                 detail = "posttime の期限切れです"
+            )
+        )
+        assertEquals(
+            "返信に失敗しました: cookieを有効にしてもう一度送信してください 今回の投稿試行で投稿用 Cookie が保存された可能性があります。Cookie を保持したままもう一度投稿してください。残り秒数が表示された場合は、その時間まで待ってください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "cookieを有効にしてもう一度送信してください"
+            )
+        )
+    }
+
+    @Test
+    fun postResponseHelpers_extractWaitSecondsAndAppendRetryLabel() {
+        assertEquals(45L, extractHttpBoardApiPostingWaitSeconds("あと45秒待ってください"))
+        assertEquals(200L, extractHttpBoardApiPostingWaitSeconds("3分20秒後に再試行してください"))
+        assertEquals(3500L, extractHttpBoardApiPostingWaitSeconds("IP制限によりあと3500秒書き込みができません"))
+        assertEquals(86_400L, extractHttpBoardApiPostingWaitSeconds("Cookie 作成後 1日ほど書き込みできません"))
+        assertEquals("1分15秒", formatHttpBoardApiPostingWaitLabel(75L))
+        assertEquals("1日1時間", formatHttpBoardApiPostingWaitLabel(90_000L))
+
+        assertEquals(
+            "返信に失敗しました: あと45秒待ってください 約45秒後に再試行してください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "あと45秒待ってください"
+            )
+        )
+        assertEquals(
+            "返信に失敗しました: posttime の期限切れです あと86400秒待ってください 今回の投稿試行で投稿用 Cookie が保存された可能性があります。Cookie を保持したまま約1日後に再試行してください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "posttime の期限切れです あと86400秒待ってください"
+            )
+        )
+        assertEquals(
+            "返信に失敗しました: IP制限によりあと3500秒書き込みができません 約58分20秒後に再試行してください",
+            buildHttpBoardApiPostingFailureMessage(
+                prefix = "返信に失敗しました",
+                detail = "IP制限によりあと3500秒書き込みができません"
             )
         )
     }
@@ -88,6 +143,18 @@ class HttpBoardApiSupportTest {
         assertEquals(
             HttpBoardApiPostingFailureKind.IP_RESTRICTION,
             classifyHttpBoardApiPostingFailure("規制中です。この回線からは書き込めません")
+        )
+        assertEquals(
+            HttpBoardApiPostingFailureKind.COOKIE_RESET_REQUIRED,
+            classifyHttpBoardApiPostingFailure("Cookieを新規作成しました。もう一度書き込みしてください")
+        )
+        assertEquals(
+            HttpBoardApiPostingFailureKind.COOKIE_RESET_REQUIRED,
+            classifyHttpBoardApiPostingFailure("cookieを有効にしてもう一度送信してください")
+        )
+        assertEquals(
+            HttpBoardApiPostingFailureKind.IP_RESTRICTION,
+            classifyHttpBoardApiPostingFailure("IP制限によりあと3500秒書き込みができません")
         )
         assertEquals(
             "返信に失敗しました: 規制中です。この回線からは書き込めません IP規制の可能性があります。時間を置くか、別の書き込み可能な回線を試してください",
@@ -138,6 +205,14 @@ class HttpBoardApiSupportTest {
         """.trimIndent()
 
         assertEquals("文字", parseHttpBoardApiChrencValue(html))
+        assertEquals(
+            "abc-123",
+            parseHttpBoardApiInputValue("""<input type=hidden name=hash value="abc-123">""", "hash")
+        )
+        assertEquals(
+            "UTF-8",
+            parseHttpBoardApiInputValue("""<input value='UTF-8' name='chrenc' type='hidden'>""", "chrenc")
+        )
         assertEquals("A", decodeHttpBoardApiNumericEntities("&#65;"))
         assertEquals("\uD83D\uDE00", decodeHttpBoardApiNumericEntities("&#x1F600;"))
         assertEquals("plain", decodeHttpBoardApiNumericEntities("plain"))
@@ -270,6 +345,7 @@ class HttpBoardApiSupportTest {
             HttpBoardApiPostingConfig(
                 encoding = HttpBoardApiPostEncoding.SHIFT_JIS,
                 chrencValue = "文字",
+                cacheable = false,
                 fromFallback = true
             ),
             fallbackHttpBoardApiPostingConfig("文字")
@@ -285,5 +361,37 @@ class HttpBoardApiSupportTest {
                 }
             )
         )
+    }
+
+    @Test
+    fun postingHelpers_buildFormDataUsesServerHashWhenAvailable() {
+        val formData = buildHttpBoardApiPostFormData(
+            logTag = "HttpBoardApiTest",
+            threadId = "777",
+            name = "",
+            email = "",
+            subject = "",
+            comment = "reply",
+            password = "1234",
+            imageFile = null,
+            imageFileName = null,
+            textOnly = true,
+            postingConfig = HttpBoardApiPostingConfig(
+                encoding = HttpBoardApiPostEncoding.UTF8,
+                chrencValue = "UTF-8",
+                hashValue = "server-hash",
+                ptuaValue = "server-ptua"
+            )
+        )
+
+        val hashPart = formData
+            .filterIsInstance<PartData.FormItem>()
+            .first { it.name == "hash" }
+        val ptuaPart = formData
+            .filterIsInstance<PartData.FormItem>()
+            .first { it.name == "ptua" }
+
+        assertEquals("server-hash", hashPart.value)
+        assertEquals("server-ptua", ptuaPart.value)
     }
 }

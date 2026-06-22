@@ -5,9 +5,9 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrl
+import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrlFromUrl
 import com.valoser.futacha.shared.network.extractArchiveSearchScope
-import com.valoser.futacha.shared.network.fetchArchiveSearchResults
-import com.valoser.futacha.shared.network.selectLatestArchiveMatch
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.resolveThreadTitle
@@ -83,51 +83,26 @@ internal suspend fun tryRefreshHistoryEntryFromArchive(
     archiveSearchJson: Json,
     tag: String
 ): ArchiveRefreshResult {
-    val client = httpClient ?: return ArchiveRefreshResult.NoMatch
+    if (httpClient == null) return ArchiveRefreshResult.NoMatch
     val scope = extractArchiveSearchScope(board?.url ?: entry.boardUrl)
-    val queryCandidates = buildList {
-        normalizeHistoryArchiveQuery(entry.threadId, maxLength = 64)
-            .takeIf { it.isNotBlank() }
-            ?.let { add(it) }
-        normalizeHistoryArchiveQuery(entry.title, maxLength = 120)
-            .takeIf { it.isNotBlank() }
-            ?.let { add(it) }
-    }.distinct()
-    if (queryCandidates.isEmpty()) return ArchiveRefreshResult.NoMatch
-
-    var lastErrorMessage: String? = null
-    var hadSuccessfulSearch = false
-    queryCandidates.forEach { query ->
-        val results = try {
-            withTimeoutOrNull(fetchTimeoutMillis) {
-                fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
-            } ?: run {
-                val detail = "Archive search timed out"
-                lastErrorMessage = detail
-                Logger.w(tag, "Archive search timed out for ${entry.threadId}")
-                return@forEach
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (error: Throwable) {
-            val detail = error.message ?: "Archive search failed"
-            lastErrorMessage = detail
-            Logger.w(tag, "Archive search failed for ${entry.threadId}: $detail")
-            return@forEach
-        }
-        hadSuccessfulSearch = true
-        val matched = selectLatestArchiveMatch(results, entry.threadId) ?: return@forEach
-        return resolveHistoryArchiveEntry(
-            entry = entry,
-            board = board,
-            match = matched,
-            repository = repository,
-            fetchTimeoutMillis = fetchTimeoutMillis,
-            tag = tag
-        )
-    }
-    if (hadSuccessfulSearch) return ArchiveRefreshResult.NoMatch
-    return lastErrorMessage?.let { ArchiveRefreshResult.Error(it) } ?: ArchiveRefreshResult.NoMatch
+    val archiveThreadUrl = buildInqueuetArchiveThreadUrlFromUrl(entry.boardUrl)
+        ?: buildInqueuetArchiveThreadUrl(board?.url ?: entry.boardUrl, entry.threadId)
+        ?: return ArchiveRefreshResult.NoMatch
+    return resolveHistoryArchiveEntry(
+        entry = entry,
+        board = board,
+        match = ArchiveSearchItem(
+            threadId = entry.threadId,
+            server = scope?.server.orEmpty(),
+            board = scope?.board.orEmpty(),
+            title = entry.title,
+            htmlUrl = archiveThreadUrl,
+            thumbUrl = entry.titleImageUrl
+        ),
+        repository = repository,
+        fetchTimeoutMillis = fetchTimeoutMillis,
+        tag = tag
+    )
 }
 
 internal suspend fun resolveHistoryArchiveEntry(

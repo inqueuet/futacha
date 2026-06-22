@@ -60,11 +60,24 @@ internal fun buildPastThreadSearchErrorMessage(error: Throwable): String {
 }
 
 internal fun buildPastThreadSearchIdleMessage(): String {
-    return "検索ワードを入力するとここに結果が表示されます。"
+    return "スレタイまたはスレNo.を入力するとここに候補が表示されます。"
 }
 
 internal fun buildPastThreadSearchEmptyMessage(): String {
-    return "見つかりませんでした"
+    return "一致する過去スレが見つかりません"
+}
+
+internal fun buildPastThreadSearchNoticeTitle(): String {
+    return "過去ログ検索の注意"
+}
+
+internal fun buildPastThreadSearchNoticeMessages(): List<String> {
+    return listOf(
+        "対応板は限られています。",
+        "レス数100未満のスレは保存されません。",
+        "保存時刻や反映時間は保証されません。",
+        "見つからない場合は未保存または未対応の可能性があります。"
+    )
 }
 
 internal fun archiveSearchItemToCatalogItem(item: ArchiveSearchItem): CatalogItem {
@@ -74,6 +87,6 @@ internal fun archiveSearchItemToCatalogItem(item: ArchiveSearchItem): CatalogIte
         title = item.title,
         thumbnailUrl = item.thumbUrl,
         fullImageUrl = item.thumbUrl,
-        replyCount = 0
+        replyCount = item.replyCount
     )
 }

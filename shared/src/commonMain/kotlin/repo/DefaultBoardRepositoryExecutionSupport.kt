@@ -61,7 +61,8 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
             }
 
             val hasCookies = hasDefaultBoardRepositoryCookies(cookieRepository, board)
-            if (fetchedSetup || hasCookies) {
+            val setupCompleted = hasCookies || (cookieRepository == null && fetchedSetup)
+            if (setupCompleted) {
                 markDefaultBoardRepositoryBoardInitialized(
                     initializedBoards = initializedBoards,
                     board = board,
@@ -126,7 +127,7 @@ internal suspend fun <T> runDefaultBoardRepositoryPostingWithInitializedCookies(
         ensureCookiesInitialized(board)
         block()
     }
-    return cookieRepository?.commitOnSuccess { exec() } ?: exec()
+    return cookieRepository?.commitEvenOnFailure { exec() } ?: exec()
 }
 
 internal suspend fun fetchDefaultBoardRepositoryOpImageWithPermit(

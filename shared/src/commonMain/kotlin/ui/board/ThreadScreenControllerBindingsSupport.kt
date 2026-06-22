@@ -123,6 +123,7 @@ internal fun buildThreadScreenControllerBindingsBundle(
                     }
                 },
                 voteSaidane = { post ->
+                    requireWritableThreadBoard(interactionInputs.effectiveBoardUrl)
                     interactionInputs.repository.voteSaidane(
                         interactionInputs.effectiveBoardUrl,
                         interactionInputs.threadId,
@@ -130,6 +131,7 @@ internal fun buildThreadScreenControllerBindingsBundle(
                     )
                 },
                 requestDeletion = { post ->
+                    requireWritableThreadBoard(interactionInputs.effectiveBoardUrl)
                     interactionInputs.repository.requestDeletion(
                         interactionInputs.effectiveBoardUrl,
                         interactionInputs.threadId,

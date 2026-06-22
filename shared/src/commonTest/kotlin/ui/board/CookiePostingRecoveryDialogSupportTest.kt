@@ -10,7 +10,7 @@ class CookiePostingRecoveryDialogSupportTest {
         assertEquals(
             CookiePostingRecoveryGuidance(
                 title = "書き込み用Cookieがありません",
-                message = "まだ Cookie が保存されていません。書き込み可能な回線で一度書き込みに成功して、Cookie を作成してから再試行してください。必要なら Cookie 画面で現在の保存状態を確認できます。"
+                message = "まだ Cookie が保存されていません。書き込みを試すと、失敗しても Cookie だけ保存される場合があります。Cookie 画面で保存状態を確認し、保存されていれば Cookie を削除せずにもう一度投稿してください。"
             ),
             buildCookiePostingRecoveryGuidance(
                 hasAnyCookies = false,
@@ -24,7 +24,7 @@ class CookiePostingRecoveryDialogSupportTest {
         assertEquals(
             CookiePostingRecoveryGuidance(
                 title = "この板の書き込み用Cookieがありません",
-                message = "Cookie はありますが、この板で使う書き込み用 Cookie が見つかりません。書き込み可能な回線で一度書き込みに成功して、この板の Cookie を生成してから再試行してください。必要なら Cookie 画面で削除や確認ができます。"
+                message = "Cookie はありますが、この板で使う書き込み用 Cookie が見つかりません。この板で一度書き込みを試すと、失敗しても Cookie だけ保存される場合があります。保存されていれば Cookie を削除せずにもう一度投稿してください。"
             ),
             buildCookiePostingRecoveryGuidance(
                 hasAnyCookies = true,
@@ -37,8 +37,8 @@ class CookiePostingRecoveryDialogSupportTest {
     fun buildCookiePostingRecoveryGuidance_returnsResetMessageWhenPostingCookieExists() {
         assertEquals(
             CookiePostingRecoveryGuidance(
-                title = "Cookieの再生成を試してください",
-                message = "保存済みの Cookie が原因で書き込みに失敗している可能性があります。Cookie を初期化してから、書き込み可能な回線で一度書き込みに成功させ、新しい Cookie を再生成してください。"
+                title = "もう一度投稿してください",
+                message = "投稿用 Cookie は保存されています。Cookie を削除せずにもう一度投稿してください。サーバーが残り秒数を返した場合は、その時間まで待ってから再試行してください。"
             ),
             buildCookiePostingRecoveryGuidance(
                 hasAnyCookies = true,

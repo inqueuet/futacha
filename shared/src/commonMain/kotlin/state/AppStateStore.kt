@@ -165,6 +165,7 @@ class AppStateStore internal constructor(
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
     val isAdsEnabled: Flow<Boolean> = storage.adsEnabled
     val hasShownPostingNotice: Flow<Boolean> = storage.hasShownPostingNotice
+    val isPastThreadSearchNoticeHidden: Flow<Boolean> = storage.pastThreadSearchNoticeHidden
     val isLightweightModeEnabled: Flow<Boolean> = storage.lightweightModeEnabled
     val isThreadSummaryModeEnabled: Flow<Boolean> = storage.threadSummaryModeEnabled
     val isAiPostFilterEnabled: Flow<Boolean> = storage.aiPostFilterEnabled
@@ -238,6 +239,9 @@ class AppStateStore internal constructor(
 
     suspend fun setHasShownPostingNotice(shown: Boolean) =
         preferenceOperations.setHasShownPostingNotice(shown)
+
+    suspend fun setPastThreadSearchNoticeHidden(hidden: Boolean) =
+        preferenceOperations.setPastThreadSearchNoticeHidden(hidden)
 
     suspend fun setLastUsedDeleteKey(deleteKey: String) =
         preferenceOperations.setLastUsedDeleteKey(deleteKey)
@@ -438,6 +442,7 @@ internal interface PlatformStateStorage {
     val backgroundRefreshEnabled: Flow<Boolean>
     val adsEnabled: Flow<Boolean>
     val hasShownPostingNotice: Flow<Boolean>
+    val pastThreadSearchNoticeHidden: Flow<Boolean>
     val lightweightModeEnabled: Flow<Boolean>
     val threadSummaryModeEnabled: Flow<Boolean>
     val aiPostFilterEnabled: Flow<Boolean>
@@ -473,6 +478,7 @@ internal interface PlatformStateStorage {
     suspend fun updateBackgroundRefreshEnabled(enabled: Boolean)
     suspend fun updateAdsEnabled(enabled: Boolean)
     suspend fun updateHasShownPostingNotice(shown: Boolean)
+    suspend fun updatePastThreadSearchNoticeHidden(hidden: Boolean)
     suspend fun updateLightweightModeEnabled(enabled: Boolean)
     suspend fun updateThreadSummaryModeEnabled(enabled: Boolean)
     suspend fun updateAiPostFilterEnabled(enabled: Boolean)

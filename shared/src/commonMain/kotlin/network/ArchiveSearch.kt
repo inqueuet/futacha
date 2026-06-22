@@ -1,41 +1,19 @@
 package com.valoser.futacha.shared.network
 
 import com.valoser.futacha.shared.model.BoardSummary
-import com.valoser.futacha.shared.util.AppDispatchers
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsChannel
+import io.ktor.client.request.parameter
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.Url
-import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.cancel
-import io.ktor.utils.io.readAvailable
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.withContext
-import kotlinx.serialization.KSerializer
-import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.descriptors.PrimitiveKind
-import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
-import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonDecoder
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonPrimitive
-import kotlin.coroutines.coroutineContext
 
 data class ArchiveSearchScope(val server: String, val board: String)
 
-@Serializable
 data class ArchiveSearchItem(
     val threadId: String,
     val server: String,
@@ -43,54 +21,55 @@ data class ArchiveSearchItem(
     val title: String? = null,
     val htmlUrl: String,
     val thumbUrl: String? = null,
+    val replyCount: Int = 0,
     val status: String? = null,
-    @Serializable(with = ArchiveSearchTimestampSerializer::class)
+    val totalBytes: Long? = null,
+    val savedAt: Long? = null,
     val createdAt: Long? = null,
-    @Serializable(with = ArchiveSearchTimestampSerializer::class)
     val finalizedAt: Long? = null,
-    @Serializable(with = ArchiveSearchTimestampSerializer::class)
     val uploadedAt: Long? = null
 )
 
+private const val FUTABA_HOST_SUFFIX = ".2chan.net"
+private const val INQUEUET_HOST_SUFFIX = ".inqueuet.com"
+private const val DEFAULT_ARCHIVE_SEARCH_SERVER = "may"
+private const val DEFAULT_ARCHIVE_SEARCH_LIMIT = 20
+private const val MAX_ARCHIVE_SEARCH_LIMIT = 100
+private val ARCHIVE_THREAD_RES_ID_REGEX = Regex("""/res/(\d+)\.html?""")
+
 @Serializable
-data class ArchiveSearchResponse(
-    val query: String? = null,
-    val filter: String? = null,
+private data class InqueuetArchiveSearchResponse(
+    val q: String? = null,
+    val server: String? = null,
+    val board: String? = null,
+    val limit: Int? = null,
     val count: Int? = null,
-    val results: List<ArchiveSearchItem> = emptyList()
+    val results: List<InqueuetArchiveSearchResult> = emptyList()
 )
 
-private const val MAX_ARCHIVE_RESPONSE_SIZE = 2 * 1024 * 1024 // 2MB
-private const val ARCHIVE_READ_IDLE_TIMEOUT_MILLIS = 15_000L
-private const val ARCHIVE_REQUEST_TIMEOUT_MILLIS = 20_000L
-private const val MAX_ARCHIVE_RESULT_ITEMS = 1_500
-private const val ARCHIVE_READ_BUFFER_BYTES = 8 * 1024
-private const val ARCHIVE_MAX_ZERO_READ_RETRIES = 250
-private const val ARCHIVE_ZERO_READ_BACKOFF_MILLIS = 25L
-private val ARCHIVE_THREAD_RES_ID_REGEX = Regex("""/res/(\d+)\.html?""")
-private val ARCHIVE_THREAD_TRAILING_ID_REGEX = Regex("""(\d+)(?:\.html?)?$""")
-
-object ArchiveSearchTimestampSerializer : KSerializer<Long?> {
-    override val descriptor: SerialDescriptor =
-        PrimitiveSerialDescriptor("ArchiveSearchTimestamp", PrimitiveKind.LONG)
-
-    override fun deserialize(decoder: Decoder): Long? {
-        val jsonDecoder = decoder as? JsonDecoder ?: return runCatching { decoder.decodeLong() }.getOrNull()
-        val element = jsonDecoder.decodeJsonElement()
-        if (element is JsonNull) return null
-        val primitive = element.jsonPrimitive
-        return primitive.content.toLongOrNull()
-    }
-
-    @OptIn(ExperimentalSerializationApi::class)
-    override fun serialize(encoder: Encoder, value: Long?) {
-        if (value == null) {
-            encoder.encodeNull()
-        } else {
-            encoder.encodeLong(value)
-        }
-    }
-}
+@Serializable
+private data class InqueuetArchiveSearchResult(
+    val id: String? = null,
+    val server: String? = null,
+    val board: String? = null,
+    @SerialName("thread_no")
+    val threadNo: String? = null,
+    val threadId: String? = null,
+    @SerialName("reply_count")
+    val replyCount: Int? = null,
+    @SerialName("replyCount")
+    val replyCountLegacy: Int? = null,
+    val status: String? = null,
+    @SerialName("total_bytes")
+    val totalBytes: Long? = null,
+    @SerialName("saved_at")
+    val savedAt: Long? = null,
+    val title: String? = null,
+    @SerialName("archive_url")
+    val archiveUrl: String? = null,
+    val htmlUrl: String? = null,
+    val thumbUrl: String? = null
+)
 
 fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
     return extractArchiveSearchScope(board?.url)
@@ -110,240 +89,108 @@ fun extractArchiveSearchScope(boardUrl: String?): ArchiveSearchScope? {
     }.getOrNull()
 }
 
-fun buildArchiveSearchUrl(
+fun buildInqueuetArchiveUrl(sourceUrl: String): String? {
+    if (sourceUrl.isBlank() || !sourceUrl.contains("://")) return null
+    return runCatching {
+        val url = Url(sourceUrl.trim())
+        val server = resolveInqueuetArchiveServer(url.host) ?: return null
+        val encodedPath = url.encodedPath.takeIf { it.isNotBlank() } ?: return null
+        "https://$server.inqueuet.com$encodedPath"
+    }.getOrNull()
+}
+
+fun buildInqueuetArchiveThreadUrlFromUrl(sourceUrl: String): String? {
+    val archiveUrl = buildInqueuetArchiveUrl(sourceUrl) ?: return null
+    return if (ARCHIVE_THREAD_RES_ID_REGEX.containsMatchIn(archiveUrl)) archiveUrl else null
+}
+
+fun isInqueuetArchiveUrl(url: String): Boolean {
+    if (url.isBlank() || !url.contains("://")) return false
+    return runCatching {
+        val host = Url(url.trim()).host.trim().lowercase().trim('.')
+        host == "inqueuet.com" || host.endsWith(INQUEUET_HOST_SUFFIX)
+    }.getOrDefault(false)
+}
+
+fun buildInqueuetArchiveThreadUrl(
+    boardUrl: String,
+    threadId: String
+): String? {
+    val sourceThreadUrl = runCatching {
+        BoardUrlResolver.resolveThreadUrl(boardUrl, threadId)
+    }.getOrNull() ?: return null
+    return buildInqueuetArchiveUrl(sourceThreadUrl)
+}
+
+fun buildDirectArchiveSearchItems(
     query: String,
     scope: ArchiveSearchScope?
-): String {
-    val params = buildList<String> {
-        if (query.isNotBlank()) {
-            add("q=${query.encodeURLParameter().replace("%20", "+")}")
-        }
-        scope?.let {
-            add("server=${it.server.encodeURLParameter()}")
-            add("board=${it.board.encodeURLParameter()}")
-        }
-    }
-    return buildString {
-        append("https://spider.serendipity01234.workers.dev/search")
-        if (params.isNotEmpty()) {
-            append("?")
-            append(params.joinToString("&"))
-        }
-    }
-}
-
-suspend fun fetchArchiveSearchResults(
-    httpClient: HttpClient,
-    query: String,
-    scope: ArchiveSearchScope?,
-    json: Json
 ): List<ArchiveSearchItem> {
-    return withContext(AppDispatchers.io) {
-        withTimeout(ARCHIVE_REQUEST_TIMEOUT_MILLIS) {
-            val url = buildArchiveSearchUrl(query, scope)
-            val response = httpClient.get(url)
-            try {
-                if (!response.status.isSuccess()) {
-                    throw IllegalStateException("検索に失敗しました: ${response.status}")
-                }
-                val contentLength = response.headers["Content-Length"]?.toLongOrNull()
-                if (contentLength != null && contentLength > MAX_ARCHIVE_RESPONSE_SIZE) {
-                    throw IllegalStateException("検索結果が大きすぎます")
-                }
-                val body = readArchiveResponseBody(response)
-                withContext(AppDispatchers.parsing) {
-                    parseArchiveSearchResults(body, scope, json)
-                }
-            } finally {
-                // Body lifecycle is managed in readArchiveResponseBody.
-            }
-        }
-    }
-}
-
-private suspend fun readArchiveResponseBody(response: io.ktor.client.statement.HttpResponse): String {
-    val channel = response.bodyAsChannel()
-    val buffer = ByteArray(ARCHIVE_READ_BUFFER_BYTES)
-    var output = ByteArray(ARCHIVE_READ_BUFFER_BYTES)
-    var totalBytes = 0
-    var zeroReadCount = 0
-    val bytes = try {
-        while (true) {
-            coroutineContext.ensureActive()
-            val read = withTimeoutOrNull(ARCHIVE_READ_IDLE_TIMEOUT_MILLIS) {
-                channel.readAvailable(buffer, 0, buffer.size)
-            } ?: throw IllegalStateException("検索結果の取得がタイムアウトしました")
-            if (read == -1) break
-            if (read == 0) {
-                zeroReadCount += 1
-                if (zeroReadCount >= ARCHIVE_MAX_ZERO_READ_RETRIES) {
-                    throw IllegalStateException("検索結果の取得がタイムアウトしました")
-                }
-                delay(ARCHIVE_ZERO_READ_BACKOFF_MILLIS)
-                continue
-            }
-            zeroReadCount = 0
-            val requiredSize = totalBytes + read
-            if (requiredSize > MAX_ARCHIVE_RESPONSE_SIZE) {
-                throw IllegalStateException("検索結果が大きすぎます")
-            }
-            if (requiredSize > output.size) {
-                var nextSize = output.size
-                while (nextSize < requiredSize) {
-                    nextSize = (nextSize * 2).coerceAtMost(MAX_ARCHIVE_RESPONSE_SIZE)
-                    if (nextSize == output.size) break
-                }
-                if (nextSize < requiredSize) {
-                    throw IllegalStateException("検索結果が大きすぎます")
-                }
-                output = output.copyOf(nextSize)
-            }
-            buffer.copyInto(output, destinationOffset = totalBytes, startIndex = 0, endIndex = read)
-            totalBytes = requiredSize
-        }
-        if (totalBytes == output.size) output else output.copyOf(totalBytes)
-    } finally {
-        runCatching { channel.cancel(null) }
-    }
-
-    val body = bytes.decodeToString()
-    if (utf8ByteLength(body) > MAX_ARCHIVE_RESPONSE_SIZE.toLong()) {
-        throw IllegalStateException("検索結果が大きすぎます")
-    }
-    return body
-}
-
-fun parseArchiveSearchResults(
-    body: String,
-    scope: ArchiveSearchScope?,
-    json: Json
-): List<ArchiveSearchItem> {
-    val element = runCatching { json.parseToJsonElement(body) }.getOrElse {
-        throw IllegalStateException("検索結果の解析に失敗しました")
-    }
-    val itemsElement = when (element) {
-        is JsonArray -> element
-        is JsonObject -> {
-            element["results"]
-                ?: element["items"]
-                ?: element["data"]
-                ?: element["threads"]
-        }
-        else -> null
-    }
-    val items = itemsElement as? JsonArray
-        ?: throw IllegalStateException("検索結果の形式が不明です")
-    return items
-        .asSequence()
-        .take(MAX_ARCHIVE_RESULT_ITEMS)
-        .mapNotNull { parseArchiveSearchItem(it, scope) }
-        .toList()
-}
-
-fun parseArchiveSearchItem(
-    element: JsonElement,
-    scope: ArchiveSearchScope?
-): ArchiveSearchItem? {
-    val obj = element as? JsonObject ?: return null
-    val htmlUrl = obj.firstString("htmlUrl", "html_url", "url", "link", "href") ?: return null
-    val threadId = obj.firstString("threadId", "thread_id", "id", "thread")
-        ?: extractThreadIdFromUrl(htmlUrl)
-        ?: return null
-    val server = obj.firstString("server", "srv") ?: scope?.server.orEmpty()
-    val board = obj.firstString("board", "boardId", "brd") ?: scope?.board.orEmpty()
-    val title = obj.firstString("title", "subject")
-    val thumbUrl = obj.firstString("thumbUrl", "thumb_url", "thumb", "thumbnail", "image")
-    val status = obj.firstString("status", "state")
-    val createdAt = obj.firstLong("createdAt", "created_at", "created")
-    val finalizedAt = obj.firstLong("finalizedAt", "finalized_at", "finalized")
-    val uploadedAt = obj.firstLong("uploadedAt", "uploaded_at", "uploaded")
-    return ArchiveSearchItem(
-        threadId = threadId,
-        server = server,
-        board = board,
-        title = title,
-        htmlUrl = htmlUrl,
-        thumbUrl = thumbUrl,
-        status = status,
-        createdAt = createdAt,
-        finalizedAt = finalizedAt,
-        uploadedAt = uploadedAt
+    val normalized = query.trim()
+    if (normalized.isBlank()) return emptyList()
+    if (!normalized.all { it.isDigit() }) return emptyList()
+    val scopedThreadUrl = scope?.let {
+        "https://${it.server}.inqueuet.com/${it.board}/res/$normalized.htm"
+    } ?: return emptyList()
+    return listOf(
+        ArchiveSearchItem(
+            threadId = normalized,
+            server = scope.server,
+            board = scope.board,
+            title = "No.$normalized",
+            htmlUrl = scopedThreadUrl
+        )
     )
 }
 
-fun selectLatestArchiveMatch(
-    items: List<ArchiveSearchItem>,
-    threadId: String
-): ArchiveSearchItem? {
-    return items
-        .asSequence()
-        .filter { it.threadId == threadId }
-        .maxByOrNull { item ->
-            item.uploadedAt ?: item.finalizedAt ?: item.createdAt ?: 0L
-        }
-}
+suspend fun searchInqueuetArchiveThreads(
+    httpClient: HttpClient,
+    archiveSearchJson: Json,
+    query: String,
+    scope: ArchiveSearchScope?,
+    limit: Int = DEFAULT_ARCHIVE_SEARCH_LIMIT
+): List<ArchiveSearchItem> {
+    val normalized = query.trim()
+    require(normalized.isNotBlank()) { "q required" }
 
-private fun JsonObject.firstString(vararg keys: String): String? {
-    keys.forEach { key ->
-        val value = this[key]?.asStringOrNull()?.trim()
-        if (!value.isNullOrEmpty()) {
-            return value
-        }
+    val directItems = buildDirectArchiveSearchItems(normalized, scope)
+    if (directItems.isNotEmpty()) {
+        return directItems
     }
-    return null
-}
 
-private fun JsonObject.firstLong(vararg keys: String): Long? {
-    keys.forEach { key ->
-        val value = this[key]?.asLongOrNull()
-        if (value != null) {
-            return value
-        }
+    val safeLimit = limit.coerceIn(1, MAX_ARCHIVE_SEARCH_LIMIT)
+    val hostServer = scope?.server
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: DEFAULT_ARCHIVE_SEARCH_SERVER
+    val response = httpClient.get("https://$hostServer.inqueuet.com/search") {
+        parameter("q", normalized)
+        scope?.server?.trim()?.takeIf { it.isNotBlank() }?.let { parameter("server", it) }
+        scope?.board?.trim()?.takeIf { it.isNotBlank() }?.let { parameter("board", it) }
+        parameter("limit", safeLimit)
     }
-    return null
-}
-
-private fun JsonElement.asStringOrNull(): String? {
-    val primitive = this as? JsonPrimitive ?: return null
-    if (this is JsonNull) return null
-    val content = primitive.content
-    return if (content == "null") null else content
-}
-
-private fun JsonElement.asLongOrNull(): Long? {
-    val primitive = this as? JsonPrimitive ?: return null
-    if (this is JsonNull) return null
-    return primitive.content.toLongOrNull()
-}
-
-private fun utf8ByteLength(value: String): Long {
-    var total = 0L
-    var index = 0
-    while (index < value.length) {
-        val code = value[index].code
-        val nextCode = value.getOrNull(index + 1)?.code
-        val hasSurrogatePair =
-            code in 0xD800..0xDBFF &&
-                nextCode != null &&
-                nextCode in 0xDC00..0xDFFF
-        total += when {
-            code <= 0x7F -> 1L
-            code <= 0x7FF -> 2L
-            hasSurrogatePair -> {
-                index += 1
-                4L
-            }
-            else -> 3L
-        }
-        index += 1
+    val body = response.bodyAsText()
+    if (!response.status.isSuccess()) {
+        val detail = if (body.isBlank()) "" else ": ${body.take(120)}"
+        throw NetworkException("過去ログ検索に失敗しました (HTTP ${response.status.value}$detail)", response.status.value)
     }
-    return total
+
+    val decoded = archiveSearchJson.decodeFromString<InqueuetArchiveSearchResponse>(body)
+    return decoded.results.mapNotNull { result ->
+        result.toArchiveSearchItem(scope)
+    }
 }
 
-private fun extractThreadIdFromUrl(url: String): String? {
-    val primary = ARCHIVE_THREAD_RES_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
-    if (!primary.isNullOrBlank()) return primary
-    return ARCHIVE_THREAD_TRAILING_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
+private fun resolveInqueuetArchiveServer(host: String): String? {
+    val normalizedHost = host.trim().lowercase().trim('.')
+    val server = when {
+        normalizedHost.endsWith(FUTABA_HOST_SUFFIX) ->
+            normalizedHost.removeSuffix(FUTABA_HOST_SUFFIX)
+        normalizedHost.endsWith(INQUEUET_HOST_SUFFIX) ->
+            normalizedHost.removeSuffix(INQUEUET_HOST_SUFFIX)
+        else -> null
+    }?.takeIf { it.isNotBlank() && !it.contains('.') }
+    return server
 }
 
 private fun resolveBaseUrlFromThreadUrl(threadUrl: String): String? {
@@ -363,4 +210,47 @@ private fun resolveBaseUrlFromThreadUrl(threadUrl: String): String? {
             append(path.trimEnd('/'))
         }
     }.getOrNull()
+}
+
+private fun InqueuetArchiveSearchResult.toArchiveSearchItem(
+    fallbackScope: ArchiveSearchScope?
+): ArchiveSearchItem? {
+    val resolvedThreadId = threadNo?.trim()?.takeIf { it.isNotBlank() }
+        ?: threadId?.trim()?.takeIf { it.isNotBlank() }
+        ?: id?.split('/')?.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }
+        ?: archiveUrl?.let { ARCHIVE_THREAD_RES_ID_REGEX.find(it)?.groupValues?.getOrNull(1) }
+        ?: htmlUrl?.let { ARCHIVE_THREAD_RES_ID_REGEX.find(it)?.groupValues?.getOrNull(1) }
+        ?: return null
+    val resolvedServer = server?.trim()?.takeIf { it.isNotBlank() }
+        ?: id?.split('/')?.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() }
+        ?: fallbackScope?.server.orEmpty()
+    val resolvedBoard = board?.trim()?.takeIf { it.isNotBlank() }
+        ?: id?.split('/')?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+        ?: fallbackScope?.board.orEmpty()
+    val resolvedUrl = archiveUrl?.trim()?.takeIf { it.isNotBlank() }
+        ?: htmlUrl?.trim()?.takeIf { it.isNotBlank() }
+        ?: buildArchiveThreadUrlOrNull(resolvedServer, resolvedBoard, resolvedThreadId)
+        ?: return null
+    return ArchiveSearchItem(
+        threadId = resolvedThreadId,
+        server = resolvedServer,
+        board = resolvedBoard,
+        title = title,
+        htmlUrl = resolvedUrl,
+        thumbUrl = thumbUrl,
+        replyCount = replyCount ?: replyCountLegacy ?: 0,
+        status = status,
+        totalBytes = totalBytes,
+        savedAt = savedAt,
+        uploadedAt = savedAt
+    )
+}
+
+private fun buildArchiveThreadUrlOrNull(
+    server: String,
+    board: String,
+    threadId: String
+): String? {
+    if (server.isBlank() || board.isBlank() || threadId.isBlank()) return null
+    return "https://$server.inqueuet.com/$board/res/$threadId.htm"
 }

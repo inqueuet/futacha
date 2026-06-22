@@ -286,7 +286,7 @@ class HttpBoardApi(
             if (!boardBase.endsWith("/")) append('/')
             append("futaba.php?guid=on")
         }
-        val postingConfig = getPostingConfig(submission.board)
+        val postingConfig = getPostingConfig(submission.board, submission.threadId)
         val formData = buildHttpBoardApiPostFormData(
             logTag = TAG,
             threadId = submission.threadId,
@@ -488,21 +488,23 @@ class HttpBoardApi(
         )
     }
 
-    private suspend fun getPostingConfig(board: String): HttpBoardApiPostingConfig {
+    private suspend fun getPostingConfig(board: String, threadId: String?): HttpBoardApiPostingConfig {
+        val cacheKey = threadId?.let { "$board::thread::$it" } ?: board
         return getOrLoadHttpBoardApiPostingConfig(
-            board = board,
+            board = cacheKey,
             runtime = postingRuntime,
             fallbackChrencValue = DEFAULT_SHIFT_JIS_CHRENC_SAMPLE,
             logTag = TAG
         ) {
-            fetchPostingConfig(board)
+            fetchPostingConfig(board, threadId)
         }
     }
 
-    private suspend fun fetchPostingConfig(board: String): HttpBoardApiPostingConfig {
+    private suspend fun fetchPostingConfig(board: String, threadId: String?): HttpBoardApiPostingConfig {
         return fetchHttpBoardApiPostingConfig(
             client = client,
             board = board,
+            threadId = threadId,
             userAgent = DEFAULT_USER_AGENT,
             accept = DEFAULT_ACCEPT,
             acceptLanguage = DEFAULT_ACCEPT_LANGUAGE,

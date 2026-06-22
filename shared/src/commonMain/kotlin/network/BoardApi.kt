@@ -9,7 +9,7 @@ data class BoardEndpoint(
 
 interface BoardApi {
     /**
-     * Fetches catalog setup page to initialize cookies (posttime, cxyl, etc.)
+     * Fetches catalog setup page to initialize cookies (posttime, ptmt, cxyl, etc.)
      * This should be called before any catalog operations to ensure proper cookie setup.
      */
     suspend fun fetchCatalogSetup(board: String)

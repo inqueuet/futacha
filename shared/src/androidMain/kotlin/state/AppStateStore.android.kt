@@ -50,6 +50,7 @@ private class AndroidPlatformStateStorage(
     private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
     private val adsEnabledKey = booleanPreferencesKey("ads_enabled")
     private val postingNoticeKey = booleanPreferencesKey("has_shown_posting_notice")
+    private val pastThreadSearchNoticeHiddenKey = booleanPreferencesKey("past_thread_search_notice_hidden")
     private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
     private val threadSummaryModeKey = booleanPreferencesKey("thread_summary_mode_enabled")
     private val aiPostFilterKey = booleanPreferencesKey("ai_post_filter_enabled")
@@ -141,6 +142,9 @@ private class AndroidPlatformStateStorage(
         safeData.map { prefs -> prefs[adsEnabledKey] ?: true }
     override val hasShownPostingNotice: Flow<Boolean> =
         safeData.map { prefs -> prefs[postingNoticeKey] ?: false }
+
+    override val pastThreadSearchNoticeHidden: Flow<Boolean> =
+        safeData.map { prefs -> prefs[pastThreadSearchNoticeHiddenKey] ?: false }
 
     override val lightweightModeEnabled: Flow<Boolean> =
         safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
@@ -307,6 +311,7 @@ private class AndroidPlatformStateStorage(
         seedRequiredStringPreference(historyKey, seedBundles.history.historyJson)
         seedRequiredStringPreference(manualSaveDirectoryKey, DEFAULT_MANUAL_SAVE_ROOT)
         seedRequiredBooleanPreference(postingNoticeKey, false)
+        seedRequiredBooleanPreference(pastThreadSearchNoticeHiddenKey, false)
         seedOptionalStringPreference(ngHeadersKey, seedBundles.preferences.ngHeadersJson)
         seedOptionalStringPreference(ngWordsKey, seedBundles.preferences.ngWordsJson)
         seedOptionalStringPreference(catalogNgWordsKey, seedBundles.preferences.catalogNgWordsJson)
@@ -393,6 +398,15 @@ private class AndroidPlatformStateStorage(
             shown,
             "posting notice",
             "Failed to save posting notice state"
+        )
+    }
+
+    override suspend fun updatePastThreadSearchNoticeHidden(hidden: Boolean) {
+        updateBooleanPreference(
+            pastThreadSearchNoticeHiddenKey,
+            hidden,
+            "past thread search notice",
+            "Failed to save past thread search notice state"
         )
     }
 

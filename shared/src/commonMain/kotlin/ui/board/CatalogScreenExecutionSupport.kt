@@ -5,7 +5,8 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.network.ArchiveSearchScope
-import com.valoser.futacha.shared.network.fetchArchiveSearchResults
+import com.valoser.futacha.shared.network.buildDirectArchiveSearchItems
+import com.valoser.futacha.shared.network.searchInqueuetArchiveThreads
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
@@ -314,13 +315,7 @@ internal fun buildCatalogExecutionBindings(
             )
         },
         runPastThreadSearch = runPastThreadSearch@{ query, scope ->
-            val client = httpClient
-            if (client == null) {
-                coroutineScope.launch {
-                    showSnackbar(buildCatalogPastThreadSearchClientUnavailableMessage())
-                }
-                return@runPastThreadSearch false
-            }
+            val normalizedQuery = normalizePastThreadSearchQuery(query)
             val currentRuntime = currentPastSearchRuntimeState()
             val requestGeneration = nextCatalogRequestGeneration(currentRuntime.generation)
             currentRuntime.job?.cancel()
@@ -335,8 +330,19 @@ internal fun buildCatalogExecutionBindings(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
                     try {
-                        val items = withContext(AppDispatchers.io) {
-                            fetchArchiveSearchResults(client, query, scope, archiveSearchJson)
+                        val directItems = buildDirectArchiveSearchItems(normalizedQuery, scope)
+                        val items = when {
+                            normalizedQuery.isBlank() -> emptyList()
+                            directItems.isNotEmpty() -> directItems
+                            httpClient != null -> searchInqueuetArchiveThreads(
+                                httpClient = httpClient,
+                                archiveSearchJson = archiveSearchJson,
+                                query = normalizedQuery,
+                                scope = scope
+                            )
+                            else -> throw IllegalStateException(
+                                buildCatalogPastThreadSearchClientUnavailableMessage()
+                            )
                         }
                         if (!shouldApplyCatalogRequestResult(isActive, currentPastSearchRuntimeState().generation, requestGeneration)) {
                             return@launch

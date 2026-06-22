@@ -263,6 +263,37 @@ class PersistentCookieStorage(
         return result
     }
 
+    /**
+     * Run [block] while staging cookie changes; persist staged cookies even when the
+     * block fails. Cancellation still rolls back so aborted work does not write state.
+     */
+    suspend fun <T> commitEvenOnFailure(block: suspend () -> T): T {
+        val inheritedTransactionId = coroutineContext[CookieTransactionContext]?.id
+        if (inheritedTransactionId != null) {
+            return block()
+        }
+        var saveSnapshot: StoredCookieFile? = null
+        val transactionId = mutex.withLock {
+            saveSnapshot = ensureLoadedLocked()
+            transactionCoordinator.begin(cookies)
+        }
+        saveSnapshot?.let { persistSnapshot(it) }
+        try {
+            val result = withContext(CookieTransactionContext(transactionId)) {
+                block()
+            }
+            persistTransaction(transactionId)
+            return result
+        } catch (t: Throwable) {
+            if (t is CancellationException) {
+                rollbackTransaction(transactionId)
+            } else {
+                persistTransaction(transactionId)
+            }
+            throw t
+        }
+    }
+
     private suspend fun persistTransaction(transactionId: Long?) {
         var saveSnapshot: StoredCookieFile? = null
         mutex.withLock {

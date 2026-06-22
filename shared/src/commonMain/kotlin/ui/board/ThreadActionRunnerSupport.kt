@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.network.isInqueuetArchiveUrl
 import com.valoser.futacha.shared.repo.BoardRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -50,6 +51,14 @@ internal suspend fun <T> performThreadAction(
 }
 
 internal fun buildThreadActionBusyMessage(): String = "処理中です…"
+
+internal fun buildArchiveReadOnlyActionMessage(): String = "アーカイブは読み取り専用です"
+
+internal fun requireWritableThreadBoard(boardUrl: String) {
+    if (isInqueuetArchiveUrl(boardUrl)) {
+        throw IllegalStateException(buildArchiveReadOnlyActionMessage())
+    }
+}
 
 internal fun buildThreadActionStartLogMessage(
     successMessage: String,
@@ -201,6 +210,7 @@ internal suspend fun performThreadDeleteByUserAction(
     callbacks: ThreadDeleteByUserActionCallbacks
 ): ThreadActionRunResult<Unit> {
     return performThreadAction {
+        requireWritableThreadBoard(config.boardUrl)
         callbacks.deleteByUser(config)
     }
 }
@@ -268,6 +278,7 @@ internal suspend fun performThreadReplyAction(
     callbacks: ThreadReplyActionCallbacks
 ): ThreadActionRunResult<String?> {
     return performThreadAction {
+        requireWritableThreadBoard(config.boardUrl)
         callbacks.replyToThread(config)
     }
 }

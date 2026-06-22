@@ -87,6 +87,30 @@ class PersistentCookieStorageTest {
     }
 
     @Test
+    fun commitEvenOnFailure_persistsFailedMutationsAndRethrows() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+
+        storage.addCookie(
+            Url("https://dec.2chan.net/b/"),
+            Cookie(name = "initial", value = "1", domain = "dec.2chan.net", path = "/")
+        )
+
+        assertFailsWith<IllegalStateException> {
+            storage.commitEvenOnFailure {
+                storage.addCookie(
+                    Url("https://dec.2chan.net/b/"),
+                    Cookie(name = "posttime", value = "2", domain = "dec.2chan.net", path = "/")
+                )
+                error("post failed")
+            }
+        }
+
+        assertEquals(setOf("initial", "posttime"), storage.listCookies().map { it.name }.toSet())
+        assertTrue(storage.hasValidCookieFor(Url("https://dec.2chan.net/b/res/123.htm"), preferredNames = setOf("posttime")))
+    }
+
+    @Test
     fun commitOnSuccess_doesNotSerializeBlockExecution() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)

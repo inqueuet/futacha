@@ -29,6 +29,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
+import com.valoser.futacha.shared.model.isCatalogNavEntryRequiredInBar
 
 @Composable
 internal fun GlobalSettingsCatalogMenuSection(
@@ -86,6 +87,7 @@ internal fun GlobalSettingsCatalogMenuSection(
         }
         catalogMenuState.allEntries.forEach { item ->
             val meta = item.id.toMeta()
+            val isRequiredInBar = isCatalogNavEntryRequiredInBar(item.id)
             val barIndex = catalogMenuState.barEntries.indexOfFirst { it.id == item.id }
             val canMoveLeft = item.placement == CatalogNavEntryPlacement.BAR && barIndex > 0
             val canMoveRight =
@@ -148,6 +150,7 @@ internal fun GlobalSettingsCatalogMenuSection(
                     )
                     AssistChip(
                         onClick = { catalogMenuCallbacks.setPlacement(item.id, CatalogNavEntryPlacement.HIDDEN) },
+                        enabled = !isRequiredInBar,
                         label = { Text("非表示") },
                         leadingIcon = if (item.placement == CatalogNavEntryPlacement.HIDDEN) {
                             { Icon(Icons.Rounded.Check, contentDescription = null) }

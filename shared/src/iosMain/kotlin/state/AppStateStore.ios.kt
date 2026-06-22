@@ -23,6 +23,7 @@ private const val PRIVACY_FILTER_KEY = "privacy_filter_enabled"
 private const val BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val ADS_ENABLED_KEY = "ads_enabled"
 private const val POSTING_NOTICE_KEY = "has_shown_posting_notice"
+private const val PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY = "past_thread_search_notice_hidden"
 private const val LIGHTWEIGHT_MODE_KEY = "lightweight_mode_enabled"
 private const val THREAD_SUMMARY_MODE_KEY = "thread_summary_mode_enabled"
 private const val AI_POST_FILTER_KEY = "ai_post_filter_enabled"
@@ -71,6 +72,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val backgroundRefreshState = MutableStateFlow(false)
     private val adsEnabledState = MutableStateFlow(true)
     private val postingNoticeState = MutableStateFlow(false)
+    private val pastThreadSearchNoticeHiddenState = MutableStateFlow(false)
     private val lightweightModeState = MutableStateFlow(false)
     private val threadSummaryModeState = MutableStateFlow(false)
     private val aiPostFilterState = MutableStateFlow(false)
@@ -110,6 +112,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val backgroundRefreshEnabled: Flow<Boolean> = awaitDeferredInitialLoad(backgroundRefreshState)
     override val adsEnabled: Flow<Boolean> = awaitDeferredInitialLoad(adsEnabledState)
     override val hasShownPostingNotice: Flow<Boolean> = awaitDeferredInitialLoad(postingNoticeState)
+    override val pastThreadSearchNoticeHidden: Flow<Boolean> =
+        awaitDeferredInitialLoad(pastThreadSearchNoticeHiddenState)
     override val lightweightModeEnabled: Flow<Boolean> = awaitDeferredInitialLoad(lightweightModeState)
     override val threadSummaryModeEnabled: Flow<Boolean> = awaitDeferredInitialLoad(threadSummaryModeState)
     override val aiPostFilterEnabled: Flow<Boolean> = awaitDeferredInitialLoad(aiPostFilterState)
@@ -176,6 +180,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             BACKGROUND_REFRESH_KEY to readBooleanState(BACKGROUND_REFRESH_KEY),
             ADS_ENABLED_KEY to readBooleanState(ADS_ENABLED_KEY, defaultValue = true),
             POSTING_NOTICE_KEY to readBooleanState(POSTING_NOTICE_KEY),
+            PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY to readBooleanState(PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY),
             LIGHTWEIGHT_MODE_KEY to readBooleanState(LIGHTWEIGHT_MODE_KEY),
             THREAD_SUMMARY_MODE_KEY to readBooleanState(THREAD_SUMMARY_MODE_KEY),
             AI_POST_FILTER_KEY to readBooleanState(AI_POST_FILTER_KEY),
@@ -191,6 +196,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             applyDeferredBooleanState(BACKGROUND_REFRESH_KEY, booleanValues, backgroundRefreshState)
             applyDeferredBooleanState(ADS_ENABLED_KEY, booleanValues, adsEnabledState)
             applyDeferredBooleanState(POSTING_NOTICE_KEY, booleanValues, postingNoticeState)
+            applyDeferredBooleanState(
+                PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY,
+                booleanValues,
+                pastThreadSearchNoticeHiddenState
+            )
             applyDeferredBooleanState(LIGHTWEIGHT_MODE_KEY, booleanValues, lightweightModeState)
             applyDeferredBooleanState(THREAD_SUMMARY_MODE_KEY, booleanValues, threadSummaryModeState)
             applyDeferredBooleanState(AI_POST_FILTER_KEY, booleanValues, aiPostFilterState)
@@ -480,6 +490,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         seedRequiredStringState(BOARDS_KEY, seedBundles.boards.boardsJson, boardsState)
         seedRequiredStringState(HISTORY_KEY, seedBundles.history.historyJson, historyState)
         seedRequiredBooleanState(POSTING_NOTICE_KEY, false, postingNoticeState)
+        seedRequiredBooleanState(
+            PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY,
+            false,
+            pastThreadSearchNoticeHiddenState
+        )
         seedRequiredStringState(
             MANUAL_SAVE_DIRECTORY_KEY,
             DEFAULT_MANUAL_SAVE_ROOT,
@@ -608,6 +623,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun updateHasShownPostingNotice(shown: Boolean) {
         updateBooleanState(POSTING_NOTICE_KEY, shown, postingNoticeState)
+    }
+
+    override suspend fun updatePastThreadSearchNoticeHidden(hidden: Boolean) {
+        updateBooleanState(PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY, hidden, pastThreadSearchNoticeHiddenState)
     }
 
     override suspend fun updateLightweightModeEnabled(enabled: Boolean) {

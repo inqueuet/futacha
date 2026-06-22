@@ -11,7 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.valoser.futacha.shared.repository.CookieRepository
 
-private val postingCookieNames = setOf("posttime", "cxyl")
+private val postingCookieNames = setOf("posttime", "ptmt")
 
 internal data class CookiePostingRecoveryGuidance(
     val title: String,
@@ -25,17 +25,17 @@ internal fun buildCookiePostingRecoveryGuidance(
     return when {
         !hasAnyCookies -> CookiePostingRecoveryGuidance(
             title = "書き込み用Cookieがありません",
-            message = "まだ Cookie が保存されていません。書き込み可能な回線で一度書き込みに成功して、Cookie を作成してから再試行してください。必要なら Cookie 画面で現在の保存状態を確認できます。"
+            message = "まだ Cookie が保存されていません。書き込みを試すと、失敗しても Cookie だけ保存される場合があります。Cookie 画面で保存状態を確認し、保存されていれば Cookie を削除せずにもう一度投稿してください。"
         )
 
         !hasPostingCookiesForBoard -> CookiePostingRecoveryGuidance(
             title = "この板の書き込み用Cookieがありません",
-            message = "Cookie はありますが、この板で使う書き込み用 Cookie が見つかりません。書き込み可能な回線で一度書き込みに成功して、この板の Cookie を生成してから再試行してください。必要なら Cookie 画面で削除や確認ができます。"
+            message = "Cookie はありますが、この板で使う書き込み用 Cookie が見つかりません。この板で一度書き込みを試すと、失敗しても Cookie だけ保存される場合があります。保存されていれば Cookie を削除せずにもう一度投稿してください。"
         )
 
         else -> CookiePostingRecoveryGuidance(
-            title = "Cookieの再生成を試してください",
-            message = "保存済みの Cookie が原因で書き込みに失敗している可能性があります。Cookie を初期化してから、書き込み可能な回線で一度書き込みに成功させ、新しい Cookie を再生成してください。"
+            title = "もう一度投稿してください",
+            message = "投稿用 Cookie は保存されています。Cookie を削除せずにもう一度投稿してください。サーバーが残り秒数を返した場合は、その時間まで待ってから再試行してください。"
         )
     }
 }
@@ -43,7 +43,7 @@ internal fun buildCookiePostingRecoveryGuidance(
 internal fun buildCookiePostingRecoveryFallbackGuidance(): CookiePostingRecoveryGuidance {
     return CookiePostingRecoveryGuidance(
         title = "Cookieを確認してください",
-        message = "Cookie の状態を確認できませんでした。Cookie 画面で保存状態を確認し、必要なら削除後に書き込み可能な回線で一度書き込みを成功させて再生成してください。"
+        message = "Cookie の状態を確認できませんでした。Cookie 画面で posttime または ptmt が保存されていれば、削除せずにもう一度投稿してください。残り秒数が表示された場合は、その時間まで待ってください。"
     )
 }
 

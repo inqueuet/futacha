@@ -10,7 +10,8 @@ class JsoupHtmlParser : HtmlParser {
     override suspend fun parseCatalog(html: String, baseUrl: String?): List<CatalogItem> =
         CatalogHtmlParserCore.parseCatalog(html, baseUrl)
 
-    override suspend fun parseThread(html: String): ThreadPage = ThreadHtmlParserCore.parseThread(html)
+    override suspend fun parseThread(html: String, baseUrl: String?): ThreadPage =
+        ThreadHtmlParserCore.parseThread(html, baseUrl)
 
     override fun extractOpImageUrl(html: String, baseUrl: String?): String? =
         ThreadHtmlParserCore.extractOpImageUrl(html, baseUrl)

@@ -51,6 +51,7 @@ internal data class CatalogScreenPersistentBindings(
     val onFallbackCatalogNgWordsChanged: (List<String>) -> Unit,
     val onFallbackWatchWordsChanged: (List<String>) -> Unit,
     val isPrivacyFilterEnabled: Boolean,
+    val isPastThreadSearchNoticeHidden: Boolean,
     val persistentDisplayStyle: CatalogDisplayStyle,
     val persistentGridColumns: Int
 )
@@ -70,6 +71,8 @@ internal fun rememberCatalogScreenPersistentBindings(
     val lastUsedDeleteKeyState = stateStore?.lastUsedDeleteKey?.collectAsState(initial = "")
     var fallbackDeleteKey by rememberSaveable(saveableKey) { mutableStateOf("") }
     val isPrivacyFilterEnabled by stateStore?.isPrivacyFilterEnabled?.collectAsState(initial = false)
+        ?: remember { mutableStateOf(false) }
+    val isPastThreadSearchNoticeHidden by stateStore?.isPastThreadSearchNoticeHidden?.collectAsState(initial = false)
         ?: remember { mutableStateOf(false) }
     val persistentDisplayStyleState =
         stateStore?.catalogDisplayStyle?.collectAsState(initial = CatalogDisplayStyle.Grid)
@@ -93,6 +96,7 @@ internal fun rememberCatalogScreenPersistentBindings(
         onFallbackCatalogNgWordsChanged = { fallbackCatalogNgWordsState.value = it },
         onFallbackWatchWordsChanged = { fallbackWatchWordsState.value = it },
         isPrivacyFilterEnabled = isPrivacyFilterEnabled,
+        isPastThreadSearchNoticeHidden = isPastThreadSearchNoticeHidden,
         persistentDisplayStyle = persistentDisplayStyleState?.value ?: CatalogDisplayStyle.Grid,
         persistentGridColumns = persistentGridColumnsState?.value ?: DEFAULT_CATALOG_SCREEN_GRID_COLUMNS
     )

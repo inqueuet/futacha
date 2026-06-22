@@ -91,6 +91,10 @@ internal class AppStatePreferenceOperations(
         setSimple(shown, storage::updateHasShownPostingNotice, "posting notice state")
     }
 
+    suspend fun setPastThreadSearchNoticeHidden(hidden: Boolean) {
+        setSimple(hidden, storage::updatePastThreadSearchNoticeHidden, "past thread search notice state")
+    }
+
     suspend fun setLastUsedDeleteKey(deleteKey: String) {
         val sanitized = deleteKey.trim().take(8)
         setSimple(sanitized, storage::updateLastUsedDeleteKey, "last used delete key")

@@ -104,7 +104,7 @@ class HistoryRefresherTest {
         store.setHistory(listOf(entry))
         val repository = FakeHistoryBoardRepository().apply {
             threadErrors[board.url to "555"] = NetworkException("gone", statusCode = 404)
-            threadPagesByUrl["https://may.2chan.net/b/res/555.htm"] = threadPage(
+            threadPagesByUrl["https://may.inqueuet.com/b/res/555.htm"] = threadPage(
                 threadId = "555",
                 boardTitle = "archive-board",
                 titleLine = "archive title",
@@ -119,7 +119,7 @@ class HistoryRefresherTest {
             httpClient = createArchiveClient(
                 """
                     {"results":[
-                      {"threadId":"555","server":"may","board":"b","title":"archive candidate","htmlUrl":"https://may.2chan.net/b/res/555.htm","thumbUrl":"https://may.2chan.net/thumb/555s.jpg"}
+                      {"threadId":"555","server":"may","board":"b","title":"archive candidate","htmlUrl":"https://may.inqueuet.com/b/res/555.htm","thumbUrl":"https://may.inqueuet.com/b/thumb/555s.jpg"}
                     ]}
                 """.trimIndent()
             ),
@@ -132,9 +132,45 @@ class HistoryRefresherTest {
         assertEquals("archive title", updated.title)
         assertEquals("archive-thumb", updated.titleImageUrl)
         assertEquals("archive-board", updated.boardName)
-        assertEquals("https://may.2chan.net/b", updated.boardUrl)
+        assertEquals("https://may.inqueuet.com/b", updated.boardUrl)
         assertTrue(updated.isAutoRefreshDisabled)
         assertEquals(1, repository.getThreadCalls)
+        assertEquals(1, repository.getThreadByUrlCalls)
+    }
+
+    @Test
+    fun refresh_archiveFallbackBuildsThreadUrlWhenHistoryHasBoardUrl() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(
+            threadId = "556",
+            title = "old archive title",
+            boardUrl = "https://may.2chan.net/b/futaba.php"
+        )
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadErrors[board.url to "556"] = NetworkException("gone", statusCode = 404)
+            threadPagesByUrl["https://may.inqueuet.com/b/res/556.htm"] = threadPage(
+                threadId = "556",
+                boardTitle = "archive-board",
+                titleLine = "archive title",
+                thumbnailUrl = "archive-thumb",
+                replyCount = 1
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            httpClient = createThreadHtmlClient("<html></html>"),
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(boardsSnapshot = listOf(board), historySnapshot = listOf(entry))
+
+        val updated = store.history.first().single()
+        assertEquals("archive title", updated.title)
+        assertEquals("https://may.inqueuet.com/b", updated.boardUrl)
         assertEquals(1, repository.getThreadByUrlCalls)
     }
 

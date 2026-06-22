@@ -52,7 +52,6 @@ import com.valoser.futacha.shared.model.*
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.BoardUrlResolver
-import com.valoser.futacha.shared.network.fetchArchiveSearchResults
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
@@ -345,6 +344,10 @@ private fun CatalogScreenContent(
             setCreateThreadPassword = {
                 createThreadDraft = updateCreateThreadDraftPassword(createThreadDraft, it)
             },
+            isPastThreadSearchNoticeHidden = { persistentBindings.isPastThreadSearchNoticeHidden },
+            setShowPastThreadSearchNoticeDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchNoticeDialogVisible(overlayState, isVisible)
+            },
             setShowPastThreadSearchDialog = { isVisible ->
                 overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)
             },
@@ -362,6 +365,9 @@ private fun CatalogScreenContent(
             setPastSearchRuntimeState = { pastSearchRuntimeState = it },
             setShowGlobalSettings = { isVisible ->
                 overlayState = setCatalogGlobalSettingsVisible(overlayState, isVisible)
+            },
+            setShowPastThreadSearchNoticeDialog = { isVisible ->
+                overlayState = setCatalogPastThreadSearchNoticeDialogVisible(overlayState, isVisible)
             },
             setShowPastThreadSearchDialog = { isVisible ->
                 overlayState = setCatalogPastThreadSearchDialogVisible(overlayState, isVisible)

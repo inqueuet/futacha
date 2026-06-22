@@ -107,6 +107,8 @@ internal fun buildCatalogNavigationCallbacks(
     setShowCreateThreadDialog: (Boolean) -> Unit,
     scrollCatalogToTop: () -> Unit,
     performRefresh: () -> Unit,
+    isPastThreadSearchNoticeHidden: () -> Boolean,
+    setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     setShowPastThreadSearchDialog: (Boolean) -> Unit,
     setShowModeDialog: (Boolean) -> Unit,
     setShowSettingsMenu: (Boolean) -> Unit
@@ -125,10 +127,41 @@ internal fun buildCatalogNavigationCallbacks(
                 }
                 CatalogNavEntryId.ScrollToTop -> scrollCatalogToTop()
                 CatalogNavEntryId.RefreshCatalog -> performRefresh()
-                CatalogNavEntryId.PastThreadSearch -> setShowPastThreadSearchDialog(true)
+                CatalogNavEntryId.PastThreadSearch -> {
+                    if (isPastThreadSearchNoticeHidden()) {
+                        setShowPastThreadSearchDialog(true)
+                    } else {
+                        setShowPastThreadSearchNoticeDialog(true)
+                    }
+                }
                 CatalogNavEntryId.Mode -> setShowModeDialog(true)
                 CatalogNavEntryId.Settings -> setShowSettingsMenu(true)
             }
+        }
+    )
+}
+
+internal data class CatalogPastThreadSearchNoticeCallbacks(
+    val onDismiss: () -> Unit,
+    val onContinue: (doNotShowAgain: Boolean) -> Unit
+)
+
+internal fun buildCatalogPastThreadSearchNoticeCallbacks(
+    stateStore: AppStateStore?,
+    coroutineScope: CoroutineScope,
+    setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
+    setShowPastThreadSearchDialog: (Boolean) -> Unit
+): CatalogPastThreadSearchNoticeCallbacks {
+    return CatalogPastThreadSearchNoticeCallbacks(
+        onDismiss = { setShowPastThreadSearchNoticeDialog(false) },
+        onContinue = { doNotShowAgain ->
+            setShowPastThreadSearchNoticeDialog(false)
+            if (doNotShowAgain) {
+                coroutineScope.launch {
+                    stateStore?.setPastThreadSearchNoticeHidden(true)
+                }
+            }
+            setShowPastThreadSearchDialog(true)
         }
     )
 }

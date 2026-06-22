@@ -77,6 +77,11 @@ class HttpBoardApiTest {
                 request.url.toString().contains("futaba.php?guid=on") && request.headers[HttpHeaders.Referrer] == "https://www.2chan.net/b/futaba.htm" ->
                     htmlResponse("""<html><body><a href="res/777.htm">created</a></body></html>""")
 
+                request.url.encodedPath.endsWith("/res/777.htm") -> {
+                    postingConfigFetchCount += 1
+                    htmlResponse("""<input type="hidden" name="chrenc" value="UTF-8">""")
+                }
+
                 request.url.toString().contains("futaba.php?guid=on") && request.headers[HttpHeaders.Referrer] == "https://www.2chan.net/b/res/777.htm" ->
                     jsonResponse("""{"status":"ok","thisno":888}""")
 
@@ -111,7 +116,63 @@ class HttpBoardApiTest {
 
             assertEquals("777", createdThreadId)
             assertEquals("888", thisNo)
-            assertEquals(1, postingConfigFetchCount)
+            assertEquals(2, postingConfigFetchCount)
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun replyToThread_refetchesDynamicPostingHash() = runBlocking {
+        var postingConfigFetchCount = 0
+        val api = createApi { request ->
+            when {
+                request.url.encodedPath.endsWith("/res/777.htm") -> {
+                    postingConfigFetchCount += 1
+                    htmlResponse(
+                        """
+                            <input type="hidden" name="chrenc" value="UTF-8">
+                            <input type="hidden" name="hash" value="server-hash-$postingConfigFetchCount">
+                            <input type="hidden" name="ptua" value="server-ptua-$postingConfigFetchCount">
+                        """.trimIndent()
+                    )
+                }
+
+                request.url.toString().contains("futaba.php?guid=on") &&
+                    request.headers[HttpHeaders.Referrer] == "https://www.2chan.net/b/res/777.htm" ->
+                    jsonResponse("""{"status":"ok","thisno":888}""")
+
+                else -> error("Unexpected request: ${request.url} headers=${request.headers}")
+            }
+        }
+
+        try {
+            api.replyToThread(
+                board = "https://www.2chan.net/b/",
+                threadId = "777",
+                name = "",
+                email = "",
+                subject = "",
+                comment = "reply1",
+                password = "1234",
+                imageFile = null,
+                imageFileName = null,
+                textOnly = true
+            )
+            api.replyToThread(
+                board = "https://www.2chan.net/b/",
+                threadId = "777",
+                name = "",
+                email = "",
+                subject = "",
+                comment = "reply2",
+                password = "1234",
+                imageFile = null,
+                imageFileName = null,
+                textOnly = true
+            )
+
+            assertEquals(2, postingConfigFetchCount)
         } finally {
             api.close()
         }
@@ -227,8 +288,8 @@ class HttpBoardApiTest {
             }
 
             assertTrue(error.message!!.contains("posttime の期限切れです"))
-            assertTrue(error.message!!.contains("書き込み可能なIP"))
-            assertTrue(error.message!!.contains("Cookie を削除"))
+            assertTrue(error.message!!.contains("今回の投稿試行で投稿用 Cookie が保存された可能性"))
+            assertTrue(error.message!!.contains("Cookie を保持したままもう一度投稿"))
         } finally {
             api.close()
         }

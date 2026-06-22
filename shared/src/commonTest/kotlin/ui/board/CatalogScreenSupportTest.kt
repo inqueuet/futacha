@@ -349,6 +349,7 @@ class CatalogScreenSupportTest {
         var showCreateThreadDialog = false
         var scrollToTopCount = 0
         var refreshCount = 0
+        var showPastThreadSearchNoticeDialog = false
         var showPastThreadSearchDialog = false
         var showModeDialog = false
         var showSettingsMenu = false
@@ -359,6 +360,8 @@ class CatalogScreenSupportTest {
             setShowCreateThreadDialog = { showCreateThreadDialog = it },
             scrollCatalogToTop = { scrollToTopCount += 1 },
             performRefresh = { refreshCount += 1 },
+            isPastThreadSearchNoticeHidden = { false },
+            setShowPastThreadSearchNoticeDialog = { showPastThreadSearchNoticeDialog = it },
             setShowPastThreadSearchDialog = { showPastThreadSearchDialog = it },
             setShowModeDialog = { showModeDialog = it },
             setShowSettingsMenu = { showSettingsMenu = it }
@@ -375,9 +378,34 @@ class CatalogScreenSupportTest {
         assertTrue(showCreateThreadDialog)
         assertEquals(1, scrollToTopCount)
         assertEquals(1, refreshCount)
-        assertTrue(showPastThreadSearchDialog)
+        assertTrue(showPastThreadSearchNoticeDialog)
+        assertFalse(showPastThreadSearchDialog)
         assertTrue(showModeDialog)
         assertTrue(showSettingsMenu)
+    }
+
+    @Test
+    fun catalogBindingsSupport_navigationCallbacks_skipsPastThreadNoticeWhenHidden() {
+        var showPastThreadSearchNoticeDialog = false
+        var showPastThreadSearchDialog = false
+        val callbacks = buildCatalogNavigationCallbacks(
+            lastUsedDeleteKey = "",
+            currentCreateThreadPassword = { "" },
+            setCreateThreadPassword = {},
+            setShowCreateThreadDialog = {},
+            scrollCatalogToTop = {},
+            performRefresh = {},
+            isPastThreadSearchNoticeHidden = { true },
+            setShowPastThreadSearchNoticeDialog = { showPastThreadSearchNoticeDialog = it },
+            setShowPastThreadSearchDialog = { showPastThreadSearchDialog = it },
+            setShowModeDialog = {},
+            setShowSettingsMenu = {}
+        )
+
+        callbacks.onNavigate(CatalogNavEntryId.PastThreadSearch)
+
+        assertFalse(showPastThreadSearchNoticeDialog)
+        assertTrue(showPastThreadSearchDialog)
     }
 
     @Test
@@ -448,6 +476,8 @@ class CatalogScreenSupportTest {
             lastUsedDeleteKey = "del",
             currentCreateThreadPassword = { "" },
             setCreateThreadPassword = {},
+            isPastThreadSearchNoticeHidden = { false },
+            setShowPastThreadSearchNoticeDialog = {},
             scrollCatalogToTop = {},
             setShowPastThreadSearchDialog = {},
             setShowModeDialog = {},
@@ -465,6 +495,7 @@ class CatalogScreenSupportTest {
                 currentArchiveSearchScope = { null },
                 setLastArchiveSearchScope = {},
                 setArchiveSearchQuery = {},
+                setShowPastThreadSearchNoticeDialog = {},
                 setShowPastThreadSearchDialog = {},
                 setIsPastSearchSheetVisible = {},
                 runPastThreadSearch = { _, _ -> true },
@@ -829,6 +860,7 @@ class CatalogScreenSupportTest {
                 currentArchiveSearchScope = { null },
                 setLastArchiveSearchScope = {},
                 setArchiveSearchQuery = {},
+                setShowPastThreadSearchNoticeDialog = {},
                 setShowPastThreadSearchDialog = {},
                 setIsPastSearchSheetVisible = {},
                 runPastThreadSearch = { _, _ -> true },
@@ -903,6 +935,10 @@ class CatalogScreenSupportTest {
             setCatalogPastThreadSearchDialogVisible(initial, true)
         )
         assertEquals(
+            CatalogOverlayState(showPastThreadSearchNoticeDialog = true),
+            setCatalogPastThreadSearchNoticeDialogVisible(initial, true)
+        )
+        assertEquals(
             CatalogOverlayState(isGlobalSettingsVisible = true),
             setCatalogGlobalSettingsVisible(initial, true)
         )
@@ -930,6 +966,7 @@ class CatalogScreenSupportTest {
             CatalogOverlayState(
                 showModeDialog = true,
                 showCreateThreadDialog = true,
+                showPastThreadSearchNoticeDialog = false,
                 showPastThreadSearchDialog = false,
                 isPastSearchSheetVisible = false
             ),
@@ -937,6 +974,7 @@ class CatalogScreenSupportTest {
                 CatalogOverlayState(
                     showModeDialog = true,
                     showCreateThreadDialog = true,
+                    showPastThreadSearchNoticeDialog = true,
                     showPastThreadSearchDialog = true,
                     isPastSearchSheetVisible = true
                 )
@@ -945,11 +983,13 @@ class CatalogScreenSupportTest {
         assertEquals(
             CatalogOverlayState(
                 showDisplayStyleDialog = true,
+                showPastThreadSearchNoticeDialog = false,
                 isGlobalSettingsVisible = true
             ),
             resetCatalogPastSearchOverlayState(
                 CatalogOverlayState(
                     showDisplayStyleDialog = true,
+                    showPastThreadSearchNoticeDialog = true,
                     showPastThreadSearchDialog = true,
                     isGlobalSettingsVisible = true,
                     isPastSearchSheetVisible = true
@@ -1376,6 +1416,7 @@ class CatalogScreenSupportTest {
                 CatalogNavEntryId.CreateThread,
                 CatalogNavEntryId.ScrollToTop,
                 CatalogNavEntryId.RefreshCatalog,
+                CatalogNavEntryId.PastThreadSearch,
                 CatalogNavEntryId.Settings
             ),
             resolved.map { it.id }

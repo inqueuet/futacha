@@ -74,13 +74,14 @@ internal fun createDefaultBoardRepositoryCatalogTitleCache(
     maxEntries: Int
 ) = DefaultBoardRepositoryLruCache<DefaultBoardRepositoryOpImageKey, DefaultBoardRepositoryCatalogTitleCacheEntry>(maxEntries)
 
+private val DEFAULT_BOARD_REPOSITORY_POSTING_COOKIE_NAMES = setOf("posttime", "ptmt")
+
 internal suspend fun hasDefaultBoardRepositoryCookies(
     cookieRepository: CookieRepository?,
     board: String
 ): Boolean {
     return cookieRepository?.let { repository ->
-        repository.hasValidCookieFor(board, preferredNames = setOf("posttime", "cxyl")) ||
-            repository.hasValidCookieFor(board)
+        repository.hasValidCookieFor(board, preferredNames = DEFAULT_BOARD_REPOSITORY_POSTING_COOKIE_NAMES)
     } ?: false
 }
 

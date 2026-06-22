@@ -86,16 +86,20 @@ class MenuConfigTest {
     }
 
     @Test
-    fun normalizeCatalogNavEntries_keepsPastThreadSearchHidden_and_restoresSettingsBar() {
+    fun normalizeCatalogNavEntries_migratesLegacyHiddenPastThreadSearchDefault() {
         val normalized = normalizeCatalogNavEntries(
             CatalogNavEntryId.entries.map {
-                CatalogNavEntryConfig(it, CatalogNavEntryPlacement.HIDDEN, 10 - it.defaultOrder)
-            },
-            maxBarItems = 2
+                val legacyPlacement = if (it == CatalogNavEntryId.PastThreadSearch) {
+                    CatalogNavEntryPlacement.HIDDEN
+                } else {
+                    CatalogNavEntryPlacement.BAR
+                }
+                CatalogNavEntryConfig(it, legacyPlacement, it.defaultOrder)
+            }
         )
 
         assertEquals(
-            CatalogNavEntryPlacement.HIDDEN,
+            CatalogNavEntryPlacement.BAR,
             normalized.first { it.id == CatalogNavEntryId.PastThreadSearch }.placement
         )
         assertEquals(
@@ -105,7 +109,7 @@ class MenuConfigTest {
     }
 
     @Test
-    fun normalizeCatalogNavEntries_movesOverflowOutOfBar() {
+    fun normalizeCatalogNavEntries_keepsSettingsInBarWhenOverflowing() {
         val normalized = normalizeCatalogNavEntries(
             CatalogNavEntryId.entries.map {
                 CatalogNavEntryConfig(it, CatalogNavEntryPlacement.BAR, it.defaultOrder)
@@ -118,7 +122,35 @@ class MenuConfigTest {
             normalized.count { it.placement == CatalogNavEntryPlacement.BAR }
         )
         assertTrue(
-            normalized.any { it.id == CatalogNavEntryId.Mode && it.placement == CatalogNavEntryPlacement.HIDDEN }
+            normalized.any {
+                it.id == CatalogNavEntryId.Settings &&
+                    it.placement == CatalogNavEntryPlacement.BAR
+            }
+        )
+        assertTrue(
+            normalized.any {
+                it.id == CatalogNavEntryId.Mode &&
+                    it.placement == CatalogNavEntryPlacement.HIDDEN
+            }
+        )
+    }
+
+    @Test
+    fun normalizeCatalogNavEntries_respectsExplicitHiddenPastThreadSearch() {
+        val normalized = normalizeCatalogNavEntries(
+            CatalogNavEntryId.entries.map {
+                val placement = if (it == CatalogNavEntryId.PastThreadSearch) {
+                    CatalogNavEntryPlacement.HIDDEN
+                } else {
+                    CatalogNavEntryPlacement.BAR
+                }
+                CatalogNavEntryConfig(it, placement, 10 - it.defaultOrder)
+            }
+        )
+
+        assertEquals(
+            CatalogNavEntryPlacement.HIDDEN,
+            normalized.first { it.id == CatalogNavEntryId.PastThreadSearch }.placement
         )
     }
 }

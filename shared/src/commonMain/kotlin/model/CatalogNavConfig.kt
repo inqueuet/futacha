@@ -18,10 +18,7 @@ enum class CatalogNavEntryId {
     Settings;
 
     val defaultPlacement: CatalogNavEntryPlacement
-        get() = when (this) {
-            PastThreadSearch -> CatalogNavEntryPlacement.HIDDEN
-            else -> CatalogNavEntryPlacement.BAR
-        }
+        get() = CatalogNavEntryPlacement.BAR
 
     val defaultOrder: Int
         get() = when (this) {
@@ -41,6 +38,10 @@ data class CatalogNavEntryConfig(
     val order: Int = id.defaultOrder
 )
 
+fun isCatalogNavEntryRequiredInBar(id: CatalogNavEntryId): Boolean {
+    return id == CatalogNavEntryId.Settings
+}
+
 fun defaultCatalogNavEntries(): List<CatalogNavEntryConfig> {
     return CatalogNavEntryId.entries.map { id ->
         CatalogNavEntryConfig(
@@ -55,9 +56,18 @@ fun normalizeCatalogNavEntries(
     configs: List<CatalogNavEntryConfig>,
     maxBarItems: Int = 6
 ): List<CatalogNavEntryConfig> {
+    val shouldMigrateLegacyHiddenPastThreadSearch = isLegacyHiddenPastThreadSearchDefault(configs)
     val merged = CatalogNavEntryId.entries.map { id ->
         val existing = configs.firstOrNull { it.id == id }
-        val placement = existing?.placement ?: id.defaultPlacement
+        val placement = when {
+            isCatalogNavEntryRequiredInBar(id) -> {
+                CatalogNavEntryPlacement.BAR
+            }
+            shouldMigrateLegacyHiddenPastThreadSearch && id == CatalogNavEntryId.PastThreadSearch -> {
+                CatalogNavEntryPlacement.BAR
+            }
+            else -> existing?.placement ?: id.defaultPlacement
+        }
         val order = existing?.order ?: id.defaultOrder
         CatalogNavEntryConfig(id = id, placement = placement, order = order)
     }.toMutableList()
@@ -73,15 +83,20 @@ fun normalizeCatalogNavEntries(
         }
     }
 
-    // Keep this feature implemented, but do not expose it from menu UI.
-    merged.indexOfFirst { it.id == CatalogNavEntryId.PastThreadSearch }.takeIf { it >= 0 }?.let { idx ->
-        merged[idx] = merged[idx].copy(placement = CatalogNavEntryPlacement.HIDDEN)
-    }
-
     val barItems = merged.filter { it.placement == CatalogNavEntryPlacement.BAR }
         .sortedWith(compareBy<CatalogNavEntryConfig> { it.order }.thenBy { it.id.defaultOrder })
     if (barItems.size > maxBarItems) {
-        val overflow = barItems.drop(maxBarItems)
+        val requiredIds = CatalogNavEntryId.entries
+            .filter(::isCatalogNavEntryRequiredInBar)
+            .toSet()
+        val optionalLimit = (maxBarItems - requiredIds.size).coerceAtLeast(0)
+        val retainedOptionalIds = barItems
+            .filterNot { it.id in requiredIds }
+            .take(optionalLimit)
+            .map { it.id }
+            .toSet()
+        val retainedIds = requiredIds + retainedOptionalIds
+        val overflow = barItems.filterNot { it.id in retainedIds }
         overflow.forEach { item ->
             val idx = merged.indexOfFirst { it.id == item.id }
             if (idx >= 0) {
@@ -100,4 +115,18 @@ fun normalizeCatalogNavEntries(
     reorderPlacement(CatalogNavEntryPlacement.BAR)
     reorderPlacement(CatalogNavEntryPlacement.HIDDEN)
     return merged
+}
+
+private fun isLegacyHiddenPastThreadSearchDefault(configs: List<CatalogNavEntryConfig>): Boolean {
+    val byId = configs.associateBy { it.id }
+    if (CatalogNavEntryId.entries.any { it !in byId }) return false
+    return CatalogNavEntryId.entries.all { id ->
+        val config = byId.getValue(id)
+        val legacyPlacement = if (id == CatalogNavEntryId.PastThreadSearch) {
+            CatalogNavEntryPlacement.HIDDEN
+        } else {
+            CatalogNavEntryPlacement.BAR
+        }
+        config.placement == legacyPlacement && config.order == id.defaultOrder
+    }
 }

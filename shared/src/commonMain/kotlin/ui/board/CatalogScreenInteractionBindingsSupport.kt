@@ -112,6 +112,8 @@ internal data class CatalogScreenRuntimeInputs(
     val lastUsedDeleteKey: String,
     val currentCreateThreadPassword: () -> String,
     val setCreateThreadPassword: (String) -> Unit,
+    val isPastThreadSearchNoticeHidden: () -> Boolean,
+    val setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     val setShowPastThreadSearchDialog: (Boolean) -> Unit,
     val setShowModeDialog: (Boolean) -> Unit,
     val setShowSettingsMenu: (Boolean) -> Unit
@@ -123,6 +125,7 @@ internal data class CatalogScreenOverlayInputs(
     val currentPastSearchRuntimeState: () -> CatalogPastSearchRuntimeState,
     val setPastSearchRuntimeState: (CatalogPastSearchRuntimeState) -> Unit,
     val setShowGlobalSettings: (Boolean) -> Unit,
+    val setShowPastThreadSearchNoticeDialog: (Boolean) -> Unit,
     val setShowPastThreadSearchDialog: (Boolean) -> Unit,
     val setShowPastSearchSheetVisible: (Boolean) -> Unit,
     val setShowModeDialog: (Boolean) -> Unit,
@@ -212,6 +215,8 @@ internal fun buildCatalogScreenInteractionBindingsBundle(
         currentCreateThreadPassword = runtimeInputs.currentCreateThreadPassword,
         setCreateThreadPassword = runtimeInputs.setCreateThreadPassword,
         scrollCatalogToTop = mutationBindings.scrollCatalogToTop,
+        isPastThreadSearchNoticeHidden = runtimeInputs.isPastThreadSearchNoticeHidden,
+        setShowPastThreadSearchNoticeDialog = runtimeInputs.setShowPastThreadSearchNoticeDialog,
         setShowPastThreadSearchDialog = runtimeInputs.setShowPastThreadSearchDialog,
         setShowModeDialog = runtimeInputs.setShowModeDialog,
         setShowSettingsMenu = runtimeInputs.setShowSettingsMenu
@@ -228,6 +233,7 @@ internal fun buildCatalogScreenInteractionBindingsBundle(
             currentArchiveSearchScope = overlayInputs.currentArchiveSearchScope,
             setLastArchiveSearchScope = overlayInputs.setLastArchiveSearchScope,
             setArchiveSearchQuery = overlayInputs.setArchiveSearchQuery,
+            setShowPastThreadSearchNoticeDialog = overlayInputs.setShowPastThreadSearchNoticeDialog,
             setShowPastThreadSearchDialog = overlayInputs.setShowPastThreadSearchDialog,
             setIsPastSearchSheetVisible = overlayInputs.setShowPastSearchSheetVisible,
             runPastThreadSearch = runtimeBindings.executionBindings.runPastThreadSearch,

@@ -26,17 +26,26 @@ private val MP4_CONTENT_TYPE = ContentType.parse("video/mp4")
 internal data class HttpBoardApiPostingConfig(
     val encoding: HttpBoardApiPostEncoding,
     val chrencValue: String,
+    val hashValue: String? = null,
+    val ptuaValue: String? = null,
+    val cacheable: Boolean = true,
     val fromFallback: Boolean = false
 )
 
 internal fun resolveHttpBoardApiPostingConfig(
     chrencValue: String?,
-    fallbackChrencValue: String
+    fallbackChrencValue: String,
+    hashValue: String? = null,
+    ptuaValue: String? = null,
+    cacheable: Boolean = true
 ): HttpBoardApiPostingConfig {
     val resolvedChrencValue = chrencValue ?: fallbackChrencValue
     return HttpBoardApiPostingConfig(
         encoding = determineHttpBoardApiEncoding(resolvedChrencValue),
         chrencValue = resolvedChrencValue,
+        hashValue = hashValue?.takeIf { it.isNotBlank() },
+        ptuaValue = ptuaValue?.takeIf { it.isNotBlank() },
+        cacheable = cacheable,
         fromFallback = chrencValue == null
     )
 }
@@ -45,7 +54,8 @@ internal fun fallbackHttpBoardApiPostingConfig(
     fallbackChrencValue: String
 ): HttpBoardApiPostingConfig = resolveHttpBoardApiPostingConfig(
     chrencValue = null,
-    fallbackChrencValue = fallbackChrencValue
+    fallbackChrencValue = fallbackChrencValue,
+    cacheable = false
 )
 
 internal fun buildHttpBoardApiPostFormData(
@@ -76,9 +86,9 @@ internal fun buildHttpBoardApiPostFormData(
     appendHttpBoardApiAsciiField("pthb", "")
     appendHttpBoardApiAsciiField("pthc", buildHttpBoardApiClientTimestampSeed())
     appendHttpBoardApiAsciiField("pthd", "")
-    appendHttpBoardApiAsciiField("ptua", DEFAULT_PTUA_VALUE)
+    appendHttpBoardApiAsciiField("ptua", postingConfig.ptuaValue ?: DEFAULT_PTUA_VALUE)
     appendHttpBoardApiAsciiField("scsz", DEFAULT_SCREEN_SPEC)
-    appendHttpBoardApiAsciiField("hash", buildHttpBoardApiClientHash())
+    appendHttpBoardApiAsciiField("hash", postingConfig.hashValue ?: buildHttpBoardApiClientHash())
     threadId?.let {
         appendHttpBoardApiAsciiField("resto", it)
         appendHttpBoardApiAsciiField("responsemode", "ajax")

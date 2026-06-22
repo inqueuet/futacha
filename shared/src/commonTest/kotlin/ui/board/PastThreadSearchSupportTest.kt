@@ -55,7 +55,8 @@ class PastThreadSearchSupportTest {
             board = "b",
             title = "タイトル",
             htmlUrl = "https://may.2chan.net/b/res/123.htm",
-            thumbUrl = "https://img.example/123s.jpg"
+            thumbUrl = "https://img.example/123s.jpg",
+            replyCount = 232
         )
 
         val catalogItem = archiveSearchItemToCatalogItem(item)
@@ -65,13 +66,23 @@ class PastThreadSearchSupportTest {
         assertEquals("タイトル", catalogItem.title)
         assertEquals("https://img.example/123s.jpg", catalogItem.thumbnailUrl)
         assertEquals("https://img.example/123s.jpg", catalogItem.fullImageUrl)
-        assertEquals(0, catalogItem.replyCount)
+        assertEquals(232, catalogItem.replyCount)
     }
 
     @Test
     fun pastThreadSearchMessages_matchUiCopy() {
-        assertEquals("検索ワードを入力するとここに結果が表示されます。", buildPastThreadSearchIdleMessage())
-        assertEquals("見つかりませんでした", buildPastThreadSearchEmptyMessage())
+        assertEquals("スレタイまたはスレNo.を入力するとここに候補が表示されます。", buildPastThreadSearchIdleMessage())
+        assertEquals("一致する過去スレが見つかりません", buildPastThreadSearchEmptyMessage())
+        assertEquals("過去ログ検索の注意", buildPastThreadSearchNoticeTitle())
+        assertEquals(
+            listOf(
+                "対応板は限られています。",
+                "レス数100未満のスレは保存されません。",
+                "保存時刻や反映時間は保証されません。",
+                "見つからない場合は未保存または未対応の可能性があります。"
+            ),
+            buildPastThreadSearchNoticeMessages()
+        )
     }
 
     @Test

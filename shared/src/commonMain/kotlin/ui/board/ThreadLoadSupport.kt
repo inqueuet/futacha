@@ -4,9 +4,7 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
-import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.NetworkException
-import com.valoser.futacha.shared.network.selectLatestArchiveMatch
 import io.ktor.client.plugins.ResponseException
 
 internal sealed interface ThreadUiState {
@@ -251,19 +249,8 @@ internal fun buildArchiveFallbackTimeoutMessage(
     return "Archive fallback timed out for threadId=$threadId after ${timeoutMillis}ms"
 }
 
-internal fun buildArchiveSearchFailureLogMessage(threadId: String, error: Throwable): String {
-    return "Archive search failed for $threadId: ${error.message}"
-}
-
 internal fun buildArchiveRefreshSuccessLogMessage(threadId: String): String {
     return "Archive refresh succeeded for $threadId"
-}
-
-internal fun resolveArchiveFallbackMatchUrl(
-    items: List<ArchiveSearchItem>,
-    threadId: String
-): String? {
-    return selectLatestArchiveMatch(items, threadId)?.htmlUrl
 }
 
 internal data class ArchiveFallbackAttemptState(

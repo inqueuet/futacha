@@ -213,6 +213,13 @@ internal fun CatalogScreenOverlayHost(
         )
     }
 
+    if (bindings.overlayState.showPastThreadSearchNoticeDialog) {
+        PastThreadSearchNoticeDialog(
+            onDismiss = bindings.overlayBindings.pastThreadSearchNoticeCallbacks.onDismiss,
+            onContinue = bindings.overlayBindings.pastThreadSearchNoticeCallbacks.onContinue
+        )
+    }
+
     if (bindings.overlayState.showPastThreadSearchDialog) {
         val initialQuery = remember(bindings.overlayState.showPastThreadSearchDialog) {
             buildPastThreadSearchDialogInitialQuery(
