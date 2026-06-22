@@ -44,13 +44,14 @@ actual object TextEncoding {
             contentType?.contains("shift-jis", ignoreCase = true) == true ->
                 return decodeWithCfEncoding(bytes, shiftJisCfEncoding) ?: ""
             contentType?.contains("utf-8", ignoreCase = true) == true ->
-                return decodeWithCfEncoding(bytes, utf8CfEncoding)
-                    ?: decodeWithCfEncoding(bytes, shiftJisCfEncoding)
-                    ?: ""
+                return decodeUtf8Strict(bytes) ?: decodeWithCfEncoding(bytes, shiftJisCfEncoding) ?: ""
         }
+        return decodeUtf8Strict(bytes) ?: decodeWithCfEncoding(bytes, shiftJisCfEncoding) ?: ""
+    }
+
+    private fun decodeUtf8Strict(bytes: ByteArray): String? {
+        if (!isValidUtf8Bytes(bytes)) return null
         return decodeWithCfEncoding(bytes, utf8CfEncoding)
-            ?: decodeWithCfEncoding(bytes, shiftJisCfEncoding)
-            ?: ""
     }
 
     private fun decodeWithCfEncoding(bytes: ByteArray, encoding: UInt): String? {

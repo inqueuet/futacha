@@ -19,12 +19,14 @@ actual object TextEncoding {
         return when {
             contentType?.contains("shift_jis", ignoreCase = true) == true -> String(bytes, shiftJis)
             contentType?.contains("shift-jis", ignoreCase = true) == true -> String(bytes, shiftJis)
-            contentType?.contains("utf-8", ignoreCase = true) == true -> String(bytes, Charsets.UTF_8)
+            contentType?.contains("utf-8", ignoreCase = true) == true ->
+                decodeUtf8Strict(bytes) ?: String(bytes, shiftJis)
             else -> decodeUtf8Strict(bytes) ?: String(bytes, shiftJis)
         }
     }
 
     private fun decodeUtf8Strict(bytes: ByteArray): String? {
+        if (!isValidUtf8Bytes(bytes)) return null
         return runCatching {
             Charsets.UTF_8
                 .newDecoder()

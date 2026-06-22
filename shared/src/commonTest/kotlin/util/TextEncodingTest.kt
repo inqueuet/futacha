@@ -17,4 +17,17 @@ class TextEncodingTest {
 
         assertEquals(text, TextEncoding.decodeToString(TextEncoding.encodeToShiftJis(text), contentType = "text/html"))
     }
+
+    @Test
+    fun decodeToString_fallsBackToShiftJisWhenUtf8HeaderHasShiftJisBytes() {
+        val text = "株スレ"
+
+        assertEquals(
+            text,
+            TextEncoding.decodeToString(
+                TextEncoding.encodeToShiftJis(text),
+                contentType = "text/html; charset=UTF-8"
+            )
+        )
+    }
 }
