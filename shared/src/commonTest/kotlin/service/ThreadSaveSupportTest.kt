@@ -520,6 +520,41 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun rewriteSavedOriginalHtml_insertsUtf8CharsetWhenMissing() {
+        val rewritten = rewriteSavedOriginalHtml(
+            html = """
+                <html>
+                  <head><title>過去ログ</title></head>
+                  <body>本文</body>
+                </html>
+            """.trimIndent(),
+            boardPath = "b",
+            urlToPathMap = emptyMap(),
+            stripExternalResources = false
+        )
+
+        assertTrue(rewritten.contains("""<head><meta charset="UTF-8"><title>過去ログ</title>"""))
+    }
+
+    @Test
+    fun rewriteSavedOriginalHtml_addsUtf8ToContentTypeMetaWithoutCharset() {
+        val rewritten = rewriteSavedOriginalHtml(
+            html = """
+                <html>
+                  <head><meta http-equiv="Content-Type" content="text/html"></head>
+                  <body>本文</body>
+                </html>
+            """.trimIndent(),
+            boardPath = "b",
+            urlToPathMap = emptyMap(),
+            stripExternalResources = false
+        )
+
+        assertTrue(rewritten.contains("""content="text/html; charset=UTF-8""""))
+        assertTrue(rewritten.contains("""<meta charset="UTF-8">"""))
+    }
+
+    @Test
     fun rewriteSavedOriginalHtml_stripsSingleQuotedExternalResources() {
         val html = """
             <script src='https://dec.2chan.net/bin/ad.js'></script>

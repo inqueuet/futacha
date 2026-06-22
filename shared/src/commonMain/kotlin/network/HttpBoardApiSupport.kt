@@ -188,12 +188,7 @@ internal fun extractHttpBoardApiServerError(body: String): String? {
         val status = JSON_STATUS_REGEX.find(normalized)?.groupValues?.getOrNull(1)
         return status?.let { "status=$it" }
     }
-    return httpBoardApiHumanReadableLines(normalized)
-        .firstOrNull { line ->
-            ERROR_KEYWORDS.any { keyword ->
-                line.contains(keyword, ignoreCase = true)
-            }
-        }
+    return extractHttpBoardApiHumanReadableErrorLine(normalized)
 }
 
 internal fun summarizeHttpBoardApiResponse(body: String): String {
@@ -235,6 +230,31 @@ private fun httpBoardApiHumanReadableLines(body: String): Sequence<String> {
         .lineSequence()
         .map { it.trim().replace(HUMAN_READABLE_WHITESPACE_REGEX, " ") }
         .filter { it.isNotEmpty() }
+}
+
+private fun extractHttpBoardApiHumanReadableErrorLine(body: String): String? {
+    val lines = httpBoardApiHumanReadableLines(body).toList()
+    val errorIndex = lines.indexOfFirst { line ->
+        ERROR_KEYWORDS.any { keyword ->
+            line.contains(keyword, ignoreCase = true)
+        }
+    }
+    if (errorIndex == -1) return null
+
+    val firstLine = lines[errorIndex]
+    val tailLines = lines
+        .drop(errorIndex + 1)
+        .take(4)
+        .filter { line ->
+            ERROR_KEYWORDS.any { keyword -> line.contains(keyword, ignoreCase = true) } ||
+                extractHttpBoardApiPostingWaitSeconds(line) != null
+        }
+    if (tailLines.isEmpty()) {
+        return firstLine
+    }
+    return (listOf(firstLine) + tailLines)
+        .joinToString(" ")
+        .take(300)
 }
 
 internal fun requiresHttpBoardApiCookieResetRecovery(detail: String): Boolean {

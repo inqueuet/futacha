@@ -18,6 +18,9 @@ private val CONTENT_TYPE_META_REGEX = Regex(
     RegexOption.IGNORE_CASE
 )
 private val CONTENT_TYPE_CHARSET_REGEX = Regex("""charset\s*=\s*[^"'>;\s]+""", RegexOption.IGNORE_CASE)
+private val CONTENT_TYPE_CONTENT_ATTR_REGEX = Regex("""\bcontent\s*=\s*(["'])([^"']*)\1""", RegexOption.IGNORE_CASE)
+private val HEAD_OPEN_REGEX = Regex("""<head\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val HTML_OPEN_REGEX = Regex("""<html\b[^>]*>""", RegexOption.IGNORE_CASE)
 private val SUPPORTED_IMAGE_EXTENSIONS = setOf("gif", "jpg", "jpeg", "png", "webp")
 private val SUPPORTED_VIDEO_EXTENSIONS = setOf("webm", "mp4")
 
@@ -191,13 +194,44 @@ private fun extractThreadSaveTagAttribute(tag: String, attributeName: String): S
 }
 
 internal fun forceSavedHtmlUtf8Charset(html: String): String {
-    var updated = CHARSET_REGEX.replace(html) { matchResult ->
+    var updated = html
+    var hasCharsetMeta = false
+    updated = CHARSET_REGEX.replace(updated) { matchResult ->
+        hasCharsetMeta = true
         matchResult.value.replace(matchResult.groupValues[1], "UTF-8")
     }
     updated = CONTENT_TYPE_META_REGEX.replace(updated) { matchResult ->
-        CONTENT_TYPE_CHARSET_REGEX.replace(matchResult.value, "charset=UTF-8")
+        if (CONTENT_TYPE_CHARSET_REGEX.containsMatchIn(matchResult.value)) {
+            CONTENT_TYPE_CHARSET_REGEX.replace(matchResult.value, "charset=UTF-8")
+        } else {
+            CONTENT_TYPE_CONTENT_ATTR_REGEX.replace(matchResult.value) { contentMatch ->
+                val quote = contentMatch.groupValues[1]
+                val content = contentMatch.groupValues[2].trimEnd()
+                """content=$quote$content; charset=UTF-8$quote"""
+            }
+        }
     }
-    return updated
+    return if (hasCharsetMeta) {
+        updated
+    } else {
+        insertSavedHtmlUtf8CharsetMeta(updated)
+    }
+}
+
+private fun insertSavedHtmlUtf8CharsetMeta(html: String): String {
+    val headMatch = HEAD_OPEN_REGEX.find(html)
+    if (headMatch != null) {
+        return html.replaceRange(headMatch.range.last + 1, headMatch.range.last + 1, """<meta charset="UTF-8">""")
+    }
+    val htmlMatch = HTML_OPEN_REGEX.find(html)
+    if (htmlMatch != null) {
+        return html.replaceRange(
+            htmlMatch.range.last + 1,
+            htmlMatch.range.last + 1,
+            """<head><meta charset="UTF-8"></head>"""
+        )
+    }
+    return """<meta charset="UTF-8">""" + html
 }
 
 internal fun replaceSavedMediaPaths(

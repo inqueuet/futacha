@@ -70,6 +70,7 @@ class ArchiveSearchTest {
         assertEquals("may", items.single().server)
         assertEquals("b", items.single().board)
         assertEquals("https://may.inqueuet.com/b/res/1415555296.htm", items.single().htmlUrl)
+        assertEquals("https://may.inqueuet.com/b/thumb/1415555296s.jpg", items.single().thumbUrl)
     }
 
     @Test
@@ -108,7 +109,8 @@ class ArchiveSearchTest {
                                   "total_bytes": 17591812,
                                   "saved_at": 1782121545878,
                                   "title": "フィギュアスレ",
-                                  "archive_url": "https://may.inqueuet.com/b/res/1416523187.htm"
+                                  "archive_url": "https://may.inqueuet.com/b/res/1416523187.htm",
+                                  "thumb_url": "/b/thumb/1416523187s.jpg"
                                 }
                               ]
                             }
@@ -140,6 +142,7 @@ class ArchiveSearchTest {
         assertEquals(1_782_121_545_878L, items.single().savedAt)
         assertEquals("フィギュアスレ", items.single().title)
         assertEquals("https://may.inqueuet.com/b/res/1416523187.htm", items.single().htmlUrl)
+        assertEquals("https://may.inqueuet.com/b/thumb/1416523187s.jpg", items.single().thumbUrl)
     }
 
     @Test
@@ -159,5 +162,6 @@ class ArchiveSearchTest {
 
         assertEquals(1, items.size)
         assertEquals("https://may.inqueuet.com/b/res/1415555296.htm", items.single().htmlUrl)
+        assertEquals("https://may.inqueuet.com/b/thumb/1415555296s.jpg", items.single().thumbUrl)
     }
 }

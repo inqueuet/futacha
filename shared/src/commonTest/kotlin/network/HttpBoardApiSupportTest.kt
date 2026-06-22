@@ -64,6 +64,17 @@ class HttpBoardApiSupportTest {
             )
         )
         assertEquals(
+            "あなたのIPからは投稿できません あと3500秒投稿できません",
+            extractHttpBoardApiServerError(
+                """
+                    <html><body>
+                    <div>あなたのIPからは投稿できません</div>
+                    <div>あと3500秒投稿できません</div>
+                    </body></html>
+                """.trimIndent()
+            )
+        )
+        assertEquals(
             "Cookieを新規作成しました。もう一度書き込みしてください",
             extractHttpBoardApiServerError(
                 """<html><body>Cookieを新規作成しました。もう一度書き込みしてください</body></html>"""

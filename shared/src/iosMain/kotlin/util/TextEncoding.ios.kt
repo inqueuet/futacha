@@ -38,15 +38,19 @@ actual object TextEncoding {
 
     actual fun decodeToString(bytes: ByteArray, contentType: String?): String {
         if (bytes.isEmpty()) return ""
-        val encoding: UInt = when {
-            contentType?.contains("shift_jis", ignoreCase = true) == true -> shiftJisCfEncoding
-            contentType?.contains("shift-jis", ignoreCase = true) == true -> shiftJisCfEncoding
-            contentType?.contains("utf-8", ignoreCase = true) == true -> utf8CfEncoding
-            else -> shiftJisCfEncoding
+        when {
+            contentType?.contains("shift_jis", ignoreCase = true) == true ->
+                return decodeWithCfEncoding(bytes, shiftJisCfEncoding) ?: ""
+            contentType?.contains("shift-jis", ignoreCase = true) == true ->
+                return decodeWithCfEncoding(bytes, shiftJisCfEncoding) ?: ""
+            contentType?.contains("utf-8", ignoreCase = true) == true ->
+                return decodeWithCfEncoding(bytes, utf8CfEncoding)
+                    ?: decodeWithCfEncoding(bytes, shiftJisCfEncoding)
+                    ?: ""
         }
-        val decoded = decodeWithCfEncoding(bytes, encoding)
-        if (decoded != null) return decoded
-        return decodeWithCfEncoding(bytes, utf8CfEncoding) ?: ""
+        return decodeWithCfEncoding(bytes, utf8CfEncoding)
+            ?: decodeWithCfEncoding(bytes, shiftJisCfEncoding)
+            ?: ""
     }
 
     private fun decodeWithCfEncoding(bytes: ByteArray, encoding: UInt): String? {

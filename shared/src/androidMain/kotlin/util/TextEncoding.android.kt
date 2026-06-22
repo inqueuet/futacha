@@ -2,7 +2,9 @@
 
 package com.valoser.futacha.shared.util
 
+import java.nio.ByteBuffer
 import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
 
 actual object TextEncoding {
     private val shiftJis: Charset = Charset.forName("Shift_JIS")
@@ -14,12 +16,22 @@ actual object TextEncoding {
     }
 
     actual fun decodeToString(bytes: ByteArray, contentType: String?): String {
-        val charset = when {
-            contentType?.contains("shift_jis", ignoreCase = true) == true -> shiftJis
-            contentType?.contains("shift-jis", ignoreCase = true) == true -> shiftJis
-            contentType?.contains("utf-8", ignoreCase = true) == true -> Charsets.UTF_8
-            else -> shiftJis
+        return when {
+            contentType?.contains("shift_jis", ignoreCase = true) == true -> String(bytes, shiftJis)
+            contentType?.contains("shift-jis", ignoreCase = true) == true -> String(bytes, shiftJis)
+            contentType?.contains("utf-8", ignoreCase = true) == true -> String(bytes, Charsets.UTF_8)
+            else -> decodeUtf8Strict(bytes) ?: String(bytes, shiftJis)
         }
-        return String(bytes, charset)
+    }
+
+    private fun decodeUtf8Strict(bytes: ByteArray): String? {
+        return runCatching {
+            Charsets.UTF_8
+                .newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrNull()
     }
 }

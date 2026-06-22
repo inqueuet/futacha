@@ -68,7 +68,12 @@ private data class InqueuetArchiveSearchResult(
     @SerialName("archive_url")
     val archiveUrl: String? = null,
     val htmlUrl: String? = null,
-    val thumbUrl: String? = null
+    val thumbUrl: String? = null,
+    @SerialName("thumb_url")
+    val thumbUrlSnake: String? = null,
+    val thumbnailUrl: String? = null,
+    @SerialName("thumbnail_url")
+    val thumbnailUrlSnake: String? = null
 )
 
 fun extractArchiveSearchScope(board: BoardSummary?): ArchiveSearchScope? {
@@ -138,7 +143,8 @@ fun buildDirectArchiveSearchItems(
             server = scope.server,
             board = scope.board,
             title = "No.$normalized",
-            htmlUrl = scopedThreadUrl
+            htmlUrl = scopedThreadUrl,
+            thumbUrl = buildArchiveThumbnailUrlOrNull(scope.server, scope.board, normalized)
         )
     )
 }
@@ -231,13 +237,23 @@ private fun InqueuetArchiveSearchResult.toArchiveSearchItem(
         ?: htmlUrl?.trim()?.takeIf { it.isNotBlank() }
         ?: buildArchiveThreadUrlOrNull(resolvedServer, resolvedBoard, resolvedThreadId)
         ?: return null
+    val resolvedThumbUrl = listOf(thumbUrl, thumbUrlSnake, thumbnailUrl, thumbnailUrlSnake)
+        .firstNotNullOfOrNull { candidate ->
+            candidate
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        }
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { normalizeArchiveResourceUrl(it, resolvedUrl) }
+        ?: buildArchiveThumbnailUrlOrNull(resolvedServer, resolvedBoard, resolvedThreadId)
     return ArchiveSearchItem(
         threadId = resolvedThreadId,
         server = resolvedServer,
         board = resolvedBoard,
         title = title,
         htmlUrl = resolvedUrl,
-        thumbUrl = thumbUrl,
+        thumbUrl = resolvedThumbUrl,
         replyCount = replyCount ?: replyCountLegacy ?: 0,
         status = status,
         totalBytes = totalBytes,
@@ -253,4 +269,42 @@ private fun buildArchiveThreadUrlOrNull(
 ): String? {
     if (server.isBlank() || board.isBlank() || threadId.isBlank()) return null
     return "https://$server.inqueuet.com/$board/res/$threadId.htm"
+}
+
+private fun buildArchiveThumbnailUrlOrNull(
+    server: String,
+    board: String,
+    threadId: String
+): String? {
+    if (server.isBlank() || board.isBlank() || threadId.isBlank()) return null
+    return "https://$server.inqueuet.com/$board/thumb/${threadId}s.jpg"
+}
+
+private fun normalizeArchiveResourceUrl(
+    resourceUrl: String,
+    pageUrl: String
+): String {
+    if (resourceUrl.startsWith("http://") || resourceUrl.startsWith("https://")) {
+        return resourceUrl
+    }
+    if (resourceUrl.startsWith("//")) {
+        return "https:$resourceUrl"
+    }
+    return runCatching {
+        val page = Url(pageUrl)
+        val origin = buildString {
+            append(page.protocol.name)
+            append("://")
+            append(page.host)
+            if (page.port != page.protocol.defaultPort) {
+                append(":${page.port}")
+            }
+        }
+        if (resourceUrl.startsWith("/")) {
+            "$origin$resourceUrl"
+        } else {
+            val basePath = page.encodedPath.substringBeforeLast('/', "")
+            "$origin$basePath/$resourceUrl"
+        }
+    }.getOrElse { resourceUrl }
 }
