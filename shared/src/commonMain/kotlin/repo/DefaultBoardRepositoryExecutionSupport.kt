@@ -1,13 +1,24 @@
 package com.valoser.futacha.shared.repo
 
+import com.valoser.futacha.shared.network.HttpBoardApiPostingFailureKind
+import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.network.StoredCookie
+import com.valoser.futacha.shared.network.classifyHttpBoardApiPostingFailure
+import com.valoser.futacha.shared.network.extractHttpBoardApiPostingWaitSeconds
+import com.valoser.futacha.shared.network.formatHttpBoardApiPostingWaitLabel
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.Logger
+import io.ktor.http.Url
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+
+private const val DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS = 3600L
 
 internal data class DefaultBoardRepositoryOpImageFetchResult(
     val url: String?
@@ -127,7 +138,69 @@ internal suspend fun <T> runDefaultBoardRepositoryPostingWithInitializedCookies(
         ensureCookiesInitialized(board)
         block()
     }
-    return cookieRepository?.commitEvenOnFailure { exec() } ?: exec()
+    return try {
+        cookieRepository?.commitEvenOnFailure { exec() } ?: exec()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        throw enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = board,
+            cookieRepository = cookieRepository,
+            error = e
+        )
+    }
+}
+
+@OptIn(ExperimentalTime::class)
+internal suspend fun enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+    board: String,
+    cookieRepository: CookieRepository?,
+    error: Exception,
+    nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    inferredWaitSeconds: Long = DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS
+): Exception {
+    val networkError = error as? NetworkException ?: return error
+    val message = networkError.message?.trim().orEmpty()
+    if (message.isEmpty()) return error
+    if (extractHttpBoardApiPostingWaitSeconds(message) != null) return error
+    if (classifyHttpBoardApiPostingFailure(message) != HttpBoardApiPostingFailureKind.IP_RESTRICTION) {
+        return error
+    }
+    val posttimeMillis = resolveDefaultBoardRepositoryPosttimeMillis(
+        board = board,
+        cookieRepository = cookieRepository
+    ) ?: return error
+    val elapsedSeconds = ((nowMillis - posttimeMillis).coerceAtLeast(0L)) / 1000L
+    val remainingSeconds = inferredWaitSeconds - elapsedSeconds
+    if (remainingSeconds <= 0L) return error
+    val guidance = "posttime からの推定では約${formatHttpBoardApiPostingWaitLabel(remainingSeconds)}後に再試行できる可能性があります。サーバー応答に秒数がないため目安です"
+    return NetworkException(
+        message = "$message $guidance",
+        statusCode = networkError.statusCode,
+        cause = networkError
+    )
+}
+
+private suspend fun resolveDefaultBoardRepositoryPosttimeMillis(
+    board: String,
+    cookieRepository: CookieRepository?
+): Long? {
+    if (cookieRepository == null) return null
+    val boardUrl = runCatching { Url(board) }.getOrNull()
+    return cookieRepository.listCookies()
+        .asSequence()
+        .filter { it.name == "posttime" }
+        .filter { boardUrl == null || it.matchesDefaultBoardRepositoryCookieScope(boardUrl) }
+        .mapNotNull { it.value.toLongOrNull() }
+        .maxOrNull()
+}
+
+private fun StoredCookie.matchesDefaultBoardRepositoryCookieScope(url: Url): Boolean {
+    val host = url.host.lowercase()
+    val cookieDomain = domain.lowercase().removePrefix(".")
+    val domainMatches = host == cookieDomain || host.endsWith(".$cookieDomain")
+    if (!domainMatches) return false
+    val requestPath = url.encodedPath.ifBlank { "/" }
+    return path == "/" || requestPath.startsWith(path)
 }
 
 internal suspend fun fetchDefaultBoardRepositoryOpImageWithPermit(

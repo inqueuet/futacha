@@ -3,10 +3,16 @@ package com.valoser.futacha.shared.network
 import com.valoser.futacha.shared.model.BoardSummary
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.Url
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -35,7 +41,17 @@ private const val INQUEUET_HOST_SUFFIX = ".inqueuet.com"
 private const val DEFAULT_ARCHIVE_SEARCH_SERVER = "may"
 private const val DEFAULT_ARCHIVE_SEARCH_LIMIT = 20
 private const val MAX_ARCHIVE_SEARCH_LIMIT = 100
+private const val ARCHIVE_THUMBNAIL_HEAD_MAX_LINES = 80
+private const val ARCHIVE_THUMBNAIL_HEAD_MAX_BYTES = 96 * 1024
+private const val ARCHIVE_THUMBNAIL_READ_BUFFER_BYTES = 8 * 1024
+private const val ARCHIVE_THUMBNAIL_MAX_ZERO_READ_RETRIES = 80
+private const val ARCHIVE_THUMBNAIL_ZERO_READ_BACKOFF_MILLIS = 25L
+private const val ARCHIVE_THUMBNAIL_RESPONSE_TIMEOUT_MILLIS = 10_000L
 private val ARCHIVE_THREAD_RES_ID_REGEX = Regex("""/res/(\d+)\.html?""")
+private val ARCHIVE_THUMB_IMG_REGEX = Regex(
+    """<img\b[^>]{0,700}\bsrc\s*=\s*['"]([^'"]*/thumb/[^'"]+)['"][^>]{0,700}>""",
+    RegexOption.IGNORE_CASE
+)
 
 @Serializable
 private data class InqueuetArchiveSearchResponse(
@@ -143,8 +159,7 @@ fun buildDirectArchiveSearchItems(
             server = scope.server,
             board = scope.board,
             title = "No.$normalized",
-            htmlUrl = scopedThreadUrl,
-            thumbUrl = buildArchiveThumbnailUrlOrNull(scope.server, scope.board, normalized)
+            htmlUrl = scopedThreadUrl
         )
     )
 }
@@ -161,7 +176,7 @@ suspend fun searchInqueuetArchiveThreads(
 
     val directItems = buildDirectArchiveSearchItems(normalized, scope)
     if (directItems.isNotEmpty()) {
-        return directItems
+        return enrichArchiveSearchItemsWithThumbnails(httpClient, directItems)
     }
 
     val safeLimit = limit.coerceIn(1, MAX_ARCHIVE_SEARCH_LIMIT)
@@ -182,9 +197,10 @@ suspend fun searchInqueuetArchiveThreads(
     }
 
     val decoded = archiveSearchJson.decodeFromString<InqueuetArchiveSearchResponse>(body)
-    return decoded.results.mapNotNull { result ->
+    val items = decoded.results.mapNotNull { result ->
         result.toArchiveSearchItem(scope)
     }
+    return enrichArchiveSearchItemsWithThumbnails(httpClient, items)
 }
 
 private fun resolveInqueuetArchiveServer(host: String): String? {
@@ -246,7 +262,6 @@ private fun InqueuetArchiveSearchResult.toArchiveSearchItem(
         ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?.let { normalizeArchiveResourceUrl(it, resolvedUrl) }
-        ?: buildArchiveThumbnailUrlOrNull(resolvedServer, resolvedBoard, resolvedThreadId)
     return ArchiveSearchItem(
         threadId = resolvedThreadId,
         server = resolvedServer,
@@ -269,15 +284,6 @@ private fun buildArchiveThreadUrlOrNull(
 ): String? {
     if (server.isBlank() || board.isBlank() || threadId.isBlank()) return null
     return "https://$server.inqueuet.com/$board/res/$threadId.htm"
-}
-
-private fun buildArchiveThumbnailUrlOrNull(
-    server: String,
-    board: String,
-    threadId: String
-): String? {
-    if (server.isBlank() || board.isBlank() || threadId.isBlank()) return null
-    return "https://$server.inqueuet.com/$board/thumb/${threadId}s.jpg"
 }
 
 private fun normalizeArchiveResourceUrl(
@@ -307,4 +313,46 @@ private fun normalizeArchiveResourceUrl(
             "$origin$basePath/$resourceUrl"
         }
     }.getOrElse { resourceUrl }
+}
+
+private suspend fun enrichArchiveSearchItemsWithThumbnails(
+    httpClient: HttpClient,
+    items: List<ArchiveSearchItem>
+): List<ArchiveSearchItem> = coroutineScope {
+    items.map { item ->
+        async {
+            if (!item.thumbUrl.isNullOrBlank()) {
+                item
+            } else {
+                val resolvedThumbnail = fetchArchiveThreadThumbnailUrl(httpClient, item.htmlUrl)
+                if (resolvedThumbnail.isNullOrBlank()) item else item.copy(thumbUrl = resolvedThumbnail)
+            }
+        }
+    }.awaitAll()
+}
+
+private suspend fun fetchArchiveThreadThumbnailUrl(
+    httpClient: HttpClient,
+    threadUrl: String
+): String? {
+    if (threadUrl.isBlank()) return null
+    return runCatching {
+        val response: HttpResponse = httpClient.get(threadUrl) {
+            headers[HttpHeaders.Referrer] = threadUrl.substringBeforeLast('/', threadUrl)
+        }
+        if (!response.status.isSuccess()) return@runCatching null
+        val headHtml = readHttpBoardApiResponseHeadAsString(
+            response = response,
+            maxLines = ARCHIVE_THUMBNAIL_HEAD_MAX_LINES,
+            maxBytes = ARCHIVE_THUMBNAIL_HEAD_MAX_BYTES,
+            responseReadBufferBytes = ARCHIVE_THUMBNAIL_READ_BUFFER_BYTES,
+            maxZeroReadRetries = ARCHIVE_THUMBNAIL_MAX_ZERO_READ_RETRIES,
+            zeroReadBackoffMillis = ARCHIVE_THUMBNAIL_ZERO_READ_BACKOFF_MILLIS,
+            responseTotalTimeoutMillis = ARCHIVE_THUMBNAIL_RESPONSE_TIMEOUT_MILLIS
+        )
+        ARCHIVE_THUMB_IMG_REGEX.find(headHtml)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { normalizeArchiveResourceUrl(it, threadUrl) }
+    }.getOrNull()
 }

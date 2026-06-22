@@ -70,7 +70,7 @@ class ArchiveSearchTest {
         assertEquals("may", items.single().server)
         assertEquals("b", items.single().board)
         assertEquals("https://may.inqueuet.com/b/res/1415555296.htm", items.single().htmlUrl)
-        assertEquals("https://may.inqueuet.com/b/thumb/1415555296s.jpg", items.single().thumbUrl)
+        assertNull(items.single().thumbUrl)
     }
 
     @Test
@@ -146,10 +146,25 @@ class ArchiveSearchTest {
     }
 
     @Test
-    fun searchInqueuetArchiveThreads_usesDirectCandidateForThreadNumberWithoutNetwork() = runBlocking {
+    fun searchInqueuetArchiveThreads_usesDirectCandidateForThreadNumberAndFetchesThumbnail() = runBlocking {
         val client = HttpClient(MockEngine) {
             engine {
-                addHandler { error("Network should not be called") }
+                addHandler { request ->
+                    assertEquals("https://may.inqueuet.com/b/res/1415555296.htm", request.url.toString())
+                    respond(
+                        content = """
+                            <html><body>
+                              <div class="thre" data-res="1415555296">
+                                <a href="/b/src/1782110274559.png">
+                                  <img src="/b/thumb/1782110274559s.jpg">
+                                </a>
+                              </div>
+                            </body></html>
+                        """.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "text/html; charset=Shift_JIS")
+                    )
+                }
             }
         }
 
@@ -162,6 +177,78 @@ class ArchiveSearchTest {
 
         assertEquals(1, items.size)
         assertEquals("https://may.inqueuet.com/b/res/1415555296.htm", items.single().htmlUrl)
-        assertEquals("https://may.inqueuet.com/b/thumb/1415555296s.jpg", items.single().thumbUrl)
+        assertEquals("https://may.inqueuet.com/b/thumb/1782110274559s.jpg", items.single().thumbUrl)
+    }
+
+    @Test
+    fun searchInqueuetArchiveThreads_fetchesThreadHeadThumbnailWhenSearchResultHasNoThumb() = runBlocking {
+        val requestedUrls = mutableListOf<String>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requestedUrls += request.url.toString()
+                    when (request.url.encodedPath) {
+                        "/search" -> respond(
+                            content = """
+                                {
+                                  "q": "株",
+                                  "server": "may",
+                                  "board": "b",
+                                  "limit": 5,
+                                  "count": 1,
+                                  "results": [
+                                    {
+                                      "id": "may/b/1416564780",
+                                      "server": "may",
+                                      "board": "b",
+                                      "thread_no": "1416564780",
+                                      "reply_count": 1000,
+                                      "status": "complete",
+                                      "total_bytes": 1034296,
+                                      "saved_at": 1782121963135,
+                                      "title": "株スレ",
+                                      "archive_url": "https://may.inqueuet.com/b/res/1416564780.htm"
+                                    }
+                                  ]
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json")
+                        )
+                        "/b/res/1416564780.htm" -> respond(
+                            content = """
+                                <html><body>
+                                  <div class="thre" data-res="1416564780">
+                                    <a href="/b/src/1782110274559.png" target="_blank">
+                                      <img src="/b/thumb/1782110274559s.jpg" border=0>
+                                    </a>
+                                  </div>
+                                </body></html>
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "text/html; charset=Shift_JIS")
+                        )
+                        else -> error("Unexpected request: ${request.url}")
+                    }
+                }
+            }
+        }
+
+        val items = searchInqueuetArchiveThreads(
+            httpClient = client,
+            archiveSearchJson = Json { ignoreUnknownKeys = true },
+            query = "株",
+            scope = ArchiveSearchScope(server = "may", board = "b"),
+            limit = 5
+        )
+
+        assertEquals(
+            listOf(
+                "https://may.inqueuet.com/search?q=%E6%A0%AA&server=may&board=b&limit=5",
+                "https://may.inqueuet.com/b/res/1416564780.htm"
+            ),
+            requestedUrls
+        )
+        assertEquals("https://may.inqueuet.com/b/thumb/1782110274559s.jpg", items.single().thumbUrl)
     }
 }

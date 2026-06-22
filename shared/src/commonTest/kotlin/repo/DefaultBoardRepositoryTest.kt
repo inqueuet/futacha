@@ -519,6 +519,50 @@ class DefaultBoardRepositoryTest {
         assertEquals("https://dec.2chan.net/src/a.jpg", opImage?.url)
     }
 
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_appendsEstimatedWaitFromPosttimeForIpRestriction() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1000000000", domain = ".2chan.net", path = "/")
+        )
+
+        val enriched = enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = boardUrl,
+            cookieRepository = cookieRepository,
+            error = NetworkException("返信に失敗しました: あなたのIPからは投稿できません"),
+            nowMillis = 1_000_100_000L
+        )
+
+        assertTrue(enriched is NetworkException)
+        assertTrue(enriched.message!!.contains("posttime からの推定"))
+        assertTrue(enriched.message!!.contains("約58分20秒後"))
+        assertTrue(enriched.message!!.contains("目安"))
+    }
+
+    @Test
+    fun defaultBoardRepositoryExecutionSupport_doesNotAppendEstimateWhenServerProvidesWaitSeconds() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
+        val cookieRepository = CookieRepository(storage)
+        storage.addCookie(
+            io.ktor.http.Url(boardUrl),
+            io.ktor.http.Cookie(name = "posttime", value = "1000000000", domain = ".2chan.net", path = "/")
+        )
+
+        val original = NetworkException("返信に失敗しました: あと120秒投稿できません")
+        val enriched = enrichDefaultBoardRepositoryPostingFailureWithPosttimeEstimate(
+            board = boardUrl,
+            cookieRepository = cookieRepository,
+            error = original,
+            nowMillis = 1_000_100_000L
+        )
+
+        assertTrue(enriched === original)
+    }
+
     companion object {
         private const val STORAGE_PATH = "private/cookies/default-board-repository-test.json"
     }
