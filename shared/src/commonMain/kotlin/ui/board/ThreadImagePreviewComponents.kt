@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
@@ -62,19 +63,6 @@ internal fun ImagePreviewDialog(
         scale = 1f
         translation = Offset.Zero
     }
-    val previewRequest = remember(entry.url) {
-        ImageRequest.Builder(platformContext)
-            .data(entry.url)
-            .crossfade(true)
-            .build()
-    }
-    val painter = rememberAsyncImagePainter(
-        model = previewRequest,
-        imageLoader = imageLoader
-    )
-    val painterState by painter.state.collectAsState()
-    val isLoadingState = painterState is AsyncImagePainter.State.Loading
-    val isErrorState = painterState is AsyncImagePainter.State.Error
 
     ThreadMediaPreviewDialogFrame(
         navigationKey = entry.url,
@@ -96,6 +84,25 @@ internal fun ImagePreviewDialog(
             }
         }
     ) { previewSize ->
+        val requestSize = remember(previewSize) {
+            resolveImagePreviewRequestSize(previewSize)
+        }
+        val previewRequest = remember(platformContext, entry.url, requestSize) {
+            requestSize?.let { size ->
+                ImageRequest.Builder(platformContext)
+                    .data(entry.url)
+                    .crossfade(true)
+                    .size(size.width, size.height)
+                    .build()
+            }
+        }
+        val painter = rememberAsyncImagePainter(
+            model = previewRequest,
+            imageLoader = imageLoader
+        )
+        val painterState by painter.state.collectAsState()
+        val isLoadingState = previewRequest == null || painterState is AsyncImagePainter.State.Loading
+        val isErrorState = painterState is AsyncImagePainter.State.Error
         val targetContentScale by remember(previewSize, painterState) {
             derivedStateOf {
                 val imageSize = painter.intrinsicSize
@@ -192,4 +199,8 @@ internal fun ImagePreviewDialog(
             }
         }
     }
+}
+
+internal fun resolveImagePreviewRequestSize(previewSize: IntSize): IntSize? {
+    return previewSize.takeIf { it.width > 0 && it.height > 0 }
 }

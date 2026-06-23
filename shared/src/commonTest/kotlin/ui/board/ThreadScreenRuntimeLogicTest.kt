@@ -34,6 +34,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -202,6 +203,17 @@ class ThreadScreenRuntimeLogicTest {
                     lastReadItemOffset = 34
                 )
             )
+        )
+    }
+
+    @Test
+    fun imagePreviewRequestSize_requiresMeasuredContainer() {
+        assertNull(resolveImagePreviewRequestSize(IntSize.Zero))
+        assertNull(resolveImagePreviewRequestSize(IntSize(width = 0, height = 800)))
+        assertNull(resolveImagePreviewRequestSize(IntSize(width = 600, height = 0)))
+        assertEquals(
+            IntSize(width = 600, height = 800),
+            resolveImagePreviewRequestSize(IntSize(width = 600, height = 800))
         )
     }
 

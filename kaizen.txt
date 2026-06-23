@@ -179,16 +179,17 @@ Relevant code:
 - shared/src/commonMain/kotlin/ui/board/ThreadImagePreviewComponents.kt
 
 Current behavior:
-- ImagePreviewDialog builds an ImageRequest with data(entry.url) and crossfade(true), but no size().
+- ImagePreviewDialog waits for the fullscreen preview container to report a non-zero size.
+- It then builds an ImageRequest with data(entry.url), crossfade(true), and size(containerWidth, containerHeight).
 - Zoom/pan state is reset per URL.
 
 Risk:
-- Large full images may decode closer to source size on first preview open.
-- Adding size() can reduce first-display cost but may reduce sharpness when zoomed.
+- First display avoids an unbounded source-size decode, but zooming beyond the fitted screen-sized decode can look softer.
+- High-resolution reload on zoom is not implemented yet.
 
 Kaizen:
-- Request a screen-sized image for initial display.
-- Optionally trigger a higher-resolution load after the user zooms past a threshold.
+- Keep the initial request screen-sized for lower first-open decode cost.
+- Optionally trigger a higher-resolution load after the user zooms past a threshold if sharpness complaints appear.
 - Do not add image preview runtime logs. Prefer sizing fixes, cache-policy tests, and manual profiler inspection.
 
 
