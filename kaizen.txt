@@ -35,7 +35,7 @@ This is the primary classification for the remaining findings below. Original it
    - Archive search response and thumbnail enrichment.
 
 3. Thread rendering, derived data, navigation, and dialogs
-   Items: 27, 43, 46, 47, 48, 54, 56, 57
+   Items: 43, 46, 47, 48, 54, 56, 57
 
    Scope:
    - Thread navigation, search/read-aloud/filter behavior, AI summaries, and quote UI.
@@ -107,32 +107,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-27. Duplicate post IDs can corrupt derived maps keyed only by post.id
---------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenDerivedRuntimeSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadFilterSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadSearchSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenContentHost.kt
-
-Current behavior:
-- Lazy list keys already account for duplicate post IDs by adding duplicate ordinal information where needed.
-- Some derived data still uses Map<String, ...> keyed only by post.id:
-  - search highlight ranges
-  - lower-body text cache for filtering
-  - parts of AI moderation merge/lookup
-
-Risk:
-- If malformed HTML, parser recovery, or duplicate Futaba IDs produce two Post objects with the same id, later entries overwrite earlier entries.
-- Search highlights, filter matches, and AI hidden-post state can apply to the wrong visible post.
-- This is rare, but it is a real correctness issue because the list rendering layer already acknowledges duplicate IDs are possible.
-
-Kaizen:
-- Introduce a stable ThreadPostKey value used by UI keys and derived maps.
-- Include post index or duplicate ordinal in search/filter/AI derived state.
-- Add a regression test with duplicate post IDs to verify highlights and filtering do not cross-apply.
 
 
 28. Watch sync can contend with UI/history refresh and storage work
