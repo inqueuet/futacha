@@ -825,6 +825,25 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun buildThreadSearchMatches_keepsDuplicatePostIdsSeparateByIndex() {
+        val targets = runBlocking {
+            buildThreadSearchTargets(
+                listOf(
+                    post(id = "1", messageHtml = "猫だけ"),
+                    post(id = "1", messageHtml = "犬だけ")
+                )
+            )
+        }
+
+        val matches = runBlocking { buildThreadSearchMatches(targets, "猫") }
+        val highlightRanges = matches.associate { it.post to it.highlightRanges }
+
+        assertEquals(listOf("1"), matches.map { it.postId })
+        assertEquals(listOf(0), matches.map { it.postIndex })
+        assertEquals(mapOf(targets[0].post to listOf(0..0)), highlightRanges)
+    }
+
+    @Test
     fun computeHighlightRanges_capsRangesForPathologicalQueries() {
         val ranges = computeHighlightRanges("a".repeat(200), "a")
 
@@ -895,9 +914,9 @@ class ThreadScreenLoadLogicTest {
     @Test
     fun threadSearchNavigationHelpers_resolveIndexAndScrollTarget() {
         val matches = listOf(
-            ThreadSearchMatch(postId = "1", postIndex = 10, highlightRanges = emptyList()),
-            ThreadSearchMatch(postId = "2", postIndex = 20, highlightRanges = emptyList()),
-            ThreadSearchMatch(postId = "3", postIndex = 30, highlightRanges = emptyList())
+            ThreadSearchMatch(postId = "1", postIndex = 10, post = post("1"), highlightRanges = emptyList()),
+            ThreadSearchMatch(postId = "2", postIndex = 20, post = post("2"), highlightRanges = emptyList()),
+            ThreadSearchMatch(postId = "3", postIndex = 30, post = post("3"), highlightRanges = emptyList())
         )
 
         assertEquals(

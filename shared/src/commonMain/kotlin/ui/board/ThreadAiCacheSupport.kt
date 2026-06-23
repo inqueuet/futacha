@@ -112,3 +112,9 @@ internal fun shouldComputeFullThreadPostFingerprint(
 internal fun resolveThreadAiSourcePosts(page: ThreadPage): List<Post> {
     return page.posts
 }
+
+internal fun resolveThreadAiPostModerationSourcePosts(posts: List<Post>): List<Post> {
+    val duplicatePostIds = findDuplicatePostIds(posts)
+    if (duplicatePostIds.isEmpty()) return posts
+    return posts.filterNot { it.id in duplicatePostIds }
+}

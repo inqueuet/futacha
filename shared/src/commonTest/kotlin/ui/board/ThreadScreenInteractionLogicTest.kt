@@ -737,11 +737,13 @@ class ThreadScreenInteractionLogicTest {
             ThreadSearchMatch(
                 postId = "1",
                 postIndex = 2,
+                post = searchPost("1"),
                 highlightRanges = listOf(0..1)
             ),
             ThreadSearchMatch(
                 postId = "2",
                 postIndex = 5,
+                post = searchPost("2"),
                 highlightRanges = listOf(1..2)
             )
         )
@@ -878,6 +880,7 @@ class ThreadScreenInteractionLogicTest {
                         ThreadSearchMatch(
                             postId = "1",
                             postIndex = 2,
+                            post = searchPost("1"),
                             highlightRanges = listOf(0..1)
                         )
                     )
@@ -1150,6 +1153,7 @@ class ThreadScreenInteractionLogicTest {
             ThreadSearchMatch(
                 postId = "1",
                 postIndex = 3,
+                post = searchPost("1"),
                 highlightRanges = listOf(0..1)
             )
         )
@@ -1874,4 +1878,15 @@ class ThreadScreenInteractionLogicTest {
         assertEquals("x", (offlineFailureDecision.error as IllegalStateException).message)
     }
 
+    private fun searchPost(id: String): Post {
+        return Post(
+            id = id,
+            author = null,
+            subject = null,
+            timestamp = "",
+            messageHtml = "body $id",
+            imageUrl = null,
+            thumbnailUrl = null
+        )
+    }
 }

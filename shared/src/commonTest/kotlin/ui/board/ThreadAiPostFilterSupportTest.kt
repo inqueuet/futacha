@@ -44,6 +44,42 @@ class ThreadAiPostFilterSupportTest {
     }
 
     @Test
+    fun resolveAiHiddenPostStateSkipsDuplicatePostIds() {
+        val state = resolveAiHiddenPostState(
+            posts = listOf(
+                post("1"),
+                post("2", body = "first duplicate"),
+                post("2", body = "second duplicate"),
+                post("3")
+            ),
+            moderationResults = listOf(
+                PostModerationResult(postId = "2", shouldHide = true, reason = "曖昧"),
+                PostModerationResult(postId = "3", shouldHide = true, reason = "一意")
+            )
+        )
+
+        assertEquals(setOf("3"), state.postIds)
+        assertEquals(mapOf("3" to "一意"), state.reasons)
+    }
+
+    @Test
+    fun findDuplicatePostIdsReturnsOnlyRepeatedIds() {
+        assertEquals(
+            setOf("2", "4"),
+            findDuplicatePostIds(
+                listOf(
+                    post("1"),
+                    post("2"),
+                    post("2", body = "duplicate"),
+                    post("3"),
+                    post("4"),
+                    post("4", body = "duplicate")
+                )
+            )
+        )
+    }
+
+    @Test
     fun resolveAiHiddenPostStateNormalizesLongMultilineReasons() {
         val state = resolveAiHiddenPostState(
             posts = listOf(post("1"), post("2")),
@@ -122,13 +158,13 @@ class ThreadAiPostFilterSupportTest {
         )
     }
 
-    private fun post(id: String): Post {
+    private fun post(id: String, body: String = "body"): Post {
         return Post(
             id = id,
             author = null,
             subject = null,
             timestamp = "",
-            messageHtml = "body",
+            messageHtml = body,
             imageUrl = null,
             thumbnailUrl = null
         )

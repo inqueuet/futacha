@@ -47,7 +47,7 @@ internal data class ThreadScreenContentHostBindings(
     val lazyListState: LazyListState,
     val saidaneOverrides: Map<String, String>,
     val selfPostIdentifierSet: Set<String>,
-    val postHighlightRanges: Map<String, List<IntRange>>,
+    val postHighlightRanges: Map<Post, List<IntRange>>,
     val postOverlayState: ThreadPostOverlayState,
     val setPostOverlayState: (ThreadPostOverlayState) -> Unit,
     val onSaidaneClick: (Post) -> Unit,
@@ -156,8 +156,8 @@ internal fun ThreadScreenContentHost(
                     val hasThreadLowerBodyFilters = threadFilterComputationState.criteria.options.any {
                         it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
                     }
-                    val precomputedLowerBodyByPostId = if (hasNgWordFilters || hasThreadLowerBodyFilters) {
-                        buildLowerBodyByPostId(state.page.posts, bindings.postTextCache)
+                    val precomputedLowerBodyByPost = if (hasNgWordFilters || hasThreadLowerBodyFilters) {
+                        buildLowerBodyByPost(state.page.posts, bindings.postTextCache)
                     } else {
                         emptyMap()
                     }
@@ -166,12 +166,12 @@ internal fun ThreadScreenContentHost(
                         ngHeaders = bindings.ngHeaders,
                         ngWords = bindings.ngWords,
                         enabled = hasNgFilters,
-                        precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
+                        precomputedLowerBodyByPost = precomputedLowerBodyByPost
                     )
                     applyThreadFilters(
                         page = ngFiltered,
                         criteria = threadFilterComputationState.criteria,
-                        precomputedLowerBodyByPostId = precomputedLowerBodyByPostId
+                        precomputedLowerBodyByPost = precomputedLowerBodyByPost
                     )
                 }
                 if (bindings.threadFilterCache.size >= THREAD_FILTER_CACHE_MAX_ENTRIES) {
@@ -205,6 +205,9 @@ internal fun ThreadScreenContentHost(
             val threadSummaryCache = remember { linkedMapOf<ThreadSummaryCacheKey, ThreadSummaryUiState.Ready>() }
             val threadPostModerationCache = remember { linkedMapOf<ThreadPostModerationCacheKey, PostModerationResult>() }
             val aiSourcePosts = remember(state.page) { resolveThreadAiSourcePosts(state.page) }
+            val aiPostModerationSourcePosts = remember(aiSourcePosts) {
+                resolveThreadAiPostModerationSourcePosts(aiSourcePosts)
+            }
             val aiCacheKey = remember(
                 state.page.threadId,
                 postsFingerprint,
@@ -292,7 +295,7 @@ internal fun ThreadScreenContentHost(
                 }
                 val input = PostModerationInput(
                     threadId = state.page.threadId,
-                    posts = aiSourcePosts
+                    posts = aiPostModerationSourcePosts
                 )
                 val cachedResults = linkedMapOf<String, PostModerationResult>()
                 val uncachedPosts = mutableListOf<Post>()

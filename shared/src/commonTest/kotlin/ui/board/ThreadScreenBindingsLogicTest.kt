@@ -2095,6 +2095,15 @@ class ThreadScreenBindingsLogicTest {
             isReadAloudControlsVisible = true,
             readAloudStatus = ReadAloudStatus.Idle
         )
+        val searchPost = Post(
+            id = "1",
+            author = null,
+            subject = null,
+            timestamp = "",
+            messageHtml = "abc",
+            imageUrl = null,
+            thumbnailUrl = null
+        )
         val snapshot = buildThreadScreenDerivedRuntimeSnapshot(
             derivedUiState = derivedUiState,
             isSearchActive = true,
@@ -2102,6 +2111,7 @@ class ThreadScreenBindingsLogicTest {
                 ThreadSearchMatch(
                     postId = "1",
                     postIndex = 0,
+                    post = searchPost,
                     highlightRanges = listOf(0..2)
                 )
             ),
@@ -2112,7 +2122,7 @@ class ThreadScreenBindingsLogicTest {
             firstVisibleItemIndex = 2
         )
 
-        assertEquals(mapOf("1" to listOf(0..2)), snapshot.postHighlightRanges)
+        assertEquals(mapOf(searchPost to listOf(0..2)), snapshot.postHighlightRanges)
         assertEquals(1, snapshot.firstVisibleSegmentIndex)
     }
 

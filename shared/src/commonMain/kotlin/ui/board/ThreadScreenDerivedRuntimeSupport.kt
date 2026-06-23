@@ -8,13 +8,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 internal data class ThreadScreenDerivedRuntimeSnapshot(
-    val postHighlightRanges: Map<String, List<IntRange>>,
+    val postHighlightRanges: Map<Post, List<IntRange>>,
     val firstVisibleSegmentIndex: Int
 )
 
@@ -27,7 +28,7 @@ internal fun buildThreadScreenDerivedRuntimeSnapshot(
 ): ThreadScreenDerivedRuntimeSnapshot {
     return ThreadScreenDerivedRuntimeSnapshot(
         postHighlightRanges = if (isSearchActive) {
-            searchMatches.associate { it.postId to it.highlightRanges }
+            searchMatches.associate { it.post to it.highlightRanges }
         } else {
             emptyMap()
         },
@@ -44,7 +45,7 @@ internal fun buildThreadScreenDerivedRuntimeSnapshot(
 internal data class ThreadScreenDerivedRuntimeState(
     val derivedUiState: ThreadScreenDerivedUiState,
     val searchMatches: List<ThreadSearchMatch>,
-    val postHighlightRanges: Map<String, List<IntRange>>,
+    val postHighlightRanges: Map<Post, List<IntRange>>,
     val readAloudSegments: List<ReadAloudSegment>,
     val firstVisibleSegmentIndex: () -> Int
 )
@@ -191,7 +192,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
         searchMatches
     ) {
         if (isSearchActive) {
-            searchMatches.associate { it.postId to it.highlightRanges }
+            searchMatches.associate { it.post to it.highlightRanges }
         } else {
             emptyMap()
         }

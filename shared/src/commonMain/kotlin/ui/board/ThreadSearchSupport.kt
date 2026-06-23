@@ -82,12 +82,14 @@ internal fun moveToPreviousThreadSearchMatch(
 internal data class ThreadSearchMatch(
     val postId: String,
     val postIndex: Int,
+    val post: Post,
     val highlightRanges: List<IntRange>
 )
 
 internal data class ThreadSearchTarget(
     val postId: String,
     val postIndex: Int,
+    val post: Post,
     val searchableText: String,
     val messagePlainText: String
 )
@@ -108,6 +110,7 @@ internal suspend fun buildThreadSearchTargets(
         targets += ThreadSearchTarget(
             postId = post.id,
             postIndex = index,
+            post = post,
             searchableText = buildSearchTextForPost(post, messagePlainText),
             messagePlainText = messagePlainText
         )
@@ -131,7 +134,7 @@ internal suspend fun buildThreadSearchMatches(
         val haystack = target.searchableText
         if (haystack.contains(normalizedQuery)) {
             val ranges = computeHighlightRanges(target.messagePlainText, normalizedQuery)
-            matches += ThreadSearchMatch(target.postId, target.postIndex, ranges)
+            matches += ThreadSearchMatch(target.postId, target.postIndex, target.post, ranges)
         }
     }
     return matches

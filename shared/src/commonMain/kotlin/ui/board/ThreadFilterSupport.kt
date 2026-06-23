@@ -17,19 +17,19 @@ internal fun applyNgFilters(
     ngHeaders: List<String>,
     ngWords: List<String>,
     enabled: Boolean,
-    precomputedLowerBodyByPostId: Map<String, String>? = null
+    precomputedLowerBodyByPost: Map<Post, String>? = null
 ): ThreadPage {
     if (!enabled) return page
     val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
     val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
     if (headerFilters.isEmpty() && wordFilters.isEmpty()) return page
-    val lowerBodyByPostId = if (wordFilters.isEmpty()) {
+    val lowerBodyByPost = if (wordFilters.isEmpty()) {
         emptyMap()
     } else {
-        precomputedLowerBodyByPostId ?: buildLowerBodyByPostId(page.posts)
+        precomputedLowerBodyByPost ?: buildLowerBodyByPost(page.posts)
     }
     val filteredPosts = page.posts.filterNot { post ->
-        matchesNgFilters(post, headerFilters, wordFilters, lowerBodyByPostId)
+        matchesNgFilters(post, headerFilters, wordFilters, lowerBodyByPost)
     }
     return page.copy(posts = filteredPosts)
 }
@@ -37,7 +37,7 @@ internal fun applyNgFilters(
 internal fun applyThreadFilters(
     page: ThreadPage,
     criteria: ThreadFilterCriteria,
-    precomputedLowerBodyByPostId: Map<String, String>? = null
+    precomputedLowerBodyByPost: Map<Post, String>? = null
 ): ThreadPage {
     if (criteria.options.isEmpty()) return page
     val normalizedSelfPostIdentifiers = criteria.selfPostIdentifiers
@@ -45,11 +45,11 @@ internal fun applyThreadFilters(
         .map { it.trim() }
         .filter { it.isNotBlank() }
         .toSet()
-    val needsLowerBodyByPostId = criteria.options.any {
+    val needsLowerBodyByPost = criteria.options.any {
         it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
     }
-    val lowerBodyByPostId = if (needsLowerBodyByPostId) {
-        precomputedLowerBodyByPostId ?: buildLowerBodyByPostId(page.posts)
+    val lowerBodyByPost = if (needsLowerBodyByPost) {
+        precomputedLowerBodyByPost ?: buildLowerBodyByPost(page.posts)
     } else {
         emptyMap()
     }
@@ -57,7 +57,7 @@ internal fun applyThreadFilters(
         matchesThreadFilters(
             post = post,
             criteria = criteria,
-            lowerBodyByPostId = lowerBodyByPostId,
+            lowerBodyByPost = lowerBodyByPost,
             normalizedSelfPostIdentifiers = normalizedSelfPostIdentifiers
         )
     }
@@ -68,12 +68,12 @@ internal fun applyThreadFilters(
 internal fun matchesThreadFilters(
     post: Post,
     criteria: ThreadFilterCriteria,
-    lowerBodyByPostId: Map<String, String>,
+    lowerBodyByPost: Map<Post, String>,
     normalizedSelfPostIdentifiers: Set<String>
 ): Boolean {
     val filterOptions = criteria.options.filter { it.sortOption == null }
     if (filterOptions.isEmpty()) return true
-    val lowerText = lowerBodyByPostId[post.id] ?: ""
+    val lowerText = lowerBodyByPost[post] ?: ""
     return filterOptions.any { option ->
         when (option) {
             ThreadFilterOption.SelfPosts ->
@@ -130,7 +130,7 @@ internal fun matchesNgFilters(
     post: Post,
     headerFilters: List<String>,
     wordFilters: List<String>,
-    lowerBodyByPostId: Map<String, String>
+    lowerBodyByPost: Map<Post, String>
 ): Boolean {
     if (headerFilters.isNotEmpty()) {
         val headerText = buildPostHeaderText(post)
@@ -139,7 +139,7 @@ internal fun matchesNgFilters(
         }
     }
     if (wordFilters.isNotEmpty()) {
-        val bodyText = lowerBodyByPostId[post.id] ?: ""
+        val bodyText = lowerBodyByPost[post] ?: ""
         if (wordFilters.any { bodyText.contains(it) }) {
             return true
         }
@@ -147,22 +147,22 @@ internal fun matchesNgFilters(
     return false
 }
 
-internal fun buildLowerBodyByPostId(posts: List<Post>): Map<String, String> {
+internal fun buildLowerBodyByPost(posts: List<Post>): Map<Post, String> {
     if (posts.isEmpty()) return emptyMap()
     return posts.associate { post ->
-        post.id to messageHtmlToPlainText(post.messageHtml).lowercase()
+        post to messageHtmlToPlainText(post.messageHtml).lowercase()
     }
 }
 
-internal suspend fun buildLowerBodyByPostId(
+internal suspend fun buildLowerBodyByPost(
     posts: List<Post>,
     textCache: ThreadPostTextCache?
-): Map<String, String> {
-    if (textCache == null) return buildLowerBodyByPostId(posts)
+): Map<Post, String> {
+    if (textCache == null) return buildLowerBodyByPost(posts)
     if (posts.isEmpty()) return emptyMap()
-    val result = LinkedHashMap<String, String>(posts.size)
+    val result = LinkedHashMap<Post, String>(posts.size)
     posts.forEach { post ->
-        result[post.id] = textCache.get(post).lowerText
+        result[post] = textCache.get(post).lowerText
     }
     return result
 }

@@ -90,6 +90,21 @@ class ThreadAiCacheSupportTest {
     }
 
     @Test
+    fun resolveThreadAiPostModerationSourcePostsSkipsDuplicateIds() {
+        val first = post("1")
+        val duplicateA = post("2", body = "first duplicate")
+        val duplicateB = post("2", body = "second duplicate")
+        val last = post("3")
+
+        assertEquals(
+            listOf(first, last),
+            resolveThreadAiPostModerationSourcePosts(
+                listOf(first, duplicateA, duplicateB, last)
+            )
+        )
+    }
+
+    @Test
     fun buildThreadPostModerationCacheKeyChangesOnlyForPostContentOrProvider() {
         val original = post("1")
         val same = post("1")
@@ -131,13 +146,13 @@ class ThreadAiCacheSupportTest {
         )
     }
 
-    private fun post(id: String): Post {
+    private fun post(id: String, body: String = "body $id"): Post {
         return Post(
             id = id,
             author = null,
             subject = null,
             timestamp = "",
-            messageHtml = "body $id",
+            messageHtml = body,
             imageUrl = null,
             thumbnailUrl = null
         )

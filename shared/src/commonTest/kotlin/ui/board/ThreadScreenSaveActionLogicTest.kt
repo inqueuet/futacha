@@ -1394,8 +1394,8 @@ class ThreadScreenSaveActionLogicTest {
         assertTrue(matchesSelfFilter(post.copy(id = "99"), setOf("99")))
         assertFalse(matchesSelfFilter(post.copy(id = "98"), setOf("99")))
         assertEquals(
-            mapOf("12" to "www.example.com"),
-            buildLowerBodyByPostId(listOf(post))
+            mapOf(post to "www.example.com"),
+            buildLowerBodyByPost(listOf(post))
         )
     }
 
@@ -1465,13 +1465,13 @@ class ThreadScreenSaveActionLogicTest {
             posts = posts
         )
 
-        val lowerBodies = buildLowerBodyByPostId(posts)
+        val lowerBodies = buildLowerBodyByPost(posts)
         assertTrue(
             matchesNgFilters(
                 post = posts[0],
                 headerFilters = listOf("alice"),
                 wordFilters = emptyList(),
-                lowerBodyByPostId = lowerBodies
+                lowerBodyByPost = lowerBodies
             )
         )
         assertTrue(
@@ -1479,7 +1479,7 @@ class ThreadScreenSaveActionLogicTest {
                 post = posts[0],
                 headerFilters = emptyList(),
                 wordFilters = listOf("猫"),
-                lowerBodyByPostId = lowerBodies
+                lowerBodyByPost = lowerBodies
             )
         )
         assertFalse(
@@ -1487,7 +1487,7 @@ class ThreadScreenSaveActionLogicTest {
                 post = posts[1],
                 headerFilters = listOf("alice"),
                 wordFilters = listOf("猫"),
-                lowerBodyByPostId = lowerBodies
+                lowerBodyByPost = lowerBodies
             )
         )
 
@@ -1496,7 +1496,7 @@ class ThreadScreenSaveActionLogicTest {
             ngHeaders = listOf("alice"),
             ngWords = listOf("猫"),
             enabled = true,
-            precomputedLowerBodyByPostId = lowerBodies
+            precomputedLowerBodyByPost = lowerBodies
         )
         assertEquals(listOf("2"), filtered.posts.map { it.id })
 
@@ -1505,9 +1505,62 @@ class ThreadScreenSaveActionLogicTest {
             ngHeaders = listOf("alice"),
             ngWords = listOf("猫"),
             enabled = false,
-            precomputedLowerBodyByPostId = lowerBodies
+            precomputedLowerBodyByPost = lowerBodies
         )
         assertEquals(listOf("1", "2"), unfiltered.posts.map { it.id })
+    }
+
+    @Test
+    fun threadFilters_keepDuplicatePostBodiesSeparate() {
+        val posts = listOf(
+            Post(
+                id = "1",
+                author = "Alice",
+                subject = null,
+                timestamp = "24/01/01(月)00:00:00",
+                messageHtml = "猫だけ",
+                imageUrl = null,
+                thumbnailUrl = null
+            ),
+            Post(
+                id = "1",
+                author = "Bob",
+                subject = null,
+                timestamp = "24/01/01(月)00:00:00",
+                messageHtml = "犬だけ",
+                imageUrl = null,
+                thumbnailUrl = null
+            )
+        )
+        val page = ThreadPage(
+            threadId = "100",
+            boardTitle = "board",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = posts
+        )
+        val lowerBodies = buildLowerBodyByPost(posts)
+
+        val keywordFiltered = applyThreadFilters(
+            page = page,
+            criteria = ThreadFilterCriteria(
+                options = setOf(ThreadFilterOption.Keyword),
+                keyword = "猫",
+                selfPostIdentifiers = emptyList(),
+                sortOption = null
+            ),
+            precomputedLowerBodyByPost = lowerBodies
+        )
+        val ngFiltered = applyNgFilters(
+            page = page,
+            ngHeaders = emptyList(),
+            ngWords = listOf("猫"),
+            enabled = true,
+            precomputedLowerBodyByPost = lowerBodies
+        )
+
+        assertEquals(listOf("Alice"), keywordFiltered.posts.map { it.author })
+        assertEquals(listOf("Bob"), ngFiltered.posts.map { it.author })
     }
 
     @Test

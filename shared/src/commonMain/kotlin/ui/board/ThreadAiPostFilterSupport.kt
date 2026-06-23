@@ -13,6 +13,7 @@ internal data class AiHiddenPostState(
 
 internal class AiHiddenPostResolutionContext(
     val existingPostIds: Set<String>,
+    val ambiguousPostIds: Set<String>,
     val opPostId: String?,
     val maxHiddenPosts: Int,
     val selfPostIdentifiers: Set<String>
@@ -61,6 +62,7 @@ internal fun buildAiHiddenPostResolutionContext(
 ): AiHiddenPostResolutionContext {
     return AiHiddenPostResolutionContext(
         existingPostIds = posts.map { it.id }.toSet(),
+        ambiguousPostIds = findDuplicatePostIds(posts),
         opPostId = posts.firstOrNull()?.id,
         maxHiddenPosts = resolveAiHiddenPostLimit(posts.size),
         selfPostIdentifiers = selfPostIdentifiers.toSet()
@@ -81,6 +83,7 @@ internal fun resolveAiHiddenPostState(
         if (!result.shouldHide ||
             postId.isBlank() ||
             postId !in context.existingPostIds ||
+            postId in context.ambiguousPostIds ||
             postId == context.opPostId ||
             postId in context.selfPostIdentifiers
         ) {
@@ -103,6 +106,18 @@ internal fun resolveAiHiddenPostState(
 
 internal fun resolveAiHiddenPostLimit(postCount: Int): Int {
     return (postCount - 1).coerceAtLeast(0)
+}
+
+internal fun findDuplicatePostIds(posts: List<Post>): Set<String> {
+    if (posts.size < 2) return emptySet()
+    val seen = mutableSetOf<String>()
+    val duplicates = linkedSetOf<String>()
+    posts.forEach { post ->
+        if (!seen.add(post.id)) {
+            duplicates += post.id
+        }
+    }
+    return duplicates
 }
 
 private fun String.normalizeAiHiddenReason(): String {
