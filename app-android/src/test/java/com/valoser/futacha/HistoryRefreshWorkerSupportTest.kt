@@ -66,6 +66,74 @@ class HistoryRefreshWorkerSupportTest {
     }
 
     @Test
+    fun shouldEnqueueImmediateBackgroundRefresh_requiresEnabledState() {
+        assertFalse(
+            shouldEnqueueImmediateBackgroundRefresh(
+                enabled = false,
+                hasObservedBackgroundToggle = false,
+                lastImmediateEnqueueEpochMillis = 0L,
+                nowEpochMillis = 1_000L
+            )
+        )
+    }
+
+    @Test
+    fun shouldEnqueueImmediateBackgroundRefresh_runsWhenNeverEnqueued() {
+        assertTrue(
+            shouldEnqueueImmediateBackgroundRefresh(
+                enabled = true,
+                hasObservedBackgroundToggle = false,
+                lastImmediateEnqueueEpochMillis = 0L,
+                nowEpochMillis = 1_000L
+            )
+        )
+    }
+
+    @Test
+    fun shouldEnqueueImmediateBackgroundRefresh_throttlesRecentInitialEnqueue() {
+        assertFalse(
+            shouldEnqueueImmediateBackgroundRefresh(
+                enabled = true,
+                hasObservedBackgroundToggle = false,
+                lastImmediateEnqueueEpochMillis = 1_000L,
+                nowEpochMillis = 1_000L + BACKGROUND_IMMEDIATE_REFRESH_MIN_INTERVAL_MILLIS - 1L
+            )
+        )
+        assertTrue(
+            shouldEnqueueImmediateBackgroundRefresh(
+                enabled = true,
+                hasObservedBackgroundToggle = false,
+                lastImmediateEnqueueEpochMillis = 1_000L,
+                nowEpochMillis = 1_000L + BACKGROUND_IMMEDIATE_REFRESH_MIN_INTERVAL_MILLIS
+            )
+        )
+    }
+
+    @Test
+    fun shouldEnqueueImmediateBackgroundRefresh_runsAfterObservedToggle() {
+        assertTrue(
+            shouldEnqueueImmediateBackgroundRefresh(
+                enabled = true,
+                hasObservedBackgroundToggle = true,
+                lastImmediateEnqueueEpochMillis = 1_000L,
+                nowEpochMillis = 1_001L
+            )
+        )
+    }
+
+    @Test
+    fun shouldEnqueueImmediateBackgroundRefresh_recoversFromClockMovingBackward() {
+        assertTrue(
+            shouldEnqueueImmediateBackgroundRefresh(
+                enabled = true,
+                hasObservedBackgroundToggle = false,
+                lastImmediateEnqueueEpochMillis = 2_000L,
+                nowEpochMillis = 1_000L
+            )
+        )
+    }
+
+    @Test
     fun hasHistoryFlushFailure_detectsPositiveFlushStageCountOnly() {
         assertTrue(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("history_flush" to 1)))
         assertFalse(HistoryRefreshWorker.hasHistoryFlushFailure(mapOf("history_flush" to 0)))

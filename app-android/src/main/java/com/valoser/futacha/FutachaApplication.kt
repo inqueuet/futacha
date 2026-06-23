@@ -2,6 +2,7 @@ package com.valoser.futacha
 
 import android.app.Application
 import android.app.ActivityManager
+import android.content.Context
 import android.os.Build
 import androidx.work.WorkManager
 import com.valoser.futacha.shared.network.HttpBoardApi
@@ -32,6 +33,9 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
 private const val BACKGROUND_FLOW_MAX_RETRIES = 12L
+private const val BACKGROUND_REFRESH_SCHEDULER_PREFS = "background_refresh_scheduler"
+private const val LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS =
+    "last_immediate_background_refresh_enqueue_millis"
 
 class FutachaApplication : Application() {
     private var appStateStoreValue: AppStateStore? = null
@@ -122,6 +126,10 @@ class FutachaApplication : Application() {
         applicationScope.launch {
             // Initialize WorkManager off the Application.onCreate() critical path.
             val workManager = WorkManager.getInstance(applicationContext)
+            val schedulerPrefs = applicationContext.getSharedPreferences(
+                BACKGROUND_REFRESH_SCHEDULER_PREFS,
+                Context.MODE_PRIVATE
+            )
             var hasObservedBackgroundToggle = false
             try {
                 appStateStore.isBackgroundRefreshEnabled
@@ -129,8 +137,23 @@ class FutachaApplication : Application() {
                     .onEach { enabled ->
                         if (enabled) {
                             HistoryRefreshWorker.enqueuePeriodic(workManager)
-                            if (hasObservedBackgroundToggle) {
+                            val nowMillis = System.currentTimeMillis()
+                            if (
+                                shouldEnqueueImmediateBackgroundRefresh(
+                                    enabled = true,
+                                    hasObservedBackgroundToggle = hasObservedBackgroundToggle,
+                                    lastImmediateEnqueueEpochMillis = schedulerPrefs.getLong(
+                                        LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS,
+                                        0L
+                                    ),
+                                    nowEpochMillis = nowMillis
+                                )
+                            ) {
                                 HistoryRefreshWorker.enqueueImmediate(workManager)
+                                schedulerPrefs
+                                    .edit()
+                                    .putLong(LAST_IMMEDIATE_BACKGROUND_REFRESH_ENQUEUE_MILLIS, nowMillis)
+                                    .apply()
                             }
                         } else {
                             HistoryRefreshWorker.cancel(workManager)

@@ -4,6 +4,8 @@ import com.valoser.futacha.shared.network.NetworkException
 import kotlinx.coroutines.TimeoutCancellationException
 import java.io.IOException
 
+internal const val BACKGROUND_IMMEDIATE_REFRESH_MIN_INTERVAL_MILLIS = 15L * 60L * 1000L
+
 internal fun isRetriableBackgroundRefreshError(error: Throwable): Boolean {
     return when (error) {
         is IOException,
@@ -33,4 +35,19 @@ internal fun shouldRetryBackgroundRefreshFailure(
     maxRetryAttempts: Int = 3
 ): Boolean {
     return isRetriableBackgroundRefreshError(error) && runAttemptCount < maxRetryAttempts
+}
+
+internal fun shouldEnqueueImmediateBackgroundRefresh(
+    enabled: Boolean,
+    hasObservedBackgroundToggle: Boolean,
+    lastImmediateEnqueueEpochMillis: Long,
+    nowEpochMillis: Long,
+    minIntervalMillis: Long = BACKGROUND_IMMEDIATE_REFRESH_MIN_INTERVAL_MILLIS
+): Boolean {
+    if (!enabled) return false
+    if (hasObservedBackgroundToggle) return true
+    if (lastImmediateEnqueueEpochMillis <= 0L) return true
+    if (minIntervalMillis <= 0L) return true
+    val elapsedMillis = nowEpochMillis - lastImmediateEnqueueEpochMillis
+    return elapsedMillis < 0L || elapsedMillis >= minIntervalMillis
 }
