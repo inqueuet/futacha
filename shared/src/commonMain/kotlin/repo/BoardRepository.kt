@@ -118,6 +118,7 @@ class DefaultBoardRepository(
     // try to initialize the same board simultaneously
     private val boardInitMutex = Mutex()
     private val boardInitializationMutexes = mutableMapOf<String, DefaultBoardRepositoryBoardInitLock>()
+    private val cookieSetupFailures = mutableMapOf<String, DefaultBoardRepositoryCookieSetupFailure>()
 
     private val opImageCacheMutex = Mutex()
     private val opImageCache = createDefaultBoardRepositoryOpImageCache(opImageCacheMaxEntries)
@@ -151,7 +152,7 @@ class DefaultBoardRepository(
      * Ensures cookies are initialized for the given board.
      * This should be called before any operations that require cookies.
      */
-    private suspend fun ensureCookiesInitialized(board: String) {
+    private suspend fun ensureCookiesInitialized(board: String, forceSetup: Boolean = false) {
         initializeDefaultBoardRepositoryCookies(
             board = board,
             logTag = TAG,
@@ -159,6 +160,8 @@ class DefaultBoardRepository(
             cookieRepository = cookieRepository,
             boardInitMutex = boardInitMutex,
             boardInitializationMutexes = boardInitializationMutexes,
+            cookieSetupFailures = cookieSetupFailures,
+            forceSetup = forceSetup,
             fetchCatalogSetup = { api.fetchCatalogSetup(it) }
         )
     }
@@ -166,6 +169,7 @@ class DefaultBoardRepository(
     override suspend fun invalidateCookies(board: String) {
         boardInitMutex.withLock {
             initializedBoards.remove(board)
+            cookieSetupFailures.remove(board)
         }
     }
 

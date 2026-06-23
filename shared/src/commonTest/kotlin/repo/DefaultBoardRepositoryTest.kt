@@ -133,7 +133,7 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
-    fun getCatalog_retriesCookieSetupWhenSetupDoesNotPersistPostingCookie() = runBlocking {
+    fun getCatalog_skipsRecentFailedCookieSetupWhenSetupDoesNotPersistPostingCookie() = runBlocking {
         val boardUrl = "https://dec.2chan.net/b/"
         val api = FakeBoardApi()
         val repository = DefaultBoardRepository(
@@ -145,7 +145,7 @@ class DefaultBoardRepositoryTest {
         repository.getCatalog(boardUrl, CatalogMode.Catalog)
         repository.getCatalog(boardUrl, CatalogMode.New)
 
-        assertEquals(2, api.fetchCatalogSetupCalls)
+        assertEquals(1, api.fetchCatalogSetupCalls)
         assertEquals(2, api.fetchCatalogCalls)
     }
 
@@ -504,6 +504,28 @@ class DefaultBoardRepositoryTest {
         )
         assertNull(resolveDefaultBoardRepositoryCachedOpImageUrl(cache, key1, now = 131L))
 
+        assertTrue(
+            shouldSkipDefaultBoardRepositoryCookieSetup(
+                failure = DefaultBoardRepositoryCookieSetupFailure(recordedAtMillis = 1_000L),
+                nowMillis = 1_999L,
+                negativeCacheTtlMillis = 1_000L
+            )
+        )
+        assertFalse(
+            shouldSkipDefaultBoardRepositoryCookieSetup(
+                failure = DefaultBoardRepositoryCookieSetupFailure(recordedAtMillis = 1_000L),
+                nowMillis = 2_000L,
+                negativeCacheTtlMillis = 1_000L
+            )
+        )
+        assertFalse(
+            shouldSkipDefaultBoardRepositoryCookieSetup(
+                failure = DefaultBoardRepositoryCookieSetupFailure(recordedAtMillis = 2_000L),
+                nowMillis = 1_000L,
+                negativeCacheTtlMillis = 1_000L
+            )
+        )
+
         val closeState = DefaultBoardRepositoryCloseState()
         assertTrue(beginDefaultBoardRepositoryClose(Mutex(), closeState))
         assertFalse(beginDefaultBoardRepositoryClose(Mutex(), closeState))
@@ -548,7 +570,14 @@ class DefaultBoardRepositoryTest {
         val result = withDefaultBoardRepositoryAuthRetry(
             board = "https://dec.2chan.net/b/",
             logTag = "DefaultBoardRepositoryTest",
-            ensureCookiesInitialized = { ensureCalls += 1 },
+            ensureCookiesInitialized = { _, forceSetup ->
+                ensureCalls += 1
+                if (ensureCalls == 1) {
+                    assertFalse(forceSetup)
+                } else {
+                    assertTrue(forceSetup)
+                }
+            },
             invalidateCookies = { invalidateCalls += 1 }
         ) {
             actionCalls += 1
@@ -569,7 +598,7 @@ class DefaultBoardRepositoryTest {
         val wrapped = runDefaultBoardRepositoryWithInitializedCookies(
             board = "https://dec.2chan.net/b/",
             cookieRepository = cookieRepository,
-            ensureCookiesInitialized = {}
+            ensureCookiesInitialized = { _, forceSetup -> assertTrue(forceSetup) }
         ) {
             commitCalls += 1
             "done"
@@ -583,7 +612,8 @@ class DefaultBoardRepositoryTest {
         val postingSuccess = runDefaultBoardRepositoryPostingWithInitializedCookies(
             board = boardUrl,
             cookieRepository = postingCookieRepository,
-            ensureCookiesInitialized = {
+            ensureCookiesInitialized = { _, forceSetup ->
+                assertTrue(forceSetup)
                 postingStorage.addCookie(
                     io.ktor.http.Url(boardUrl),
                     io.ktor.http.Cookie(name = "posttime", value = "ok", domain = "dec.2chan.net", path = "/")
@@ -601,7 +631,8 @@ class DefaultBoardRepositoryTest {
             runDefaultBoardRepositoryPostingWithInitializedCookies(
                 board = boardUrl,
                 cookieRepository = failedPostingCookieRepository,
-                ensureCookiesInitialized = {
+                ensureCookiesInitialized = { _, forceSetup ->
+                    assertTrue(forceSetup)
                     failedPostingStorage.addCookie(
                         io.ktor.http.Url(boardUrl),
                         io.ktor.http.Cookie(name = "posttime", value = "staged", domain = "dec.2chan.net", path = "/")

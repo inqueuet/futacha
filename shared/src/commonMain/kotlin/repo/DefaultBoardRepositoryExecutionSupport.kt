@@ -19,6 +19,7 @@ import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
 private const val DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS = 3600L
+internal const val DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS = 60_000L
 
 internal data class DefaultBoardRepositoryOpImageFetchResult(
     val url: String?
@@ -29,6 +30,10 @@ internal data class DefaultBoardRepositoryBoardInitLock(
     var holders: Int = 0
 )
 
+internal data class DefaultBoardRepositoryCookieSetupFailure(
+    val recordedAtMillis: Long
+)
+
 internal suspend fun initializeDefaultBoardRepositoryCookies(
     board: String,
     logTag: String,
@@ -36,6 +41,10 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
     cookieRepository: CookieRepository?,
     boardInitMutex: kotlinx.coroutines.sync.Mutex,
     boardInitializationMutexes: MutableMap<String, DefaultBoardRepositoryBoardInitLock> = mutableMapOf(),
+    cookieSetupFailures: MutableMap<String, DefaultBoardRepositoryCookieSetupFailure> = mutableMapOf(),
+    forceSetup: Boolean = false,
+    nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    negativeCacheTtlMillis: Long = DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS,
     fetchCatalogSetup: suspend (String) -> Unit
 ) {
     val boardInitializationLock = boardInitMutex.withLock {
@@ -57,7 +66,17 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
             if (!shouldInitialize) return
 
             if (hasDefaultBoardRepositoryCookies(cookieRepository, board)) {
+                cookieSetupFailures.remove(board)
                 Logger.d(logTag, "Skipping catalog setup for board $board (existing cookies found)")
+                return
+            }
+
+            if (!forceSetup && shouldSkipDefaultBoardRepositoryCookieSetup(
+                    failure = cookieSetupFailures[board],
+                    nowMillis = nowMillis,
+                    negativeCacheTtlMillis = negativeCacheTtlMillis
+                )
+            ) {
                 return
             }
 
@@ -74,12 +93,14 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
             val hasCookies = hasDefaultBoardRepositoryCookies(cookieRepository, board)
             val setupCompleted = hasCookies || (cookieRepository == null && fetchedSetup)
             if (setupCompleted) {
+                cookieSetupFailures.remove(board)
                 markDefaultBoardRepositoryBoardInitialized(
                     initializedBoards = initializedBoards,
                     board = board,
                     boardInitMutex = boardInitMutex
                 )
             } else {
+                cookieSetupFailures[board] = DefaultBoardRepositoryCookieSetupFailure(nowMillis)
                 Logger.w(logTag, "Cookie initialization incomplete for board $board; will retry on next request")
             }
         }
@@ -99,12 +120,12 @@ internal suspend fun initializeDefaultBoardRepositoryCookies(
 internal suspend fun <T> withDefaultBoardRepositoryAuthRetry(
     board: String,
     logTag: String,
-    ensureCookiesInitialized: suspend (String) -> Unit,
+    ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
     invalidateCookies: suspend (String) -> Unit,
     block: suspend () -> T
 ): T {
     try {
-        ensureCookiesInitialized(board)
+        ensureCookiesInitialized(board, false)
         return block()
     } catch (e: Exception) {
         if (e is CancellationException) throw e
@@ -112,7 +133,7 @@ internal suspend fun <T> withDefaultBoardRepositoryAuthRetry(
 
         Logger.w(logTag, "Operation failed for board $board, retrying with fresh cookies: ${e.message}")
         invalidateCookies(board)
-        ensureCookiesInitialized(board)
+        ensureCookiesInitialized(board, true)
         return block()
     }
 }
@@ -120,10 +141,10 @@ internal suspend fun <T> withDefaultBoardRepositoryAuthRetry(
 internal suspend fun <T> runDefaultBoardRepositoryWithInitializedCookies(
     board: String,
     cookieRepository: CookieRepository?,
-    ensureCookiesInitialized: suspend (String) -> Unit,
+    ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
     block: suspend () -> T
 ): T {
-    ensureCookiesInitialized(board)
+    ensureCookiesInitialized(board, true)
     val exec: suspend () -> T = { block() }
     return cookieRepository?.commitOnSuccess { exec() } ?: exec()
 }
@@ -131,11 +152,11 @@ internal suspend fun <T> runDefaultBoardRepositoryWithInitializedCookies(
 internal suspend fun <T> runDefaultBoardRepositoryPostingWithInitializedCookies(
     board: String,
     cookieRepository: CookieRepository?,
-    ensureCookiesInitialized: suspend (String) -> Unit,
+    ensureCookiesInitialized: suspend (String, Boolean) -> Unit,
     block: suspend () -> T
 ): T {
     val exec: suspend () -> T = {
-        ensureCookiesInitialized(board)
+        ensureCookiesInitialized(board, true)
         block()
     }
     return try {
@@ -148,6 +169,16 @@ internal suspend fun <T> runDefaultBoardRepositoryPostingWithInitializedCookies(
             error = e
         )
     }
+}
+
+internal fun shouldSkipDefaultBoardRepositoryCookieSetup(
+    failure: DefaultBoardRepositoryCookieSetupFailure?,
+    nowMillis: Long,
+    negativeCacheTtlMillis: Long
+): Boolean {
+    val recordedAtMillis = failure?.recordedAtMillis ?: return false
+    val ageMillis = nowMillis - recordedAtMillis
+    return ageMillis >= 0L && ageMillis < negativeCacheTtlMillis.coerceAtLeast(1L)
 }
 
 @OptIn(ExperimentalTime::class)
