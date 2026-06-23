@@ -251,6 +251,7 @@ fun FutachaApp(
                     shouldUseLightweightMode = shouldUseLightweightMode,
                     historyRefresher = historyRefresher,
                     effectiveAutoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+                    fileSystem = fileSystem,
                     navigationState = navigationState,
                     updateNavigationState = updateNavigationState
                 )

@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.model.toThreadPage
 import com.valoser.futacha.shared.network.BoardUrlResolver
+import com.valoser.futacha.shared.repository.IMPORTED_HISTORY_DIRECTORY
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
@@ -88,6 +89,7 @@ internal fun buildOfflineThreadLookupContext(
 
 internal fun buildThreadOfflineSources(
     autoSaveRepository: SavedThreadRepository?,
+    importedHistoryRepository: SavedThreadRepository?,
     manualSaveRepository: SavedThreadRepository?,
     legacyManualSaveRepository: SavedThreadRepository?,
     manualSaveDirectory: String,
@@ -97,6 +99,10 @@ internal fun buildThreadOfflineSources(
         OfflineThreadSource(
             repository = autoSaveRepository,
             baseDirectory = AUTO_SAVE_DIRECTORY
+        ),
+        OfflineThreadSource(
+            repository = importedHistoryRepository,
+            baseDirectory = IMPORTED_HISTORY_DIRECTORY
         ),
         OfflineThreadSource(
             repository = manualSaveRepository,

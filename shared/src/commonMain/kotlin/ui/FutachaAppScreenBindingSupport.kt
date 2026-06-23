@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.ui.board.buildScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenContract
@@ -57,7 +58,13 @@ internal data class FutachaScreenPreferencesCallbackInputs(
 internal data class FutachaScreenHistoryCallbackInputs(
     val navigationCallbacks: FutachaNavigationCallbacks,
     val historyMutations: FutachaHistoryMutationCallbacks,
-    val onHistoryRefresh: suspend () -> Unit
+    val onHistoryRefresh: suspend () -> Unit,
+    val onHistoryExport: suspend () -> String = { "" },
+    val onHistoryExportThenClear: suspend () -> String = { "" },
+    val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
+    val onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = { null },
+    val onHistoryImport: suspend () -> String = { "" },
+    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" }
 )
 
 internal data class FutachaScreenBindingsInputs(
@@ -70,7 +77,13 @@ internal data class FutachaScreenBindingsInputs(
     val historyMutations: FutachaHistoryMutationCallbacks,
     val preferencesStateInputs: FutachaScreenPreferencesStateInputs,
     val onOpenSaveDirectoryPicker: () -> Unit,
-    val onHistoryRefresh: suspend () -> Unit
+    val onHistoryRefresh: suspend () -> Unit,
+    val onHistoryExport: suspend () -> String = { "" },
+    val onHistoryExportThenClear: suspend () -> String = { "" },
+    val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
+    val onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = { null },
+    val onHistoryImport: suspend () -> String = { "" },
+    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" }
 )
 
 internal data class FutachaScreenBindingsBundle(
@@ -162,6 +175,12 @@ internal fun buildFutachaScreenHistoryCallbacks(
         onHistoryEntryDismissed = inputs.historyMutations.onDismissHistoryEntry,
         onHistoryEntryUpdated = inputs.historyMutations.onUpdateHistoryEntry,
         onHistoryRefresh = inputs.onHistoryRefresh,
+        onHistoryExport = inputs.onHistoryExport,
+        onHistoryExportThenClear = inputs.onHistoryExportThenClear,
+        onHistoryExportSelected = inputs.onHistoryExportSelected,
+        onHistoryLoadImportPreview = inputs.onHistoryLoadImportPreview,
+        onHistoryImport = inputs.onHistoryImport,
+        onHistoryImportSelected = inputs.onHistoryImportSelected,
         onHistoryCleared = inputs.historyMutations.onClearHistory
     )
 }
@@ -194,7 +213,13 @@ internal fun buildFutachaScreenBindingsBundle(
         FutachaScreenHistoryCallbackInputs(
             navigationCallbacks = navigationCallbacks,
             historyMutations = inputs.historyMutations,
-            onHistoryRefresh = inputs.onHistoryRefresh
+            onHistoryRefresh = inputs.onHistoryRefresh,
+            onHistoryExport = inputs.onHistoryExport,
+            onHistoryExportThenClear = inputs.onHistoryExportThenClear,
+            onHistoryExportSelected = inputs.onHistoryExportSelected,
+            onHistoryLoadImportPreview = inputs.onHistoryLoadImportPreview,
+            onHistoryImport = inputs.onHistoryImport,
+            onHistoryImportSelected = inputs.onHistoryImportSelected
         )
     )
     return FutachaScreenBindingsBundle(

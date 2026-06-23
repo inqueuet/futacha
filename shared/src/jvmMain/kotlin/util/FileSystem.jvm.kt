@@ -146,10 +146,29 @@ private class JvmFileSystem : FileSystem {
             is SaveLocation.Bookmark -> Result.failure(UnsupportedOperationException("Bookmark unsupported on JVM"))
         }
 
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> =
+        when (base) {
+            is SaveLocation.Path -> readBytes(join(base.path, relativePath))
+            is SaveLocation.TreeUri -> Result.failure(UnsupportedOperationException("TreeUri unsupported on JVM"))
+            is SaveLocation.Bookmark -> Result.failure(UnsupportedOperationException("Bookmark unsupported on JVM"))
+        }
+
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean =
         when (base) {
             is SaveLocation.Path -> exists(join(base.path, relativePath))
             is SaveLocation.TreeUri, is SaveLocation.Bookmark -> false
+        }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long =
+        when (base) {
+            is SaveLocation.Path -> getFileSize(join(base.path, relativePath))
+            is SaveLocation.TreeUri, is SaveLocation.Bookmark -> 0L
+        }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> =
+        when (base) {
+            is SaveLocation.Path -> listFiles(join(base.path, directory))
+            is SaveLocation.TreeUri, is SaveLocation.Bookmark -> emptyList()
         }
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> =

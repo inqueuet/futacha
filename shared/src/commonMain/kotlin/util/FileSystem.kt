@@ -180,6 +180,13 @@ interface FileSystem {
     suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit>
 
     /**
+     * ファイルからバイト配列を読み込み (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス
+     */
+    suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray>
+
+    /**
      * ファイルから文字列を読み込み (SaveLocation版)
      * @param base ベース保存先 (Path/TreeUri/Bookmark)
      * @param relativePath ベースからの相対パス (ファイル名を含む)
@@ -192,6 +199,20 @@ interface FileSystem {
      * @param relativePath ベースからの相対パス (空文字列の場合はベース自体を確認)
      */
     suspend fun exists(base: SaveLocation, relativePath: String = ""): Boolean
+
+    /**
+     * ファイルサイズを取得 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param relativePath ベースからの相対パス
+     */
+    suspend fun getFileSize(base: SaveLocation, relativePath: String): Long
+
+    /**
+     * ディレクトリ内の直下ファイル/ディレクトリ名一覧を取得 (SaveLocation版)
+     * @param base ベース保存先 (Path/TreeUri/Bookmark)
+     * @param directory ベースからの相対ディレクトリ
+     */
+    suspend fun listFiles(base: SaveLocation, directory: String = ""): List<String>
 
     /**
      * ファイルまたはディレクトリを削除 (SaveLocation版)

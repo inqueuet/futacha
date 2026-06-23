@@ -18,6 +18,7 @@ internal class AppStateHistoryCoordinator(
     private val historyPersistMutex = Mutex()
     private var cachedHistory: List<ThreadHistoryEntry>? = null
     private var historyRevision: Long = 0L
+    private var historyPersistCount: Long = 0L
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         val (revision, previousRevision, previousHistory) = historyMutex.withLock {
@@ -145,8 +146,27 @@ internal class AppStateHistoryCoordinator(
             revision = revision,
             history = history,
             maxPasses = maxPersistPasses,
-            writeHistoryJson = { updatedHistory ->
-                storage.updateHistoryJson(encodeAppStateHistory(updatedHistory, json))
+            writeHistoryJson = { targetRevision, pass, updatedHistory ->
+                val metrics = writeMeasuredAppStateHistoryJson(
+                    history = updatedHistory,
+                    encodeHistoryJson = { targetHistory ->
+                        encodeAppStateHistoryMeasured(targetHistory, json)
+                    },
+                    updateHistoryJson = storage::updateHistoryJson
+                )
+                historyPersistCount += 1L
+                logAppStateHistoryPersistenceMetrics(
+                    tag = tag,
+                    metrics = AppStateHistoryPersistenceMetrics(
+                        persistCount = historyPersistCount,
+                        revision = targetRevision,
+                        pass = pass,
+                        entryCount = metrics.entryCount,
+                        jsonByteSize = metrics.jsonByteSize,
+                        encodeDuration = metrics.encodeDuration,
+                        writeDuration = metrics.writeDuration
+                    )
+                )
             },
             readLatestHistoryContinuation = { targetRevision ->
                 historyMutex.withLock {

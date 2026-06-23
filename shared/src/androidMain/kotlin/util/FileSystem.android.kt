@@ -455,6 +455,10 @@ class AndroidFileSystem(
     }
 
     private suspend fun readTreeFileUtf8(file: DocumentFile, fileName: String): String {
+        return readTreeFileBytes(file, fileName).toString(Charsets.UTF_8)
+    }
+
+    private suspend fun readTreeFileBytes(file: DocumentFile, fileName: String): ByteArray {
         return context.contentResolver.openInputStream(file.uri)?.use { input ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(8192)
@@ -485,7 +489,7 @@ class AndroidFileSystem(
                 validateFileSize(totalRead, "file")
                 output.write(buffer, 0, read)
             }
-            output.toString(Charsets.UTF_8.name())
+            output.toByteArray()
         } ?: throw IllegalStateException("Failed to open input stream for ${file.uri}")
     }
 
@@ -694,6 +698,33 @@ class AndroidFileSystem(
         return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
     }
 
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                readBytes(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base) { baseDir ->
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    val file = parentDir.findFile(fileName)
+                        ?: throw IllegalStateException("File not found: $fileName")
+                    readTreeFileBytes(file, fileName)
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
         // FIX: 入力検証
         runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
@@ -750,6 +781,67 @@ class AndroidFileSystem(
             is SaveLocation.Bookmark -> {
                 false
             }
+        }
+    }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long = withContext(Dispatchers.IO) {
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext 0L
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                getFileSize(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val baseDir = requireTreeBaseDirectory(base)
+                    if (relativePath.isEmpty()) {
+                        return@withContext 0L
+                    }
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    parentDir.findFile(fileName)?.length() ?: 0L
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Logger.e("AndroidFileSystem", "Error reading TreeUri file size: ${base.uri}, path: $relativePath", e)
+                    0L
+                }
+            }
+            is SaveLocation.Bookmark -> 0L
+        }
+    }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> = withContext(Dispatchers.IO) {
+        if (directory.isNotEmpty()) {
+            runFsCatching { validatePath(directory, "directory") }.getOrElse {
+                return@withContext emptyList()
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, directory)
+                listFiles(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val baseDir = requireTreeBaseDirectory(base)
+                    val targetDir = navigateToDirectory(baseDir, directory) ?: return@withContext emptyList()
+                    runInterruptible { targetDir.listFiles().mapNotNull { it.name } }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Logger.e("AndroidFileSystem", "Error listing TreeUri files: ${base.uri}, path: $directory", e)
+                    emptyList()
+                }
+            }
+            is SaveLocation.Bookmark -> emptyList()
         }
     }
 

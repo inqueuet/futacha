@@ -59,6 +59,12 @@ internal data class ThreadScreenControllerInteractionInputs(
     val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
     val onBoardClick: () -> Unit,
     val onHistoryBatchDeleteClick: () -> Unit,
+    val onHistoryExportClick: () -> Unit = {},
+    val onHistoryExportThenClearClick: () -> Unit = {},
+    val onHistoryExportSelectedClick: (List<ThreadHistoryEntry>) -> Unit = {},
+    val onHistoryLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onHistoryImportClick: () -> Unit = {},
+    val onHistoryImportSelectedClick: (Set<String>) -> Unit = {},
     val onHistorySettingsClick: () -> Unit
 )
 
@@ -150,6 +156,12 @@ internal fun buildThreadScreenControllerBindingsBundle(
                 onBoardClick = interactionInputs.onBoardClick,
                 onHistoryRefreshClick = actionExecutionBindings.historyRefreshBindings.handleHistoryRefresh,
                 onHistoryBatchDeleteClick = interactionInputs.onHistoryBatchDeleteClick,
+                onHistoryExportClick = interactionInputs.onHistoryExportClick,
+                onHistoryExportThenClearClick = interactionInputs.onHistoryExportThenClearClick,
+                onHistoryExportSelectedClick = interactionInputs.onHistoryExportSelectedClick,
+                onHistoryLoadImportPreview = interactionInputs.onHistoryLoadImportPreview,
+                onHistoryImportClick = interactionInputs.onHistoryImportClick,
+                onHistoryImportSelectedClick = interactionInputs.onHistoryImportSelectedClick,
                 onHistorySettingsClick = interactionInputs.onHistorySettingsClick
             )
         )

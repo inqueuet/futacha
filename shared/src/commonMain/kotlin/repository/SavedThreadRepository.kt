@@ -117,6 +117,24 @@ class SavedThreadRepository(
     }
 
     /**
+     * Add an archived/imported snapshot without deleting other snapshots for the same board/thread.
+     * Re-importing the same storageId updates that snapshot idempotently.
+     */
+    suspend fun addThreadSnapshotToIndex(thread: SavedThread): Result<Unit> = runSuspendCatchingNonCancellation {
+        mutationMutex.withLock {
+            withIndexLock {
+                val newStorageId = resolveSavedThreadStorageId(thread)
+                this@SavedThreadRepository.mutateIndexThreadsUnlocked { threads ->
+                    threads
+                        .filterNot { resolveSavedThreadStorageId(it) == newStorageId }
+                        .plus(thread)
+                        .sortedByDescending { it.savedAt }
+                }
+            }
+        }
+    }
+
+    /**
      * スレッドをインデックスから削除
      */
     suspend fun removeThreadFromIndex(threadId: String, boardId: String? = null): Result<Unit> = runSuspendCatchingNonCancellation {

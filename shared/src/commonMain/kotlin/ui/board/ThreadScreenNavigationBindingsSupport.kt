@@ -9,6 +9,12 @@ internal data class ThreadHistoryDrawerCallbacks(
     val onBoardClick: () -> Unit,
     val onRefreshClick: () -> Unit,
     val onBatchDeleteClick: () -> Unit,
+    val onExportClick: () -> Unit = {},
+    val onExportThenClearClick: () -> Unit = {},
+    val onExportSelectedClick: (List<ThreadHistoryEntry>) -> Unit = {},
+    val onLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onImportClick: () -> Unit = {},
+    val onImportSelectedClick: (Set<String>) -> Unit = {},
     val onSettingsClick: () -> Unit
 )
 
@@ -18,6 +24,12 @@ internal fun buildThreadScreenHistoryDrawerCallbacks(
     onBoardClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onBatchDeleteClick: () -> Unit,
+    onExportClick: () -> Unit = {},
+    onExportThenClearClick: () -> Unit = {},
+    onExportSelectedClick: (List<ThreadHistoryEntry>) -> Unit = {},
+    onLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    onImportClick: () -> Unit = {},
+    onImportSelectedClick: (Set<String>) -> Unit = {},
     onSettingsClick: () -> Unit
 ): ThreadHistoryDrawerCallbacks {
     return ThreadHistoryDrawerCallbacks(
@@ -26,6 +38,12 @@ internal fun buildThreadScreenHistoryDrawerCallbacks(
         onBoardClick = onBoardClick,
         onRefreshClick = onRefreshClick,
         onBatchDeleteClick = onBatchDeleteClick,
+        onExportClick = onExportClick,
+        onExportThenClearClick = onExportThenClearClick,
+        onExportSelectedClick = onExportSelectedClick,
+        onLoadImportPreview = onLoadImportPreview,
+        onImportClick = onImportClick,
+        onImportSelectedClick = onImportSelectedClick,
         onSettingsClick = onSettingsClick
     )
 }

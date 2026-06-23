@@ -46,6 +46,12 @@ internal fun CatalogScreenScaffold(
                 onBoardClick = bindings.historyDrawerCallbacks.onBoardClick,
                 onRefreshClick = bindings.historyDrawerCallbacks.onRefreshClick,
                 onBatchDeleteClick = bindings.historyDrawerCallbacks.onBatchDeleteClick,
+                onExportClick = bindings.historyDrawerCallbacks.onExportClick,
+                onExportThenClearClick = bindings.historyDrawerCallbacks.onExportThenClearClick,
+                onExportSelectedClick = bindings.historyDrawerCallbacks.onExportSelectedClick,
+                onLoadImportPreview = bindings.historyDrawerCallbacks.onLoadImportPreview,
+                onImportClick = bindings.historyDrawerCallbacks.onImportClick,
+                onImportSelectedClick = bindings.historyDrawerCallbacks.onImportSelectedClick,
                 onSettingsClick = bindings.historyDrawerCallbacks.onSettingsClick
             )
         }

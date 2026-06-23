@@ -51,6 +51,12 @@ internal data class ThreadScreenHistoryDrawerInputs(
     val onBoardClick: () -> Unit,
     val onHistoryRefreshClick: () -> Unit,
     val onHistoryBatchDeleteClick: () -> Unit,
+    val onHistoryExportClick: () -> Unit = {},
+    val onHistoryExportThenClearClick: () -> Unit = {},
+    val onHistoryExportSelectedClick: (List<ThreadHistoryEntry>) -> Unit = {},
+    val onHistoryLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onHistoryImportClick: () -> Unit = {},
+    val onHistoryImportSelectedClick: (Set<String>) -> Unit = {},
     val onHistorySettingsClick: () -> Unit
 )
 
@@ -103,6 +109,12 @@ internal fun buildThreadScreenInteractionBindingsBundle(
             onBoardClick = historyDrawerInputs.onBoardClick,
             onRefreshClick = historyDrawerInputs.onHistoryRefreshClick,
             onBatchDeleteClick = historyDrawerInputs.onHistoryBatchDeleteClick,
+            onExportClick = historyDrawerInputs.onHistoryExportClick,
+            onExportThenClearClick = historyDrawerInputs.onHistoryExportThenClearClick,
+            onExportSelectedClick = historyDrawerInputs.onHistoryExportSelectedClick,
+            onLoadImportPreview = historyDrawerInputs.onHistoryLoadImportPreview,
+            onImportClick = historyDrawerInputs.onHistoryImportClick,
+            onImportSelectedClick = historyDrawerInputs.onHistoryImportSelectedClick,
             onSettingsClick = historyDrawerInputs.onHistorySettingsClick
         )
     )

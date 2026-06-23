@@ -293,6 +293,17 @@ internal fun GlobalSettingsStorageSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    storageSummaryState.historyDiagnosticsText?.let { diagnosticsText ->
+                        Text(
+                            text = diagnosticsText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (storageSummaryState.isHistoryDiagnosticsWarning) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
                     storageSummaryState.warningText?.let { warningText ->
                         Text(
                             text = warningText,

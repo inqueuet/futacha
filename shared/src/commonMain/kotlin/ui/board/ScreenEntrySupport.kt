@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.FileSystem
 import io.ktor.client.HttpClient
@@ -15,7 +16,13 @@ internal data class ResolvedScreenHistoryCallbacks(
     val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
     val onHistoryCleared: () -> Unit,
     val onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit,
-    val onHistoryRefresh: suspend () -> Unit
+    val onHistoryRefresh: suspend () -> Unit,
+    val onHistoryExport: suspend () -> String,
+    val onHistoryExportThenClear: suspend () -> String,
+    val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String,
+    val onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview?,
+    val onHistoryImport: suspend () -> String,
+    val onHistoryImportSelected: suspend (Set<String>) -> String
 )
 
 internal data class ResolvedScreenContext(
@@ -49,6 +56,24 @@ internal val ScreenContextOwner.onHistoryEntryUpdated: (ThreadHistoryEntry) -> U
 
 internal val ScreenContextOwner.onHistoryRefresh: suspend () -> Unit
     get() = historyCallbacks.onHistoryRefresh
+
+internal val ScreenContextOwner.onHistoryExport: suspend () -> String
+    get() = historyCallbacks.onHistoryExport
+
+internal val ScreenContextOwner.onHistoryExportThenClear: suspend () -> String
+    get() = historyCallbacks.onHistoryExportThenClear
+
+internal val ScreenContextOwner.onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String
+    get() = historyCallbacks.onHistoryExportSelected
+
+internal val ScreenContextOwner.onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview?
+    get() = historyCallbacks.onHistoryLoadImportPreview
+
+internal val ScreenContextOwner.onHistoryImport: suspend () -> String
+    get() = historyCallbacks.onHistoryImport
+
+internal val ScreenContextOwner.onHistoryImportSelected: suspend (Set<String>) -> String
+    get() = historyCallbacks.onHistoryImportSelected
 
 internal val ScreenContextOwner.preferencesState: ScreenPreferencesState
     get() = screenContext.preferencesState
@@ -114,14 +139,26 @@ internal fun resolveScreenHistoryCallbacks(
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
     onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
     onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
-    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh
+    onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryExport: suspend () -> String = historyCallbacks.onHistoryExport,
+    onHistoryExportThenClear: suspend () -> String = historyCallbacks.onHistoryExportThenClear,
+    onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = historyCallbacks.onHistoryExportSelected,
+    onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = historyCallbacks.onHistoryLoadImportPreview,
+    onHistoryImport: suspend () -> String = historyCallbacks.onHistoryImport,
+    onHistoryImportSelected: suspend (Set<String>) -> String = historyCallbacks.onHistoryImportSelected
 ): ResolvedScreenHistoryCallbacks {
     return ResolvedScreenHistoryCallbacks(
         onHistoryEntrySelected = onHistoryEntrySelected,
         onHistoryEntryDismissed = onHistoryEntryDismissed,
         onHistoryCleared = onHistoryCleared,
         onHistoryEntryUpdated = onHistoryEntryUpdated,
-        onHistoryRefresh = onHistoryRefresh
+        onHistoryRefresh = onHistoryRefresh,
+        onHistoryExport = onHistoryExport,
+        onHistoryExportThenClear = onHistoryExportThenClear,
+        onHistoryExportSelected = onHistoryExportSelected,
+        onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+        onHistoryImport = onHistoryImport,
+        onHistoryImportSelected = onHistoryImportSelected
     )
 }
 
@@ -133,6 +170,12 @@ internal fun resolveScreenContext(
     onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
     onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
     onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryExport: suspend () -> String = historyCallbacks.onHistoryExport,
+    onHistoryExportThenClear: suspend () -> String = historyCallbacks.onHistoryExportThenClear,
+    onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = historyCallbacks.onHistoryExportSelected,
+    onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = historyCallbacks.onHistoryLoadImportPreview,
+    onHistoryImport: suspend () -> String = historyCallbacks.onHistoryImport,
+    onHistoryImportSelected: suspend (Set<String>) -> String = historyCallbacks.onHistoryImportSelected,
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks()
 ): ResolvedScreenContext {
@@ -144,7 +187,13 @@ internal fun resolveScreenContext(
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryEntryUpdated = onHistoryEntryUpdated,
-            onHistoryRefresh = onHistoryRefresh
+            onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryExportThenClear = onHistoryExportThenClear,
+            onHistoryExportSelected = onHistoryExportSelected,
+            onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+            onHistoryImport = onHistoryImport,
+            onHistoryImportSelected = onHistoryImportSelected
         ),
         preferencesState = preferencesState,
         preferencesCallbacks = preferencesCallbacks
@@ -172,6 +221,12 @@ internal fun buildScreenContract(
     onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
     onHistoryEntryUpdated: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryUpdated,
     onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryExport: suspend () -> String = historyCallbacks.onHistoryExport,
+    onHistoryExportThenClear: suspend () -> String = historyCallbacks.onHistoryExportThenClear,
+    onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = historyCallbacks.onHistoryExportSelected,
+    onHistoryLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = historyCallbacks.onHistoryLoadImportPreview,
+    onHistoryImport: suspend () -> String = historyCallbacks.onHistoryImport,
+    onHistoryImportSelected: suspend (Set<String>) -> String = historyCallbacks.onHistoryImportSelected,
     preferencesState: ScreenPreferencesState,
     preferencesCallbacks: ScreenPreferencesCallbacks = ScreenPreferencesCallbacks()
 ): ScreenContract {
@@ -182,7 +237,13 @@ internal fun buildScreenContract(
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryEntryUpdated = onHistoryEntryUpdated,
-            onHistoryRefresh = onHistoryRefresh
+            onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryExportThenClear = onHistoryExportThenClear,
+            onHistoryExportSelected = onHistoryExportSelected,
+            onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+            onHistoryImport = onHistoryImport,
+            onHistoryImportSelected = onHistoryImportSelected
         ),
         preferencesState = preferencesState,
         preferencesCallbacks = preferencesCallbacks

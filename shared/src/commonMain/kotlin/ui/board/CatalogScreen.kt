@@ -166,6 +166,12 @@ private fun CatalogScreenContent(
     val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
     val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
     val onHistoryRefresh = contextHandles.onHistoryRefresh
+    val onHistoryExport = contextHandles.onHistoryExport
+    val onHistoryExportThenClear = contextHandles.onHistoryExportThenClear
+    val onHistoryExportSelected = contextHandles.onHistoryExportSelected
+    val onHistoryLoadImportPreview = contextHandles.onHistoryLoadImportPreview
+    val onHistoryImport = contextHandles.onHistoryImport
+    val onHistoryImportSelected = contextHandles.onHistoryImportSelected
     val onHistoryCleared = contextHandles.onHistoryCleared
     val stateStore = contextHandles.stateStore
     val autoSavedThreadRepository = contextHandles.autoSavedThreadRepository
@@ -327,6 +333,12 @@ private fun CatalogScreenContent(
             currentIsHistoryRefreshing = { isHistoryRefreshing },
             setIsHistoryRefreshing = { isHistoryRefreshing = it },
             onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryExportThenClear = onHistoryExportThenClear,
+            onHistoryExportSelected = onHistoryExportSelected,
+            onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+            onHistoryImport = onHistoryImport,
+            onHistoryImportSelected = onHistoryImportSelected,
             currentPastSearchRuntimeState = { pastSearchRuntimeState },
             setPastSearchRuntimeState = { pastSearchRuntimeState = it },
             httpClient = httpClient,

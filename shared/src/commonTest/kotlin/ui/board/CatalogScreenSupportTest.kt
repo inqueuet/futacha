@@ -1551,7 +1551,14 @@ private class NoOpFileSystem : FileSystem {
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> =
         Result.failure(IllegalStateException("unused"))
 
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> =
+        Result.failure(IllegalStateException("unused"))
+
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = false
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long = 0L
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> = emptyList()
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = Result.success(Unit)
 

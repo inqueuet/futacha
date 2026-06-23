@@ -59,6 +59,8 @@ fun BoardManagementScreen(
     historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
     onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryExport: suspend () -> String = historyCallbacks.onHistoryExport,
+    onHistoryImport: suspend () -> String = historyCallbacks.onHistoryImport,
     modifier: Modifier = Modifier,
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
     onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
@@ -82,6 +84,8 @@ fun BoardManagementScreen(
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryImport = onHistoryImport,
             preferencesState = preferencesState,
             preferencesCallbacks = preferencesCallbacks
         ),
@@ -118,6 +122,12 @@ private fun BoardManagementScreenContent(
     val onBoardsReordered = contextHandles.onBoardsReordered
     val onHistoryEntrySelected = contextHandles.onHistoryEntrySelected
     val onHistoryRefresh = contextHandles.onHistoryRefresh
+    val onHistoryExport = contextHandles.onHistoryExport
+    val onHistoryExportThenClear = contextHandles.onHistoryExportThenClear
+    val onHistoryExportSelected = contextHandles.onHistoryExportSelected
+    val onHistoryLoadImportPreview = contextHandles.onHistoryLoadImportPreview
+    val onHistoryImport = contextHandles.onHistoryImport
+    val onHistoryImportSelected = contextHandles.onHistoryImportSelected
     val onHistoryEntryDismissed = contextHandles.onHistoryEntryDismissed
     val onHistoryCleared = contextHandles.onHistoryCleared
     val preferencesState = contextHandles.preferencesState
@@ -164,6 +174,12 @@ private fun BoardManagementScreenContent(
             onBoardsReordered = onBoardsReordered,
             onHistoryEntrySelected = onHistoryEntrySelected,
             onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryExportThenClear = onHistoryExportThenClear,
+            onHistoryExportSelected = onHistoryExportSelected,
+            onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+            onHistoryImport = onHistoryImport,
+            onHistoryImportSelected = onHistoryImportSelected,
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             setIsDeleteMode = { isDeleteMode = it },

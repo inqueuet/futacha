@@ -30,7 +30,9 @@ internal fun rememberGlobalSettingsDerivedState(
     hasPickerLauncher: Boolean,
     historyCount: Int,
     autoSavedCount: Int?,
-    autoSavedSize: Long?
+    autoSavedSize: Long?,
+    historyJsonByteSize: Long?,
+    showHistoryDiagnostics: Boolean
 ): GlobalSettingsDerivedState {
     val behaviorText = remember(isAndroidPlatform) {
         resolveGlobalSettingsBehaviorText(isAndroidPlatform)
@@ -77,8 +79,20 @@ internal fun rememberGlobalSettingsDerivedState(
             hasPickerLauncher = hasPickerLauncher
         )
     }
-    val storageSummaryState = remember(historyCount, autoSavedCount, autoSavedSize) {
-        resolveGlobalSettingsStorageSummaryState(historyCount, autoSavedCount, autoSavedSize)
+    val storageSummaryState = remember(
+        historyCount,
+        autoSavedCount,
+        autoSavedSize,
+        historyJsonByteSize,
+        showHistoryDiagnostics
+    ) {
+        resolveGlobalSettingsStorageSummaryState(
+            historyCount = historyCount,
+            autoSavedCount = autoSavedCount,
+            autoSavedSize = autoSavedSize,
+            historyJsonByteSize = historyJsonByteSize,
+            showHistoryDiagnostics = showHistoryDiagnostics
+        )
     }
     return GlobalSettingsDerivedState(
         behaviorText = behaviorText,

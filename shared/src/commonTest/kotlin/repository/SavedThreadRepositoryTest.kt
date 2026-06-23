@@ -594,8 +594,20 @@ internal class InMemoryFileSystem : FileSystem {
         return readString(resolvePath(base, relativePath))
     }
 
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> {
+        return readBytes(resolvePath(base, relativePath))
+    }
+
     override suspend fun exists(base: SaveLocation, relativePath: String): Boolean {
         return exists(resolvePath(base, relativePath))
+    }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long {
+        return getFileSize(resolvePath(base, relativePath))
+    }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> {
+        return listFiles(resolvePath(base, directory))
     }
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> {

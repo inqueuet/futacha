@@ -69,6 +69,12 @@ internal data class BoardManagementScreenWiringInputs(
     val onBoardsReordered: (List<BoardSummary>) -> Unit,
     val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
     val onHistoryRefresh: suspend () -> Unit,
+    val onHistoryExport: suspend () -> String = { "" },
+    val onHistoryExportThenClear: suspend () -> String = { "" },
+    val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
+    val onHistoryLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onHistoryImport: suspend () -> String = { "" },
+    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" },
     val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
     val onHistoryCleared: () -> Unit,
     val setIsDeleteMode: (Boolean) -> Unit,
@@ -97,6 +103,12 @@ internal fun rememberBoardManagementScreenWiringBundle(
 ): BoardManagementScreenWiringBundle {
     val onHistoryEntrySelectedState by rememberUpdatedState(inputs.onHistoryEntrySelected)
     val onHistoryRefreshState by rememberUpdatedState(inputs.onHistoryRefresh)
+    val onHistoryExportState by rememberUpdatedState(inputs.onHistoryExport)
+    val onHistoryExportThenClearState by rememberUpdatedState(inputs.onHistoryExportThenClear)
+    val onHistoryExportSelectedState by rememberUpdatedState(inputs.onHistoryExportSelected)
+    val onHistoryLoadImportPreviewState by rememberUpdatedState(inputs.onHistoryLoadImportPreview)
+    val onHistoryImportState by rememberUpdatedState(inputs.onHistoryImport)
+    val onHistoryImportSelectedState by rememberUpdatedState(inputs.onHistoryImportSelected)
     val onHistoryClearedState by rememberUpdatedState(inputs.onHistoryCleared)
     val interactionBindings = remember(
         inputs.drawerState,
@@ -117,6 +129,12 @@ internal fun rememberBoardManagementScreenWiringBundle(
                 onExternalMenuAction = inputs.onMenuAction,
                 onHistoryEntrySelected = { onHistoryEntrySelectedState(it) },
                 onHistoryRefresh = { onHistoryRefreshState() },
+                onHistoryExport = { onHistoryExportState() },
+                onHistoryExportThenClear = { onHistoryExportThenClearState() },
+                onHistoryExportSelected = { onHistoryExportSelectedState(it) },
+                onHistoryLoadImportPreview = { onHistoryLoadImportPreviewState() },
+                onHistoryImport = { onHistoryImportState() },
+                onHistoryImportSelected = { onHistoryImportSelectedState(it) },
                 onHistoryCleared = { onHistoryClearedState() },
                 showSnackbar = inputs.snackbarHostState::showSnackbar
             ),

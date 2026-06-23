@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -128,6 +129,12 @@ internal data class ThreadScreenControllerInteractionRuntimeInputs(
     val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
     val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
     val onHistoryCleared: () -> Unit,
+    val onHistoryExport: suspend () -> String = { "" },
+    val onHistoryExportThenClear: suspend () -> String = { "" },
+    val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
+    val onHistoryLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onHistoryImport: suspend () -> String = { "" },
+    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" },
     val onBack: () -> Unit,
     val lastUsedDeleteKey: String,
     val currentSaidaneLabel: (Post) -> String?,
@@ -254,6 +261,92 @@ internal fun buildThreadScreenControllerInteractionInputs(
                     inputs.showSnackbar
                 )
                 inputs.drawerState.close()
+            }
+        },
+        onHistoryExportClick = {
+            inputs.coroutineScope.launch {
+                try {
+                    val message = inputs.onHistoryExport()
+                    if (message.isNotBlank()) {
+                        showThreadMessage(message, inputs.showSnackbar)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showThreadMessage(
+                        buildBoardManagementHistoryArchiveFailureMessage("エクスポート", e),
+                        inputs.showSnackbar
+                    )
+                }
+            }
+        },
+        onHistoryExportThenClearClick = {
+            inputs.coroutineScope.launch {
+                try {
+                    val message = inputs.onHistoryExportThenClear()
+                    if (message.isNotBlank()) {
+                        showThreadMessage(message, inputs.showSnackbar)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showThreadMessage(
+                        buildBoardManagementHistoryArchiveFailureMessage("エクスポート後の削除", e),
+                        inputs.showSnackbar
+                    )
+                }
+            }
+        },
+        onHistoryExportSelectedClick = { selectedEntries ->
+            inputs.coroutineScope.launch {
+                try {
+                    val message = inputs.onHistoryExportSelected(selectedEntries)
+                    if (message.isNotBlank()) {
+                        showThreadMessage(message, inputs.showSnackbar)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showThreadMessage(
+                        buildBoardManagementHistoryArchiveFailureMessage("エクスポート", e),
+                        inputs.showSnackbar
+                    )
+                }
+            }
+        },
+        onHistoryLoadImportPreview = inputs.onHistoryLoadImportPreview,
+        onHistoryImportClick = {
+            inputs.coroutineScope.launch {
+                try {
+                    val message = inputs.onHistoryImport()
+                    if (message.isNotBlank()) {
+                        showThreadMessage(message, inputs.showSnackbar)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showThreadMessage(
+                        buildBoardManagementHistoryArchiveFailureMessage("インポート", e),
+                        inputs.showSnackbar
+                    )
+                }
+            }
+        },
+        onHistoryImportSelectedClick = { selectedSnapshotIds ->
+            inputs.coroutineScope.launch {
+                try {
+                    val message = inputs.onHistoryImportSelected(selectedSnapshotIds)
+                    if (message.isNotBlank()) {
+                        showThreadMessage(message, inputs.showSnackbar)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showThreadMessage(
+                        buildBoardManagementHistoryArchiveFailureMessage("インポート", e),
+                        inputs.showSnackbar
+                    )
+                }
             }
         },
         onHistorySettingsClick = {
@@ -484,6 +577,12 @@ internal data class ThreadScreenInteractionUiWiringInputs(
     val actionDependencies: ThreadScreenActionDependencies,
     val historyRefreshStateBindings: ThreadScreenHistoryRefreshStateBindings,
     val onHistoryRefresh: suspend () -> Unit,
+    val onHistoryExport: suspend () -> String = { "" },
+    val onHistoryExportThenClear: suspend () -> String = { "" },
+    val onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
+    val onHistoryLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onHistoryImport: suspend () -> String = { "" },
+    val onHistoryImportSelected: suspend (Set<String>) -> String = { "" },
     val readAloudStateBindings: ThreadScreenReadAloudStateBindings,
     val readAloudCallbacks: ThreadScreenReadAloudCallbacks,
     val readAloudDependencies: ThreadScreenReadAloudDependencies,
@@ -566,6 +665,12 @@ internal fun buildThreadScreenInteractionUiWiring(
                 onHistoryEntrySelected = inputs.onHistoryEntrySelected,
                 onHistoryEntryDismissed = inputs.onHistoryEntryDismissed,
                 onHistoryCleared = inputs.onHistoryCleared,
+                onHistoryExport = inputs.onHistoryExport,
+                onHistoryExportThenClear = inputs.onHistoryExportThenClear,
+                onHistoryExportSelected = inputs.onHistoryExportSelected,
+                onHistoryLoadImportPreview = inputs.onHistoryLoadImportPreview,
+                onHistoryImport = inputs.onHistoryImport,
+                onHistoryImportSelected = inputs.onHistoryImportSelected,
                 onBack = inputs.onBack,
                 lastUsedDeleteKey = inputs.lastUsedDeleteKey,
                 currentSaidaneLabel = inputs.currentSaidaneLabel,

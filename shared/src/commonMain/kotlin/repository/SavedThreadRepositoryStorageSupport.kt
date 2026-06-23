@@ -16,6 +16,38 @@ internal suspend fun SavedThreadRepository.readStringAt(relativePath: String): R
     }
 }
 
+internal suspend fun SavedThreadRepository.readBytesAt(relativePath: String): Result<ByteArray> {
+    return if (useSaveLocationApi) {
+        fileSystem.readBytes(resolvedSaveLocation, relativePath)
+    } else {
+        fileSystem.readBytes(buildStoragePath(relativePath))
+    }
+}
+
+internal suspend fun SavedThreadRepository.getFileSizeAt(relativePath: String): Long {
+    return if (useSaveLocationApi) {
+        fileSystem.getFileSize(resolvedSaveLocation, relativePath)
+    } else {
+        fileSystem.getFileSize(buildStoragePath(relativePath))
+    }
+}
+
+internal suspend fun SavedThreadRepository.existsAt(relativePath: String): Boolean {
+    return if (useSaveLocationApi) {
+        fileSystem.exists(resolvedSaveLocation, relativePath)
+    } else {
+        fileSystem.exists(buildStoragePath(relativePath))
+    }
+}
+
+internal suspend fun SavedThreadRepository.listFilesAt(relativePath: String): List<String> {
+    return if (useSaveLocationApi) {
+        fileSystem.listFiles(resolvedSaveLocation, relativePath)
+    } else {
+        fileSystem.listFiles(buildStoragePath(relativePath))
+    }
+}
+
 internal suspend fun SavedThreadRepository.writeStringAt(
     relativePath: String,
     content: String
@@ -24,6 +56,17 @@ internal suspend fun SavedThreadRepository.writeStringAt(
         fileSystem.writeString(resolvedSaveLocation, relativePath, content)
     } else {
         fileSystem.writeString(buildStoragePath(relativePath), content)
+    }
+}
+
+internal suspend fun SavedThreadRepository.writeBytesAt(
+    relativePath: String,
+    bytes: ByteArray
+): Result<Unit> {
+    return if (useSaveLocationApi) {
+        fileSystem.writeBytes(resolvedSaveLocation, relativePath, bytes)
+    } else {
+        fileSystem.writeBytes(buildStoragePath(relativePath), bytes)
     }
 }
 

@@ -598,6 +598,21 @@ class IosFileSystem : FileSystem {
         return writeBytes(base, relativePath, content.encodeToByteArray())
     }
 
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> = withContext(AppDispatchers.io) {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            readBytes(fullPath)
+        }
+    }
+
     override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(AppDispatchers.io) {
         // FIX: 入力検証
         runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
@@ -629,6 +644,53 @@ class IosFileSystem : FileSystem {
             val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
             Logger.e("IosFileSystem", "Error checking existence for $tag, path: $relativePath", e)
             false
+        }
+    }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long = withContext(AppDispatchers.io) {
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext 0L
+            }
+        }
+        try {
+            withSaveLocationPath(
+                base = base,
+                relativePath = relativePath,
+                onTreeUri = { 0L }
+            ) { fullPath ->
+                getFileSize(fullPath)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
+            Logger.e("IosFileSystem", "Error reading file size for $tag, path: $relativePath", e)
+            0L
+        }
+    }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> = withContext(AppDispatchers.io) {
+        if (directory.isNotEmpty()) {
+            runFsCatching { validatePath(directory, "directory") }.getOrElse {
+                return@withContext emptyList()
+            }
+        }
+        try {
+            withSaveLocationPath(
+                base = base,
+                relativePath = directory,
+                onTreeUri = { emptyList() }
+            ) { fullPath ->
+                val contents = fileManager.contentsOfDirectoryAtPath(fullPath, error = null)
+                contents?.filterIsInstance<String>() ?: emptyList()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
+            Logger.e("IosFileSystem", "Error listing files for $tag, path: $directory", e)
+            emptyList()
         }
     }
 

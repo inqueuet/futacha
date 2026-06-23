@@ -237,6 +237,12 @@ private fun ThreadScreenContent(
     val onHistoryCleared = contextHandles.onHistoryCleared
     val onHistoryEntryUpdated = contextHandles.onHistoryEntryUpdated
     val onHistoryRefresh = contextHandles.onHistoryRefresh
+    val onHistoryExport = contextHandles.onHistoryExport
+    val onHistoryExportThenClear = contextHandles.onHistoryExportThenClear
+    val onHistoryExportSelected = contextHandles.onHistoryExportSelected
+    val onHistoryLoadImportPreview = contextHandles.onHistoryLoadImportPreview
+    val onHistoryImport = contextHandles.onHistoryImport
+    val onHistoryImportSelected = contextHandles.onHistoryImportSelected
     val httpClient = contextHandles.httpClient
     val fileSystem = contextHandles.fileSystem
     val cookieRepository = contextHandles.cookieRepository
@@ -770,6 +776,12 @@ private fun ThreadScreenContent(
             actionDependencies = actionDependencies,
             historyRefreshStateBindings = historyRefreshStateBindings,
             onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryExportThenClear = onHistoryExportThenClear,
+            onHistoryExportSelected = onHistoryExportSelected,
+            onHistoryLoadImportPreview = onHistoryLoadImportPreview,
+            onHistoryImport = onHistoryImport,
+            onHistoryImportSelected = onHistoryImportSelected,
             readAloudStateBindings = readAloudStateBindings,
             readAloudCallbacks = readAloudCallbacks,
             readAloudDependencies = readAloudDependencies,

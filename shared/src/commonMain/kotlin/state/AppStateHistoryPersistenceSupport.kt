@@ -3,6 +3,8 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.Duration
+import kotlin.time.TimeSource
 
 internal data class AppStatePersistedHistoryContinuation(
     val revision: Long,
@@ -105,7 +107,7 @@ internal suspend fun persistAppStateHistory(
     revision: Long,
     history: List<ThreadHistoryEntry>,
     maxPasses: Int,
-    writeHistoryJson: suspend (List<ThreadHistoryEntry>) -> Unit,
+    writeHistoryJson: suspend (Long, Int, List<ThreadHistoryEntry>) -> Unit,
     readLatestHistoryContinuation: suspend (Long) -> AppStatePersistedHistoryContinuation?
 ) {
     historyPersistMutex.withLock {
@@ -115,13 +117,36 @@ internal suspend fun persistAppStateHistory(
         while (true) {
             passCount += 1
             if (passCount > maxPasses) {
-                writeHistoryJson(targetHistory)
+                writeHistoryJson(targetRevision, passCount, targetHistory)
                 break
             }
-            writeHistoryJson(targetHistory)
+            writeHistoryJson(targetRevision, passCount, targetHistory)
             val continuation = readLatestHistoryContinuation(targetRevision) ?: break
             targetRevision = continuation.revision
             targetHistory = continuation.history
         }
     }
 }
+
+internal suspend fun writeMeasuredAppStateHistoryJson(
+    history: List<ThreadHistoryEntry>,
+    encodeHistoryJson: suspend (List<ThreadHistoryEntry>) -> Pair<String, Duration>,
+    updateHistoryJson: suspend (String) -> Unit
+): AppStateHistoryWriteMetrics {
+    val (encoded, encodeDuration) = encodeHistoryJson(history)
+    val writeMark = TimeSource.Monotonic.markNow()
+    updateHistoryJson(encoded)
+    return AppStateHistoryWriteMetrics(
+        entryCount = countHistoryEntries(history),
+        jsonByteSize = historyJsonByteSize(encoded),
+        encodeDuration = encodeDuration,
+        writeDuration = writeMark.elapsedNow()
+    )
+}
+
+internal data class AppStateHistoryWriteMetrics(
+    val entryCount: Int,
+    val jsonByteSize: Long,
+    val encodeDuration: Duration,
+    val writeDuration: Duration
+)

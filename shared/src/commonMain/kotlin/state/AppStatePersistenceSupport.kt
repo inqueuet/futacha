@@ -17,6 +17,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlin.time.TimeSource
 
 internal suspend fun encodeAppStateBoards(
     boards: List<BoardSummary>,
@@ -36,6 +37,15 @@ internal suspend fun encodeAppStateHistory(
     }
 }
 
+internal suspend fun encodeAppStateHistoryMeasured(
+    history: List<ThreadHistoryEntry>,
+    json: Json
+): Pair<String, kotlin.time.Duration> {
+    val mark = TimeSource.Monotonic.markNow()
+    val encoded = encodeAppStateHistory(history, json)
+    return encoded to mark.elapsedNow()
+}
+
 internal fun decodeAppStateBoards(
     raw: String,
     json: Json,
@@ -52,7 +62,15 @@ internal fun decodeAppStateHistory(
     json: Json,
     tag: String
 ): List<ThreadHistoryEntry> = runCatching {
-    json.decodeFromString(ListSerializer(ThreadHistoryEntry.serializer()), raw)
+    val mark = TimeSource.Monotonic.markNow()
+    json.decodeFromString(ListSerializer(ThreadHistoryEntry.serializer()), raw).also { decoded ->
+        logAppStateHistoryDecodeMetrics(
+            tag = tag,
+            entryCount = decoded.size,
+            jsonByteSize = historyJsonByteSize(raw),
+            duration = mark.elapsedNow()
+        )
+    }
 }.getOrElse { error ->
     Logger.e(tag, "Failed to decode history from JSON", error)
     emptyList()

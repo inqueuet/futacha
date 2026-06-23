@@ -100,6 +100,8 @@ internal fun buildBoardManagementScreenContentArgs(
     historyCallbacks: ScreenHistoryCallbacks = ScreenHistoryCallbacks(),
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntrySelected,
     onHistoryRefresh: suspend () -> Unit = historyCallbacks.onHistoryRefresh,
+    onHistoryExport: suspend () -> String = historyCallbacks.onHistoryExport,
+    onHistoryImport: suspend () -> String = historyCallbacks.onHistoryImport,
     modifier: Modifier = Modifier,
     onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit = historyCallbacks.onHistoryEntryDismissed,
     onHistoryCleared: () -> Unit = historyCallbacks.onHistoryCleared,
@@ -123,6 +125,8 @@ internal fun buildBoardManagementScreenContentArgs(
             onHistoryEntryDismissed = onHistoryEntryDismissed,
             onHistoryCleared = onHistoryCleared,
             onHistoryRefresh = onHistoryRefresh,
+            onHistoryExport = onHistoryExport,
+            onHistoryImport = onHistoryImport,
             preferencesState = preferencesState,
             preferencesCallbacks = preferencesCallbacks
         ),

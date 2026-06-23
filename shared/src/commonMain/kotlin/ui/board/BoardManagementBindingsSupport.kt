@@ -17,6 +17,10 @@ internal fun buildBoardManagementHistoryRefreshFailureMessage(error: Throwable):
 
 internal fun buildBoardManagementHistoryBatchDeleteMessage(): String = "履歴を一括削除しました"
 
+internal fun buildBoardManagementHistoryArchiveFailureMessage(actionLabel: String, error: Throwable): String {
+    return "履歴アーカイブの${actionLabel}に失敗しました: ${error.message ?: "不明なエラー"}"
+}
+
 internal fun buildBoardManagementAddBoardSuccessMessage(name: String): String = "\"$name\" を追加しました"
 
 internal fun buildBoardManagementDeleteBoardSuccessMessage(board: BoardSummary): String {
@@ -27,7 +31,13 @@ internal data class BoardManagementHistoryDrawerCallbacks(
     val onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
     val onBoardClick: () -> Unit,
     val onRefreshClick: () -> Unit,
-    val onBatchDeleteClick: () -> Unit
+    val onBatchDeleteClick: () -> Unit,
+    val onExportClick: () -> Unit = {},
+    val onExportThenClearClick: () -> Unit = {},
+    val onExportSelectedClick: (List<ThreadHistoryEntry>) -> Unit = {},
+    val onLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    val onImportClick: () -> Unit = {},
+    val onImportSelectedClick: (Set<String>) -> Unit = {}
 )
 
 internal fun buildBoardManagementHistoryDrawerCallbacks(
@@ -35,6 +45,12 @@ internal fun buildBoardManagementHistoryDrawerCallbacks(
     closeDrawer: suspend () -> Unit,
     onHistoryEntrySelected: (ThreadHistoryEntry) -> Unit,
     onHistoryRefresh: suspend () -> Unit,
+    onHistoryExport: suspend () -> String = { "" },
+    onHistoryExportThenClear: suspend () -> String = { "" },
+    onHistoryExportSelected: suspend (List<ThreadHistoryEntry>) -> String = { "" },
+    onHistoryLoadImportPreview: suspend () -> com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview? = { null },
+    onHistoryImport: suspend () -> String = { "" },
+    onHistoryImportSelected: suspend (Set<String>) -> String = { "" },
     onHistoryCleared: () -> Unit,
     showSnackbar: suspend (String) -> Unit,
     currentIsHistoryRefreshing: () -> Boolean,
@@ -63,6 +79,77 @@ internal fun buildBoardManagementHistoryDrawerCallbacks(
                     showSnackbar(buildBoardManagementHistoryRefreshFailureMessage(e))
                 } finally {
                     setIsHistoryRefreshing(false)
+                }
+            }
+        },
+        onExportClick = {
+            coroutineScope.launch {
+                try {
+                    val message = onHistoryExport()
+                    if (message.isNotBlank()) {
+                        showSnackbar(message)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showSnackbar(buildBoardManagementHistoryArchiveFailureMessage("エクスポート", e))
+                }
+            }
+        },
+        onExportThenClearClick = {
+            coroutineScope.launch {
+                try {
+                    val message = onHistoryExportThenClear()
+                    if (message.isNotBlank()) {
+                        showSnackbar(message)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showSnackbar(buildBoardManagementHistoryArchiveFailureMessage("エクスポート後の削除", e))
+                }
+            }
+        },
+        onExportSelectedClick = { selectedEntries ->
+            coroutineScope.launch {
+                try {
+                    val message = onHistoryExportSelected(selectedEntries)
+                    if (message.isNotBlank()) {
+                        showSnackbar(message)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showSnackbar(buildBoardManagementHistoryArchiveFailureMessage("エクスポート", e))
+                }
+            }
+        },
+        onLoadImportPreview = onHistoryLoadImportPreview,
+        onImportClick = {
+            coroutineScope.launch {
+                try {
+                    val message = onHistoryImport()
+                    if (message.isNotBlank()) {
+                        showSnackbar(message)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showSnackbar(buildBoardManagementHistoryArchiveFailureMessage("インポート", e))
+                }
+            }
+        },
+        onImportSelectedClick = { selectedSnapshotIds ->
+            coroutineScope.launch {
+                try {
+                    val message = onHistoryImportSelected(selectedSnapshotIds)
+                    if (message.isNotBlank()) {
+                        showSnackbar(message)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    showSnackbar(buildBoardManagementHistoryArchiveFailureMessage("インポート", e))
                 }
             }
         },

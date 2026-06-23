@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.rememberDirectoryPickerLauncher
+import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,7 @@ internal fun rememberFutachaBindingsRuntimeState(
     shouldUseLightweightMode: Boolean,
     historyRefresher: HistoryRefresher,
     effectiveAutoSavedThreadRepository: SavedThreadRepository?,
+    fileSystem: FileSystem?,
     navigationState: FutachaNavigationState,
     updateNavigationState: (FutachaNavigationState) -> Unit
 ): FutachaBindingsRuntimeState {
@@ -77,6 +79,16 @@ internal fun rememberFutachaBindingsRuntimeState(
         },
         preferredFileManagerPackage = observedRuntimeState.preferredFileManager?.packageName
     )
+    val clearHistoryEntries: suspend () -> Unit = {
+        clearHistory(
+            stateStore = stateStore,
+            autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
+            onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
+            onAutoSavedThreadDeleteFailure = {
+                Logger.e(FUTACHA_APP_BINDINGS_TAG, "Failed to clear auto saved threads", it)
+            }
+        )
+    }
     val historyMutations = buildFutachaHistoryMutationCallbacks(
         coroutineScope = coroutineScope,
         dismissHistoryEntry = { entry ->
@@ -90,17 +102,20 @@ internal fun rememberFutachaBindingsRuntimeState(
             )
         },
         updateHistoryEntry = stateStore::upsertHistoryEntry,
-        clearHistory = {
-            clearHistory(
-                stateStore = stateStore,
-                autoSavedThreadRepository = effectiveAutoSavedThreadRepository,
-                onSkippedThreadsCleared = historyRefresher::clearSkippedThreads,
-                onAutoSavedThreadDeleteFailure = {
-                    Logger.e(FUTACHA_APP_BINDINGS_TAG, "Failed to clear auto saved threads", it)
-                }
-            )
-        }
+        clearHistory = clearHistoryEntries
     )
+    val importedHistoryRepository = remember(fileSystem) {
+        buildImportedHistoryRepository(fileSystem)
+    }
+    val historyArchiveSourceRepositories = remember(
+        effectiveAutoSavedThreadRepository,
+        observedRuntimeState.activeSavedThreadsRepository
+    ) {
+        listOfNotNull(
+            effectiveAutoSavedThreadRepository,
+            observedRuntimeState.activeSavedThreadsRepository
+        ).distinct()
+    }
     val screenBindings = buildFutachaScreenBindingsBundle(
         coroutineScope = coroutineScope,
         inputs = FutachaScreenBindingsInputs(
@@ -137,7 +152,54 @@ internal fun rememberFutachaBindingsRuntimeState(
                 catalogNavEntries = observedRuntimeState.catalogNavEntries
             ),
             onOpenSaveDirectoryPicker = directoryPickerLauncher,
-            onHistoryRefresh = refreshHistoryEntries
+            onHistoryRefresh = refreshHistoryEntries,
+            onHistoryExport = {
+                exportAllFutachaHistoryArchive(
+                    stateStore = stateStore,
+                    fileSystem = fileSystem,
+                    sourceRepositories = historyArchiveSourceRepositories,
+                    appVersion = observedRuntimeState.appVersion
+                )
+            },
+            onHistoryExportThenClear = {
+                exportAllFutachaHistoryArchiveThenClear(
+                    stateStore = stateStore,
+                    fileSystem = fileSystem,
+                    sourceRepositories = historyArchiveSourceRepositories,
+                    appVersion = observedRuntimeState.appVersion,
+                    clearHistory = clearHistoryEntries
+                )
+            },
+            onHistoryExportSelected = { selectedEntries ->
+                exportSelectedFutachaHistoryArchive(
+                    stateStore = stateStore,
+                    fileSystem = fileSystem,
+                    sourceRepositories = historyArchiveSourceRepositories,
+                    appVersion = observedRuntimeState.appVersion,
+                    selectedEntries = selectedEntries
+                )
+            },
+            onHistoryLoadImportPreview = {
+                loadLatestFutachaHistoryArchivePreview(
+                    stateStore = stateStore,
+                    fileSystem = fileSystem
+                )
+            },
+            onHistoryImport = {
+                importLatestFutachaHistoryArchive(
+                    stateStore = stateStore,
+                    fileSystem = fileSystem,
+                    destinationRepository = importedHistoryRepository
+                )
+            },
+            onHistoryImportSelected = { selectedSnapshotIds ->
+                importLatestFutachaHistoryArchive(
+                    stateStore = stateStore,
+                    fileSystem = fileSystem,
+                    destinationRepository = importedHistoryRepository,
+                    selectedSnapshotIds = selectedSnapshotIds
+                )
+            }
         )
     )
     return remember(screenBindings) {

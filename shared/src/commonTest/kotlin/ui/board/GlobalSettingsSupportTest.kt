@@ -134,24 +134,57 @@ class GlobalSettingsSupportTest {
     @Test
     fun resolveGlobalSettingsStorageSummaryState_marksWarningAtThreshold() {
         val normal = resolveGlobalSettingsStorageSummaryState(
-            historyCount = 49,
+            historyCount = 99,
             autoSavedCount = 2,
-            autoSavedSize = 1_572_864L
+            autoSavedSize = 1_572_864L,
+            historyJsonByteSize = 65_536L
         )
-        assertEquals("履歴: 49件", normal.historyText)
+        assertEquals("履歴: 99件", normal.historyText)
         assertEquals("自動保存: 2件 / 1.5 MB", normal.autoSavedText)
+        assertNull(normal.historyDiagnosticsText)
         assertFalse(normal.isHistoryWarning)
+        assertFalse(normal.isHistoryDiagnosticsWarning)
         assertNull(normal.warningText)
 
         val warning = resolveGlobalSettingsStorageSummaryState(
-            historyCount = 50,
+            historyCount = 100,
             autoSavedCount = null,
-            autoSavedSize = null
+            autoSavedSize = null,
+            historyJsonByteSize = null
         )
         assertTrue(warning.isHistoryWarning)
-        assertEquals("履歴: 50件", warning.historyText)
+        assertFalse(warning.isHistoryDiagnosticsWarning)
+        assertEquals("履歴: 100件", warning.historyText)
         assertEquals("自動保存: 0件 / 不明", warning.autoSavedText)
-        assertTrue(warning.warningText?.contains("更新に時間がかかることがあります") == true)
+        assertNull(warning.historyDiagnosticsText)
+        assertTrue(warning.warningText?.contains("履歴データが大きい場合") == true)
+    }
+
+    @Test
+    fun resolveGlobalSettingsStorageSummaryState_showsDiagnosticsOnlyWhenRequested() {
+        val hidden = resolveGlobalSettingsStorageSummaryState(
+            historyCount = 2,
+            autoSavedCount = 0,
+            autoSavedSize = 0L,
+            historyJsonByteSize = 512_000L,
+            showHistoryDiagnostics = false
+        )
+
+        assertNull(hidden.historyDiagnosticsText)
+        assertFalse(hidden.isHistoryDiagnosticsWarning)
+
+        val warning = resolveGlobalSettingsStorageSummaryState(
+            historyCount = 2,
+            autoSavedCount = 0,
+            autoSavedSize = 0L,
+            historyJsonByteSize = 512_000L,
+            showHistoryDiagnostics = true
+        )
+
+        assertFalse(warning.isHistoryWarning)
+        assertTrue(warning.isHistoryDiagnosticsWarning)
+        assertEquals("履歴診断: 2件 / JSON約500.0 KB / 警告 100件以上", warning.historyDiagnosticsText)
+        assertTrue(warning.warningText?.contains("履歴データが大きい場合") == true)
     }
 
     @Test

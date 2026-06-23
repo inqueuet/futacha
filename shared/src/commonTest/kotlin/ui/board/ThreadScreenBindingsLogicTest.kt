@@ -19,6 +19,7 @@ import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.repository.IMPORTED_HISTORY_DIRECTORY
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
@@ -508,13 +509,15 @@ class ThreadScreenBindingsLogicTest {
         assertEquals("https://may.2chan.net/b", bundle.effectiveBoardUrl)
         assertEquals(historyEntry, bundle.initialHistoryEntry)
         assertSame(autoSaveRepository, bundle.autoSaveRepository)
+        assertNotNull(bundle.importedHistoryRepository)
         assertNotNull(bundle.manualSaveRepository)
         assertNotNull(bundle.legacyManualSaveRepository)
         assertEquals(listOf("b", null), bundle.offlineLookupContext.boardIdCandidates)
         assertEquals(setOf("https://may.2chan.net/b"), bundle.offlineLookupContext.expectedBoardKeys)
         assertEquals(AUTO_SAVE_DIRECTORY, bundle.offlineSources[0].baseDirectory)
-        assertEquals("/tmp/futacha", bundle.offlineSources[1].baseDirectory)
-        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, bundle.offlineSources[2].baseDirectory)
+        assertEquals(IMPORTED_HISTORY_DIRECTORY, bundle.offlineSources[1].baseDirectory)
+        assertEquals("/tmp/futacha", bundle.offlineSources[2].baseDirectory)
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, bundle.offlineSources[3].baseDirectory)
     }
 
     @Test

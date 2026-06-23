@@ -11,7 +11,8 @@ import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
 import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
 import kotlin.math.round
 
-private const val GLOBAL_SETTINGS_HISTORY_WARNING_THRESHOLD = 50
+private const val GLOBAL_SETTINGS_HISTORY_WARNING_THRESHOLD = 100
+private const val GLOBAL_SETTINGS_HISTORY_JSON_WARNING_BYTES = 512_000L
 
 internal data class PreferredFileManagerSummaryState(
     val currentSettingText: String,
@@ -189,6 +190,8 @@ internal fun resolveGlobalSettingsEntrySelection(
 internal data class GlobalSettingsStorageSummaryState(
     val historyText: String,
     val autoSavedText: String,
+    val historyDiagnosticsText: String?,
+    val isHistoryDiagnosticsWarning: Boolean,
     val isHistoryWarning: Boolean,
     val warningText: String?
 )
@@ -203,19 +206,52 @@ internal fun formatGlobalSettingsSizeMb(bytes: Long?): String {
 internal fun resolveGlobalSettingsStorageSummaryState(
     historyCount: Int,
     autoSavedCount: Int?,
-    autoSavedSize: Long?
+    autoSavedSize: Long?,
+    historyJsonByteSize: Long? = null,
+    showHistoryDiagnostics: Boolean = false
 ): GlobalSettingsStorageSummaryState {
     val isWarning = historyCount >= GLOBAL_SETTINGS_HISTORY_WARNING_THRESHOLD
+    val isJsonSizeWarning = historyJsonByteSize != null &&
+        historyJsonByteSize >= GLOBAL_SETTINGS_HISTORY_JSON_WARNING_BYTES
     return GlobalSettingsStorageSummaryState(
         historyText = "履歴: ${historyCount}件",
         autoSavedText = "自動保存: ${autoSavedCount ?: 0}件 / ${formatGlobalSettingsSizeMb(autoSavedSize)}",
+        historyDiagnosticsText = if (showHistoryDiagnostics) {
+            buildGlobalSettingsHistoryDiagnosticsText(
+                historyCount = historyCount,
+                historyJsonByteSize = historyJsonByteSize
+            )
+        } else {
+            null
+        },
+        isHistoryDiagnosticsWarning = showHistoryDiagnostics && (isWarning || isJsonSizeWarning),
         isHistoryWarning = isWarning,
-        warningText = if (isWarning) {
-            "※件数が多いと更新に時間がかかることがあります。不要な履歴は既存の削除・クリア操作をご利用ください。"
+        warningText = if (isWarning || isJsonSizeWarning) {
+            "※履歴が多い、または履歴データが大きい場合は更新に時間がかかることがあります。不要な履歴はエクスポート後の削除も検討してください。"
         } else {
             null
         }
     )
+}
+
+internal fun buildGlobalSettingsHistoryDiagnosticsText(
+    historyCount: Int,
+    historyJsonByteSize: Long?
+): String {
+    val sizeText = historyJsonByteSize
+        ?.let { "JSON約${formatGlobalSettingsSizeApprox(it)}" }
+        ?: "JSON計算中"
+    return "履歴診断: ${historyCount}件 / $sizeText / 警告 ${GLOBAL_SETTINGS_HISTORY_WARNING_THRESHOLD}件以上"
+}
+
+internal fun formatGlobalSettingsSizeApprox(bytes: Long): String {
+    if (bytes < 1024L) return "${bytes} B"
+    if (bytes < 1024L * 1024L) {
+        val kbTimesTen = (bytes / 1024.0) * 10
+        val rounded = round(kbTimesTen) / 10.0
+        return "${rounded} KB"
+    }
+    return formatGlobalSettingsSizeMb(bytes)
 }
 
 internal enum class GlobalSettingsCacheCleanupTarget {

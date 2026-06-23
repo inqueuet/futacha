@@ -8,6 +8,7 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.model.ThreadMenuEntryId
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
@@ -19,6 +20,7 @@ import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.network.NetworkException
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
+import com.valoser.futacha.shared.repository.IMPORTED_HISTORY_DIRECTORY
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
@@ -468,14 +470,16 @@ class ThreadScreenLoadLogicTest {
 
         val sources = buildThreadOfflineSources(
             autoSaveRepository = null,
+            importedHistoryRepository = null,
             manualSaveRepository = null,
             legacyManualSaveRepository = null,
             manualSaveDirectory = "/manual",
             manualSaveLocation = SaveLocation.Path("/manual")
         )
         assertEquals(AUTO_SAVE_DIRECTORY, sources[0].baseDirectory)
-        assertEquals("/manual", sources[1].baseDirectory)
-        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sources[2].baseDirectory)
+        assertEquals(IMPORTED_HISTORY_DIRECTORY, sources[1].baseDirectory)
+        assertEquals("/manual", sources[2].baseDirectory)
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, sources[3].baseDirectory)
         assertFalse(hasOfflineThreadSources(sources))
         assertEquals(
             "Skip offline metadata due to board mismatch: threadId=123 boardUrl=https://may.2chan.net/b/futaba.php",
@@ -491,6 +495,101 @@ class ThreadScreenLoadLogicTest {
                 boardIdCandidates = listOf("b", "hist", null)
             )
         )
+    }
+
+    @Test
+    fun loadOfflineThreadPage_readsImportedHistoryRepositorySource() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val importedRepository = SavedThreadRepository(
+            fileSystem = fileSystem,
+            baseDirectory = IMPORTED_HISTORY_DIRECTORY
+        )
+        val storageId = "archive_0526__b_123"
+        val metadata = SavedThreadMetadata(
+            threadId = "123",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/",
+            title = "imported thread",
+            storageId = storageId,
+            savedAt = 1L,
+            expiresAtLabel = null,
+            posts = listOf(
+                SavedPost(
+                    id = "123",
+                    order = 1,
+                    author = null,
+                    subject = null,
+                    timestamp = "24/01/01(月)00:00:00",
+                    messageHtml = "imported body",
+                    originalImageUrl = null,
+                    localImagePath = "src/1.jpg",
+                    originalVideoUrl = null,
+                    localVideoPath = null,
+                    originalThumbnailUrl = null,
+                    localThumbnailPath = "thumb/1s.jpg"
+                )
+            ),
+            totalSize = 1L
+        )
+        importedRepository.saveIndex(
+            SavedThreadIndex(
+                threads = listOf(
+                    SavedThread(
+                        threadId = "123",
+                        boardId = "b",
+                        boardName = "may/b",
+                        title = "imported thread",
+                        storageId = storageId,
+                        thumbnailPath = "thumb/1s.jpg",
+                        savedAt = 1L,
+                        postCount = 1,
+                        imageCount = 1,
+                        videoCount = 0,
+                        totalSize = 1L,
+                        status = SaveStatus.COMPLETED
+                    )
+                ),
+                totalSize = 1L,
+                lastUpdated = 1L
+            )
+        ).getOrThrow()
+        fileSystem.writeString(
+            "$IMPORTED_HISTORY_DIRECTORY/$storageId/metadata.json",
+            Json.encodeToString(SavedThreadMetadata.serializer(), metadata)
+        ).getOrThrow()
+        fileSystem.writeBytes(
+            "$IMPORTED_HISTORY_DIRECTORY/$storageId/src/1.jpg",
+            byteArrayOf(1)
+        ).getOrThrow()
+        fileSystem.writeBytes(
+            "$IMPORTED_HISTORY_DIRECTORY/$storageId/thumb/1s.jpg",
+            byteArrayOf(2)
+        ).getOrThrow()
+
+        val page = loadOfflineThreadPage(
+            threadId = "123",
+            lookupContext = buildOfflineThreadLookupContext(
+                boardId = "b",
+                initialHistoryBoardId = "b",
+                effectiveBoardUrl = "https://may.2chan.net/b/",
+                boardUrl = "https://may.2chan.net/b/",
+                initialHistoryBoardUrl = "https://may.2chan.net/b/res/123.htm"
+            ),
+            fileSystem = fileSystem,
+            sources = buildThreadOfflineSources(
+                autoSaveRepository = null,
+                importedHistoryRepository = importedRepository,
+                manualSaveRepository = null,
+                legacyManualSaveRepository = null,
+                manualSaveDirectory = "/manual",
+                manualSaveLocation = SaveLocation.Path("/manual")
+            )
+        )
+
+        assertEquals("123", page?.threadId)
+        assertEquals("imported body", page?.posts?.single()?.messageHtml)
+        assertTrue(page?.posts?.single()?.imageUrl?.contains("$IMPORTED_HISTORY_DIRECTORY/$storageId/src/1.jpg") == true)
     }
 
     @Test

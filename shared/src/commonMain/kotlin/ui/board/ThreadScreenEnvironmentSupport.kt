@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
+import com.valoser.futacha.shared.repository.IMPORTED_HISTORY_DIRECTORY
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.ui.isDefaultManualSaveRoot
@@ -15,6 +16,7 @@ internal data class ThreadScreenEnvironmentBundle(
     val effectiveBoardUrl: String,
     val initialHistoryEntry: ThreadHistoryEntry?,
     val autoSaveRepository: SavedThreadRepository?,
+    val importedHistoryRepository: SavedThreadRepository?,
     val manualSaveRepository: SavedThreadRepository?,
     val legacyManualSaveRepository: SavedThreadRepository?,
     val offlineLookupContext: OfflineThreadLookupContext,
@@ -55,6 +57,12 @@ internal fun buildThreadScreenEnvironmentBundle(
             baseSaveLocation = manualSaveLocation
         )
     }
+    val importedHistoryRepository = fileSystem?.let { fs ->
+        SavedThreadRepository(
+            fs,
+            baseDirectory = IMPORTED_HISTORY_DIRECTORY
+        )
+    }
     val legacyManualSaveRepository = fileSystem?.let { fs ->
         val isCurrentDefaultPath = manualSaveLocation is SaveLocation.Path &&
             isDefaultManualSaveRoot(manualSaveDirectory)
@@ -80,11 +88,13 @@ internal fun buildThreadScreenEnvironmentBundle(
         effectiveBoardUrl = effectiveBoardUrl,
         initialHistoryEntry = initialHistoryEntry,
         autoSaveRepository = autoSavedThreadRepository,
+        importedHistoryRepository = importedHistoryRepository,
         manualSaveRepository = manualSaveRepository,
         legacyManualSaveRepository = legacyManualSaveRepository,
         offlineLookupContext = offlineLookupContext,
         offlineSources = buildThreadOfflineSources(
             autoSaveRepository = autoSavedThreadRepository,
+            importedHistoryRepository = importedHistoryRepository,
             manualSaveRepository = manualSaveRepository,
             legacyManualSaveRepository = legacyManualSaveRepository,
             manualSaveDirectory = manualSaveDirectory,

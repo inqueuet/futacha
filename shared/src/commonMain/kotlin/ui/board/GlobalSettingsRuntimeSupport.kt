@@ -15,6 +15,8 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.state.encodeAppStateHistory
+import com.valoser.futacha.shared.state.historyJsonByteSize
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
@@ -25,8 +27,13 @@ import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.serialization.json.Json
 
 private const val GLOBAL_SETTINGS_AUTO_SAVE_STATS_FETCH_TIMEOUT_MS = 4_000L
+
+private val globalSettingsHistoryJson = Json {
+    ignoreUnknownKeys = true
+}
 
 internal data class GlobalSettingsMutableStateBundle(
     val isFileManagerPickerVisible: MutableState<Boolean>,
@@ -124,6 +131,8 @@ internal fun rememberGlobalSettingsScreenRuntime(
     val imageLoader = LocalFutachaImageLoader.current
     val platformContext = LocalPlatformContext.current
     val historyCount = historyEntries.size
+    var historyJsonSize by remember { mutableStateOf<Long?>(null) }
+    var shouldShowHistoryDiagnostics by remember { mutableStateOf(false) }
     var isFileManagerPickerVisible by mutableStateBundle.isFileManagerPickerVisible
     var autoSavedCount by mutableStateBundle.autoSavedCount
     var autoSavedSize by mutableStateBundle.autoSavedSize
@@ -148,10 +157,21 @@ internal fun rememberGlobalSettingsScreenRuntime(
             setAutoSavedSize = { autoSavedSize = it }
         )
     }
+    val refreshAutoSavedStatsWithDiagnostics: suspend () -> Unit = {
+        val update = loadGlobalSettingsAutoSavedStatsUpdate(effectiveAutoSavedRepository)
+        if (update.shouldApply) {
+            shouldShowHistoryDiagnostics = false
+            historyJsonSize = null
+            applyAutoSavedStatsUpdate(update)
+        } else {
+            shouldShowHistoryDiagnostics = true
+            historyJsonSize = null
+            val encoded = encodeAppStateHistory(historyEntries, globalSettingsHistoryJson)
+            historyJsonSize = historyJsonByteSize(encoded)
+        }
+    }
     LaunchedEffect(effectiveAutoSavedRepository) {
-        applyAutoSavedStatsUpdate(
-            loadGlobalSettingsAutoSavedStatsUpdate(effectiveAutoSavedRepository)
-        )
+        refreshAutoSavedStatsWithDiagnostics()
     }
 
     val effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection
@@ -166,7 +186,9 @@ internal fun rememberGlobalSettingsScreenRuntime(
         hasPickerLauncher = preferencesCallbacks.onOpenSaveDirectoryPicker != null,
         historyCount = historyCount,
         autoSavedCount = autoSavedCount,
-        autoSavedSize = autoSavedSize
+        autoSavedSize = autoSavedSize,
+        historyJsonByteSize = historyJsonSize,
+        showHistoryDiagnostics = shouldShowHistoryDiagnostics
     )
     val callbackBundle = buildGlobalSettingsCallbackBundle(
         inputs = GlobalSettingsCallbackBundleInputs(
@@ -206,9 +228,7 @@ internal fun rememberGlobalSettingsScreenRuntime(
                 }
             },
             refreshAutoSavedStats = {
-                applyAutoSavedStatsUpdate(
-                    loadGlobalSettingsAutoSavedStatsUpdate(effectiveAutoSavedRepository)
-                )
+                refreshAutoSavedStatsWithDiagnostics()
             }
         )
     )
