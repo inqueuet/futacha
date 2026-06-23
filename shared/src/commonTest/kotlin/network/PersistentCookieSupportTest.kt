@@ -182,6 +182,28 @@ class PersistentCookieSupportTest {
     }
 
     @Test
+    fun snapshotHelpers_revisionGateRejectsOlderOrSameRevision() {
+        assertFalse(
+            shouldPersistCookieSnapshotRevision(
+                persistedRevision = 2L,
+                snapshotRevision = 1L
+            )
+        )
+        assertFalse(
+            shouldPersistCookieSnapshotRevision(
+                persistedRevision = 2L,
+                snapshotRevision = 2L
+            )
+        )
+        assertTrue(
+            shouldPersistCookieSnapshotRevision(
+                persistedRevision = 2L,
+                snapshotRevision = 3L
+            )
+        )
+    }
+
+    @Test
     fun transactionCoordinator_commitAndRollbackFollowTransactionState() = kotlinx.coroutines.runBlocking {
         val coordinator = PersistentCookieTransactionCoordinator<String, String>("PersistentCookieSupportTest")
         val snapshot = linkedMapOf("a" to "1")

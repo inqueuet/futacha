@@ -5,8 +5,10 @@ import io.ktor.http.Cookie
 import io.ktor.http.Url
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -201,7 +203,39 @@ class PersistentCookieStorageTest {
 
         storage.clearAll()
         assertTrue(storage.listCookies().isEmpty())
-        assertEquals("""{"version":1,"cookies":[]}""", fileSystem.readString(STORAGE_PATH).getOrThrow())
+        val persisted = decodePersistedCookieFile(fileSystem.readString(STORAGE_PATH).getOrThrow())
+        assertTrue(persisted.revision > 0L)
+        assertTrue(persisted.cookies.isEmpty())
+    }
+
+    @Test
+    fun concurrentAddCookie_persistsReloadableLatestSnapshot() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val storage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+
+        (0 until 32).map { index ->
+            async {
+                storage.addCookie(
+                    Url("https://dec.2chan.net/b/"),
+                    Cookie(
+                        name = "c$index",
+                        value = "v$index",
+                        domain = "dec.2chan.net",
+                        path = "/"
+                    )
+                )
+            }
+        }.awaitAll()
+
+        val persisted = decodePersistedCookieFile(fileSystem.readString(STORAGE_PATH).getOrThrow())
+        assertEquals(32, persisted.cookies.size)
+        assertTrue(persisted.revision >= 32L)
+
+        val restoredStorage = PersistentCookieStorage(fileSystem, STORAGE_PATH)
+        assertEquals(
+            (0 until 32).map { "c$it" }.toSet(),
+            restoredStorage.listCookies().map { it.name }.toSet()
+        )
     }
 
     @Test
@@ -271,5 +305,10 @@ class PersistentCookieStorageTest {
 
     companion object {
         private const val STORAGE_PATH = "private/cookies/test-cookies.json"
+        private val COOKIE_JSON = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
+
+        private fun decodePersistedCookieFile(content: String): StoredCookieFile {
+            return COOKIE_JSON.decodeFromString(StoredCookieFile.serializer(), content)
+        }
     }
 }

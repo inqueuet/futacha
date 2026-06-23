@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 
 internal data class PersistentCookieSnapshotLoadResult(
     val cookies: List<StoredCookie>,
+    val revision: Long,
     val restoredFromBackup: Boolean
 )
 
@@ -42,12 +43,20 @@ internal suspend fun decodePersistentCookieSnapshotOrNull(
         }
         PersistentCookieSnapshotLoadResult(
             cookies = parsed.cookies,
+            revision = parsed.revision,
             restoredFromBackup = isBackup
         )
     } catch (error: SerializationException) {
         Logger.e(logTag, "Failed to parse cookie file at '$path': ${error.message}")
         null
     }
+}
+
+internal fun shouldPersistCookieSnapshotRevision(
+    persistedRevision: Long,
+    snapshotRevision: Long
+): Boolean {
+    return snapshotRevision > persistedRevision
 }
 
 internal suspend fun loadPersistentCookieSnapshot(

@@ -40,6 +40,7 @@ data class StoredCookie(
 @Serializable
 internal data class StoredCookieFile(
     val version: Int = 1,
+    val revision: Long = 0L,
     val cookies: List<StoredCookie>
 )
 
@@ -63,8 +64,11 @@ class PersistentCookieStorage(
         PersistentCookieTransactionCoordinator<CookieKey, StoredCookie>("PersistentCookieStorage")
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
     private val mutex = Mutex()
+    private val persistMutex = Mutex()
     private val cookies = mutableMapOf<CookieKey, StoredCookie>()
     private var isLoaded = false
+    private var nextSnapshotRevision = 0L
+    private var persistedSnapshotRevision = 0L
     // FIX: パフォーマンス最適化 - 期限切れCookieの削除頻度を制限
     private var lastPurgeTimeMillis = 0L
     private val purgeIntervalMillis = 5 * 60 * 1000L // 5分間隔
@@ -331,6 +335,8 @@ class PersistentCookieStorage(
             logTag = "PersistentCookieStorage"
         )?.let { loadResult ->
             cookies.clear()
+            nextSnapshotRevision = maxOf(nextSnapshotRevision, loadResult.revision)
+            persistedSnapshotRevision = maxOf(persistedSnapshotRevision, loadResult.revision)
             loadResult.cookies.forEach { stored ->
                 if (!isStoredPersistentCookieAllowed(stored)) return@forEach
                 val key = CookieKey(
@@ -390,8 +396,13 @@ class PersistentCookieStorage(
         enforceCookieCapacityLocked(cookies, currentTimeMillis())
     }
 
-    private fun createSnapshotLocked(sourceCookies: Map<CookieKey, StoredCookie>): StoredCookieFile =
-        StoredCookieFile(cookies = sourceCookies.values.toList())
+    private fun createSnapshotLocked(sourceCookies: Map<CookieKey, StoredCookie>): StoredCookieFile {
+        nextSnapshotRevision += 1L
+        return StoredCookieFile(
+            revision = nextSnapshotRevision,
+            cookies = sourceCookies.values.toList()
+        )
+    }
 
     private suspend fun encodeSnapshot(snapshot: StoredCookieFile): String {
         return withContext(AppDispatchers.parsing) {
@@ -401,12 +412,22 @@ class PersistentCookieStorage(
 
     private suspend fun persistSnapshot(snapshot: StoredCookieFile) {
         val content = encodeSnapshot(snapshot)
-        persistPersistentCookieSnapshot(
-            fileSystem = fileSystem,
-            storagePath = storagePath,
-            content = content,
-            logTag = "PersistentCookieStorage"
-        )
+        persistMutex.withLock {
+            if (!shouldPersistCookieSnapshotRevision(
+                    persistedRevision = persistedSnapshotRevision,
+                    snapshotRevision = snapshot.revision
+                )
+            ) {
+                return
+            }
+            persistPersistentCookieSnapshot(
+                fileSystem = fileSystem,
+                storagePath = storagePath,
+                content = content,
+                logTag = "PersistentCookieStorage"
+            )
+            persistedSnapshotRevision = snapshot.revision
+        }
     }
 
     private fun purgeExpiredLocked(
