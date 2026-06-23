@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, and item 32 AI availability now refreshes continuously only while a Thread screen is visible.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, and item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -52,7 +52,7 @@ This is the primary classification for the remaining findings below. Original it
    - Response/body reads that create media-related memory spikes.
 
 5. Background refresh, Watch sync, autosave scheduling, and command orchestration
-   Items: 33, 39, 40, 42
+   Items: 39, 40, 42
 
    Scope:
    - Background refresh scheduling and duplicated refresh instances.
@@ -108,31 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-33. Read-aloud progress can trigger full watch snapshots during long playback
-----------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreen.kt
-- shared/src/commonMain/kotlin/watch/WatchReadAloudStatusStore.kt
-- app-android/src/main/java/com/valoser/futacha/WatchSyncManager.kt
-- shared/src/commonMain/kotlin/watch/WatchSnapshotBuilder.kt
-
-Current behavior:
-- ThreadScreen updates WatchReadAloudStatusStore as read-aloud progress moves.
-- Progress is bucketed every 5 posts while speaking, but every paused index is distinct.
-- WatchSyncManager combines this status with boards/history/watch words and sends a debounced snapshot.
-- Snapshot building can load preview thread pages for history entries.
-
-Risk:
-- Long read-aloud sessions can repeatedly rebuild and send watch snapshots even when history did not change.
-- Pausing and seeking can generate more status changes than normal playback.
-- Snapshot metadata reads can contend with saved-thread index/autosave work.
-
-Kaizen:
-- Send read-aloud status as a small dedicated watch message instead of rebuilding the full snapshot.
-- Add a minimum interval for read-aloud progress snapshots.
-- Skip saved metadata preview loading when the only changed input is read-aloud status.
 
 
 34. iOS video preview runs JavaScript on every UIKitView update
@@ -1031,6 +1006,7 @@ These findings were completed and removed from the active backlog:
 - Items 1-25 are treated as complete for the current kaizen pass, including autosave contention, stale-first thread display, image/video hot-path findings, catalog transforms, saved-thread/index work, retry budgets, posting-config fallback, and parser truncation surfacing.
 - "Add history growth warning and full thread archive import/export path." History archive/export/import work and the clear-after-export path are treated as complete.
 - "Keep Catalog head metadata requests under tighter control." Catalog title completion is policy-controlled, can be inferred from fetched catalog items, skips unnecessary head requests for boards with real catalog titles, keeps conservative batch/concurrency/timeout limits, and normalizes official `futaba.htm` board links to `futaba.php?mode=cat` for catalog fetching.
+- Item 33: Read-aloud watch progress now sends dedicated small status updates with a minimum interval, and Wear applies those updates to the current snapshot without reloading preview metadata.
 
 
 Removed obsolete findings
