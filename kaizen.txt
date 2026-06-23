@@ -6,18 +6,20 @@ Scope:
 - It is not referenced by the app at runtime.
 - Obsolete findings and already-completed items were removed on 2026-06-23.
 - No real-device profiling has been performed yet, so priorities are based on code structure.
+- Do not add new runtime logging, debug timing logs, or diagnostic file/console output for any kaizen item. Logging itself consumes I/O and can become the performance problem being investigated.
+- Prefer deterministic tests, code-path reduction, existing persisted state, bounded in-memory counters used only by tests, and manual profiling tools over adding app runtime logs.
 
 Current summary:
-- The largest remaining risks are unbounded history persistence, catalog helper requests, thread-wide derived work, WatchWords multi-fetch, autosave contention, and offline fallback ordering.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, and several small thumbnail requests now specify size() with crossfade disabled.
+- The largest remaining risks are WatchWords multi-fetch, autosave contention, and offline fallback ordering.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, and item 3 thread-wide derived work has been reduced enough to treat as complete.
 
 Major classification
 ====================
 
-This is the primary classification for the 70 findings below. Some findings are cross-cutting, but each item is assigned to one main owner area so implementation planning can be split without double-counting.
+This is the primary classification for the remaining findings below. Original item numbers are retained after completed items are removed so code/history references stay stable.
 
 1. State, persistence, storage, and settings data
-   Items: 1, 13, 15, 16, 17, 21, 22, 30, 31, 35, 38, 41, 49, 58, 59, 60, 65, 68, 69
+   Items: 13, 15, 16, 17, 21, 22, 30, 31, 35, 38, 41, 49, 58, 59, 60, 65, 68, 69
 
    Scope:
    - AppStateStore/DataStore/NSUserDefaults JSON growth and locking.
@@ -25,7 +27,7 @@ This is the primary classification for the 70 findings below. Some findings are 
    - SaveLocation/manual save settings and cache/storage cleanup boundaries.
 
 2. Catalog, board list, search, and archive discovery
-   Items: 2, 4, 10, 20, 37, 52, 53, 67
+   Items: 4, 10, 20, 37, 52, 53, 67
 
    Scope:
    - Catalog transforms, search/NG/watch filtering, and visible-item replacement.
@@ -33,10 +35,10 @@ This is the primary classification for the 70 findings below. Some findings are 
    - Archive search response and thumbnail enrichment.
 
 3. Thread rendering, derived data, navigation, and dialogs
-   Items: 3, 6, 11, 12, 27, 43, 46, 47, 48, 54, 56, 57
+   Items: 6, 11, 12, 27, 43, 46, 47, 48, 54, 56, 57
 
    Scope:
-   - Thread-wide derived maps, search/read-aloud/filter data, AI summaries, and quote UI.
+   - Thread navigation, search/read-aloud/filter behavior, AI summaries, and quote UI.
    - Thread load fallback ordering and scroll/index correctness.
    - Tree/flat display correctness around duplicate post IDs.
 
@@ -86,116 +88,6 @@ This is the primary classification for the 70 findings below. Some findings are 
 High priority
 =============
 
-1. Add history growth warning and full thread archive import/export path
-------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/state/AppStateHistoryCoordinatorSupport.kt
-- shared/src/commonMain/kotlin/state/AppStateHistoryMutationSupport.kt
-- shared/src/commonMain/kotlin/state/AppStatePersistenceSupport.kt
-- shared/src/commonMain/kotlin/ui/board/BoardHistoryComponents.kt
-
-Current behavior:
-- History mutations keep a List<ThreadHistoryEntry> without an obvious upper bound.
-- persistHistory() writes the updated list by encoding the full history JSON.
-- decodeAppStateHistory() decodes the full stored list.
-- Scroll position updates are throttled, but persistence still writes history as one list.
-
-Risk:
-- Long-term use can make history mutation, JSON encode/decode, and drawer rendering progressively heavier.
-- Adding a naive truncate is not acceptable for product usability because history entries are tied to scroll restoration, revisiting old threads, and auto-save cleanup.
-- Exporting only ThreadHistoryEntry records is insufficient because imported history must still be able to open the thread itself when the original remote thread is gone or network access is unavailable.
-
-Kaizen:
-- Do not hard-limit or silently truncate history.
-- Add warning thresholds for large history, for example entry count and persisted JSON byte size. Show the warning from the history drawer/settings surface only when the stored history is large enough to affect startup, mutation, or drawer rendering.
-- Add history export that writes a versioned archive bundle, not just the ThreadHistoryEntry list.
-- Export must support both modes:
-  - Export all active history entries in one operation.
-  - Export only selected history entries chosen by the user.
-- The archive must include:
-  - ThreadHistoryEntry records, including scroll restoration fields and board metadata.
-  - SavedThread/SavedThreadMetadata data for each exported history item when an auto-saved or manually saved local copy exists.
-  - The local HTML snapshot and downloaded media files needed by offline fallback, preserving relative paths so imported threads can be opened without the original remote thread.
-  - A manifest with archive version, export timestamp, app version when available, entry count, byte size, and per-thread import status data.
-- Add history import that restores both the history records and the saved thread payloads, then lets the user merge imported entries back into the active history when they want to revisit older threads.
-- Import must support both modes:
-  - Import all entries from an archive in one operation.
-  - Preview the archive manifest and import only selected entries chosen by the user.
-- Selection UI should expose enough information to choose safely: board name, thread title/id, last visited time, reply count, saved media availability, and whether the entry already exists locally.
-- Define merge behavior explicitly: dedupe by board/thread identity, keep the newest lastVisitedEpochMillis, preserve scroll position from the newer entry unless the imported entry is the only copy, and keep current active entries first.
-- Support multiple partial archives imported independently, for example a subset exported on 5/26 and another subset exported on 5/27, both imported one at a time on 6/1.
-- Make archive import idempotent and collision-safe:
-  - Give each archive a stable archiveId and each exported thread snapshot a snapshotId or content hash in the manifest.
-  - Re-importing the same archive should skip already imported payloads instead of duplicating history or overwriting files.
-  - Different archives may contain disjoint thread sets, overlapping thread sets, or newer snapshots of the same board/thread.
-  - Store imported thread payloads under collision-safe paths, for example archiveId/snapshotId or content-addressed directories, before linking the active history/offline fallback to the selected payload.
-  - If two archives contain the same board/thread, keep one active history entry by board/thread identity, prefer the newest lastVisitedEpochMillis for history ordering, and prefer the newest saved thread snapshot for offline fallback unless the user chooses otherwise.
-  - Preserve older imported snapshots as non-active payloads when feasible so imports never destroy readable data from another archive.
-- Provide a clear "export then clear active history" path so users can reduce active history size without losing old history.
-- Define storage behavior explicitly: exported archives should be self-contained; export should not delete matching auto-save directories by itself; clearing active history may still clean active auto-save data according to existing explicit clear/delete semantics after the archive has been successfully written.
-- Define conflict behavior for importing saved thread payloads: avoid overwriting newer local saved copies unless the user confirms, and keep imported payloads addressable by history/offline fallback.
-- Add tests for archive manifest encoding, full thread payload export/import, export-all, export-selected, import-all, import-selected, importing multiple partial archives, re-import idempotency, overlapping thread snapshots, media path restoration, import merge, duplicate handling, warning threshold calculation, clear-after-export flow, delete, clear, and auto-save cleanup behavior.
-- Log history count, JSON byte size, encode/decode duration, and persist count in debug builds.
-
-
-2. Keep Catalog head metadata requests under tighter control
------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/CatalogContentComponents.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogHeadMetadataSupport.kt
-- shared/src/commonMain/kotlin/repo/BoardRepository.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApi.kt
-- shared/src/commonMain/kotlin/util/CatalogDisplayTitleResolver.kt
-
-Current behavior:
-- Head metadata/title completion is conditional: only img.2chan.net and empty/numeric-looking titles.
-- Grid columns 7-8 already disable head metadata completion.
-- When enabled, visible items are batched up to 24, concurrency is 4, and each item has a 3s UI timeout.
-- Repository title resolution shares the OP image semaphore path and may call fetchThreadHead().
-- fetchThreadHead(maxLines = 65) estimates roughly 266KB of Range data.
-
-Risk:
-- Catalog viewing can still trigger helper HTTP requests after scrolling stops.
-- Title completion and OP image lookup can contend for the same semaphore.
-- Slow or missing thread heads can make catalog scrolling feel delayed even when the catalog body loaded quickly.
-
-Kaizen:
-- Add debug timing for head metadata batch size, duration, success/failure/timeout count, and board/thread ids.
-- Consider a lower batch size/concurrency or shorter timeout for title completion.
-- Consider separate semaphores for OP image URL resolution and title completion.
-- Revisit fetchThreadHead Range sizing: start near 64KB and retry larger only when needed.
-
-
-3. Reduce thread-wide derived work on initial display and updates
-----------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenDerivedRuntimeSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadContentLayout.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadContentSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadFilterSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadSearchSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadReadAloudSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadMediaSupport.kt
-
-Current behavior:
-- ThreadContent builds poster labels, post index, referencedByMap, and postsByPosterId for page.posts.
-- ThreadScreenDerivedRuntimeSupport builds MediaPreviewCollection for currentPosts even before a preview/gallery is opened.
-- Search activation builds search targets by converting all post bodies to plain text.
-- NG/thread filtering can build a lowercased body map for all posts.
-- Read-aloud segment generation is conditional, but when triggered it scans all posts.
-
-Risk:
-- Large threads can queue several parsing/derived jobs at once.
-- The same HTML body can be transformed separately for search, NG/filter, read-aloud, message rendering, and media preview title.
-
-Kaizen:
-- Introduce a per-post derived cache keyed by threadId + post.id + messageHtml hash + media URLs.
-- Keep separate fields for plainText, lowerText, firstLine, mediaInfo, and URL/quote ranges rather than forcing one string to serve every use case.
-- Delay full MediaPreviewEntry list construction until media tap or gallery open; keep only lightweight media refs/counts during normal display.
-- Build search/read-aloud data in phases: visible range first, then background remainder.
-- Log derived duration by category with post count and cancellation count.
-
-
 4. Change WatchWords mode from all-source blocking to staged results
 -------------------------------------------------------------------
 Relevant code:
@@ -217,7 +109,7 @@ Kaizen:
 - Show the primary Catalog source first, then merge other sources progressively.
 - Add source-mode settings or a reduced default source set.
 - Preserve stable item keys and scroll anchor when later sources merge in.
-- Log source duration, timeout count, item count, merge duration, and match count.
+- Do not add WatchWords runtime logs. Verify staged merge behavior with tests that cover timeout, item count, and match ordering.
 
 
 5. Make autosave less competitive with foreground reading
@@ -245,7 +137,7 @@ Kaizen:
 - Keep metadata save early, but delay media download until idle, screen exit, or background refresh.
 - Lower autosave media concurrency or make it conditional on network/battery/user setting.
 - Replace full post fingerprinting with lighter revision information where possible.
-- Log autosave start reason, fingerprint duration, media count, bytes, duration, and failure type.
+- Do not add autosave runtime logs. Verify autosave scheduling and contention with tests/fakes that record calls in memory.
 
 
 6. Prefer local stale display before slow fallback chains when available
@@ -270,7 +162,7 @@ Kaizen:
 - If an auto-saved copy exists, display it as stale/local immediately and run remote refresh in the background.
 - On remote success, replace posts/title/thumb/deleted state while preserving scroll/search/dialog state.
 - Keep archive lookup for 404/410, but do not block the first local render.
-- Log remote/archive/offline decision and duration separately.
+- Do not add remote/archive/offline decision logs. Cover fallback ordering with tests and explicit state transitions.
 
 
 Medium priority
@@ -317,7 +209,7 @@ Risk:
 Kaizen:
 - Request a screen-sized image for initial display.
 - Optionally trigger a higher-resolution load after the user zooms past a threshold.
-- Log image dimensions, decode duration, memory/disk cache hit, and preview first-paint time.
+- Do not add image preview runtime logs. Prefer sizing fixes, cache-policy tests, and manual profiler inspection.
 
 
 9. Keep video thumbnails and video preview startup out of hot paths
@@ -345,7 +237,7 @@ Kaizen:
 - Use static video placeholders in passive lists unless a real thumbnail is already cached.
 - Generate video thumbnails mainly in gallery or explicit preview contexts.
 - Reuse player objects while a dialog is open where platform code allows it.
-- Log thumbnail generation duration, cache hit rate, player prepare time, and first-frame time.
+- Do not add video/player runtime logs. Prefer lifecycle fixes, cache tests, and manual profiler inspection.
 
 
 10. Reduce catalog transform allocation during search/NG/watch changes
@@ -365,7 +257,7 @@ Kaizen:
 - Cache normalized title/id/threadUrl per CatalogItem identity/revision.
 - Cache NG/watch match results for the active word sets.
 - Avoid full scan for too-short search queries if product behavior allows it.
-- Log transform duration, item count, query length, NG word count, and watch word count.
+- Do not add catalog transform runtime logs. Cover allocation-sensitive paths with tests and bounded input caps.
 
 
 11. Keep AI/read-aloud work conditional and measurable
@@ -385,7 +277,7 @@ Risk:
 - These are not default hot paths, but they can become expensive for users who enable them on large threads.
 
 Kaizen:
-- Add separate logs for AI start delay, input post count, batch count, inference duration, and publish count.
+- Do not add AI runtime logs. Use bounded queues, timeouts, and in-memory test fakes for timing/backpressure assertions.
 - For large threads, summarize/classify OP + recent N posts first and delay full-thread processing.
 - Generate read-aloud segments lazily from the current visible/read position.
 
@@ -429,7 +321,7 @@ Risk:
 - Large saved-thread indexes can still make first display or delete-refresh slow.
 
 Kaizen:
-- Add loadIndex duration, index byte size, thread count, and delete-refresh duration logs.
+- Do not add SavedThreadRepository runtime logs. Validate index size, load/delete behavior, and recovery with repository tests.
 - Consider in-memory index snapshot cache or state-level diff update after deletion.
 
 
@@ -455,7 +347,7 @@ Risk:
 Kaizen:
 - Decide whether "enabled at startup" should enqueue immediate work.
 - If yes, persist a last-immediate-enqueue timestamp and enqueue one-time work when enabled and stale enough.
-- Log enable source, periodic enqueue, immediate enqueue, and last refresh timestamp.
+- Do not add background refresh runtime logs. Verify scheduling decisions with WorkManager/BGTask fakes or existing observable state.
 
 
 15. Saved-thread delete UI timeout does not cover the delete operation itself
@@ -479,7 +371,7 @@ Risk:
 
 Kaizen:
 - Wrap the whole delete + reload sequence in one timeout or expose separate "deleting" progress.
-- Add delete duration, deleted storage id count, file count if available, and platform logs.
+- Do not add delete/runtime platform logs. Keep cleanup behavior testable through repository results and fake file systems.
 - Consider background delete with optimistic index update plus recoverable backup if the file tree is huge.
 
 
@@ -504,7 +396,7 @@ Risk:
 Kaizen:
 - Fold hasAutoSave=true into the refresh update buffer when possible instead of calling upsert per auto-save.
 - If separate writes are needed, coalesce autosave history flag updates with a debounce.
-- Log refresh batch flush count, autosave history flag write count, and history encode duration.
+- Do not add refresh persistence runtime logs. Test batching and flag writes through in-memory state/storage fakes.
 
 
 17. Thread save metadata/index JSON can become CPU-heavy on large threads
@@ -555,7 +447,7 @@ Risk:
 Kaizen:
 - Add per-save failed URL negative cache keyed by URL and HTTP status/error class.
 - Stop retrying immediately for non-retriable statuses such as 404/410/unsupported type.
-- Log retry count, status code, total failed URL count, and time spent on failed media.
+- Do not add media retry runtime logs. Return structured save results/errors and cover retry behavior with tests.
 - Consider saving metadata first and letting media downloads resume later.
 
 
@@ -601,7 +493,7 @@ Risk:
 Kaizen:
 - Keep a "transforming" state and continue showing old items with a subtle refresh indicator if board/mode identity allows it.
 - For board changes, avoid showing old-board data, but show a skeleton instead of an empty result.
-- Log transform duration and count how often initialValue is empty while source items are non-empty.
+- Do not add transform/flicker runtime logs. Test initial visible-item state directly and keep previous non-empty data where appropriate.
 
 
 21. iOS full-tree deletion has coarse cancellation and no item limits
@@ -623,7 +515,7 @@ Risk:
 
 Kaizen:
 - Implement bounded manual traversal on iOS similar to Android, or move large deletes to a background cleanup queue.
-- Add delete duration logs with path type and estimated saved-thread size.
+- Do not add delete duration logs. Verify delete scope and size accounting through tests.
 - For history cleanup, consider marking stale autosaves and deleting later.
 
 
@@ -646,7 +538,7 @@ Risk:
 - Timeouts may surface as generic "load/save failed" messages rather than "waiting for another save/delete".
 
 Kaizen:
-- Add lock wait duration logs and include lock owner/action labels where possible.
+- Do not add lock-wait runtime logs. Reduce lock scope and cover contention ordering with coroutine tests/fakes.
 - Show a user-facing "保存/削除処理中です" message when lock waits exceed a short threshold.
 - Separate read-only index loads from write locks if index consistency rules allow it.
 
@@ -671,7 +563,7 @@ Risk:
 - Multiple slow helper requests can make the app look frozen even when coroutines are still retrying normally.
 
 Kaizen:
-- Log attempt count, cumulative elapsed time, request type, and board/thread identifiers.
+- Do not add retry/runtime request logs. Prefer structured retry budgets and tests for attempt counts.
 - Use lower maxAttempts for helper/head metadata requests than for primary catalog/thread loads.
 - Surface a distinct "retrying network request" state only when cumulative delay exceeds a short threshold.
 
@@ -697,7 +589,7 @@ Risk:
 
 Kaizen:
 - Add a short negative cache for posting-config fetch failures.
-- Include "posting config fallback used" in structured logs and user-facing error details when post/reply fails afterward.
+- Do not add structured logs for posting config fallback. If needed, include the fallback context only in user-facing error details.
 - Only use the fallback silently for boards that are known to accept it.
 - Preserve and expand tests for IP restriction wait parsing, including "あとN秒", "N秒までおまちください", minutes/hours, posttime/ptmt recovery, and messages that should not expose raw Cookie names unnecessarily.
 
@@ -720,7 +612,7 @@ Risk:
 - Users may report "thread lost posts" or "history count is wrong" rather than a clear parse-limit warning.
 
 Kaizen:
-- Surface truncation/cap reasons in the thread UI and refresh logs.
+- Surface truncation/cap reasons in the thread UI or returned parser state; do not add refresh logs.
 - Add counters for skipped catalog cells, oversized blocks, and parse timeout truncations.
 - Add tests that verify history/save behavior when ThreadPage.isTruncated is true.
 
@@ -743,7 +635,7 @@ Risk:
 - Head reads use a similar accumulation path, so repeated OP image helper requests can add smaller but frequent allocation pressure.
 
 Kaizen:
-- Log response byte size and buffer expansion count in debug builds.
+- Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
 
@@ -794,7 +686,7 @@ Risk:
 - If watch connectivity is flaky, send/ack retries can hide extra background work from normal app logs.
 
 Kaizen:
-- Add source labels to refresh logs: ui, worker, watch, startup.
+- Do not add refresh source logs. Pass source labels through in-memory result/state only if needed for tests or UI behavior.
 - Throttle watch-triggered refresh requests separately from UI refresh.
 - Build a lightweight watch snapshot when saved metadata/index locks are busy.
 
@@ -820,7 +712,7 @@ Risk:
 Kaizen:
 - Store selected media as a platform file/URI handle plus metadata instead of ByteArray when possible.
 - Enforce size limits before loading bytes into shared state.
-- Add memory/size logs around attachment selection and multipart submission.
+- Do not add attachment memory/size runtime logs. Enforce caps before storing/submitting bytes and cover them with tests.
 
 
 30. History persistence can write the full history JSON multiple times for one logical change
@@ -841,7 +733,7 @@ Risk:
 - If history grows large, this can look like intermittent UI stalls or delayed settings/history updates.
 
 Kaizen:
-- Log passCount, history size, encoded byte count, and elapsed time in debug builds.
+- Do not add history persist runtime logs. Keep persistence passes bounded and cover pass behavior with tests.
 - Coalesce fast-follow history mutations before entering the full write loop.
 - Consider a split store for high-frequency fields such as scroll position and auto-save markers.
 
@@ -864,7 +756,7 @@ Risk:
 - This risk grows with history size and with background refresh/watch sync writing history while settings are open.
 
 Kaizen:
-- Add per-key write duration logs on iOS.
+- Do not add iOS write-duration logs. Reduce write frequency and test NSUserDefaults batching behavior through abstractions.
 - Use separate mutexes for large JSON preferences and small scalar preferences if NSUserDefaults consistency allows it.
 - Prefer a file-backed history store on iOS if history continues to grow.
 
@@ -888,7 +780,7 @@ Risk:
 
 Kaizen:
 - Poll only while an AI-capable screen is visible, or back off when availability has been stable.
-- Log availability check duration and whether it caused service binding/model lookup.
+- Do not add availability runtime logs. Cache availability and test service-binding decisions with fakes.
 - Expose a manual refresh path in settings instead of continuous polling when features are idle.
 
 
@@ -936,7 +828,7 @@ Risk:
 
 Kaizen:
 - Remember the last applied muted/volume/controls tuple and evaluate JavaScript only when it changes.
-- Add debug counters for WKWebView reloads and JS sync calls.
+- Do not add WKWebView runtime counters/logs. Reduce reload triggers and verify update inputs with tests where possible.
 - Consider using AVPlayer for local/MP4 cases and reserving WKWebView for WEBM only.
 
 
@@ -985,7 +877,7 @@ Risk:
 
 Kaizen:
 - Add a short negative cache for failed cookie initialization per board.
-- Log setup attempt count, wait time for boardInitializationLock, and whether a preferred cookie was produced.
+- Do not add cookie setup runtime logs. Track recent setup failures in memory if needed for behavior, and test lock/setup decisions.
 - Let read-only catalog/thread loads proceed after a recent setup failure while still surfacing the cookie warning.
 
 
@@ -1030,7 +922,7 @@ Risk:
 - Manual save, autosave, and index writes can appear frozen while waiting on the provider.
 
 Kaizen:
-- Add an overall SAF write timeout and log provider/package, byte count, and phase: open/write/flush/close.
+- Add an overall SAF write timeout, but do not log provider/package, byte count, or write phases.
 - Prefer app-scoped temp file plus provider copy only for the final export path.
 - Show a distinct "保存先プロバイダの応答待ち" message when SAF writes exceed a threshold.
 
@@ -1080,7 +972,7 @@ Risk:
 Kaizen:
 - Bound repository close with a short timeout in BGTask cleanup.
 - Avoid starting helper work that outlives the BGTask deadline.
-- Log close duration separately from refresh duration.
+- Do not add close-duration logs. Separate close from refresh control flow and cover cancellation behavior with tests.
 
 
 41. Android DataStore read fallback can temporarily expose empty/default state
@@ -1131,7 +1023,7 @@ Risk:
 Kaizen:
 - Add per-action coalescing for RefreshHistory, screen-forwarded commands, and destructive confirmation commands.
 - Replace the single pendingAiScreenCommand slot with a small typed queue or reject a new foreground command while one is pending.
-- Report queue depth and dropped/coalesced counts in debug logs.
+- Do not report queue depth through runtime logs. Expose queue depth/drop counts only to tests or user-visible state if product behavior needs it.
 
 
 43. Thread load fallback waits remote, archive, and offline paths sequentially
@@ -1155,7 +1047,7 @@ Risk:
 Kaizen:
 - Probe local metadata quickly before remote load and display stale copy while remote/archive continue.
 - Short-circuit archive fallback when a recent autosave exists and the primary failure is timeout/offline.
-- Log which fallback phase consumed time and whether a local copy was available at the start.
+- Do not add fallback timing logs. Make fallback order explicit in state/results and cover it with tests.
 
 
 44. Android AdView is created and loaded before it is visible
@@ -1179,7 +1071,7 @@ Risk:
 Kaizen:
 - Gate AdView creation/load on a stable "thread screen stayed visible for N ms" signal, not just composition.
 - Reserve banner height or explicitly animate layout changes to avoid content jumps on load.
-- Add logs for AdView create/load/destroy counts during rapid navigation.
+- Do not add AdView runtime logs. Reduce create/load/destroy churn and verify lifecycle calls with fakes where possible.
 
 
 45. Android AppFunction service reports success after enqueue, not after execution
@@ -1249,7 +1141,7 @@ Risk:
 Kaizen:
 - Render quote previews with LazyColumn and stable keys.
 - Cap initial preview targets, for example first 20 posts, and show a "more results" affordance for the rest.
-- Track and log target count when opening previews so pathological references are visible during debugging.
+- Do not log quote preview target counts. Cap/virtualize target rendering and test large-reference cases.
 
 
 48. Thread filter cache stores whole ThreadPage copies
@@ -1298,7 +1190,7 @@ Risk:
 Kaizen:
 - Gate cache cleanup behind one screen-level cacheCleanupJob or Mutex and disable buttons while it runs.
 - Prefer DiskCache.clear() for the active image cache; only delete directories after the ImageLoader/DiskCache is closed or recreated.
-- Add a timeout and progress/error logging for cache cleanup.
+- Add a timeout for cache cleanup, but do not add progress/error runtime logging.
 
 
 50. File manager picker does broad PackageManager and icon work on every dialog open
@@ -1578,7 +1470,7 @@ Risk:
 
 Kaizen:
 - Fail closed when SecRandomCopyBytes() fails: return an error to password setup/change instead of using Kotlin Random.
-- Optionally retry SecRandomCopyBytes() once and log the status before failing.
+- Optionally retry SecRandomCopyBytes() once, but do not log the status before failing.
 - Add a platform abstraction test/fake for the failure path so the fallback cannot silently reappear.
 
 
@@ -1806,6 +1698,14 @@ Kaizen:
 - Prefer a platform crypto digest or streaming implementation so hashing does not require constructing a full padded copy in app code.
 
 
+Completed findings
+==================
+
+These findings were completed and removed from the active backlog:
+- "Add history growth warning and full thread archive import/export path." History archive/export/import work and the clear-after-export path are treated as complete.
+- "Keep Catalog head metadata requests under tighter control." Catalog title completion is policy-controlled, can be inferred from fetched catalog items, skips unnecessary head requests for boards with real catalog titles, keeps conservative batch/concurrency/timeout limits, and normalizes official `futaba.htm` board links to `futaba.php?mode=cat` for catalog fetching.
+
+
 Removed obsolete findings
 =========================
 
@@ -1823,9 +1723,8 @@ These older notes were deleted because the current code no longer matches them:
 Suggested implementation order
 ==============================
 
-1. Add debug timing logs before broad behavior changes: history size/JSON bytes, derived durations, head metadata batches, image fallback, autosave, and thread fallback decisions.
-2. Implement history growth warning plus full thread archive export/import with explicit auto-save cleanup policy and tests.
-3. Split quick autosave metadata from slower media autosave.
-4. Stage WatchWords results and preserve scroll anchors.
-5. Move MediaPreviewEntry/search/read-aloud full scans toward lazy or visible-first generation.
-6. Add local stale-first thread display when an auto-save exists.
+1. Do not add runtime logs before behavior changes. Logging consumes I/O and can distort performance work; use tests, manual profiling tools, or temporary local instrumentation that is not committed.
+2. Split quick autosave metadata from slower media autosave.
+3. Stage WatchWords results and preserve scroll anchors.
+4. Move MediaPreviewEntry/search/read-aloud full scans toward lazy or visible-first generation.
+5. Add local stale-first thread display when an auto-save exists.
