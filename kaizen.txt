@@ -12,6 +12,7 @@ Scope:
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
 - Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, and item 4 WatchWords mode now stages primary catalog display before merging additional sources.
+- Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
 ====================
@@ -43,7 +44,7 @@ This is the primary classification for the remaining findings below. Original it
    - Tree/flat display correctness around duplicate post IDs.
 
 4. Media, image, video, and attachment handling
-   Items: 26, 29, 34, 55, 62, 64
+   Items: 26, 34, 55, 62, 64
 
    Scope:
    - Image fallback, preview sizing, thumbnail generation, video startup, and WebM cache.
@@ -107,30 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-29. Image/video attachment posting keeps full bytes in memory
-------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/network/BoardApi.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApi.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApiPostingSupport.kt
-- shared/src/commonMain/kotlin/util/ImagePicker.kt and platform actuals
-
-Current behavior:
-- createThread/replyToThread accept imageFile as ByteArray.
-- Posting support builds multipart data from that ByteArray.
-- UI picker flows can therefore keep the selected attachment bytes in Compose/app state until posting completes or is cancelled.
-
-Risk:
-- Large images or videos can duplicate memory between picker state, multipart construction, and Ktor send buffers.
-- Retrying a post can keep the same large ByteArray alive longer than expected.
-- Low-memory devices may see jank or crashes before the network request even reaches the server.
-
-Kaizen:
-- Store selected media as a platform file/URI handle plus metadata instead of ByteArray when possible.
-- Enforce size limits before loading bytes into shared state.
-- Do not add attachment memory/size runtime logs. Enforce caps before storing/submitting bytes and cover them with tests.
 
 
 30. History persistence can write the full history JSON multiple times for one logical change
