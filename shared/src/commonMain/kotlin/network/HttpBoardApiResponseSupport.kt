@@ -78,7 +78,13 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
         withTimeout(responseTotalTimeoutMillis) {
             val channel = response.bodyAsChannel()
             val buffer = ByteArray(responseReadBufferBytes)
-            var output = ByteArray(minOf(responseReadBufferBytes, maxBytes.coerceAtLeast(1)))
+            var output = ByteArray(
+                initialHttpBoardApiResponseBodyBufferSize(
+                    contentLength = contentLength,
+                    maxBytes = maxBytes,
+                    fallbackBufferBytes = responseReadBufferBytes
+                )
+            )
             var totalBytes = 0
             var zeroReadCount = 0
             var readLoopCount = 0L
@@ -110,11 +116,12 @@ internal suspend fun readHttpBoardApiResponseBytesWithLimit(
                         throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
                     }
                     if (requiredSize > output.size) {
-                        var newSize = output.size
-                        while (newSize < requiredSize) {
-                            newSize = (newSize * 2).coerceAtMost(maxBytes)
-                            if (newSize == output.size) break
-                        }
+                        val newSize = nextHttpBoardApiResponseBufferSize(
+                            currentSize = output.size,
+                            requiredSize = requiredSize,
+                            maxBytes = maxBytes,
+                            minimumGrowthSize = responseReadBufferBytes
+                        )
                         if (newSize < requiredSize) {
                             throw NetworkException("Failed to expand response buffer safely")
                         }
@@ -207,11 +214,12 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
                         throw NetworkException("Response size exceeds maximum allowed ($maxBytes bytes)")
                     }
                     if (requiredSize > output.size) {
-                        var newSize = output.size
-                        while (newSize < requiredSize) {
-                            newSize = (newSize * 2).coerceAtMost(maxBytes)
-                            if (newSize == output.size) break
-                        }
+                        val newSize = nextHttpBoardApiResponseBufferSize(
+                            currentSize = output.size,
+                            requiredSize = requiredSize,
+                            maxBytes = maxBytes,
+                            minimumGrowthSize = responseReadBufferBytes
+                        )
                         if (newSize < requiredSize) {
                             throw NetworkException("Failed to expand response head buffer safely")
                         }
@@ -237,6 +245,45 @@ internal suspend fun readHttpBoardApiResponseHeadBytesWithLimit(
             }
         }
     }
+}
+
+internal fun initialHttpBoardApiResponseBodyBufferSize(
+    contentLength: Long?,
+    maxBytes: Int,
+    fallbackBufferBytes: Int
+): Int {
+    val fallback = minOf(
+        fallbackBufferBytes.coerceAtLeast(1),
+        maxBytes.coerceAtLeast(1)
+    )
+    val knownLength = contentLength ?: return fallback
+    return if (knownLength in 0..maxBytes.toLong()) {
+        knownLength.toInt()
+    } else {
+        fallback
+    }
+}
+
+internal fun nextHttpBoardApiResponseBufferSize(
+    currentSize: Int,
+    requiredSize: Int,
+    maxBytes: Int,
+    minimumGrowthSize: Int
+): Int {
+    if (requiredSize <= currentSize) return currentSize
+    var newSize = if (currentSize > 0) {
+        currentSize
+    } else {
+        minOf(minimumGrowthSize.coerceAtLeast(1), maxBytes.coerceAtLeast(1))
+    }
+    while (newSize < requiredSize) {
+        val doubled = (newSize.toLong() * 2L)
+            .coerceAtMost(maxBytes.toLong())
+            .toInt()
+        if (doubled <= newSize) break
+        newSize = doubled
+    }
+    return newSize
 }
 
 private fun httpBoardApiResponseReadIdleTimeout(responseTotalTimeoutMillis: Long): Long {

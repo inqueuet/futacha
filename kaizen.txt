@@ -10,7 +10,7 @@ Scope:
 - Prefer deterministic tests, code-path reduction, existing persisted state, bounded in-memory counters used only by tests, and manual profiling tools over adding app runtime logs.
 
 Current summary:
-- The largest remaining risks are autosave contention and offline fallback ordering.
+- The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
 - Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, and item 4 WatchWords mode now stages primary catalog display before merging additional sources.
 
 Major classification
@@ -19,7 +19,7 @@ Major classification
 This is the primary classification for the remaining findings below. Original item numbers are retained after completed items are removed so code/history references stay stable.
 
 1. State, persistence, storage, and settings data
-   Items: 13, 15, 16, 17, 21, 22, 30, 31, 35, 38, 41, 49, 58, 59, 60, 65, 68, 69
+   Items: 30, 31, 35, 38, 41, 49, 58, 59, 60, 65, 68, 69
 
    Scope:
    - AppStateStore/DataStore/NSUserDefaults JSON growth and locking.
@@ -27,7 +27,7 @@ This is the primary classification for the remaining findings below. Original it
    - SaveLocation/manual save settings and cache/storage cleanup boundaries.
 
 2. Catalog, board list, search, and archive discovery
-   Items: 10, 20, 37, 52, 53, 67
+   Items: 37, 52, 53, 67
 
    Scope:
    - Catalog transforms, search/NG/watch filtering, and visible-item replacement.
@@ -35,7 +35,7 @@ This is the primary classification for the remaining findings below. Original it
    - Archive search response and thumbnail enrichment.
 
 3. Thread rendering, derived data, navigation, and dialogs
-   Items: 6, 11, 12, 27, 43, 46, 47, 48, 54, 56, 57
+   Items: 27, 43, 46, 47, 48, 54, 56, 57
 
    Scope:
    - Thread navigation, search/read-aloud/filter behavior, AI summaries, and quote UI.
@@ -43,7 +43,7 @@ This is the primary classification for the remaining findings below. Original it
    - Tree/flat display correctness around duplicate post IDs.
 
 4. Media, image, video, and attachment handling
-   Items: 7, 8, 9, 18, 26, 29, 34, 55, 62, 64
+   Items: 26, 29, 34, 55, 62, 64
 
    Scope:
    - Image fallback, preview sizing, thumbnail generation, video startup, and WebM cache.
@@ -51,7 +51,7 @@ This is the primary classification for the remaining findings below. Original it
    - Response/body reads that create media-related memory spikes.
 
 5. Background refresh, Watch sync, autosave scheduling, and command orchestration
-   Items: 5, 14, 28, 32, 33, 39, 40, 42
+   Items: 28, 32, 33, 39, 40, 42
 
    Scope:
    - Background refresh scheduling and duplicated refresh instances.
@@ -60,12 +60,11 @@ This is the primary classification for the remaining findings below. Original it
    - AI command queue backpressure.
 
 6. Network, parser, posting, and cookie runtime
-   Items: 23, 24, 25, 36, 51, 63
+   Items: 36, 51, 63
 
    Scope:
-   - HTTP retry budgets and parser caps.
-   - Posting/reply error visibility, including preserving the successful Futaba IP restriction wait guidance.
    - Cookie initialization, cookie manager concurrency, and first-load mutex contention.
+   - Posting/reply cookie recovery behavior, including preserving the successful Futaba IP restriction wait guidance.
    - Do not confuse posting-config fallback with the Cookie/IP restriction recovery path. The latter is a valued feature: when Futaba replies with "IP制限" / "あとN秒" / "N秒までおまちください", the app extracts the wait duration, keeps the posting Cookie, and guides retry timing instead of telling the user to delete Cookie data.
 
 7. Platform services and external provider integration
@@ -77,529 +76,15 @@ This is the primary classification for the remaining findings below. Original it
    - External-provider UI flows that are expensive before the user sees value.
 
 8. Security-sensitive paths and unbounded external input
-   Items: 19, 61, 66, 70
+   Items: 61, 66, 70
 
    Scope:
    - AI service timeout accounting and deep-link parsing boundaries.
    - App-lock salt/hash behavior and oversized password input.
    - Inputs that can be supplied from outside normal typing flows.
 
-
-High priority
-=============
-
-5. Make autosave less competitive with foreground reading
---------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenEffectSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenSaveExecutionBindingsSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadAutoSaveRunnerSupport.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveService.kt
-- shared/src/commonMain/kotlin/service/HistoryRefresher.kt
-- shared/src/commonMain/kotlin/service/HistoryRefreshAutoSaveSupport.kt
-
-Current behavior:
-- Thread screen autosave can run every 60s.
-- Autosave allows up to 300 media items and 90s duration.
-- Foreground Thread autosave writes metadata first and indexes the thread as DOWNLOADING before continuing media download in the same autosave run.
-- It then waits briefly, downloads media to AUTO_SAVE_DIRECTORY with foreground autosave media concurrency reduced to 1, and rewrites metadata/index with final media paths and status.
-- Foreground autosave checks readiness before building the post fingerprint, so throttled/in-progress/offline states avoid a full post fingerprint scan.
-- HistoryRefresher can also autosave changed history entries, mainly in background/worker paths.
-
-Risk:
-- Thread display, image loading, manual refresh, and autosave may still compete for network and storage IO on very large media sets or slow providers.
-- Autosave fingerprinting and media planning still scan posts when a save is actually ready to run.
-
-Kaizen:
-- Keep metadata save early and preserve the partially usable autosave snapshot if media download is interrupted.
-- Keep foreground autosave media download delayed and serial unless profiling shows it can safely be relaxed.
-- Consider making media download conditional on network/battery/user setting if foreground contention remains noticeable.
-- Replace full post fingerprinting with lighter revision information only if profiling shows ready-state fingerprint scans are still material.
-- Do not add autosave runtime logs. Verify autosave scheduling and contention with tests/fakes that record calls in memory.
-
-
-6. Prefer local stale display before slow fallback chains when available
-----------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenLoadBindingsSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadLoadRunnerSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadLoadSupport.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepository.kt
-
-Current behavior:
-- Initial thread refresh sets ThreadUiState.Loading, then gives an existing offline copy a short stale-first window before remote load.
-- If a local copy is found quickly, the screen displays it as an offline copy while remote/archive loading continues.
-- Remote/archive success replaces the local copy and clears the offline-copy state.
-- Archive fallback is only selected for 404/410.
-- If archive fallback is selected, it is tried before offline fallback.
-- Offline fallback is used after remote/archive failure when allowed.
-
-Risk:
-- Very slow provider-backed saved copies can miss the short stale-first window and still fall through to the normal remote-first path.
-- Initial stale display can still briefly write/update history before remote success replaces it.
-
-Kaizen:
-- Keep the stale-first window short so missing or slow local storage does not delay remote loading.
-- Preserve search/dialog/scroll-adjacent state while replacing posts/title/thumb/deleted state on remote success.
-- Keep archive lookup for 404/410, but do not block the first local render.
-- Do not add remote/archive/offline decision logs. Cover fallback ordering with tests and explicit state transitions.
-
-
 Medium priority
 ===============
-
-7. Measure and tune image fallback policy rather than disabling it globally
---------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/image/ImageLoaderProvider.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogPreviewImageComponents.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadPostComponents.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadGalleryComponents.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadImagePreviewComponents.kt
-
-Current behavior:
-- FutabaExtensionFallbackInterceptor still exists globally, but ImageRequest-level policy is available.
-- CatalogPreviewImage prefers static candidates and uses a shorter video fallback policy with a 60s negative cache.
-- Preview/gallery/thread uses still need fallback behavior for mismatched source media.
-
-Risk:
-- Failed /src/ URLs can still trigger extra requests in thread, gallery, history, and preview contexts.
-- Globally disabling fallback would regress recovery of real media with incorrect extensions.
-
-Kaizen:
-- Add fallback attempt/exhausted/recovered counters by screen and extension.
-- Keep stronger fallback for explicit user actions such as preview/save.
-- Consider weaker fallback for passive lists, especially video fallback.
-- Tune negative cache TTL based on observed transient-failure rate.
-
-
-8. Size fullscreen image preview requests
-----------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadImagePreviewComponents.kt
-
-Current behavior:
-- ImagePreviewDialog waits for the fullscreen preview container to report a non-zero size.
-- It then builds an ImageRequest with data(entry.url), crossfade(true), and size(containerWidth, containerHeight).
-- Zoom/pan state is reset per URL.
-
-Risk:
-- First display avoids an unbounded source-size decode, but zooming beyond the fitted screen-sized decode can look softer.
-- High-resolution reload on zoom is not implemented yet.
-
-Kaizen:
-- Keep the initial request screen-sized for lower first-open decode cost.
-- Optionally trigger a higher-resolution load after the user zooms past a threshold if sharpness complaints appear.
-- Do not add image preview runtime logs. Prefer sizing fixes, cache-policy tests, and manual profiler inspection.
-
-
-9. Keep video thumbnails and video preview startup out of hot paths
-------------------------------------------------------------------
-Relevant code:
-- shared/src/androidMain/kotlin/ui/image/ImageLoaderProvider.android.kt
-- shared/src/androidMain/kotlin/ui/board/PlatformVideoPlayer.android.kt
-- shared/src/iosMain/kotlin/ui/image/IosVideoFrameFetcher.kt
-- shared/src/iosMain/kotlin/ui/board/PlatformVideoPlayer.ios.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadPostComponents.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadGalleryComponents.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadVideoPreviewComponents.kt
-
-Current behavior:
-- Android ImageLoader registers VideoFrameDecoder.
-- iOS video thumbnails use AVFoundation for MP4-family media and WKWebView for WebM.
-- Android video preview creates an ExoPlayer/PlayerView and prepares on preview open.
-- iOS video preview uses WKWebView for supported web media paths.
-
-Risk:
-- Video-heavy threads can put expensive thumbnail/player setup into image and preview paths.
-- iOS WebM thumbnail generation is especially expensive and serialized.
-
-Kaizen:
-- Use static video placeholders in passive lists unless a real thumbnail is already cached.
-- Generate video thumbnails mainly in gallery or explicit preview contexts.
-- Reuse player objects while a dialog is open where platform code allows it.
-- Do not add video/player runtime logs. Prefer lifecycle fixes, cache tests, and manual profiler inspection.
-
-
-10. Reduce catalog transform allocation during search/NG/watch changes
----------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/CatalogScreenDerivedRuntimeSupport.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogViewTransformer.kt
-
-Current behavior:
-- buildVisibleCatalogItems() deduplicates, transforms by mode, prioritizes watch matches, filters NG words, and filters query.
-- When search/NG/watch matching is needed, buildVisibleCatalogItems() creates per-item normalized title/id/threadUrl once for that transform and reuses it across watch priority, NG filtering, and query filtering.
-- If normal catalog mode has no watch words, NG words, or query, it skips normalized text creation and returns the deduplicated items.
-
-Risk:
-- Large catalogs plus search/NG/watch word changes still require a full pass over the visible source list.
-- Normalized strings are scoped to one transform; there is no long-lived cache across repeated query edits.
-
-Kaizen:
-- Keep normalized title/id/threadUrl sharing within each transform.
-- Consider a small identity/revision cache only if repeated query edits still show allocation pressure.
-- Cache NG/watch match results for active word sets only if profiling shows the current single-pass sharing is insufficient.
-- Avoid full scan for too-short search queries if product behavior allows it.
-- Do not add catalog transform runtime logs. Cover allocation-sensitive paths with tests and bounded input caps.
-
-
-11. Keep AI/read-aloud work conditional and measurable
------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenContentHost.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadReadAloudSupport.kt
-- shared/src/commonMain/kotlin/ui/board/AiPreferenceSupport.kt
-- shared/src/androidMain/kotlin/ai/OnDeviceAiService.android.kt
-- shared/src/iosMain/kotlin/ai/OnDeviceAiService.ios.kt
-
-Current behavior:
-- AI summary/post filtering is default-off and only runs when feature availability and preferences allow it.
-- Read-aloud segment generation is conditional but scans all posts when triggered.
-
-Risk:
-- These are not default hot paths, but they can become expensive for users who enable them on large threads.
-
-Kaizen:
-- Do not add AI runtime logs. Use bounded queues, timeouts, and in-memory test fakes for timing/backpressure assertions.
-- For large threads, summarize/classify OP + recent N posts first and delay full-thread processing.
-- Generate read-aloud segments lazily from the current visible/read position.
-
-
-12. Measure small constant scroll/draw costs before changing UX
---------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadContentSupport.kt
-- shared/src/commonMain/kotlin/ui/board/EdgeSwipeRefreshSupport.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogScreenHostComponents.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenOverlayHost.kt
-
-Current behavior:
-- ThreadScrollbar reads LazyList layoutInfo and draws via Canvas.
-- Edge refresh uses nested scroll/pointer input on catalog/thread lists.
-- Privacy filter draws a full-screen semi-transparent Canvas overlay.
-
-Risk:
-- These are likely not primary bottlenecks, but they can add frame cost on low-end devices during heavy image/text work.
-
-Kaizen:
-- Measure before removing UX.
-- Compare frame timing with scrollbar, edge refresh, and privacy overlay toggled separately.
-- Add a lightweight mode only if profiling shows meaningful jank contribution.
-
-
-13. Saved thread list can still be optimized, but it is no longer unconnected
-----------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/SavedThreadsScreen.kt
-- shared/src/commonMain/kotlin/ui/board/SavedThreadsScreenSupport.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepository.kt
-- shared/src/commonMain/kotlin/ui/FutachaApp.kt
-- shared/src/commonMain/kotlin/ui/board/BoardManagementSupport.kt
-
-Current behavior:
-- SavedThreadsScreen is reachable from BoardManagementMenuAction.SAVED_THREADS.
-- The screen loads repository index data and reloads after deletion.
-
-Risk:
-- Large saved-thread indexes can still make first display or delete-refresh slow.
-
-Kaizen:
-- Do not add SavedThreadRepository runtime logs. Validate index size, load/delete behavior, and recovery with repository tests.
-- Consider in-memory index snapshot cache or state-level diff update after deletion.
-
-
-Additional bug / freeze / load risks found on 2026-06-23
-========================================================
-
-14. Background refresh may not run immediately when already enabled at app start
--------------------------------------------------------------------------------
-Relevant code:
-- app-android/src/main/java/com/valoser/futacha/FutachaApplication.kt
-- app-android/src/main/java/com/valoser/futacha/HistoryRefreshWorker.kt
-
-Current behavior:
-- The Application collector observes isBackgroundRefreshEnabled.
-- It enqueues periodic work whenever enabled is observed.
-- It only enqueues immediate one-time work after hasObservedBackgroundToggle is already true.
-
-Risk:
-- If background refresh was already enabled before app launch, startup only schedules periodic work.
-- The first refresh can wait for WorkManager's periodic window instead of happening soon after launch.
-- Users may interpret this as background refresh being stale or broken.
-
-Kaizen:
-- Decide whether "enabled at startup" should enqueue immediate work.
-- If yes, persist a last-immediate-enqueue timestamp and enqueue one-time work when enabled and stale enough.
-- Do not add background refresh runtime logs. Verify scheduling decisions with WorkManager/BGTask fakes or existing observable state.
-
-
-15. Saved-thread delete UI timeout does not cover the delete operation itself
------------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/SavedThreadsScreenSupport.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepository.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepositoryDeletionSupport.kt
-- shared/src/androidMain/kotlin/util/FileSystem.android.kt
-- shared/src/iosMain/kotlin/util/FileSystem.ios.kt
-
-Current behavior:
-- deleteSavedThreadAndReload() calls repository.deleteThread() first.
-- The 15s timeout is applied only inside loadSavedThreadsSnapshot() after deletion.
-- deleteThread() may recursively delete a storage directory before updating the index.
-
-Risk:
-- Large saved/autosaved thread directories can keep the UI in a deleting/loading state longer than the visible timeout suggests.
-- Android recursive delete is bounded and cancellation-aware, but still can take time.
-- iOS deleteRecursively delegates to NSFileManager.removeItemAtPath for the whole tree, so cancellation/progress granularity is coarse.
-
-Kaizen:
-- Wrap the whole delete + reload sequence in one timeout or expose separate "deleting" progress.
-- Do not add delete/runtime platform logs. Keep cleanup behavior testable through repository results and fake file systems.
-- Consider background delete with optimistic index update plus recoverable backup if the file tree is huge.
-
-
-16. History refresh autosave can cause extra full-history writes outside batch flush
------------------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/service/HistoryRefreshAutoSaveSupport.kt
-- shared/src/commonMain/kotlin/service/HistoryRefresher.kt
-- shared/src/commonMain/kotlin/state/AppStateStore.kt
-- shared/src/commonMain/kotlin/state/AppStatePersistenceSupport.kt
-
-Current behavior:
-- HistoryRefreshUpdateBuffer batches refreshed ThreadHistoryEntry updates and merge-flushes them.
-- Auto-save jobs are launched separately.
-- When an auto-save is indexed, it calls stateStore.upsertHistoryEntry(updatedEntry.copy(hasAutoSave = true)).
-
-Risk:
-- Background refresh can perform both batched mergeHistoryEntries() and separate upsertHistoryEntry() calls.
-- Each history write still encodes the full history list.
-- If multiple auto-saves complete while refresh/UI work is active, persistence churn can show up as IO/CPU pressure.
-
-Kaizen:
-- Fold hasAutoSave=true into the refresh update buffer when possible instead of calling upsert per auto-save.
-- If separate writes are needed, coalesce autosave history flag updates with a debounce.
-- Do not add refresh persistence runtime logs. Test batching and flag writes through in-memory state/storage fakes.
-
-
-17. Thread save metadata/index JSON can become CPU-heavy on large threads
--------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveService.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveExecutionSupport.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveRuntimeSupport.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepositoryIndexSupport.kt
-
-Current behavior:
-- ThreadSaveService builds SavedPost metadata for every post.
-- Metadata JSON uses prettyPrint.
-- buildThreadSaveMetadataPayloadWithStableSize() may encode metadata up to 8 times to settle totalSize.
-- SavedThreadRepository index writes encode the full index and write temp, backup, and primary payloads.
-
-Risk:
-- Large threads with many posts/media can spend noticeable CPU time in JSON serialization after downloads finish.
-- The user may see a long FINALIZING phase after network work has completed.
-- Auto-save has the same metadata path, so background work can also hit this cost.
-
-Kaizen:
-- Measure metadata encode count/duration and payload byte size.
-- Avoid prettyPrint for machine-only metadata/index if human readability is not required.
-- Store totalSize outside the metadata payload or calculate it without repeated full re-encoding.
-- Keep index updates incremental or cache the encoded index when only one entry changes.
-
-
-18. Thread media save retries can amplify bad URLs and slow networks
---------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveService.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveExecutionSupport.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveMediaDownloadSupport.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveNetworkSupport.kt
-
-Current behavior:
-- Thread save schedules up to 300 media items.
-- Each media item can retry up to 3 times.
-- Downloads run 2 at a time.
-- Each request has a 30s request timeout, while body streaming can use the broader save-duration budget.
-
-Risk:
-- Deleted media or consistently failing hosts can consume much of the 3-minute manual save budget.
-- Auto-save uses a tighter 90s budget, so repeated bad URLs can lead to partial saves and repeated future attempts.
-- The image loader has negative cache for some fallback failures, but the save path does not appear to reuse that knowledge.
-
-Kaizen:
-- Add per-save failed URL negative cache keyed by URL and HTTP status/error class.
-- Stop retrying immediately for non-retriable statuses such as 404/410/unsupported type.
-- Do not add media retry runtime logs. Return structured save results/errors and cover retry behavior with tests.
-- Consider saving metadata first and letting media downloads resume later.
-
-
-19. AI inference timeouts can be spent waiting for locks or service binding
----------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenContentHost.kt
-- shared/src/androidMain/kotlin/ai/OnDeviceAiService.android.kt
-- shared/src/iosMain/kotlin/ai/OnDeviceAiService.ios.kt
-
-Current behavior:
-- runThreadAiInferenceWithTimeout() uses one timeout to acquire aiInferenceMutex, then another timeout for the actual AI call.
-- Android remote AI requests also use a requestMutex and the timeout covers service binding, mutex wait, and response wait.
-- iOS uses notification bridge requests with a 45s timeout.
-
-Risk:
-- Summary and moderation can occupy up to two timeout windows sequentially.
-- A request may fail because it waited for a lock/bind, not because inference itself was slow.
-- With post moderation batches, this can make AI-enabled thread screens stay in "running" state for a long time.
-
-Kaizen:
-- Track lock wait, service bind wait, inference duration, and response wait separately.
-- Use a single end-to-end budget per user-visible AI action.
-- If the AI mutex is busy, defer moderation instead of consuming a full batch timeout.
-- Publish fewer intermediate UI updates while AI is running during scrolling.
-
-
-20. Catalog visible-item transform can briefly blank after item-list replacement
--------------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/CatalogScreenDerivedRuntimeSupport.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogViewTransformer.kt
-
-Current behavior:
-- rememberCatalogVisibleItemsState() stores previous visible items only while the items list identity stays the same.
-- When request.items identity changes, previousResult.visibleItems is set to null.
-- produceState initialValue then becomes emptyList() until buildVisibleCatalogItems() finishes on AppDispatchers.parsing.
-
-Risk:
-- After catalog refresh or mode/source replacement, the UI can briefly show an empty catalog even though data exists.
-- On large catalogs with search/NG/watch transforms, this can look like flicker or slow loading.
-
-Kaizen:
-- Keep a "transforming" state and continue showing old items with a subtle refresh indicator if board/mode identity allows it.
-- For board changes, avoid showing old-board data, but show a skeleton instead of an empty result.
-- Do not add transform/flicker runtime logs. Test initial visible-item state directly and keep previous non-empty data where appropriate.
-
-
-21. iOS full-tree deletion has coarse cancellation and no item limits
----------------------------------------------------------------------
-Relevant code:
-- shared/src/iosMain/kotlin/util/FileSystem.ios.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepositoryDeletionSupport.kt
-- shared/src/commonMain/kotlin/ui/FutachaAppHistorySupport.kt
-
-Current behavior:
-- iOS deleteRecursively() calls NSFileManager.removeItemAtPath() for the whole directory tree.
-- Android has explicit bounded recursive traversal with item/time limits.
-- History deletion and saved-thread deletion can delete autosave/manual save directories.
-
-Risk:
-- Very large thread save directories may monopolize one FutachaIo worker until NSFileManager returns.
-- Cancellation cannot stop midway through the platform call.
-- Multiple deletes can queue behind this work and make storage actions feel frozen.
-
-Kaizen:
-- Implement bounded manual traversal on iOS similar to Android, or move large deletes to a background cleanup queue.
-- Do not add delete duration logs. Verify delete scope and size accounting through tests.
-- For history cleanup, consider marking stale autosaves and deleting later.
-
-
-22. Save/delete/index locks can serialize unrelated user actions longer than expected
-------------------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/repository/SavedThreadRepository.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepositoryDeletionSupport.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/ThreadSaveService.kt
-- shared/src/commonMain/kotlin/com/valoser/futacha/shared/service/SingleMediaSaveService.kt
-
-Current behavior:
-- SavedThreadRepository uses instance mutexes and ThreadStorageLockRegistry for index/storage mutation.
-- Index lock wait and operation timeouts are 30s.
-- Delete storage lock wait timeout is 15s per target.
-- Single media save and full thread save use storage locks to avoid collisions.
-
-Risk:
-- A long save/delete can make a later index read, saved list load, or save action wait even if the user action looks unrelated.
-- Timeouts may surface as generic "load/save failed" messages rather than "waiting for another save/delete".
-
-Kaizen:
-- Do not add lock-wait runtime logs. Reduce lock scope and cover contention ordering with coroutine tests/fakes.
-- Show a user-facing "保存/削除処理中です" message when lock waits exceed a short threshold.
-- Separate read-only index loads from write locks if index consistency rules allow it.
-
-
-23. HTTP retry budgets can turn one user action into a long stall
------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/network/HttpBoardApiExecutionSupport.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApi.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogScreenExecutionSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadLoadRunnerSupport.kt
-
-Current behavior:
-- withHttpBoardApiRetry runs up to 3 attempts by default.
-- Each attempt is wrapped in requestAttemptTimeoutMillis.
-- Failed attempts add retry delays starting at 500ms and doubling up to 5s.
-- Catalog/thread UI paths also have their own timeout and loading state logic.
-
-Risk:
-- A single refresh, post, reply, or helper request can stay busy for much longer than the user expects.
-- When helper requests are nested in a screen refresh, the final snackbar/log may only say timeout or failure without showing the retry chain.
-- Multiple slow helper requests can make the app look frozen even when coroutines are still retrying normally.
-
-Kaizen:
-- Do not add retry/runtime request logs. Prefer structured retry budgets and tests for attempt counts.
-- Use lower maxAttempts for helper/head metadata requests than for primary catalog/thread loads.
-- Surface a distinct "retrying network request" state only when cumulative delay exceeds a short threshold.
-
-
-24. Posting-config fallback can hide the root cause of post/reply failures
--------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/network/HttpBoardApiExecutionSupport.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApi.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApiPostingSupport.kt
-
-Current behavior:
-- getOrLoadHttpBoardApiPostingConfig serializes per-board config fetches behind a mutex.
-- If fetching futaba.htm/form config fails, it logs a warning and returns a non-cached Shift_JIS fallback.
-- The fallback is intentionally not cached, so later post attempts can repeat the same fetch/fallback sequence.
-- Separately, the Cookie/IP restriction recovery path parses Futaba posting failures such as IP制限 and "あとN秒" / "N秒までおまちください", preserves posttime/ptmt Cookie state, and tells the user how long to wait before retrying. This has materially improved real posting success and user satisfaction.
-
-Risk:
-- The actual cause can be "posting config could not be loaded", but the user may only see a later generic post/reply failure.
-- A board with persistent config-load failures causes repeated network work on every post attempt.
-- Waiting callers are blocked behind the per-board config mutex even when they will all receive the same fallback.
-- Regressing the Cookie/IP restriction recovery path would directly reduce posting success; do not simplify it into a generic Cookie error.
-
-Kaizen:
-- Add a short negative cache for posting-config fetch failures.
-- Do not add structured logs for posting config fallback. If needed, include the fallback context only in user-facing error details.
-- Only use the fallback silently for boards that are known to accept it.
-- Preserve and expand tests for IP restriction wait parsing, including "あとN秒", "N秒までおまちください", minutes/hours, posttime/ptmt recovery, and messages that should not expose raw Cookie names unnecessarily.
-
-
-25. Parser hard caps can become user-visible partial data bugs
--------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/parser/CatalogHtmlParserCore.kt
-- shared/src/commonMain/kotlin/parser/ThreadHtmlParserCore.kt
-- shared/src/commonMain/kotlin/parser/ThreadHtmlReplyParsingSupport.kt
-
-Current behavior:
-- Catalog parsing rejects HTML over 10MB, limits iterations to 2000, and caps items at 1000.
-- Thread parsing rejects HTML over 10MB, times out after 5s, limits reply parsing to 2000 iterations, and caps posts at 3000.
-- ThreadPage can carry isTruncated/truncationReason, but several downstream flows still update history, save metadata, and derive UI state from the partial page.
-
-Risk:
-- Large or malformed boards can show missing catalog items/posts while still looking like a normal successful load.
-- History reply counts, auto-save contents, search results, and read-aloud segments can be based on truncated data.
-- Users may report "thread lost posts" or "history count is wrong" rather than a clear parse-limit warning.
-
-Kaizen:
-- Surface truncation/cap reasons in the thread UI or returned parser state; do not add refresh logs.
-- Add counters for skipped catalog cells, oversized blocks, and parse timeout truncations.
-- Add tests that verify history/save behavior when ThreadPage.isTruncated is true.
-
 
 26. Response reads can create avoidable memory and GC spikes
 -----------------------------------------------------------
@@ -1686,6 +1171,7 @@ Completed findings
 ==================
 
 These findings were completed and removed from the active backlog:
+- Items 1-25 are treated as complete for the current kaizen pass, including autosave contention, stale-first thread display, image/video hot-path findings, catalog transforms, saved-thread/index work, retry budgets, posting-config fallback, and parser truncation surfacing.
 - "Add history growth warning and full thread archive import/export path." History archive/export/import work and the clear-after-export path are treated as complete.
 - "Keep Catalog head metadata requests under tighter control." Catalog title completion is policy-controlled, can be inferred from fetched catalog items, skips unnecessary head requests for boards with real catalog titles, keeps conservative batch/concurrency/timeout limits, and normalizes official `futaba.htm` board links to `futaba.php?mode=cat` for catalog fetching.
 
@@ -1708,7 +1194,7 @@ Suggested implementation order
 ==============================
 
 1. Do not add runtime logs before behavior changes. Logging consumes I/O and can distort performance work; use tests, manual profiling tools, or temporary local instrumentation that is not committed.
-2. Split quick autosave metadata from slower media autosave.
-3. Stage WatchWords results and preserve scroll anchors.
-4. Move MediaPreviewEntry/search/read-aloud full scans toward lazy or visible-first generation.
-5. Add local stale-first thread display when an auto-save exists.
+2. Reduce duplicate buffering in catalog/thread response reads.
+3. Fix duplicate post ID handling in derived thread maps.
+4. Bound attachment bytes and large external inputs before storing them in app state.
+5. Tighten cookie/storage consistency paths that can serialize unrelated work.

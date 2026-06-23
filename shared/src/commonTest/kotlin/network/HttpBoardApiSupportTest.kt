@@ -35,6 +35,65 @@ class HttpBoardApiSupportTest {
     }
 
     @Test
+    fun responseReadHelpers_useContentLengthForBodyInitialBuffer() {
+        assertEquals(
+            123,
+            initialHttpBoardApiResponseBodyBufferSize(
+                contentLength = 123L,
+                maxBytes = 1024,
+                fallbackBufferBytes = 8
+            )
+        )
+        assertEquals(
+            8,
+            initialHttpBoardApiResponseBodyBufferSize(
+                contentLength = null,
+                maxBytes = 1024,
+                fallbackBufferBytes = 8
+            )
+        )
+        assertEquals(
+            8,
+            initialHttpBoardApiResponseBodyBufferSize(
+                contentLength = 2048L,
+                maxBytes = 1024,
+                fallbackBufferBytes = 8
+            )
+        )
+    }
+
+    @Test
+    fun responseReadHelpers_expandFromZeroAndStayBounded() {
+        assertEquals(
+            8,
+            nextHttpBoardApiResponseBufferSize(
+                currentSize = 0,
+                requiredSize = 6,
+                maxBytes = 1024,
+                minimumGrowthSize = 8
+            )
+        )
+        assertEquals(
+            32,
+            nextHttpBoardApiResponseBufferSize(
+                currentSize = 8,
+                requiredSize = 17,
+                maxBytes = 1024,
+                minimumGrowthSize = 8
+            )
+        )
+        assertEquals(
+            20,
+            nextHttpBoardApiResponseBufferSize(
+                currentSize = 16,
+                requiredSize = 21,
+                maxBytes = 20,
+                minimumGrowthSize = 8
+            )
+        )
+    }
+
+    @Test
     fun postResponseHelpers_detectSuccessAndErrors() {
         assertTrue(isSuccessfulHttpBoardApiPostResponse("書き込みました。"))
         assertTrue(isSuccessfulHttpBoardApiPostResponse("""{"status":"ok","thisno":10}"""))
