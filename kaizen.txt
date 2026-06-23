@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, and item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, and item 31 iOS storage writes now use separate locks for large JSON and scalar settings.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -20,7 +20,7 @@ Major classification
 This is the primary classification for the remaining findings below. Original item numbers are retained after completed items are removed so code/history references stay stable.
 
 1. State, persistence, storage, and settings data
-   Items: 31, 35, 38, 41, 49, 58, 59, 60, 65, 68, 69
+   Items: 35, 38, 41, 49, 58, 59, 60, 65, 68, 69
 
    Scope:
    - AppStateStore/DataStore/NSUserDefaults JSON growth and locking.
@@ -108,29 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-31. Large iOS preference writes can block unrelated state updates behind one mutex
---------------------------------------------------------------------------------
-Relevant code:
-- shared/src/iosMain/kotlin/state/AppStateStore.ios.kt
-- shared/src/commonMain/kotlin/state/AppStatePersistenceSupport.kt
-- shared/src/commonMain/kotlin/state/AppStateHistoryCoordinatorSupport.kt
-
-Current behavior:
-- IosPlatformStateStorage uses a single updateMutex for all NSUserDefaults writes.
-- The actual write block runs on Dispatchers.Default, but every setting waits for the same mutex.
-- History, boards, NG words, watch words, menu config, and lightweight booleans all share this path.
-
-Risk:
-- A large history JSON write can delay a small settings toggle or UI-observed preference update.
-- The UI may appear to ignore a setting briefly even though it is waiting behind an unrelated persistence operation.
-- This risk grows with history size and with background refresh/watch sync writing history while settings are open.
-
-Kaizen:
-- Do not add iOS write-duration logs. Reduce write frequency and test NSUserDefaults batching behavior through abstractions.
-- Use separate mutexes for large JSON preferences and small scalar preferences if NSUserDefaults consistency allows it.
-- Prefer a file-backed history store on iOS if history continues to grow.
 
 
 32. AI availability polling can wake service/binding paths every minute while enabled

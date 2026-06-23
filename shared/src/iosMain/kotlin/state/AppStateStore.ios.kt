@@ -58,7 +58,8 @@ internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformS
 
 private class IosPlatformStateStorage : PlatformStateStorage {
     private val defaults = NSUserDefaults.standardUserDefaults()
-    private val updateMutex = Mutex()
+    private val largeJsonUpdateMutex = Mutex()
+    private val scalarUpdateMutex = Mutex()
     private val cacheLock = NSLock()
     private val stringReadCache = mutableMapOf<String, String?>()
     private val booleanReadCache = mutableMapOf<String, Boolean>()
@@ -187,62 +188,60 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             AI_COMMAND_KEY to readBooleanState(AI_COMMAND_KEY)
         )
 
-        updateMutex.withLock {
-            applyDeferredStringState(BOARDS_KEY, stringValues, boardsState)
-            applyDeferredStringState(HISTORY_KEY, stringValues, historyState)
-            applyDeferredStringState(CATALOG_DISPLAY_STYLE_KEY, stringValues, displayStyleState)
-            applyDeferredStringState(CATALOG_GRID_COLUMNS_KEY, stringValues, gridColumnsState)
-            applyDeferredBooleanState(PRIVACY_FILTER_KEY, booleanValues, privacyFilterState)
-            applyDeferredBooleanState(BACKGROUND_REFRESH_KEY, booleanValues, backgroundRefreshState)
-            applyDeferredBooleanState(ADS_ENABLED_KEY, booleanValues, adsEnabledState)
-            applyDeferredBooleanState(POSTING_NOTICE_KEY, booleanValues, postingNoticeState)
-            applyDeferredBooleanState(
-                PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY,
-                booleanValues,
-                pastThreadSearchNoticeHiddenState
-            )
-            applyDeferredBooleanState(LIGHTWEIGHT_MODE_KEY, booleanValues, lightweightModeState)
-            applyDeferredBooleanState(THREAD_SUMMARY_MODE_KEY, booleanValues, threadSummaryModeState)
-            applyDeferredBooleanState(AI_POST_FILTER_KEY, booleanValues, aiPostFilterState)
-            applyDeferredBooleanState(AI_COMMAND_KEY, booleanValues, aiCommandState)
-            applyDeferredStringState(APP_LOCK_PASSWORD_HASH_KEY, stringValues, appLockPasswordHashState)
-            applyDeferredStringState(
-                key = MANUAL_SAVE_DIRECTORY_KEY,
-                values = stringValues,
-                state = manualSaveDirectoryState,
-                transform = ::sanitizeManualSaveDirectoryValue
-            )
-            applyDeferredStringState(ATTACHMENT_PICKER_PREF_KEY, stringValues, attachmentPickerPreferenceState)
-            applyDeferredStringState(SAVE_DIRECTORY_SELECTION_KEY, stringValues, saveDirectorySelectionState)
-            applyDeferredStringState(THREAD_GALLERY_TAP_ACTION_KEY, stringValues, threadGalleryTapActionState)
-            applyDeferredStringState(THEME_MODE_KEY, stringValues, themeModeState)
-            applyDeferredStringState(THEME_PALETTE_KEY, stringValues, themePaletteState)
-            applyDeferredStringState(APP_ICON_VARIANT_KEY, stringValues, appIconVariantState)
-            applyDeferredStringState(THREAD_DISPLAY_MODE_KEY, stringValues, threadDisplayModeState)
-            applyDeferredStringState(CATALOG_MODE_MAP_KEY, stringValues, catalogModeMapState)
-            applyDeferredStringState(NG_HEADERS_KEY, stringValues, ngHeadersState)
-            applyDeferredStringState(NG_WORDS_KEY, stringValues, ngWordsState)
-            applyDeferredStringState(CATALOG_NG_WORDS_KEY, stringValues, catalogNgWordsState)
-            applyDeferredStringState(WATCH_WORDS_KEY, stringValues, watchWordsState)
-            applyDeferredStringState(SELF_POST_IDENTIFIERS_KEY, stringValues, selfPostIdentifiersState)
-            applyDeferredStringState(THREAD_MENU_CONFIG_KEY, stringValues, threadMenuConfigState)
-            applyDeferredStringState(THREAD_SETTINGS_MENU_CONFIG_KEY, stringValues, threadSettingsMenuConfigState)
-            applyDeferredStringState(THREAD_MENU_ENTRIES_KEY, stringValues, threadMenuEntriesState)
-            applyDeferredStringState(CATALOG_NAV_ENTRIES_KEY, stringValues, catalogNavEntriesState)
-            applyDeferredStringState(
-                key = PREFERRED_FILE_MANAGER_PACKAGE_KEY,
-                values = stringValues,
-                state = preferredFileManagerPackageState,
-                transform = { it.orEmpty() }
-            )
-            applyDeferredStringState(
-                key = PREFERRED_FILE_MANAGER_LABEL_KEY,
-                values = stringValues,
-                state = preferredFileManagerLabelState,
-                transform = { it.orEmpty() }
-            )
-            applyDeferredStringState(LAST_USED_DELETE_KEY, stringValues, lastUsedDeleteKeyState)
-        }
+        applyDeferredStringState(BOARDS_KEY, stringValues, boardsState)
+        applyDeferredStringState(HISTORY_KEY, stringValues, historyState)
+        applyDeferredStringState(CATALOG_DISPLAY_STYLE_KEY, stringValues, displayStyleState)
+        applyDeferredStringState(CATALOG_GRID_COLUMNS_KEY, stringValues, gridColumnsState)
+        applyDeferredBooleanState(PRIVACY_FILTER_KEY, booleanValues, privacyFilterState)
+        applyDeferredBooleanState(BACKGROUND_REFRESH_KEY, booleanValues, backgroundRefreshState)
+        applyDeferredBooleanState(ADS_ENABLED_KEY, booleanValues, adsEnabledState)
+        applyDeferredBooleanState(POSTING_NOTICE_KEY, booleanValues, postingNoticeState)
+        applyDeferredBooleanState(
+            PAST_THREAD_SEARCH_NOTICE_HIDDEN_KEY,
+            booleanValues,
+            pastThreadSearchNoticeHiddenState
+        )
+        applyDeferredBooleanState(LIGHTWEIGHT_MODE_KEY, booleanValues, lightweightModeState)
+        applyDeferredBooleanState(THREAD_SUMMARY_MODE_KEY, booleanValues, threadSummaryModeState)
+        applyDeferredBooleanState(AI_POST_FILTER_KEY, booleanValues, aiPostFilterState)
+        applyDeferredBooleanState(AI_COMMAND_KEY, booleanValues, aiCommandState)
+        applyDeferredStringState(APP_LOCK_PASSWORD_HASH_KEY, stringValues, appLockPasswordHashState)
+        applyDeferredStringState(
+            key = MANUAL_SAVE_DIRECTORY_KEY,
+            values = stringValues,
+            state = manualSaveDirectoryState,
+            transform = ::sanitizeManualSaveDirectoryValue
+        )
+        applyDeferredStringState(ATTACHMENT_PICKER_PREF_KEY, stringValues, attachmentPickerPreferenceState)
+        applyDeferredStringState(SAVE_DIRECTORY_SELECTION_KEY, stringValues, saveDirectorySelectionState)
+        applyDeferredStringState(THREAD_GALLERY_TAP_ACTION_KEY, stringValues, threadGalleryTapActionState)
+        applyDeferredStringState(THEME_MODE_KEY, stringValues, themeModeState)
+        applyDeferredStringState(THEME_PALETTE_KEY, stringValues, themePaletteState)
+        applyDeferredStringState(APP_ICON_VARIANT_KEY, stringValues, appIconVariantState)
+        applyDeferredStringState(THREAD_DISPLAY_MODE_KEY, stringValues, threadDisplayModeState)
+        applyDeferredStringState(CATALOG_MODE_MAP_KEY, stringValues, catalogModeMapState)
+        applyDeferredStringState(NG_HEADERS_KEY, stringValues, ngHeadersState)
+        applyDeferredStringState(NG_WORDS_KEY, stringValues, ngWordsState)
+        applyDeferredStringState(CATALOG_NG_WORDS_KEY, stringValues, catalogNgWordsState)
+        applyDeferredStringState(WATCH_WORDS_KEY, stringValues, watchWordsState)
+        applyDeferredStringState(SELF_POST_IDENTIFIERS_KEY, stringValues, selfPostIdentifiersState)
+        applyDeferredStringState(THREAD_MENU_CONFIG_KEY, stringValues, threadMenuConfigState)
+        applyDeferredStringState(THREAD_SETTINGS_MENU_CONFIG_KEY, stringValues, threadSettingsMenuConfigState)
+        applyDeferredStringState(THREAD_MENU_ENTRIES_KEY, stringValues, threadMenuEntriesState)
+        applyDeferredStringState(CATALOG_NAV_ENTRIES_KEY, stringValues, catalogNavEntriesState)
+        applyDeferredStringState(
+            key = PREFERRED_FILE_MANAGER_PACKAGE_KEY,
+            values = stringValues,
+            state = preferredFileManagerPackageState,
+            transform = { it.orEmpty() }
+        )
+        applyDeferredStringState(
+            key = PREFERRED_FILE_MANAGER_LABEL_KEY,
+            values = stringValues,
+            state = preferredFileManagerLabelState,
+            transform = { it.orEmpty() }
+        )
+        applyDeferredStringState(LAST_USED_DELETE_KEY, stringValues, lastUsedDeleteKeyState)
     }
 
     private fun applyDeferredStringState(
@@ -250,7 +249,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         values: Map<String, String?>,
         state: MutableStateFlow<String?>
     ) {
-        if (key !in locallyUpdatedKeys) {
+        if (!isLocallyUpdated(key)) {
             state.value = values[key]
         }
     }
@@ -261,7 +260,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         state: MutableStateFlow<String>,
         transform: (String?) -> String
     ) {
-        if (key !in locallyUpdatedKeys) {
+        if (!isLocallyUpdated(key)) {
             state.value = transform(values[key])
         }
     }
@@ -271,7 +270,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         values: Map<String, Boolean>,
         state: MutableStateFlow<Boolean>
     ) {
-        if (key !in locallyUpdatedKeys) {
+        if (!isLocallyUpdated(key)) {
             state.value = values[key] ?: state.value
         }
     }
@@ -306,6 +305,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private fun cachedBooleanState(key: String): Boolean? {
         return withCacheLock {
             booleanReadCache[key]
+        }
+    }
+
+    private fun markLocallyUpdated(key: String) {
+        withCacheLock {
+            locallyUpdatedKeys += key
+        }
+    }
+
+    private fun isLocallyUpdated(key: String): Boolean {
+        return withCacheLock {
+            key in locallyUpdatedKeys
         }
     }
 
@@ -367,12 +378,63 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         }
     }
 
-    private suspend fun update(block: () -> Unit) {
-        updateMutex.withLock {
+    private suspend fun updateLargeJson(block: () -> Unit) {
+        largeJsonUpdateMutex.withLock {
             withContext(Dispatchers.Default) {
                 block()
             }
         }
+    }
+
+    private suspend fun updateScalar(block: () -> Unit) {
+        scalarUpdateMutex.withLock {
+            withContext(Dispatchers.Default) {
+                block()
+            }
+        }
+    }
+
+    private suspend fun updateAllState(block: () -> Unit) {
+        largeJsonUpdateMutex.withLock {
+            scalarUpdateMutex.withLock {
+                withContext(Dispatchers.Default) {
+                    block()
+                }
+            }
+        }
+    }
+
+    private fun writeStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String?>
+    ) {
+        markLocallyUpdated(key)
+        defaults.setObject(value, forKey = key)
+        state.value = value
+        cacheStringState(key, value)
+    }
+
+    private fun writeStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String>
+    ) {
+        markLocallyUpdated(key)
+        defaults.setObject(value, forKey = key)
+        state.value = value
+        cacheStringState(key, value)
+    }
+
+    private fun writeBooleanState(
+        key: String,
+        value: Boolean,
+        state: MutableStateFlow<Boolean>
+    ) {
+        markLocallyUpdated(key)
+        defaults.setBool(value, forKey = key)
+        state.value = value
+        cacheBooleanState(key, value)
     }
 
     private suspend fun updateStringState(
@@ -380,11 +442,18 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         value: String,
         state: MutableStateFlow<String?>
     ) {
-        update {
-            defaults.setObject(value, forKey = key)
-            state.value = value
-            cacheStringState(key, value)
-            locallyUpdatedKeys += key
+        updateScalar {
+            writeStringState(key, value, state)
+        }
+    }
+
+    private suspend fun updateLargeStringState(
+        key: String,
+        value: String,
+        state: MutableStateFlow<String?>
+    ) {
+        updateLargeJson {
+            writeStringState(key, value, state)
         }
     }
 
@@ -393,11 +462,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         value: String,
         state: MutableStateFlow<String>
     ) {
-        update {
-            defaults.setObject(value, forKey = key)
-            state.value = value
-            cacheStringState(key, value)
-            locallyUpdatedKeys += key
+        updateScalar {
+            writeStringState(key, value, state)
         }
     }
 
@@ -406,11 +472,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         value: Boolean,
         state: MutableStateFlow<Boolean>
     ) {
-        update {
-            defaults.setBool(value, forKey = key)
-            state.value = value
-            cacheBooleanState(key, value)
-            locallyUpdatedKeys += key
+        updateScalar {
+            writeBooleanState(key, value, state)
         }
     }
 
@@ -422,15 +485,15 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         secondValue: String,
         secondState: MutableStateFlow<String>
     ) {
-        update {
+        updateScalar {
+            markLocallyUpdated(firstKey)
+            markLocallyUpdated(secondKey)
             defaults.setObject(firstValue, forKey = firstKey)
             defaults.setObject(secondValue, forKey = secondKey)
             firstState.value = firstValue
             secondState.value = secondValue
             cacheStringState(firstKey, firstValue)
             cacheStringState(secondKey, secondValue)
-            locallyUpdatedKeys += firstKey
-            locallyUpdatedKeys += secondKey
         }
     }
 
@@ -440,10 +503,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         state: MutableStateFlow<String?>
     ) {
         if (defaults.stringForKey(key) == null) {
+            markLocallyUpdated(key)
             defaults.setObject(value, forKey = key)
             state.value = value
             cacheStringState(key, value)
-            locallyUpdatedKeys += key
         }
     }
 
@@ -453,10 +516,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         state: MutableStateFlow<Boolean>
     ) {
         if (defaults.objectForKey(key) == null) {
+            markLocallyUpdated(key)
             defaults.setBool(value, forKey = key)
             state.value = value
             cacheBooleanState(key, value)
-            locallyUpdatedKeys += key
         }
     }
 
@@ -466,10 +529,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         state: MutableStateFlow<String>
     ) {
         if (defaults.stringForKey(key) == null) {
+            markLocallyUpdated(key)
             defaults.setObject(value, forKey = key)
             state.value = value
             cacheStringState(key, value)
-            locallyUpdatedKeys += key
         }
     }
 
@@ -479,10 +542,10 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         state: MutableStateFlow<String?>
     ) {
         if (value != null && defaults.stringForKey(key) == null) {
+            markLocallyUpdated(key)
             defaults.setObject(value, forKey = key)
             state.value = value
             cacheStringState(key, value)
-            locallyUpdatedKeys += key
         }
     }
 
@@ -593,11 +656,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun updateBoardsJson(value: String) {
-        updateStringState(BOARDS_KEY, value, boardsState)
+        updateLargeStringState(BOARDS_KEY, value, boardsState)
     }
 
     override suspend fun updateHistoryJson(value: String) {
-        updateStringState(HISTORY_KEY, value, historyState)
+        updateLargeStringState(HISTORY_KEY, value, historyState)
     }
 
     override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
@@ -609,7 +672,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun updateAdsEnabled(enabled: Boolean) {
-        update {
+        updateScalar {
+            markLocallyUpdated(ADS_ENABLED_KEY)
             if (enabled) {
                 defaults.removeObjectForKey(ADS_ENABLED_KEY)
             } else {
@@ -617,7 +681,6 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             }
             adsEnabledState.value = enabled
             cacheBooleanState(ADS_ENABLED_KEY, enabled)
-            locallyUpdatedKeys += ADS_ENABLED_KEY
         }
     }
 
@@ -690,7 +753,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {
-        updateStringState(CATALOG_MODE_MAP_KEY, value, catalogModeMapState)
+        updateLargeStringState(CATALOG_MODE_MAP_KEY, value, catalogModeMapState)
     }
 
     override suspend fun updateCatalogDisplayStyle(style: String) {
@@ -702,31 +765,31 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun updateNgHeadersJson(value: String) {
-        updateStringState(NG_HEADERS_KEY, value, ngHeadersState)
+        updateLargeStringState(NG_HEADERS_KEY, value, ngHeadersState)
     }
 
     override suspend fun updateNgWordsJson(value: String) {
-        updateStringState(NG_WORDS_KEY, value, ngWordsState)
+        updateLargeStringState(NG_WORDS_KEY, value, ngWordsState)
     }
 
     override suspend fun updateCatalogNgWordsJson(value: String) {
-        updateStringState(CATALOG_NG_WORDS_KEY, value, catalogNgWordsState)
+        updateLargeStringState(CATALOG_NG_WORDS_KEY, value, catalogNgWordsState)
     }
 
     override suspend fun updateWatchWordsJson(value: String) {
-        updateStringState(WATCH_WORDS_KEY, value, watchWordsState)
+        updateLargeStringState(WATCH_WORDS_KEY, value, watchWordsState)
     }
 
     override suspend fun updateSelfPostIdentifiersJson(value: String) {
-        updateStringState(SELF_POST_IDENTIFIERS_KEY, value, selfPostIdentifiersState)
+        updateLargeStringState(SELF_POST_IDENTIFIERS_KEY, value, selfPostIdentifiersState)
     }
 
     override suspend fun updateThreadMenuConfigJson(value: String) {
-        updateStringState(THREAD_MENU_CONFIG_KEY, value, threadMenuConfigState)
+        updateLargeStringState(THREAD_MENU_CONFIG_KEY, value, threadMenuConfigState)
     }
 
     override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
-        updateStringState(
+        updateLargeStringState(
             THREAD_SETTINGS_MENU_CONFIG_KEY,
             value,
             threadSettingsMenuConfigState
@@ -734,11 +797,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     }
 
     override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
-        updateStringState(THREAD_MENU_ENTRIES_KEY, value, threadMenuEntriesState)
+        updateLargeStringState(THREAD_MENU_ENTRIES_KEY, value, threadMenuEntriesState)
     }
 
     override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
-        updateStringState(CATALOG_NAV_ENTRIES_KEY, value, catalogNavEntriesState)
+        updateLargeStringState(CATALOG_NAV_ENTRIES_KEY, value, catalogNavEntriesState)
     }
 
     override suspend fun updatePreferredFileManagerPackage(packageName: String) {
@@ -770,7 +833,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles) {
         deferredLoadJob.join()
-        update { seedFrom(seedBundles) }
+        updateAllState { seedFrom(seedBundles) }
         // NSUserDefaults writes are automatically persisted; explicit synchronize is unnecessary.
     }
 
