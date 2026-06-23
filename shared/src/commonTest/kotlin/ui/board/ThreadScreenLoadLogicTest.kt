@@ -117,6 +117,102 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun loadThreadLocalStalePageIfAvailable_usesDedicatedOfflineCallback() = runBlocking {
+        val page = ThreadPage(
+            threadId = "123",
+            boardTitle = "may/b",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = emptyList()
+        )
+        var staleCalled = false
+        val result = loadThreadLocalStalePageIfAvailable(
+            config = buildThreadLoadRunnerConfig(
+                threadId = "123",
+                effectiveBoardUrl = "https://may.2chan.net/b",
+                threadUrlOverride = "https://may.2chan.net/b/res/123.htm",
+                allowOfflineFallback = true,
+                archiveFallbackTimeoutMillis = 100L,
+                offlineFallbackTimeoutMillis = 100L,
+                localStaleLoadTimeoutMillis = 100L
+            ),
+            callbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { error("unused") },
+                loadRemoteByBoard = { _, _ -> error("unused") },
+                loadArchiveFallback = { error("unused") },
+                loadOfflineFallback = { error("fallback should not be used") },
+                loadLocalStalePage = {
+                    staleCalled = true
+                    page
+                }
+            )
+        )
+
+        assertTrue(staleCalled)
+        assertEquals(
+            ThreadLoadExecutionResult(
+                page = page,
+                usedOffline = true,
+                nextThreadUrlOverride = "https://may.2chan.net/b/res/123.htm"
+            ),
+            result
+        )
+    }
+
+    @Test
+    fun loadThreadLocalStalePageIfAvailable_skipsWhenDisabledOrTimedOut() = runBlocking {
+        var disabledCalled = false
+        val disabledResult = loadThreadLocalStalePageIfAvailable(
+            config = buildThreadLoadRunnerConfig(
+                threadId = "123",
+                effectiveBoardUrl = "https://may.2chan.net/b",
+                threadUrlOverride = null,
+                allowOfflineFallback = false,
+                archiveFallbackTimeoutMillis = 100L,
+                offlineFallbackTimeoutMillis = 100L,
+                localStaleLoadTimeoutMillis = 100L
+            ),
+            callbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { error("unused") },
+                loadRemoteByBoard = { _, _ -> error("unused") },
+                loadArchiveFallback = { error("unused") },
+                loadOfflineFallback = { error("unused") },
+                loadLocalStalePage = {
+                    disabledCalled = true
+                    null
+                }
+            )
+        )
+
+        assertNull(disabledResult)
+        assertFalse(disabledCalled)
+
+        val timedOutResult = loadThreadLocalStalePageIfAvailable(
+            config = buildThreadLoadRunnerConfig(
+                threadId = "123",
+                effectiveBoardUrl = "https://may.2chan.net/b",
+                threadUrlOverride = null,
+                allowOfflineFallback = true,
+                archiveFallbackTimeoutMillis = 100L,
+                offlineFallbackTimeoutMillis = 100L,
+                localStaleLoadTimeoutMillis = 1L
+            ),
+            callbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { error("unused") },
+                loadRemoteByBoard = { _, _ -> error("unused") },
+                loadArchiveFallback = { error("unused") },
+                loadOfflineFallback = { error("unused") },
+                loadLocalStalePage = {
+                    delay(10_000L)
+                    null
+                }
+            )
+        )
+
+        assertNull(timedOutResult)
+    }
+
+    @Test
     fun runThreadReadAloudSession_runsSegmentsAndHandlesUserCancellation() = runBlocking {
         val segments = listOf(
             ReadAloudSegment(postIndex = 1, postId = "10", body = "a"),

@@ -7,6 +7,7 @@ internal const val AUTO_SAVE_INTERVAL_MS = 60_000L
 internal const val THREAD_MANUAL_SAVE_TIMEOUT_MS = 3 * 60_000L
 internal const val THREAD_SINGLE_MEDIA_SAVE_TIMEOUT_MS = 150_000L
 internal const val THREAD_REMOTE_LOAD_TIMEOUT_MS = 20_000L
+internal const val THREAD_LOCAL_STALE_LOAD_TIMEOUT_MS = 500L
 internal const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
 internal const val ARCHIVE_FALLBACK_TIMEOUT_MS = 8_000L
 internal const val OFFLINE_FALLBACK_TIMEOUT_MS = 5_000L

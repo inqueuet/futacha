@@ -104,6 +104,26 @@ internal fun buildThreadScreenLoadBindings(
             stateBindings.setUiState(ThreadUiState.Loading)
             try {
                 stateBindings.setIsShowingOfflineCopy(false)
+                val localStaleResult = loadThreadLocalStalePageIfAvailable(
+                    config = loadRunnerConfig,
+                    callbacks = loadRunnerCallbacks
+                )
+                if (localStaleResult != null && isActive) {
+                    stateBindings.setResolvedThreadUrlOverride(localStaleResult.nextThreadUrlOverride)
+                    stateBindings.setIsShowingOfflineCopy(true)
+                    uiCallbacks.onInitialLoadSuccess(
+                        buildThreadInitialLoadUiOutcome(
+                            page = localStaleResult.page,
+                            embeddedHtml = localStaleResult.embeddedHtml,
+                            history = history,
+                            threadId = threadId,
+                            threadTitle = threadTitle,
+                            board = board,
+                            overrideThreadUrl = localStaleResult.nextThreadUrlOverride,
+                            usedOffline = true
+                        )
+                    )
+                }
                 val loadResult = performThreadLoadWithOfflineFallback(
                     config = loadRunnerConfig,
                     callbacks = loadRunnerCallbacks

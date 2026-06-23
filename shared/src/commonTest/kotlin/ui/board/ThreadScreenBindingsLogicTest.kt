@@ -461,6 +461,7 @@ class ThreadScreenBindingsLogicTest {
         assertTrue(bindings.loadRunnerConfig.allowOfflineFallback)
         assertEquals(ARCHIVE_FALLBACK_TIMEOUT_MS, bindings.loadRunnerConfig.archiveFallbackTimeoutMillis)
         assertEquals(OFFLINE_FALLBACK_TIMEOUT_MS, bindings.loadRunnerConfig.offlineFallbackTimeoutMillis)
+        assertEquals(THREAD_LOCAL_STALE_LOAD_TIMEOUT_MS, bindings.loadRunnerConfig.localStaleLoadTimeoutMillis)
         assertNull(bindings.singleMediaSaveRunnerCallbacks)
         assertNotNull(bindings.deleteByUserActionCallbacks)
         assertNotNull(bindings.replyActionCallbacks)
@@ -734,7 +735,8 @@ class ThreadScreenBindingsLogicTest {
                 loadRemoteByUrl = { error("unexpected by-url load") },
                 loadRemoteByBoard = { _, _ -> ThreadPageContent(page = page) },
                 loadArchiveFallback = { error("unexpected archive fallback") },
-                loadOfflineFallback = { error("unexpected offline fallback") }
+                loadOfflineFallback = { error("unexpected offline fallback") },
+                loadLocalStalePage = { null }
             ),
             history = emptyList(),
             threadId = "123",
@@ -796,6 +798,115 @@ class ThreadScreenBindingsLogicTest {
         assertEquals(listOf(4 to 8), manualRefreshRequests)
         assertEquals(2, historyUpdates.size)
         assertEquals(listOf("スレッドを更新しました"), shownMessages)
+        assertNull(refreshThreadJob)
+    }
+
+    @Test
+    fun threadScreenLoadBindingsSupport_displaysLocalStaleBeforeRemoteInitialLoad() = runBlocking {
+        var refreshThreadJob: Job? = null
+        var uiState: ThreadUiState = ThreadUiState.Error("initial")
+        var resolvedThreadUrlOverride: String? = null
+        var isShowingOfflineCopy = false
+        val shownMessages = mutableListOf<String>()
+        val historyUpdates = mutableListOf<ThreadHistoryEntry>()
+        val uiPages = mutableListOf<String>()
+        val localPage = ThreadPage(
+            threadId = "123",
+            boardTitle = "board",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = listOf(
+                Post(
+                    id = "1",
+                    author = null,
+                    subject = "local",
+                    timestamp = "now",
+                    messageHtml = "local body",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            )
+        )
+        val remotePage = localPage.copy(
+            posts = listOf(
+                Post(
+                    id = "1",
+                    author = null,
+                    subject = "remote",
+                    timestamp = "now",
+                    messageHtml = "remote body",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            )
+        )
+        val bindings = buildThreadScreenLoadBindings(
+            coroutineScope = this,
+            loadRunnerConfig = buildThreadLoadRunnerConfig(
+                threadId = "123",
+                effectiveBoardUrl = "https://example.com/test",
+                threadUrlOverride = null,
+                allowOfflineFallback = true,
+                archiveFallbackTimeoutMillis = 1L,
+                offlineFallbackTimeoutMillis = 1L,
+                localStaleLoadTimeoutMillis = 100L
+            ),
+            loadRunnerCallbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { error("unexpected by-url load") },
+                loadRemoteByBoard = { _, _ ->
+                    ThreadPageContent(page = remotePage)
+                },
+                loadArchiveFallback = { error("unexpected archive fallback") },
+                loadOfflineFallback = { error("unexpected offline fallback") },
+                loadLocalStalePage = { localPage }
+            ),
+            history = emptyList(),
+            threadId = "123",
+            threadTitle = "title",
+            board = BoardSummary(
+                id = "test",
+                name = "Test",
+                category = "cat",
+                url = "https://example.com/test",
+                description = "desc"
+            ),
+            stateBindings = ThreadScreenLoadStateBindings(
+                currentRefreshThreadJob = { refreshThreadJob },
+                setRefreshThreadJob = { refreshThreadJob = it },
+                currentManualRefreshGeneration = { 0L },
+                setManualRefreshGeneration = {},
+                setIsRefreshing = {},
+                setUiState = { uiState = it },
+                setResolvedThreadUrlOverride = { resolvedThreadUrlOverride = it },
+                setIsShowingOfflineCopy = { isShowingOfflineCopy = it }
+            ),
+            uiCallbacks = ThreadScreenLoadUiCallbacks(
+                onManualRefreshSuccess = { _, _, _ -> error("unexpected manual refresh") },
+                onManualRefreshFailure = { error("unexpected manual refresh failure") },
+                onInitialLoadSuccess = { outcome ->
+                    outcome.uiState?.let {
+                        uiState = it
+                        uiPages += (it as ThreadUiState.Success).page.posts.single().subject.orEmpty()
+                    }
+                    outcome.historyEntry?.let(historyUpdates::add)
+                    outcome.snackbarMessage?.let(shownMessages::add)
+                },
+                onInitialLoadFailure = { outcome ->
+                    outcome.uiState?.let { uiState = it }
+                    outcome.snackbarMessage?.let(shownMessages::add)
+                }
+            )
+        )
+
+        bindings.refreshThread()
+        refreshThreadJob?.join()
+
+        assertTrue(uiState is ThreadUiState.Success)
+        assertEquals(listOf("local", "remote"), uiPages)
+        assertFalse(isShowingOfflineCopy)
+        assertNull(resolvedThreadUrlOverride)
+        assertEquals(2, historyUpdates.size)
+        assertEquals(listOf("ローカルコピーを表示しています"), shownMessages)
         assertNull(refreshThreadJob)
     }
 

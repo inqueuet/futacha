@@ -127,18 +127,20 @@ Relevant code:
 - shared/src/commonMain/kotlin/repository/SavedThreadRepository.kt
 
 Current behavior:
-- Initial thread refresh sets ThreadUiState.Loading before remote load.
+- Initial thread refresh sets ThreadUiState.Loading, then gives an existing offline copy a short stale-first window before remote load.
+- If a local copy is found quickly, the screen displays it as an offline copy while remote/archive loading continues.
+- Remote/archive success replaces the local copy and clears the offline-copy state.
 - Archive fallback is only selected for 404/410.
 - If archive fallback is selected, it is tried before offline fallback.
 - Offline fallback is used after remote/archive failure when allowed.
 
 Risk:
-- A saved local copy can exist, but the first visible state is still Loading until remote/archive fallback resolves or times out.
-- On 404/410 with local copy, archive lookup can delay local display.
+- Very slow provider-backed saved copies can miss the short stale-first window and still fall through to the normal remote-first path.
+- Initial stale display can still briefly write/update history before remote success replaces it.
 
 Kaizen:
-- If an auto-saved copy exists, display it as stale/local immediately and run remote refresh in the background.
-- On remote success, replace posts/title/thumb/deleted state while preserving scroll/search/dialog state.
+- Keep the stale-first window short so missing or slow local storage does not delay remote loading.
+- Preserve search/dialog/scroll-adjacent state while replacing posts/title/thumb/deleted state on remote success.
 - Keep archive lookup for 404/410, but do not block the first local render.
 - Do not add remote/archive/offline decision logs. Cover fallback ordering with tests and explicit state transitions.
 

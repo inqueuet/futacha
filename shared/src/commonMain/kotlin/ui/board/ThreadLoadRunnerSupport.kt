@@ -18,6 +18,7 @@ internal data class ThreadLoadRunnerConfig(
     val allowOfflineFallback: Boolean,
     val archiveFallbackTimeoutMillis: Long,
     val offlineFallbackTimeoutMillis: Long,
+    val localStaleLoadTimeoutMillis: Long,
     val remoteLoadTimeoutMillis: Long
 )
 
@@ -28,6 +29,7 @@ internal fun buildThreadLoadRunnerConfig(
     allowOfflineFallback: Boolean,
     archiveFallbackTimeoutMillis: Long,
     offlineFallbackTimeoutMillis: Long,
+    localStaleLoadTimeoutMillis: Long = THREAD_LOCAL_STALE_LOAD_TIMEOUT_MS,
     remoteLoadTimeoutMillis: Long = THREAD_REMOTE_LOAD_TIMEOUT_MS
 ): ThreadLoadRunnerConfig {
     return ThreadLoadRunnerConfig(
@@ -37,6 +39,7 @@ internal fun buildThreadLoadRunnerConfig(
         allowOfflineFallback = allowOfflineFallback,
         archiveFallbackTimeoutMillis = archiveFallbackTimeoutMillis,
         offlineFallbackTimeoutMillis = offlineFallbackTimeoutMillis,
+        localStaleLoadTimeoutMillis = localStaleLoadTimeoutMillis.coerceAtLeast(1L),
         remoteLoadTimeoutMillis = remoteLoadTimeoutMillis.coerceAtLeast(1_000L)
     )
 }
@@ -46,6 +49,7 @@ internal data class ThreadLoadRunnerCallbacks(
     val loadRemoteByBoard: suspend (String, String) -> ThreadPageContent,
     val loadArchiveFallback: suspend () -> ArchiveFallbackOutcome,
     val loadOfflineFallback: suspend () -> ThreadPage?,
+    val loadLocalStalePage: suspend () -> ThreadPage? = loadOfflineFallback,
     val onArchiveFallbackTimeout: (String) -> Unit = {},
     val onOfflineFallbackMiss: () -> Unit = {}
 )
@@ -113,6 +117,16 @@ internal fun buildThreadLoadRunnerCallbacks(
                 )
             }
         },
+        loadLocalStalePage = {
+            withContext(AppDispatchers.io) {
+                loadOfflineThreadPage(
+                    threadId = threadId,
+                    lookupContext = offlineLookupContext,
+                    fileSystem = fileSystem,
+                    sources = offlineSources
+                )
+            }
+        },
         onArchiveFallbackTimeout = onWarning,
         onOfflineFallbackMiss = {
             if (hasOfflineThreadSources(offlineSources)) {
@@ -124,6 +138,21 @@ internal fun buildThreadLoadRunnerCallbacks(
                 )
             }
         }
+    )
+}
+
+internal suspend fun loadThreadLocalStalePageIfAvailable(
+    config: ThreadLoadRunnerConfig,
+    callbacks: ThreadLoadRunnerCallbacks
+): ThreadLoadExecutionResult? {
+    if (!config.allowOfflineFallback) return null
+    val localPage = withTimeoutOrNull(config.localStaleLoadTimeoutMillis) {
+        callbacks.loadLocalStalePage()
+    } ?: return null
+    return ThreadLoadExecutionResult(
+        page = localPage,
+        usedOffline = true,
+        nextThreadUrlOverride = config.threadUrlOverride
     )
 }
 
