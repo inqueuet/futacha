@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, and item 35 cookie snapshot writes are serialized and revision-gated.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, and item 36 read-only board requests now skip recent failed Cookie setup attempts.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -61,7 +61,7 @@ This is the primary classification for the remaining findings below. Original it
    - AI command queue backpressure.
 
 6. Network, parser, posting, and cookie runtime
-   Items: 36, 51, 63
+   Items: 51, 63
 
    Scope:
    - Cookie initialization, cookie manager concurrency, and first-load mutex contention.
@@ -108,31 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-36. Cookie initialization failures can add setup work to every board request
----------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/repo/BoardRepository.kt
-- shared/src/commonMain/kotlin/repo/DefaultBoardRepositoryExecutionSupport.kt
-- shared/src/commonMain/kotlin/repo/DefaultBoardRepositorySupport.kt
-- shared/src/commonMain/kotlin/network/HttpBoardApi.kt
-
-Current behavior:
-- ensureCookiesInitialized() checks initializedBoards and existing posting cookies.
-- If no valid cookie exists, it calls fetchCatalogSetup(board).
-- When setup fails or does not produce a preferred cookie, the board is not marked initialized.
-- The next catalog/thread/helper request repeats the setup attempt.
-
-Risk:
-- A board that rejects setup, has blocked cookies, or is temporarily offline can pay the catalog-setup request before every primary request.
-- Catalog display and OP image/title helper fetches can all queue behind the same per-board initialization lock.
-- Users may see repeated slow loads instead of one clear "cookie setup unavailable" state.
-
-Kaizen:
-- Add a short negative cache for failed cookie initialization per board.
-- Do not add cookie setup runtime logs. Track recent setup failures in memory if needed for behavior, and test lock/setup decisions.
-- Let read-only catalog/thread loads proceed after a recent setup failure while still surfacing the cookie warning.
 
 
 37. OP image/title helper timeout covers both semaphore wait and network fetch
@@ -962,6 +937,7 @@ These findings were completed and removed from the active backlog:
 - Item 33: Read-aloud watch progress now sends dedicated small status updates with a minimum interval, and Wear applies those updates to the current snapshot without reloading preview metadata.
 - Item 34: iOS video preview now remembers the last applied muted/volume/controls state and skips unchanged WKWebView JavaScript sync.
 - Item 35: Cookie snapshot files now carry monotonically increasing revisions, and disk writes are serialized so stale snapshots cannot overwrite newer persisted Cookie state.
+- Item 36: Read-only board requests now negative-cache recent Cookie setup failures, while forced setup remains enabled for posting/deletion/vote operations and auth retry.
 
 
 Removed obsolete findings
