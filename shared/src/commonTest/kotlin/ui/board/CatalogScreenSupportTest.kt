@@ -203,7 +203,7 @@ class CatalogScreenSupportTest {
             setIsRefreshing = { isRefreshing = it },
             setCatalogUiState = { uiState = it },
             setLastCatalogItems = { lastItemCount = it.size },
-            loadCatalogItems = { _, _ -> error("should not load catalog without board") }
+            loadCatalogItems = { _, _, _ -> error("should not load catalog without board") }
         )
 
         bindings.loadInitialCatalog()
@@ -242,7 +242,7 @@ class CatalogScreenSupportTest {
             setIsRefreshing = { isRefreshing = it },
             setCatalogUiState = { uiState = it },
             setLastCatalogItems = { lastItemCount = it.size },
-            loadCatalogItems = { _, _ -> CatalogPageContent(items = expectedItems) }
+            loadCatalogItems = { _, _, _ -> CatalogPageContent(items = expectedItems) }
         )
 
         bindings.loadInitialCatalog()
@@ -446,7 +446,7 @@ class CatalogScreenSupportTest {
             setIsRefreshing = {},
             setCatalogUiState = {},
             setLastCatalogItems = {},
-            loadCatalogItems = { _, _ -> CatalogPageContent(items = emptyList()) },
+            loadCatalogItems = { _, _, _ -> CatalogPageContent(items = emptyList()) },
             activeRepository = FakeBoardRepository(),
             currentCreateThreadDraft = { emptyCreateThreadDraft() },
             currentCreateThreadImage = { null },

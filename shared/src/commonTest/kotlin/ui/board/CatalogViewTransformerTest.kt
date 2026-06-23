@@ -123,10 +123,14 @@ class CatalogViewTransformerTest {
     @Test
     fun loadCatalogItemsForMode_mergesSuccessfulWatchSourceCatalogs() = runBlocking {
         val calls = mutableListOf<CatalogMode>()
+        val partials = mutableListOf<List<String>>()
 
         val items = loadCatalogItemsForMode(
             boardUrl = "https://may.2chan.net/b/futaba.php",
-            mode = CatalogMode.WatchWords
+            mode = CatalogMode.WatchWords,
+            onWatchWordsPartial = { page ->
+                partials += page.items.map { it.id }
+            }
         ) { _, mode ->
             calls += mode
             when (mode) {
@@ -139,8 +143,11 @@ class CatalogViewTransformerTest {
             }
         }
 
-        assertEquals(CatalogMode.watchSourceModes, calls)
+        assertEquals(CatalogMode.Catalog, calls.first())
+        assertEquals(CatalogMode.watchSourceModes.toSet(), calls.toSet())
+        assertEquals(listOf("100"), partials.first())
         assertEquals(listOf("100", "200"), items.items.map { it.id })
+        assertEquals(items.items.map { it.id }, partials.last())
     }
 
     @Test

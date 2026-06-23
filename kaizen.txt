@@ -10,8 +10,8 @@ Scope:
 - Prefer deterministic tests, code-path reduction, existing persisted state, bounded in-memory counters used only by tests, and manual profiling tools over adding app runtime logs.
 
 Current summary:
-- The largest remaining risks are WatchWords multi-fetch, autosave contention, and offline fallback ordering.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, and item 3 thread-wide derived work has been reduced enough to treat as complete.
+- The largest remaining risks are autosave contention and offline fallback ordering.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, and item 4 WatchWords mode now stages primary catalog display before merging additional sources.
 
 Major classification
 ====================
@@ -27,7 +27,7 @@ This is the primary classification for the remaining findings below. Original it
    - SaveLocation/manual save settings and cache/storage cleanup boundaries.
 
 2. Catalog, board list, search, and archive discovery
-   Items: 4, 10, 20, 37, 52, 53, 67
+   Items: 10, 20, 37, 52, 53, 67
 
    Scope:
    - Catalog transforms, search/NG/watch filtering, and visible-item replacement.
@@ -87,30 +87,6 @@ This is the primary classification for the remaining findings below. Original it
 
 High priority
 =============
-
-4. Change WatchWords mode from all-source blocking to staged results
--------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/model/CatalogMode.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogViewTransformer.kt
-
-Current behavior:
-- WatchWords mode fetches Catalog, New, Old, Many, Few, Momentum, and So.
-- Fetch concurrency is 2 and each source has an 8s timeout.
-- Successful catalogs are flattened and deduplicated.
-- Normal-mode watch word prioritization is already O(n) stable partition style, not sortedBy.
-
-Risk:
-- WatchWords mode can take several times longer than a normal catalog fetch.
-- One slow source can delay the final merged view.
-- A later merge can change count/order while the user is already scrolling if staged later, so scroll anchoring must be designed.
-
-Kaizen:
-- Show the primary Catalog source first, then merge other sources progressively.
-- Add source-mode settings or a reduced default source set.
-- Preserve stable item keys and scroll anchor when later sources merge in.
-- Do not add WatchWords runtime logs. Verify staged merge behavior with tests that cover timeout, item count, and match ordering.
-
 
 5. Make autosave less competitive with foreground reading
 --------------------------------------------------------

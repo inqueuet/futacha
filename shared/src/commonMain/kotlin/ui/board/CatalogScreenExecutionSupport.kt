@@ -25,6 +25,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.coroutineContext
 
+internal typealias CatalogPartialUpdate = suspend (CatalogPageContent) -> Unit
+
+internal typealias CatalogLoadItems = suspend (
+    BoardSummary,
+    CatalogMode,
+    CatalogPartialUpdate
+) -> CatalogPageContent
+
 internal fun buildCatalogHistoryRefreshSuccessMessage(): String = "履歴を更新しました"
 
 internal fun buildCatalogHistoryRefreshBusyMessage(): String = "履歴更新はすでに実行中です"
@@ -98,7 +106,7 @@ internal fun buildCatalogInitialLoadBindings(
     setIsRefreshing: (Boolean) -> Unit,
     setCatalogUiState: (CatalogUiState) -> Unit,
     setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent
+    loadCatalogItems: CatalogLoadItems
 ): CatalogInitialLoadBindings {
     return CatalogInitialLoadBindings(
         loadInitialCatalog = load@{
@@ -119,19 +127,27 @@ internal fun buildCatalogInitialLoadBindings(
             setCatalogLoadJob(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
-                    try {
-                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
-                            loadCatalogItems(board, currentCatalogMode())
-                        }
+                    var hasAppliedCatalog = false
+                    suspend fun applyCatalog(catalog: CatalogPageContent) {
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
-                            return@launch
+                            return
                         }
+                        hasAppliedCatalog = true
                         setCatalogUiState(CatalogUiState.Success(catalog))
                         setLastCatalogItems(catalog.items)
+                    }
+                    try {
+                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
+                            loadCatalogItems(board, currentCatalogMode(), ::applyCatalog)
+                        }
+                        applyCatalog(catalog)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        if (shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
+                        if (
+                            !hasAppliedCatalog &&
+                            shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)
+                        ) {
                             setCatalogUiState(CatalogUiState.Error(buildCatalogLoadErrorMessage(e)))
                         }
                     } finally {
@@ -245,7 +261,7 @@ internal fun buildCatalogExecutionBindings(
     setCatalogLoadJob: (Job?) -> Unit,
     setCatalogUiState: (CatalogUiState) -> Unit,
     setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent,
+    loadCatalogItems: CatalogLoadItems,
     currentPastSearchRuntimeState: () -> CatalogPastSearchRuntimeState,
     setPastSearchRuntimeState: (CatalogPastSearchRuntimeState) -> Unit,
     httpClient: HttpClient?,
@@ -283,20 +299,28 @@ internal fun buildCatalogExecutionBindings(
             setCatalogLoadJob(
                 coroutineScope.launch {
                     val runningJob = coroutineContext[Job]
-                    try {
-                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
-                            loadCatalogItems(board, currentCatalogMode())
-                        }
+                    var hasAppliedCatalog = false
+                    suspend fun applyCatalog(catalog: CatalogPageContent) {
                         if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
-                            return@launch
+                            return
                         }
+                        hasAppliedCatalog = true
                         setCatalogUiState(CatalogUiState.Success(catalog))
                         setLastCatalogItems(catalog.items)
+                    }
+                    try {
+                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
+                            loadCatalogItems(board, currentCatalogMode(), ::applyCatalog)
+                        }
+                        applyCatalog(catalog)
                         showSnackbar(buildCatalogRefreshSuccessMessage())
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
-                        if (shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
+                        if (
+                            !hasAppliedCatalog &&
+                            shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)
+                        ) {
                             showSnackbar(buildCatalogRefreshFailureMessage())
                         }
                     } finally {

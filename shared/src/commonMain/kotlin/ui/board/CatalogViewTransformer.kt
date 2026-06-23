@@ -5,9 +5,10 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.matchesNormalizedWatchWords
 import com.valoser.futacha.shared.model.normalizeWatchWords
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
@@ -101,33 +102,84 @@ internal fun matchesCatalogNgWords(
 internal suspend fun loadCatalogItemsForMode(
     boardUrl: String,
     mode: CatalogMode,
+    onWatchWordsPartial: suspend (CatalogPageContent) -> Unit = {},
     fetchCatalog: suspend (String, CatalogMode) -> CatalogPageContent
 ): CatalogPageContent {
     if (mode != CatalogMode.WatchWords) {
         return fetchCatalog(boardUrl, mode)
     }
 
-    val fetchResults = coroutineScope {
+    val successfulCatalogs = mutableListOf<CatalogPageContent>()
+    var firstError: Throwable? = null
+
+    runCatchingCatalogSource {
+        withTimeoutOrNull(CATALOG_WATCH_SOURCE_TIMEOUT_MS) {
+            fetchCatalog(boardUrl, CatalogMode.Catalog)
+        } ?: throw IllegalStateException("Catalog watch source timed out: ${CatalogMode.Catalog}")
+    }.fold(
+        onSuccess = { catalog ->
+            successfulCatalogs += catalog
+            onWatchWordsPartial(buildWatchWordsCatalogPage(successfulCatalogs))
+        },
+        onFailure = { error ->
+            firstError = error
+        }
+    )
+
+    val remainingModes = CatalogMode.watchSourceModes.filterNot { it == CatalogMode.Catalog }
+    coroutineScope {
         val fetchSemaphore = Semaphore(2)
-        CatalogMode.watchSourceModes.map { sourceMode ->
-            async {
+        val resultChannel = Channel<Result<CatalogPageContent>>(capacity = remainingModes.size)
+        remainingModes.forEach { sourceMode ->
+            launch {
                 fetchSemaphore.withPermit {
-                    runCatching {
-                        withTimeoutOrNull(CATALOG_WATCH_SOURCE_TIMEOUT_MS) {
-                            fetchCatalog(boardUrl, sourceMode)
-                        } ?: throw IllegalStateException("Catalog watch source timed out: $sourceMode")
-                    }
+                    resultChannel.send(
+                        runCatchingCatalogSource {
+                            withTimeoutOrNull(CATALOG_WATCH_SOURCE_TIMEOUT_MS) {
+                                fetchCatalog(boardUrl, sourceMode)
+                            } ?: throw IllegalStateException("Catalog watch source timed out: $sourceMode")
+                        }
+                    )
                 }
             }
-        }.awaitAll()
+        }
+        repeat(remainingModes.size) {
+            resultChannel.receive().fold(
+                onSuccess = { catalog ->
+                    successfulCatalogs += catalog
+                    onWatchWordsPartial(buildWatchWordsCatalogPage(successfulCatalogs))
+                },
+                onFailure = { error ->
+                    if (firstError == null) {
+                        firstError = error
+                    }
+                }
+            )
+        }
     }
 
-    val successfulCatalogs = fetchResults.mapNotNull { it.getOrNull() }
     if (successfulCatalogs.isEmpty()) {
-        val firstError = fetchResults.firstNotNullOfOrNull { it.exceptionOrNull() }
         throw firstError ?: IllegalStateException("監視モード用のカタログ取得に失敗しました")
     }
 
+    return buildWatchWordsCatalogPage(successfulCatalogs)
+}
+
+private suspend inline fun runCatchingCatalogSource(
+    block: suspend () -> CatalogPageContent
+): Result<CatalogPageContent> {
+    return try {
+        Result.success(block())
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Throwable) {
+        Result.failure(error)
+    }
+}
+
+private fun buildWatchWordsCatalogPage(
+    successfulCatalogs: List<CatalogPageContent>
+): CatalogPageContent {
     return CatalogPageContent(
         items = mergeWatchSourceCatalogItems(successfulCatalogs.map { it.items }),
         embeddedHtml = successfulCatalogs.firstNotNullOfOrNull { page ->

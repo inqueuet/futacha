@@ -37,7 +37,7 @@ internal fun buildCatalogScreenRuntimeBindingsBundle(
     setIsRefreshing: (Boolean) -> Unit,
     setCatalogUiState: (CatalogUiState) -> Unit,
     setLastCatalogItems: (List<CatalogItem>) -> Unit,
-    loadCatalogItems: suspend (BoardSummary, CatalogMode) -> CatalogPageContent,
+    loadCatalogItems: CatalogLoadItems,
     activeRepository: BoardRepository,
     currentCreateThreadDraft: () -> CreateThreadDraft,
     currentCreateThreadImage: () -> com.valoser.futacha.shared.util.ImageData?,

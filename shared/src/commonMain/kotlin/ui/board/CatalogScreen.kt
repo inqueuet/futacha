@@ -244,10 +244,15 @@ private fun CatalogScreenContent(
             }
     }
     var lastCatalogItems by uiRuntimeStateRefs.lastCatalogItems
-    suspend fun loadCatalogItems(currentBoard: BoardSummary, mode: CatalogMode): CatalogPageContent {
+    suspend fun loadCatalogItems(
+        currentBoard: BoardSummary,
+        mode: CatalogMode,
+        onPartial: CatalogPartialUpdate
+    ): CatalogPageContent {
         return loadCatalogItemsForMode(
             boardUrl = currentBoard.url,
             mode = mode,
+            onWatchWordsPartial = onPartial,
             fetchCatalog = activeRepository::getCatalogPage
         )
     }
