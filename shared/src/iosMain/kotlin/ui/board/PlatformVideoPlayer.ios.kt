@@ -23,6 +23,7 @@ import platform.WebKit.WKWebViewConfiguration
 import platform.darwin.NSObject
 
 private const val VIDEO_STATE_MESSAGE_HANDLER = "futachaVideoState"
+private const val WEB_VIDEO_SYNC_APPLIED_RESULT = "applied"
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
@@ -64,6 +65,7 @@ private fun WebVideoPlayer(
     isMuted: Boolean
 ) {
     val delegate = remember { WebVideoNavigationDelegate() }
+    val syncTracker = remember { WebVideoSyncStateTracker() }
     val html = remember(videoUrl) { buildEmbeddedVideoHtml(videoUrl) }
     SideEffect {
         delegate.onStateChanged = onStateChanged
@@ -92,6 +94,7 @@ private fun WebVideoPlayer(
         onRelease = { view ->
             view.stopLoading()
             view.loadHTMLString("", baseURL = null)
+            syncTracker.clear()
             view.configuration.userContentController.removeScriptMessageHandlerForName(VIDEO_STATE_MESSAGE_HANDLER)
             view.navigationDelegate = null
         },
@@ -99,18 +102,79 @@ private fun WebVideoPlayer(
             val desiredTag = html.hashCode().toLong()
             if (view.tag != desiredTag) {
                 view.tag = desiredTag
+                syncTracker.clear()
                 view.loadHTMLString(html, baseURL = null)
             } else {
-                val mutedFlag = if (isMuted) "true" else "false"
-                val volumeValue = normalizeVideoPlayerVolume(volume, isMuted)
-                val controlsFlag = if (areControlsVisible) "true" else "false"
-                view.evaluateJavaScript(
-                    "var v=document.querySelector('video'); if(v){ v.muted=$mutedFlag; v.volume=$volumeValue; v.controls=$controlsFlag; }",
-                    completionHandler = null
+                val syncState = resolveVideoPlayerWebSyncState(
+                    volume = volume,
+                    isMuted = isMuted,
+                    areControlsVisible = areControlsVisible
                 )
+                if (syncTracker.shouldApply(syncState)) {
+                    syncTracker.markPending(syncState)
+                    view.evaluateJavaScript(
+                        buildWebVideoSyncJavaScript(syncState)
+                    ) { result, error ->
+                        if (error == null && result as? String == WEB_VIDEO_SYNC_APPLIED_RESULT) {
+                            syncTracker.markApplied(syncState)
+                        } else {
+                            syncTracker.clearPending(syncState)
+                        }
+                    }
+                }
             }
         }
     )
+}
+
+private class WebVideoSyncStateTracker {
+    private var appliedState: VideoPlayerWebSyncState? = null
+    private var pendingState: VideoPlayerWebSyncState? = null
+
+    fun shouldApply(nextState: VideoPlayerWebSyncState): Boolean {
+        return shouldApplyVideoPlayerWebSyncState(
+            appliedState = appliedState,
+            pendingState = pendingState,
+            nextState = nextState
+        )
+    }
+
+    fun markPending(state: VideoPlayerWebSyncState) {
+        pendingState = state
+    }
+
+    fun markApplied(state: VideoPlayerWebSyncState) {
+        appliedState = state
+        if (pendingState == state) {
+            pendingState = null
+        }
+    }
+
+    fun clearPending(state: VideoPlayerWebSyncState) {
+        if (pendingState == state) {
+            pendingState = null
+        }
+    }
+
+    fun clear() {
+        appliedState = null
+        pendingState = null
+    }
+}
+
+private fun buildWebVideoSyncJavaScript(state: VideoPlayerWebSyncState): String {
+    val mutedFlag = if (state.isMuted) "true" else "false"
+    val controlsFlag = if (state.areControlsVisible) "true" else "false"
+    return """
+        (function(){
+            var v=document.querySelector('video');
+            if(!v){return 'missing';}
+            v.muted=$mutedFlag;
+            v.volume=${state.volume};
+            v.controls=$controlsFlag;
+            return '$WEB_VIDEO_SYNC_APPLIED_RESULT';
+        })()
+    """.trimIndent()
 }
 
 @OptIn(ExperimentalForeignApi::class)

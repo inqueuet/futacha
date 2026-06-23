@@ -60,4 +60,70 @@ class VideoPlayerSupportTest {
         assertEquals(1f, normalizeVideoPlayerVolume(2f, isMuted = false))
         assertEquals(0.35f, normalizeVideoPlayerVolume(0.35f, isMuted = false))
     }
+
+    @Test
+    fun resolveVideoPlayerWebSyncState_normalizesVolumeAndKeepsControlState() {
+        assertEquals(
+            VideoPlayerWebSyncState(
+                isMuted = true,
+                volume = 0f,
+                areControlsVisible = false
+            ),
+            resolveVideoPlayerWebSyncState(
+                volume = 0.8f,
+                isMuted = true,
+                areControlsVisible = false
+            )
+        )
+        assertEquals(
+            VideoPlayerWebSyncState(
+                isMuted = false,
+                volume = 1f,
+                areControlsVisible = true
+            ),
+            resolveVideoPlayerWebSyncState(
+                volume = 2f,
+                isMuted = false,
+                areControlsVisible = true
+            )
+        )
+    }
+
+    @Test
+    fun shouldApplyVideoPlayerWebSyncState_skipsAppliedAndPendingStates() {
+        val nextState = VideoPlayerWebSyncState(
+            isMuted = false,
+            volume = 0.9f,
+            areControlsVisible = true
+        )
+
+        assertTrue(
+            shouldApplyVideoPlayerWebSyncState(
+                appliedState = null,
+                pendingState = null,
+                nextState = nextState
+            )
+        )
+        assertFalse(
+            shouldApplyVideoPlayerWebSyncState(
+                appliedState = nextState,
+                pendingState = null,
+                nextState = nextState
+            )
+        )
+        assertFalse(
+            shouldApplyVideoPlayerWebSyncState(
+                appliedState = null,
+                pendingState = nextState,
+                nextState = nextState
+            )
+        )
+        assertTrue(
+            shouldApplyVideoPlayerWebSyncState(
+                appliedState = nextState,
+                pendingState = null,
+                nextState = nextState.copy(areControlsVisible = false)
+            )
+        )
+    }
 }

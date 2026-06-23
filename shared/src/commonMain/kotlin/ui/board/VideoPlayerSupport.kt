@@ -7,6 +7,12 @@ internal data class VideoPreviewChromeState(
     val showsControlPanel: Boolean
 )
 
+internal data class VideoPlayerWebSyncState(
+    val isMuted: Boolean,
+    val volume: Float,
+    val areControlsVisible: Boolean
+)
+
 internal fun resolveReadyVideoPlayerState(isPlaying: Boolean): VideoPlayerState =
     if (isPlaying) VideoPlayerState.Ready else VideoPlayerState.Idle
 
@@ -14,6 +20,24 @@ internal fun normalizeVideoPlayerVolume(
     volume: Float,
     isMuted: Boolean
 ): Float = if (isMuted) 0f else volume.coerceIn(0f, 1f)
+
+internal fun resolveVideoPlayerWebSyncState(
+    volume: Float,
+    isMuted: Boolean,
+    areControlsVisible: Boolean
+): VideoPlayerWebSyncState = VideoPlayerWebSyncState(
+    isMuted = isMuted,
+    volume = normalizeVideoPlayerVolume(volume, isMuted),
+    areControlsVisible = areControlsVisible
+)
+
+internal fun shouldApplyVideoPlayerWebSyncState(
+    appliedState: VideoPlayerWebSyncState?,
+    pendingState: VideoPlayerWebSyncState?,
+    nextState: VideoPlayerWebSyncState
+): Boolean {
+    return nextState != appliedState && nextState != pendingState
+}
 
 internal fun resolveVideoPreviewChromeState(
     playbackState: VideoPlayerState,

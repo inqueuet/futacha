@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, and item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, and item 34 iOS video preview now skips unchanged WKWebView JavaScript sync.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -44,7 +44,7 @@ This is the primary classification for the remaining findings below. Original it
    - Tree/flat display correctness around duplicate post IDs.
 
 4. Media, image, video, and attachment handling
-   Items: 26, 34, 55, 62, 64
+   Items: 26, 55, 62, 64
 
    Scope:
    - Image fallback, preview sizing, thumbnail generation, video startup, and WebM cache.
@@ -108,29 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-34. iOS video preview runs JavaScript on every UIKitView update
---------------------------------------------------------------
-Relevant code:
-- shared/src/iosMain/kotlin/ui/board/PlatformVideoPlayer.ios.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadVideoPreviewComponents.kt
-- shared/src/commonMain/kotlin/ui/board/VideoPlayerSupport.kt
-
-Current behavior:
-- WebVideoPlayer embeds video in a WKWebView.
-- If the video HTML did not change, every UIKitView update still calls evaluateJavaScript to sync muted, volume, and controls.
-- Parent state changes such as chrome visibility, playback state, or dialog recomposition can cause update callbacks.
-
-Risk:
-- Rapid recomposition while the preview is open can queue unnecessary JavaScript evaluation on the WebKit side.
-- On slower iOS devices this can delay controls, playback state messages, or dismissal.
-- Because it only happens while video preview is visible, it may look like "video preview sometimes freezes".
-
-Kaizen:
-- Remember the last applied muted/volume/controls tuple and evaluate JavaScript only when it changes.
-- Do not add WKWebView runtime counters/logs. Reduce reload triggers and verify update inputs with tests where possible.
-- Consider using AVPlayer for local/MP4 cases and reserving WKWebView for WEBM only.
 
 
 35. Cookie snapshot writes are not serialized after leaving the storage mutex
@@ -1007,6 +984,7 @@ These findings were completed and removed from the active backlog:
 - "Add history growth warning and full thread archive import/export path." History archive/export/import work and the clear-after-export path are treated as complete.
 - "Keep Catalog head metadata requests under tighter control." Catalog title completion is policy-controlled, can be inferred from fetched catalog items, skips unnecessary head requests for boards with real catalog titles, keeps conservative batch/concurrency/timeout limits, and normalizes official `futaba.htm` board links to `futaba.php?mode=cat` for catalog fetching.
 - Item 33: Read-aloud watch progress now sends dedicated small status updates with a minimum interval, and Wear applies those updates to the current snapshot without reloading preview metadata.
+- Item 34: iOS video preview now remembers the last applied muted/volume/controls state and skips unchanged WKWebView JavaScript sync.
 
 
 Removed obsolete findings
