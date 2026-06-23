@@ -11,14 +11,13 @@ internal class AppStateHistoryCoordinator(
     private val storage: PlatformStateStorage,
     private val json: Json,
     private val tag: String,
-    private val maxPersistPasses: Int,
     private val rethrowIfCancellation: (Throwable) -> Unit
 ) {
     private val historyMutex = Mutex()
     private val historyPersistMutex = Mutex()
     private var cachedHistory: List<ThreadHistoryEntry>? = null
     private var historyRevision: Long = 0L
-    private var historyPersistCount: Long = 0L
+    private var persistedHistoryRevision: Long = 0L
 
     suspend fun setHistory(history: List<ThreadHistoryEntry>) {
         val (revision, previousRevision, previousHistory) = historyMutex.withLock {
@@ -145,27 +144,13 @@ internal class AppStateHistoryCoordinator(
             historyPersistMutex = historyPersistMutex,
             revision = revision,
             history = history,
-            maxPasses = maxPersistPasses,
-            writeHistoryJson = { targetRevision, pass, updatedHistory ->
-                val metrics = writeMeasuredAppStateHistoryJson(
+            writeHistoryJson = { _, updatedHistory ->
+                writeAppStateHistoryJson(
                     history = updatedHistory,
                     encodeHistoryJson = { targetHistory ->
                         encodeAppStateHistoryMeasured(targetHistory, json)
                     },
                     updateHistoryJson = storage::updateHistoryJson
-                )
-                historyPersistCount += 1L
-                logAppStateHistoryPersistenceMetrics(
-                    tag = tag,
-                    metrics = AppStateHistoryPersistenceMetrics(
-                        persistCount = historyPersistCount,
-                        revision = targetRevision,
-                        pass = pass,
-                        entryCount = metrics.entryCount,
-                        jsonByteSize = metrics.jsonByteSize,
-                        encodeDuration = metrics.encodeDuration,
-                        writeDuration = metrics.writeDuration
-                    )
                 )
             },
             readLatestHistoryContinuation = { targetRevision ->
@@ -184,6 +169,12 @@ internal class AppStateHistoryCoordinator(
                         null
                     }
                 }
+            },
+            shouldSkipRevision = { targetRevision ->
+                targetRevision <= persistedHistoryRevision
+            },
+            markPersistedRevision = { targetRevision ->
+                persistedHistoryRevision = maxOf(persistedHistoryRevision, targetRevision)
             }
         )
     }

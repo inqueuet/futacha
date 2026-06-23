@@ -4,7 +4,6 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.Duration
-import kotlin.time.TimeSource
 
 internal data class AppStatePersistedHistoryContinuation(
     val revision: Long,
@@ -106,47 +105,28 @@ internal suspend fun persistAppStateHistory(
     historyPersistMutex: Mutex,
     revision: Long,
     history: List<ThreadHistoryEntry>,
-    maxPasses: Int,
-    writeHistoryJson: suspend (Long, Int, List<ThreadHistoryEntry>) -> Unit,
-    readLatestHistoryContinuation: suspend (Long) -> AppStatePersistedHistoryContinuation?
+    writeHistoryJson: suspend (Long, List<ThreadHistoryEntry>) -> Unit,
+    readLatestHistoryContinuation: suspend (Long) -> AppStatePersistedHistoryContinuation?,
+    shouldSkipRevision: (Long) -> Boolean,
+    markPersistedRevision: (Long) -> Unit
 ) {
     historyPersistMutex.withLock {
-        var targetRevision = revision
-        var targetHistory = history
-        var passCount = 0
-        while (true) {
-            passCount += 1
-            if (passCount > maxPasses) {
-                writeHistoryJson(targetRevision, passCount, targetHistory)
-                break
-            }
-            writeHistoryJson(targetRevision, passCount, targetHistory)
-            val continuation = readLatestHistoryContinuation(targetRevision) ?: break
-            targetRevision = continuation.revision
-            targetHistory = continuation.history
+        val continuation = readLatestHistoryContinuation(revision)
+        val targetRevision = continuation?.revision ?: revision
+        val targetHistory = continuation?.history ?: history
+        if (shouldSkipRevision(targetRevision)) {
+            return@withLock
         }
+        writeHistoryJson(targetRevision, targetHistory)
+        markPersistedRevision(targetRevision)
     }
 }
 
-internal suspend fun writeMeasuredAppStateHistoryJson(
+internal suspend fun writeAppStateHistoryJson(
     history: List<ThreadHistoryEntry>,
     encodeHistoryJson: suspend (List<ThreadHistoryEntry>) -> Pair<String, Duration>,
     updateHistoryJson: suspend (String) -> Unit
-): AppStateHistoryWriteMetrics {
-    val (encoded, encodeDuration) = encodeHistoryJson(history)
-    val writeMark = TimeSource.Monotonic.markNow()
+): Unit {
+    val (encoded, _) = encodeHistoryJson(history)
     updateHistoryJson(encoded)
-    return AppStateHistoryWriteMetrics(
-        entryCount = countHistoryEntries(history),
-        jsonByteSize = historyJsonByteSize(encoded),
-        encodeDuration = encodeDuration,
-        writeDuration = writeMark.elapsedNow()
-    )
 }
-
-internal data class AppStateHistoryWriteMetrics(
-    val entryCount: Int,
-    val jsonByteSize: Long,
-    val encodeDuration: Duration,
-    val writeDuration: Duration
-)

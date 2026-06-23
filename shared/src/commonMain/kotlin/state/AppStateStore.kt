@@ -95,7 +95,6 @@ class AppStateStore internal constructor(
         storage = storage,
         json = json,
         tag = TAG,
-        maxPersistPasses = HISTORY_PERSIST_MAX_PASSES,
         rethrowIfCancellation = ::rethrowIfCancellation
     )
     private val scrollPersistenceCoordinator = AppStateHistoryScrollPersistenceCoordinator(
@@ -115,7 +114,6 @@ class AppStateStore internal constructor(
         private const val SCROLL_DEBOUNCE_DELAY_MS = 2_000L
         private const val SELF_IDENTIFIER_MAX_ENTRIES = 20
         private const val SELF_POST_KEY_DELIMITER = "::"
-        private const val HISTORY_PERSIST_MAX_PASSES = 8
     }
 
     private val storageMutationHandler = AppStateStorageMutationHandler(
