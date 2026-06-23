@@ -2,6 +2,7 @@ package com.valoser.futacha
 
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.PutDataMapRequest
@@ -56,6 +57,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.resume
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
@@ -76,8 +78,13 @@ class WatchSyncManager(
     private val pendingSnapshotAcks = LinkedHashMap<String, WatchSnapshot>()
     private val handledCommandIdsMutex = Mutex()
     private val handledCommandIds = LinkedHashSet<String>()
+    private val watchRefreshRequestMutex = Mutex()
+    private val previewMetadataSuppressedUntilElapsedMillis = AtomicLong(0L)
     private var isSnapshotRequestInFlight = false
     private var shouldSendSnapshotAfterCurrentRequest = false
+    private var pendingSnapshotRequestIncludesPreview = false
+    private var isWatchRefreshInFlight = false
+    private var lastWatchRefreshStartedElapsedMillis = 0L
     private val isStarted = AtomicBoolean(false)
 
     @OptIn(FlowPreview::class)
@@ -147,43 +154,55 @@ class WatchSyncManager(
     }
 
     fun requestSnapshot() {
+        requestSnapshot(includePreviewThreadPages = true)
+    }
+
+    private fun requestSnapshot(includePreviewThreadPages: Boolean) {
         scope.launch {
             val shouldStart = snapshotRequestMutex.withLock {
                 if (isSnapshotRequestInFlight) {
                     shouldSendSnapshotAfterCurrentRequest = true
+                    pendingSnapshotRequestIncludesPreview =
+                        pendingSnapshotRequestIncludesPreview || includePreviewThreadPages
                     false
                 } else {
                     isSnapshotRequestInFlight = true
+                    pendingSnapshotRequestIncludesPreview = false
                     true
                 }
             }
             if (shouldStart) {
-                drainSnapshotRequests()
+                drainSnapshotRequests(includePreviewThreadPages)
             }
         }
     }
 
-    private suspend fun drainSnapshotRequests() {
+    private suspend fun drainSnapshotRequests(initialIncludesPreview: Boolean) {
         var shouldContinue = true
+        var includePreviewThreadPages = initialIncludesPreview
         try {
             while (shouldContinue) {
                 runCatching {
                     withTimeout(WATCH_SNAPSHOT_REQUEST_TIMEOUT_MILLIS) {
-                        sendCurrentSnapshot()
+                        sendCurrentSnapshot(includePreviewThreadPages)
                     }
                 }.onFailure { error ->
                     if (error is CancellationException && error !is TimeoutCancellationException) {
                         throw error
                     }
                 }
-                shouldContinue = snapshotRequestMutex.withLock {
+                val nextRequestIncludesPreview = snapshotRequestMutex.withLock {
                     val pending = shouldSendSnapshotAfterCurrentRequest
+                    val pendingIncludesPreview = pendingSnapshotRequestIncludesPreview
                     shouldSendSnapshotAfterCurrentRequest = false
+                    pendingSnapshotRequestIncludesPreview = false
                     if (!pending) {
                         isSnapshotRequestInFlight = false
                     }
-                    pending
+                    shouldContinue = pending
+                    pendingIncludesPreview
                 }
+                includePreviewThreadPages = nextRequestIncludesPreview
             }
         } finally {
             // If we exit abnormally (e.g. scope cancellation) the in-flight flag
@@ -192,6 +211,7 @@ class WatchSyncManager(
                 withContext(NonCancellable) {
                     snapshotRequestMutex.withLock {
                         shouldSendSnapshotAfterCurrentRequest = false
+                        pendingSnapshotRequestIncludesPreview = false
                         isSnapshotRequestInFlight = false
                     }
                 }
@@ -226,7 +246,12 @@ class WatchSyncManager(
         when (command.type) {
             WatchCommandType.Refresh -> {
                 scope.launch {
+                    var didStartRefresh = false
                     try {
+                        didStartRefresh = beginWatchRefreshIfAllowed()
+                        if (!didStartRefresh) {
+                            return@launch
+                        }
                         runCatching {
                             withTimeout(WATCH_REFRESH_TIMEOUT_MILLIS) {
                                 historyRefresher.refresh(
@@ -241,7 +266,10 @@ class WatchSyncManager(
                             }
                         }
                     } finally {
-                        requestSnapshot()
+                        if (didStartRefresh) {
+                            finishWatchRefresh()
+                        }
+                        requestSnapshot(includePreviewThreadPages = false)
                     }
                 }
             }
@@ -350,24 +378,42 @@ class WatchSyncManager(
         }
     }
 
-    private suspend fun sendCurrentSnapshot() {
+    private suspend fun sendCurrentSnapshot(includePreviewThreadPages: Boolean) {
         val boards = stateStore.boards.first()
         val history = stateStore.history.first()
         val watchWords = stateStore.watchWords.first()
         val readAloudStatus = WatchReadAloudStatusStore.status.value
-        sendSnapshot(buildSnapshot(boards, history, watchWords, readAloudStatus))
+        sendSnapshot(
+            buildSnapshot(
+                boards = boards,
+                history = history,
+                watchWords = watchWords,
+                readAloudStatus = readAloudStatus,
+                includePreviewThreadPages = includePreviewThreadPages
+            )
+        )
     }
 
     private suspend fun buildSnapshot(
         boards: List<BoardSummary>,
         history: List<ThreadHistoryEntry>,
         watchWords: List<String>,
-        readAloudStatus: WatchReadAloudStatus?
+        readAloudStatus: WatchReadAloudStatus?,
+        includePreviewThreadPages: Boolean = true
     ): WatchSnapshot {
         val previousCountsSnapshot = previousReplyCountsMutex.withLock {
             previousReplyCounts.toMap()
         }
-        val threadPages = loadPreviewThreadPages(history)
+        val shouldLoadPreviewThreadPages = shouldLoadWatchPreviewThreadPages(
+            includePreviewThreadPages = includePreviewThreadPages,
+            previewSuppressedUntilElapsedMillis = previewMetadataSuppressedUntilElapsedMillis.get(),
+            nowElapsedMillis = SystemClock.elapsedRealtime()
+        )
+        val threadPages = if (shouldLoadPreviewThreadPages) {
+            loadPreviewThreadPages(history)
+        } else {
+            emptyMap()
+        }
         return snapshotBuilder.build(
             boards = boards,
             history = history,
@@ -376,6 +422,42 @@ class WatchSyncManager(
             previousReplyCounts = previousCountsSnapshot,
             readAloudStatus = readAloudStatus
         )
+    }
+
+    private suspend fun beginWatchRefreshIfAllowed(): Boolean {
+        val nowElapsedMillis = SystemClock.elapsedRealtime()
+        return watchRefreshRequestMutex.withLock {
+            val decision = resolveWatchRefreshRequestDecision(
+                isRefreshInFlight = isWatchRefreshInFlight,
+                lastRefreshStartedElapsedMillis = lastWatchRefreshStartedElapsedMillis,
+                nowElapsedMillis = nowElapsedMillis,
+                minIntervalMillis = WATCH_REFRESH_MIN_INTERVAL_MILLIS
+            )
+            if (decision == WatchRefreshRequestDecision.StartRefresh) {
+                isWatchRefreshInFlight = true
+                lastWatchRefreshStartedElapsedMillis = nowElapsedMillis
+                suppressPreviewMetadataLoads(nowElapsedMillis)
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private suspend fun finishWatchRefresh() {
+        withContext(NonCancellable) {
+            suppressPreviewMetadataLoads(SystemClock.elapsedRealtime())
+            watchRefreshRequestMutex.withLock {
+                isWatchRefreshInFlight = false
+            }
+        }
+    }
+
+    private fun suppressPreviewMetadataLoads(nowElapsedMillis: Long) {
+        val suppressedUntil = nowElapsedMillis + WATCH_PREVIEW_METADATA_SUPPRESSION_MILLIS
+        previewMetadataSuppressedUntilElapsedMillis.updateAndGet { current ->
+            maxOf(current, suppressedUntil)
+        }
     }
 
     private suspend fun loadPreviewThreadPages(
@@ -597,6 +679,8 @@ class WatchSyncManager(
         private const val WATCH_METADATA_LOAD_TIMEOUT_MILLIS = 1_000L
         private val WATCH_REFRESH_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(6)
         private val WATCH_REFRESH_AUTO_SAVE_BUDGET_MILLIS = TimeUnit.SECONDS.toMillis(90)
+        private val WATCH_REFRESH_MIN_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(2)
+        private val WATCH_PREVIEW_METADATA_SUPPRESSION_MILLIS = TimeUnit.MINUTES.toMillis(2)
         private const val WATCH_REFRESH_MAX_THREADS_PER_RUN = 60
         private const val WATCH_REFRESH_MAX_AUTO_SAVES_PER_RUN = 2
     }
