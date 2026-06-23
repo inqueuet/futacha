@@ -31,14 +31,14 @@ data class ImageData(
 
         other as ImageData
 
-        if (!bytes.contentEquals(other.bytes)) return false
+        if (bytes !== other.bytes) return false
         if (fileName != other.fileName) return false
 
         return true
     }
 
     override fun hashCode(): Int {
-        var result = bytes.contentHashCode()
+        var result = bytes.size
         result = 31 * result + fileName.hashCode()
         return result
     }

@@ -19,3 +19,11 @@ internal fun buildPickedImageData(
     val resolvedFileName = fileName?.trim().orEmpty().ifBlank { fallbackFileName }
     return ImageData(bytes, resolvedFileName)
 }
+
+internal fun normalizePickedImageData(
+    imageData: ImageData?,
+    maxBytes: Long = MAX_PICKED_IMAGE_BYTES
+): ImageData? {
+    imageData ?: return null
+    return imageData.takeIf { isPickedImagePayloadSizeValid(it.bytes.size.toLong(), maxBytes) }
+}

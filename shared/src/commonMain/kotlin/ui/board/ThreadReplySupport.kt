@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.util.normalizePickedImageData
 
 internal fun buildDeletePasswordRequiredMessage(): String = "削除キーを入力してください"
 
@@ -208,7 +209,7 @@ internal fun updateThreadReplyDialogImage(
     state: ThreadReplyDialogState,
     value: ImageData?
 ): ThreadReplyDialogState {
-    return updateThreadReplyDialogField(state) { copy(imageData = value) }
+    return updateThreadReplyDialogField(state) { copy(imageData = normalizePickedImageData(value)) }
 }
 
 internal fun clearThreadReplyDialog(

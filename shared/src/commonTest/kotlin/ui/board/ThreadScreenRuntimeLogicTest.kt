@@ -597,10 +597,8 @@ class ThreadScreenRuntimeLogicTest {
         assertEquals("subj2", updateThreadReplyDialogSubject(updated, "subj2").draft.subject)
         assertEquals("body2", updateThreadReplyDialogComment(updated, "body2").draft.comment)
         assertEquals("pass", updateThreadReplyDialogPassword(updated, "pass").draft.password)
-        assertEquals(
-            ImageData(byteArrayOf(9), "b.jpg"),
-            updateThreadReplyDialogImage(updated, ImageData(byteArrayOf(9), "b.jpg")).draft.imageData
-        )
+        val selectedImage = ImageData(byteArrayOf(9), "b.jpg")
+        assertEquals(selectedImage, updateThreadReplyDialogImage(updated, selectedImage).draft.imageData)
 
         val quoted = appendQuoteSelectionToReplyDialog(updated, listOf(">No.1"))
         assertEquals("body\n>No.1\n", quoted?.draft?.comment)
@@ -663,13 +661,14 @@ class ThreadScreenRuntimeLogicTest {
         replyCallbacks.onEmailChange("sage")
         replyCallbacks.onSubjectChange("subject")
         replyCallbacks.onPasswordChange("pass")
-        replyCallbacks.onImageSelected(ImageData(byteArrayOf(1), "a.jpg"))
+        val replyImage = ImageData(byteArrayOf(1), "a.jpg")
+        replyCallbacks.onImageSelected(replyImage)
         assertEquals("comment", replyState.draft.comment)
         assertEquals("name", replyState.draft.name)
         assertEquals("sage", replyState.draft.email)
         assertEquals("subject", replyState.draft.subject)
         assertEquals("pass", replyState.draft.password)
-        assertEquals(ImageData(byteArrayOf(1), "a.jpg"), replyState.draft.imageData)
+        assertEquals(replyImage, replyState.draft.imageData)
 
         replyCallbacks.onClear()
         assertEquals(ThreadReplyDraft(), replyState.draft)
@@ -717,6 +716,7 @@ class ThreadScreenRuntimeLogicTest {
             setPassword = { replyPassword = it },
             setImageData = { replyImageData = it }
         )
+        val boundImage = ImageData(byteArrayOf(1), "a.jpg")
         replyDraftBinding.setDraft(
             ThreadReplyDraft(
                 name = "name",
@@ -724,7 +724,7 @@ class ThreadScreenRuntimeLogicTest {
                 subject = "subject",
                 comment = "comment",
                 password = "pass",
-                imageData = ImageData(byteArrayOf(1), "a.jpg")
+                imageData = boundImage
             )
         )
         assertEquals(
@@ -734,7 +734,7 @@ class ThreadScreenRuntimeLogicTest {
                 subject = "subject",
                 comment = "comment",
                 password = "pass",
-                imageData = ImageData(byteArrayOf(1), "a.jpg")
+                imageData = boundImage
             ),
             replyDraftBinding.currentDraft()
         )

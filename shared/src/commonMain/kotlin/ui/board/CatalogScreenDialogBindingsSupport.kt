@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.network.ArchiveSearchScope
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.ImageData
+import com.valoser.futacha.shared.util.normalizePickedImageData
 
 internal data class CatalogCreateThreadDialogCallbacks(
     val onNameChange: (String) -> Unit,
@@ -42,7 +43,7 @@ internal fun buildCatalogCreateThreadDialogCallbacks(
         onPasswordChange = { value ->
             setDraft(updateCreateThreadDraftPassword(currentDraft(), value))
         },
-        onImageSelected = setImage,
+        onImageSelected = { value -> setImage(normalizePickedImageData(value)) },
         onDismiss = { setShowCreateThreadDialog(false) },
         onSubmit = onSubmit,
         onClear = onClear
