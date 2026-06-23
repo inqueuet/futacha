@@ -1216,7 +1216,12 @@ class ThreadScreenInteractionLogicTest {
                 currentPreviewState = { previewState },
                 setPreviewState = { previewState = it },
                 currentMediaEntries = { mediaEntries },
-                currentMediaIndexByKey = { buildMediaPreviewIndexByKey(mediaEntries) }
+                ensureMediaPreviewCollection = {
+                    MediaPreviewCollection(
+                        entries = mediaEntries,
+                        indexByKey = buildMediaPreviewIndexByKey(mediaEntries)
+                    )
+                }
             ),
             controllerActionInputs = ThreadScreenControllerActionInputs(
                 coroutineScope = this,
@@ -1308,6 +1313,7 @@ class ThreadScreenInteractionLogicTest {
         )
 
         bundle.mediaBindings.onMediaClick(mediaEntries[1].url, mediaEntries[1].mediaType)
+        yield()
         bundle.controllerBindings.interactionBindings.menuEntryHandler(ThreadMenuEntryId.Reply)
         bundle.controllerBindings.interactionBindings.menuEntryHandler(ThreadMenuEntryId.Refresh)
         bundle.controllerBindings.interactionBindings.historySelectionHandler(historyEntry)

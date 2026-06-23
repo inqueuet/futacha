@@ -103,6 +103,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.time.Clock
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -590,6 +592,7 @@ private fun ThreadScreenContent(
         FutachaAiAction.PreviousThreadReadAloud -> true
         else -> false
     }
+    val postTextCache = remember(threadId) { ThreadPostTextCache() }
     val derivedRuntimeState = rememberThreadScreenDerivedRuntimeState(
         currentState,
         initialReplyCount,
@@ -599,12 +602,39 @@ private fun ThreadScreenContent(
         shouldPrepareReadAloudForCommand = shouldPrepareReadAloudForAiCommand,
         lazyListState,
         isSearchActive,
-        debouncedThreadSearchQuery
+        debouncedThreadSearchQuery,
+        postTextCache = postTextCache
     )
     val derivedUiState = derivedRuntimeState.derivedUiState
     val currentSuccessState = derivedUiState.successState
-    val mediaPreviewEntries = derivedRuntimeState.mediaPreviewEntries
-    val mediaPreviewIndexByKey = derivedRuntimeState.mediaPreviewIndexByKey
+    var mediaPreviewCollection by remember(threadId) {
+        mutableStateOf(
+            MediaPreviewCollection(
+                entries = emptyList(),
+                indexByKey = emptyMap()
+            )
+        )
+    }
+    var mediaPreviewCollectionPosts by remember(threadId) {
+        mutableStateOf<List<Post>?>(null)
+    }
+    val mediaPreviewCollectionMutex = remember(threadId) { Mutex() }
+    val ensureMediaPreviewCollection: suspend () -> MediaPreviewCollection = {
+        mediaPreviewCollectionMutex.withLock {
+            val currentPosts = derivedUiState.currentPosts
+            if (mediaPreviewCollectionPosts === currentPosts) {
+                mediaPreviewCollection
+            } else {
+                withContext(AppDispatchers.parsing) {
+                    buildMediaPreviewCollection(currentPosts)
+                }.also { collection ->
+                    mediaPreviewCollectionPosts = currentPosts
+                    mediaPreviewCollection = collection
+                }
+            }
+        }
+    }
+    val mediaPreviewEntries = mediaPreviewCollection.entries
     var mediaPreviewState by searchStateRefs.mediaPreviewState
     var restoreGalleryAfterMediaPreview by rememberSaveable { mutableStateOf(false) }
     var restoreGalleryAfterAttachmentAction by rememberSaveable { mutableStateOf(false) }
@@ -614,6 +644,16 @@ private fun ThreadScreenContent(
         if (isDismissingPreview && restoreGalleryAfterMediaPreview) {
             restoreGalleryAfterMediaPreview = false
             modalOverlayState = openThreadGalleryOverlay(modalOverlayState)
+        }
+    }
+    LaunchedEffect(derivedUiState.currentPosts) {
+        if (mediaPreviewCollectionPosts !== null && mediaPreviewCollectionPosts !== derivedUiState.currentPosts) {
+            mediaPreviewCollectionPosts = null
+            mediaPreviewCollection = MediaPreviewCollection(
+                entries = emptyList(),
+                indexByKey = emptyMap()
+            )
+            setMediaPreviewState(normalizeThreadMediaPreviewState(mediaPreviewState, totalCount = 0))
         }
     }
 
@@ -771,7 +811,7 @@ private fun ThreadScreenContent(
             mediaPreviewState = { mediaPreviewState },
             setMediaPreviewState = setMediaPreviewState,
             mediaPreviewEntries = { mediaPreviewEntries },
-            mediaPreviewIndexByKey = { mediaPreviewIndexByKey },
+            ensureMediaPreviewCollection = ensureMediaPreviewCollection,
             actionStateBindings = actionStateBindings,
             actionDependencies = actionDependencies,
             historyRefreshStateBindings = historyRefreshStateBindings,
@@ -1130,6 +1170,7 @@ private fun ThreadScreenContent(
             ngWords = ngWords,
             ngFilteringEnabled = ngFilteringEnabled,
             threadFilterCache = threadFilterCache,
+            postTextCache = postTextCache,
             lazyListState = lazyListState,
             saidaneOverrides = saidaneOverrides,
             selfPostIdentifierSet = selfPostIdentifierSet,

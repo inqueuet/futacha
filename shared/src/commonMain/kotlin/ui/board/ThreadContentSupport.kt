@@ -28,34 +28,110 @@ internal data class ThreadPostDerivedData(
 )
 
 internal fun buildThreadPostDerivedData(posts: List<Post>): ThreadPostDerivedData {
-    return ThreadPostDerivedData(
-        posterIdLabels = buildPosterIdLabels(posts),
-        postIndex = posts.associateBy { it.id },
-        referencedByMap = buildReferencedPostsMap(posts),
-        postsByPosterId = buildPostsByPosterId(posts)
-    )
+    return buildThreadPostDerivedDataCombined(posts)
 }
 
 internal suspend fun buildThreadPostDerivedDataCancellable(posts: List<Post>): ThreadPostDerivedData {
     coroutineContext.ensureActive()
     if (posts.isEmpty()) return ThreadPostDerivedData()
-    val posterIdLabels = buildPosterIdLabels(posts)
-    coroutineContext.ensureActive()
-    yield()
-    val postIndex = posts.associateBy { it.id }
-    coroutineContext.ensureActive()
-    yield()
-    val referencedByMap = buildReferencedPostsMap(posts)
-    coroutineContext.ensureActive()
-    yield()
-    val postsByPosterId = buildPostsByPosterId(posts)
+    return buildThreadPostDerivedDataCombinedCancellable(posts)
+}
+
+private const val THREAD_POST_DERIVED_DATA_CANCELLATION_CHECK_INTERVAL = 64
+
+private fun buildThreadPostDerivedDataCombined(posts: List<Post>): ThreadPostDerivedData {
+    if (posts.isEmpty()) return ThreadPostDerivedData()
+    val posterIdTotals = mutableMapOf<String, Int>()
+    val postsByPosterId = mutableMapOf<String, MutableList<Post>>()
+    val postIndex = LinkedHashMap<String, Post>(posts.size)
+    posts.forEach { post ->
+        postIndex[post.id] = post
+        val normalized = normalizePosterIdValue(post.posterId) ?: return@forEach
+        posterIdTotals[normalized] = (posterIdTotals[normalized] ?: 0) + 1
+        postsByPosterId.getOrPut(normalized) { mutableListOf() }.add(post)
+    }
+
+    val runningPosterIdCounts = mutableMapOf<String, Int>()
+    val posterIdLabels = mutableMapOf<String, PosterIdLabel>()
+    val referencedBy = mutableMapOf<String, MutableList<Post>>()
+    val seenSourceIdsByTarget = mutableMapOf<String, MutableSet<String>>()
+    posts.forEach { source ->
+        val normalized = normalizePosterIdValue(source.posterId)
+        if (normalized != null) {
+            val nextIndex = (runningPosterIdCounts[normalized] ?: 0) + 1
+            runningPosterIdCounts[normalized] = nextIndex
+            val total = posterIdTotals.getValue(normalized)
+            posterIdLabels[source.id] = PosterIdLabel(
+                text = formatPosterIdLabel(normalized, nextIndex, total),
+                highlight = total > 1 && nextIndex > 1
+            )
+        }
+        source.quoteReferences.forEach { reference ->
+            reference.targetPostIds.forEach targetLoop@{ targetId ->
+                val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
+                if (!seenSourceIds.add(source.id)) return@targetLoop
+                referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
+            }
+        }
+    }
+    return ThreadPostDerivedData(
+        posterIdLabels = posterIdLabels,
+        postIndex = postIndex,
+        referencedByMap = referencedBy.mapValues { (_, value) -> value.toList() },
+        postsByPosterId = postsByPosterId.mapValues { (_, value) -> value.toList() }
+    )
+}
+
+private suspend fun buildThreadPostDerivedDataCombinedCancellable(posts: List<Post>): ThreadPostDerivedData {
+    val posterIdTotals = mutableMapOf<String, Int>()
+    val postsByPosterId = mutableMapOf<String, MutableList<Post>>()
+    val postIndex = LinkedHashMap<String, Post>(posts.size)
+    posts.forEachIndexed { index, post ->
+        checkThreadPostDerivedDataCancellation(index)
+        postIndex[post.id] = post
+        val normalized = normalizePosterIdValue(post.posterId) ?: return@forEachIndexed
+        posterIdTotals[normalized] = (posterIdTotals[normalized] ?: 0) + 1
+        postsByPosterId.getOrPut(normalized) { mutableListOf() }.add(post)
+    }
+
+    val runningPosterIdCounts = mutableMapOf<String, Int>()
+    val posterIdLabels = mutableMapOf<String, PosterIdLabel>()
+    val referencedBy = mutableMapOf<String, MutableList<Post>>()
+    val seenSourceIdsByTarget = mutableMapOf<String, MutableSet<String>>()
+    posts.forEachIndexed { index, source ->
+        checkThreadPostDerivedDataCancellation(posts.size + index)
+        val normalized = normalizePosterIdValue(source.posterId)
+        if (normalized != null) {
+            val nextIndex = (runningPosterIdCounts[normalized] ?: 0) + 1
+            runningPosterIdCounts[normalized] = nextIndex
+            val total = posterIdTotals.getValue(normalized)
+            posterIdLabels[source.id] = PosterIdLabel(
+                text = formatPosterIdLabel(normalized, nextIndex, total),
+                highlight = total > 1 && nextIndex > 1
+            )
+        }
+        source.quoteReferences.forEach { reference ->
+            reference.targetPostIds.forEach targetLoop@{ targetId ->
+                val seenSourceIds = seenSourceIdsByTarget.getOrPut(targetId) { mutableSetOf() }
+                if (!seenSourceIds.add(source.id)) return@targetLoop
+                referencedBy.getOrPut(targetId) { mutableListOf() }.add(source)
+            }
+        }
+    }
     coroutineContext.ensureActive()
     return ThreadPostDerivedData(
         posterIdLabels = posterIdLabels,
         postIndex = postIndex,
-        referencedByMap = referencedByMap,
-        postsByPosterId = postsByPosterId
+        referencedByMap = referencedBy.mapValues { (_, value) -> value.toList() },
+        postsByPosterId = postsByPosterId.mapValues { (_, value) -> value.toList() }
     )
+}
+
+private suspend fun checkThreadPostDerivedDataCancellation(index: Int) {
+    if (index % THREAD_POST_DERIVED_DATA_CANCELLATION_CHECK_INTERVAL == 0) {
+        coroutineContext.ensureActive()
+        yield()
+    }
 }
 
 internal fun countThreadContentItemsBeforePosts(

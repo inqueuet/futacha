@@ -43,6 +43,7 @@ internal data class ThreadScreenContentHostBindings(
     val ngWords: List<String>,
     val ngFilteringEnabled: Boolean,
     val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val postTextCache: ThreadPostTextCache? = null,
     val lazyListState: LazyListState,
     val saidaneOverrides: Map<String, String>,
     val selfPostIdentifierSet: Set<String>,
@@ -156,7 +157,7 @@ internal fun ThreadScreenContentHost(
                         it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
                     }
                     val precomputedLowerBodyByPostId = if (hasNgWordFilters || hasThreadLowerBodyFilters) {
-                        buildLowerBodyByPostId(state.page.posts)
+                        buildLowerBodyByPostId(state.page.posts, bindings.postTextCache)
                     } else {
                         emptyMap()
                     }

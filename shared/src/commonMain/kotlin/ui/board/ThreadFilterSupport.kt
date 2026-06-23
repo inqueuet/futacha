@@ -154,6 +154,19 @@ internal fun buildLowerBodyByPostId(posts: List<Post>): Map<String, String> {
     }
 }
 
+internal suspend fun buildLowerBodyByPostId(
+    posts: List<Post>,
+    textCache: ThreadPostTextCache?
+): Map<String, String> {
+    if (textCache == null) return buildLowerBodyByPostId(posts)
+    if (posts.isEmpty()) return emptyMap()
+    val result = LinkedHashMap<String, String>(posts.size)
+    posts.forEach { post ->
+        result[post.id] = textCache.get(post).lowerText
+    }
+    return result
+}
+
 internal fun buildPostHeaderText(post: Post): String {
     return listOfNotNull(
         post.subject,

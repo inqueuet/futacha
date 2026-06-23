@@ -22,6 +22,13 @@ class BoardUrlResolverTest {
                 CatalogMode.New
             )
         )
+        assertEquals(
+            "https://may.2chan.net/b/futaba.php?mode=cat",
+            BoardUrlResolver.resolveCatalogUrl(
+                "https://may.2chan.net/b/futaba.htm",
+                CatalogMode.Catalog
+            )
+        )
     }
 
     @Test

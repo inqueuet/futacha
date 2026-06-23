@@ -2,7 +2,6 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -44,8 +43,6 @@ internal fun buildThreadScreenDerivedRuntimeSnapshot(
 
 internal data class ThreadScreenDerivedRuntimeState(
     val derivedUiState: ThreadScreenDerivedUiState,
-    val mediaPreviewEntries: List<MediaPreviewEntry>,
-    val mediaPreviewIndexByKey: Map<MediaPreviewKey, Int>,
     val searchMatches: List<ThreadSearchMatch>,
     val postHighlightRanges: Map<String, List<IntRange>>,
     val readAloudSegments: List<ReadAloudSegment>,
@@ -107,7 +104,8 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     shouldPrepareReadAloudForCommand: Boolean = false,
     lazyListState: LazyListState,
     isSearchActive: Boolean,
-    searchQuery: String
+    searchQuery: String,
+    postTextCache: ThreadPostTextCache? = null
 ): ThreadScreenDerivedRuntimeState {
     val derivedUiState = remember(
         currentState,
@@ -128,17 +126,6 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     }
     val currentPage = derivedUiState.currentPage
     val currentPosts = derivedUiState.currentPosts
-    val mediaPreviewCollection by produceState(
-        initialValue = MediaPreviewCollection(
-            entries = emptyList(),
-            indexByKey = emptyMap()
-        ),
-        key1 = currentPosts
-    ) {
-        value = withContext(AppDispatchers.parsing) {
-            buildMediaPreviewCollection(currentPosts)
-        }
-    }
     val searchTargets by produceState<List<ThreadSearchTarget>>(
         initialValue = emptyList(),
         key1 = isSearchActive,
@@ -149,7 +136,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
             return@produceState
         }
         value = withContext(AppDispatchers.parsing) {
-            buildThreadSearchTargets(currentPage.posts)
+            buildThreadSearchTargets(currentPage.posts, postTextCache)
         }
     }
     val normalizedSearchQuery = remember(searchQuery) { searchQuery.trim() }
@@ -178,7 +165,7 @@ internal fun rememberThreadScreenDerivedRuntimeState(
             return@produceState
         }
         value = withContext(AppDispatchers.parsing) {
-            buildReadAloudSegments(currentPosts)
+            buildReadAloudSegments(currentPosts, postTextCache)
         }
     }
     val firstVisibleSegmentIndexState = remember(
@@ -211,8 +198,6 @@ internal fun rememberThreadScreenDerivedRuntimeState(
     }
     return ThreadScreenDerivedRuntimeState(
         derivedUiState = derivedUiState,
-        mediaPreviewEntries = mediaPreviewCollection.entries,
-        mediaPreviewIndexByKey = mediaPreviewCollection.indexByKey,
         searchMatches = searchMatches,
         postHighlightRanges = postHighlightRanges,
         readAloudSegments = readAloudSegments,

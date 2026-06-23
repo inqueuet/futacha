@@ -75,7 +75,7 @@ internal data class ThreadScreenAggregateMediaInputs(
     val currentPreviewState: () -> ThreadMediaPreviewState,
     val setPreviewState: (ThreadMediaPreviewState) -> Unit,
     val currentMediaEntries: () -> List<MediaPreviewEntry>,
-    val currentMediaIndexByKey: () -> Map<MediaPreviewKey, Int>
+    val ensureMediaPreviewCollection: suspend () -> MediaPreviewCollection
 )
 
 internal data class ThreadScreenAggregateUiInputs(
@@ -475,10 +475,11 @@ internal fun buildThreadScreenInteractionUiAggregateBundle(
     uiInputs: ThreadScreenAggregateUiInputs
 ): ThreadScreenInteractionUiAggregateBundle {
     val mediaBindings = buildThreadScreenMediaBindings(
+        coroutineScope = controllerActionInputs.coroutineScope,
         currentPreviewState = mediaInputs.currentPreviewState,
         setPreviewState = mediaInputs.setPreviewState,
         currentEntries = mediaInputs.currentMediaEntries,
-        currentIndexByKey = mediaInputs.currentMediaIndexByKey
+        ensureMediaPreviewCollection = mediaInputs.ensureMediaPreviewCollection
     )
     val controllerBindings = buildThreadScreenControllerBindingsBundle(
         actionInputs = controllerActionInputs,
@@ -572,7 +573,7 @@ internal data class ThreadScreenInteractionUiWiringInputs(
     val mediaPreviewState: () -> ThreadMediaPreviewState,
     val setMediaPreviewState: (ThreadMediaPreviewState) -> Unit,
     val mediaPreviewEntries: () -> List<MediaPreviewEntry>,
-    val mediaPreviewIndexByKey: () -> Map<MediaPreviewKey, Int>,
+    val ensureMediaPreviewCollection: suspend () -> MediaPreviewCollection,
     val actionStateBindings: ThreadScreenActionStateBindings,
     val actionDependencies: ThreadScreenActionDependencies,
     val historyRefreshStateBindings: ThreadScreenHistoryRefreshStateBindings,
@@ -633,7 +634,7 @@ internal fun buildThreadScreenInteractionUiWiring(
                 currentPreviewState = inputs.mediaPreviewState,
                 setPreviewState = inputs.setMediaPreviewState,
                 currentMediaEntries = inputs.mediaPreviewEntries,
-                currentMediaIndexByKey = inputs.mediaPreviewIndexByKey
+                ensureMediaPreviewCollection = inputs.ensureMediaPreviewCollection
             ),
             controllerActionInputs = ThreadScreenControllerActionInputs(
                 coroutineScope = inputs.coroutineScope,

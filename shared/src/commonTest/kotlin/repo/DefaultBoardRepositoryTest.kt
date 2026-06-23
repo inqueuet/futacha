@@ -241,6 +241,62 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
+    fun resolveCatalogDisplayTitle_skipsLargerThreadHeadWhenFallbackIsDisabled() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = { maxLines ->
+                if (maxLines == 16) {
+                    "<html></html>"
+                } else {
+                    error("unexpected fallback thread head fetch")
+                }
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "457",
+            threadUrl = "$boardUrl/res/457.htm",
+            title = "20",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 20
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(
+            board = boardUrl,
+            item = item,
+            allowFallbackHeadScan = false
+        )
+
+        assertEquals("20", title)
+        assertEquals(listOf(16), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_skipsHeadFetchForNonPlaceholderTitle() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = {
+                error("unexpected thread head fetch")
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "789",
+            threadUrl = "$boardUrl/res/789.htm",
+            title = "通常タイトル",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 30
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("通常タイトル", title)
+        assertEquals(emptyList(), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
     fun voteDeleteOperations_forwardArgumentsAfterSingleCookieSetup() = runBlocking {
         val boardUrl = "https://dec.2chan.net/b/"
         val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)

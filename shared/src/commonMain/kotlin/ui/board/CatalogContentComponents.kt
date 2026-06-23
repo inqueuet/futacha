@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.util.CatalogTitleCompletionPolicy
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.repo.BoardRepository
 
@@ -51,6 +52,7 @@ internal fun CatalogError(message: String, modifier: Modifier = Modifier) {
 internal fun CatalogSuccessContent(
     items: List<CatalogItem>,
     embeddedHtml: List<EmbeddedHtmlContent>,
+    titleCompletionPolicy: CatalogTitleCompletionPolicy,
     board: BoardSummary?,
     repository: BoardRepository,
     watchWords: List<String>,
@@ -72,10 +74,12 @@ internal fun CatalogSuccessContent(
         )
     } else {
         val shouldResolveHeadMetadata = resolveHeadMetadata &&
+            titleCompletionPolicy.enabled &&
             (displayStyle != CatalogDisplayStyle.Grid || gridColumns <= 6)
         val resolvedHeadTitles = rememberCatalogHeadMetadataTitles(
             items = items,
             embeddedHtml = embeddedHtml,
+            titleCompletionPolicy = titleCompletionPolicy,
             boardUrl = board?.url,
             repository = repository,
             displayStyle = displayStyle,

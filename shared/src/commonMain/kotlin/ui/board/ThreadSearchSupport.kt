@@ -92,7 +92,10 @@ internal data class ThreadSearchTarget(
     val messagePlainText: String
 )
 
-internal suspend fun buildThreadSearchTargets(posts: List<Post>): List<ThreadSearchTarget> {
+internal suspend fun buildThreadSearchTargets(
+    posts: List<Post>,
+    textCache: ThreadPostTextCache? = null
+): List<ThreadSearchTarget> {
     if (posts.isEmpty()) return emptyList()
     val targets = ArrayList<ThreadSearchTarget>(posts.size)
     posts.forEachIndexed { index, post ->
@@ -100,7 +103,8 @@ internal suspend fun buildThreadSearchTargets(posts: List<Post>): List<ThreadSea
             coroutineContext.ensureActive()
             yield()
         }
-        val messagePlainText = messageHtmlToPlainText(post.messageHtml)
+        val messagePlainText = textCache?.get(post)?.plainText
+            ?: messageHtmlToPlainText(post.messageHtml)
         targets += ThreadSearchTarget(
             postId = post.id,
             postIndex = index,

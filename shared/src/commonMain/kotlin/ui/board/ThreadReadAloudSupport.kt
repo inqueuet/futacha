@@ -27,7 +27,10 @@ private val READ_ALOUD_SKIPPED_PHRASES = listOf(
 private val READ_ALOUD_URL_REGEX = Regex("(?i)\\b(?:https?|ftp)://\\S+|\\bttps?://\\S+|\\bttp://\\S+")
 private val READ_ALOUD_WHITESPACE_REGEX = Regex("\\s{2,}")
 
-internal suspend fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSegment> {
+internal suspend fun buildReadAloudSegments(
+    posts: List<Post>,
+    textCache: ThreadPostTextCache? = null
+): List<ReadAloudSegment> {
     val segments = ArrayList<ReadAloudSegment>()
     posts.forEachIndexed { index, post ->
         if (index % READ_ALOUD_CANCELLATION_CHECK_INTERVAL == 0) {
@@ -35,7 +38,7 @@ internal suspend fun buildReadAloudSegments(posts: List<Post>): List<ReadAloudSe
             yield()
         }
         if (post.isDeleted) return@forEachIndexed
-        val lines = messageHtmlToLines(post.messageHtml)
+        val lines = (textCache?.get(post)?.lines ?: messageHtmlToLines(post.messageHtml))
             .map { stripUrlsForReadAloud(it).trim() }
             .filter { it.isNotBlank() && !it.startsWith(">") && !it.startsWith("＞") }
         if (lines.isEmpty()) return@forEachIndexed

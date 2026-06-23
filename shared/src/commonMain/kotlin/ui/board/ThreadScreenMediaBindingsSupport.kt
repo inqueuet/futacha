@@ -1,15 +1,19 @@
 package com.valoser.futacha.shared.ui.board
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+
 internal data class ThreadScreenMediaBindings(
     val normalizePreviewState: () -> Unit,
     val onMediaClick: (String, MediaType) -> Unit
 )
 
 internal fun buildThreadScreenMediaBindings(
+    coroutineScope: CoroutineScope,
     currentPreviewState: () -> ThreadMediaPreviewState,
     setPreviewState: (ThreadMediaPreviewState) -> Unit,
     currentEntries: () -> List<MediaPreviewEntry>,
-    currentIndexByKey: () -> Map<MediaPreviewKey, Int>
+    ensureMediaPreviewCollection: suspend () -> MediaPreviewCollection
 ): ThreadScreenMediaBindings {
     return ThreadScreenMediaBindings(
         normalizePreviewState = {
@@ -19,13 +23,16 @@ internal fun buildThreadScreenMediaBindings(
             )?.let(setPreviewState)
         },
         onMediaClick = { url, mediaType ->
-            resolveThreadMediaClickState(
-                currentState = currentPreviewState(),
-                entries = currentEntries(),
-                indexByKey = currentIndexByKey(),
-                url = url,
-                mediaType = mediaType
-            )?.let(setPreviewState)
+            coroutineScope.launch {
+                val collection = ensureMediaPreviewCollection()
+                resolveThreadMediaClickState(
+                    currentState = currentPreviewState(),
+                    entries = collection.entries,
+                    indexByKey = collection.indexByKey,
+                    url = url,
+                    mediaType = mediaType
+                )?.let(setPreviewState)
+            }
         }
     )
 }

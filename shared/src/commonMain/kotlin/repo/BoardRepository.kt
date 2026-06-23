@@ -13,7 +13,7 @@ import com.valoser.futacha.shared.parser.HtmlParser
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
-import com.valoser.futacha.shared.util.shouldResolveCatalogThreadTitleFromHead
+import com.valoser.futacha.shared.util.shouldResolveCatalogItemTitleFromHead
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -39,7 +39,11 @@ interface BoardRepository {
         items = getCatalog(board, mode)
     )
     suspend fun fetchOpImageUrl(board: String, threadId: String): String?
-    suspend fun resolveCatalogDisplayTitle(board: String, item: CatalogItem): String? = item.title
+    suspend fun resolveCatalogDisplayTitle(
+        board: String,
+        item: CatalogItem,
+        allowFallbackHeadScan: Boolean = true
+    ): String? = item.title
     suspend fun getThread(board: String, threadId: String): ThreadPage
     suspend fun getThreadContent(board: String, threadId: String): ThreadPageContent = ThreadPageContent(
         page = getThread(board, threadId)
@@ -234,8 +238,12 @@ class DefaultBoardRepository(
         return fetchResult.url
     }
 
-    override suspend fun resolveCatalogDisplayTitle(board: String, item: CatalogItem): String? {
-        if (!shouldResolveCatalogThreadTitleFromHead(board, item.title, item.replyCount)) {
+    override suspend fun resolveCatalogDisplayTitle(
+        board: String,
+        item: CatalogItem,
+        allowFallbackHeadScan: Boolean
+    ): String? {
+        if (!shouldResolveCatalogItemTitleFromHead(item.title, item.replyCount)) {
             return item.title
         }
         val key = DefaultBoardRepositoryOpImageKey(board, item.id)
@@ -244,7 +252,11 @@ class DefaultBoardRepository(
         val resolvedTitle = withTimeoutOrNull(SEMAPHORE_TIMEOUT_MILLIS) {
             catalogTitleSemaphore.withPermit {
                 withRetryOnAuthFailure(board) {
-                    resolveCatalogThreadTitle(board, item.id)
+                    resolveCatalogThreadTitle(
+                        board = board,
+                        threadId = item.id,
+                        allowFallbackHeadScan = allowFallbackHeadScan
+                    )
                 }
             }
         } ?: run {
@@ -491,11 +503,13 @@ class DefaultBoardRepository(
 
     private suspend fun resolveCatalogThreadTitle(
         board: String,
-        threadId: String
+        threadId: String,
+        allowFallbackHeadScan: Boolean
     ): String? {
         return resolveDefaultBoardRepositoryCatalogThreadTitle(
             threadId = threadId,
             logTag = TAG,
+            allowFallbackHeadScan = allowFallbackHeadScan,
             fetchInitialThreadHead = {
                 withContext(AppDispatchers.io) {
                     api.fetchThreadHead(board, threadId, CATALOG_TITLE_INITIAL_LINE_LIMIT)

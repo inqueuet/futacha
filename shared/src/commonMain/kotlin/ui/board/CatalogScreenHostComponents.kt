@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.util.inferCatalogTitleCompletionPolicy
+import com.valoser.futacha.shared.util.resolveCatalogTitleCompletionPolicy
 import kotlinx.coroutines.launch
 
 @Composable
@@ -103,9 +105,14 @@ internal fun CatalogScreenScaffold(
                             query = bindings.debouncedSearchQuery
                         )
                     )
+                    val titleCompletionPolicy = remember(state.content.items, bindings.board?.url) {
+                        inferCatalogTitleCompletionPolicy(state.content.items)
+                            ?: resolveCatalogTitleCompletionPolicy(bindings.board?.url)
+                    }
                     CatalogSuccessContent(
                         items = visibleItems,
                         embeddedHtml = state.content.embeddedHtml,
+                        titleCompletionPolicy = titleCompletionPolicy,
                         board = bindings.board,
                         repository = bindings.activeRepository,
                         watchWords = bindings.watchWords,

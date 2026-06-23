@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
+import io.ktor.http.encodedPath
 import io.ktor.http.takeFrom
 
 internal object BoardUrlResolver {
@@ -24,6 +25,9 @@ internal object BoardUrlResolver {
             ensureHttpScheme(parsed)
             URLBuilder().apply {
                 takeFrom(parsed)
+                if (encodedPath.endsWith("/futaba.htm", ignoreCase = true)) {
+                    encodedPath = encodedPath.dropLast("futaba.htm".length) + "futaba.php"
+                }
                 parameters.remove("mode")
                 parameters.remove("sort")
                 parameters.append("mode", "cat")

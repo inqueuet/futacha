@@ -330,7 +330,7 @@ class ThreadScreenRuntimeLogicTest {
     }
 
     @Test
-    fun threadScreenMediaBindingsSupport_updatesPreviewState() {
+    fun threadScreenMediaBindingsSupport_updatesPreviewState() = runBlocking {
         val entries = listOf(
             MediaPreviewEntry(
                 url = "https://example.com/a.jpg",
@@ -346,19 +346,30 @@ class ThreadScreenRuntimeLogicTest {
             )
         )
         var previewState = ThreadMediaPreviewState(previewMediaIndex = 9)
+        var ensureCalls = 0
 
         val bindings = buildThreadScreenMediaBindings(
+            coroutineScope = this,
             currentPreviewState = { previewState },
             setPreviewState = { previewState = it },
             currentEntries = { entries },
-            currentIndexByKey = { buildMediaPreviewIndexByKey(entries) }
+            ensureMediaPreviewCollection = {
+                ensureCalls += 1
+                MediaPreviewCollection(
+                    entries = entries,
+                    indexByKey = buildMediaPreviewIndexByKey(entries)
+                )
+            }
         )
 
         bindings.normalizePreviewState()
         assertEquals(emptyThreadMediaPreviewState(), previewState)
+        assertEquals(0, ensureCalls)
 
         bindings.onMediaClick("https://example.com/b.mp4", MediaType.Video)
+        yield()
         assertEquals(ThreadMediaPreviewState(previewMediaIndex = 1), previewState)
+        assertEquals(1, ensureCalls)
     }
 
     @Test

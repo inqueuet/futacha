@@ -9,6 +9,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.util.CatalogTitleCompletionPolicy
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.repo.BoardRepository
@@ -31,6 +32,7 @@ private const val MAX_CATALOG_HEAD_METADATA_CONCURRENCY = 2
 internal fun rememberCatalogHeadMetadataTitles(
     items: List<CatalogItem>,
     embeddedHtml: List<EmbeddedHtmlContent>,
+    titleCompletionPolicy: CatalogTitleCompletionPolicy,
     boardUrl: String?,
     repository: BoardRepository,
     displayStyle: CatalogDisplayStyle,
@@ -69,6 +71,7 @@ internal fun rememberCatalogHeadMetadataTitles(
         items,
         boardUrl,
         repository,
+        titleCompletionPolicy,
         displayStyle,
         gridState,
         listState,
@@ -104,7 +107,12 @@ internal fun rememberCatalogHeadMetadataTitles(
                         val cacheKey = activeCacheKeysByItemId[item.id]
                             ?: buildCatalogHeadMetadataCacheKey(boardUrl, item)
                         resolvedCacheKeysByItemId[item.id] != cacheKey &&
-                            shouldResolveCatalogThreadTitleFromHead(boardUrl, item.title, item.replyCount)
+                            shouldResolveCatalogThreadTitleFromHead(
+                                boardUrl = boardUrl,
+                                currentTitle = item.title,
+                                replyCount = item.replyCount,
+                                inferredPolicy = titleCompletionPolicy
+                            )
                     }
                     .take(MAX_CATALOG_HEAD_METADATA_BATCH_SIZE)
                     .toList()
@@ -121,7 +129,11 @@ internal fun rememberCatalogHeadMetadataTitles(
                                 val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
                                 val title = try {
                                     withTimeoutOrNull(CATALOG_HEAD_METADATA_TIMEOUT_MS) {
-                                        repository.resolveCatalogDisplayTitle(boardUrl, item)
+                                        repository.resolveCatalogDisplayTitle(
+                                            board = boardUrl,
+                                            item = item,
+                                            allowFallbackHeadScan = titleCompletionPolicy.allowFallbackHeadScan
+                                        )
                                     }
                                         ?.takeIf { it.isNotBlank() }
                                         ?: fallbackTitle
