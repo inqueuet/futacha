@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, and item 31 iOS storage writes now use separate locks for large JSON and scalar settings.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, and item 32 AI availability now refreshes continuously only while a Thread screen is visible.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -52,7 +52,7 @@ This is the primary classification for the remaining findings below. Original it
    - Response/body reads that create media-related memory spikes.
 
 5. Background refresh, Watch sync, autosave scheduling, and command orchestration
-   Items: 32, 33, 39, 40, 42
+   Items: 33, 39, 40, 42
 
    Scope:
    - Background refresh scheduling and duplicated refresh instances.
@@ -108,29 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-32. AI availability polling can wake service/binding paths every minute while enabled
-------------------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/FutachaAppObservedRuntimeStateSupport.kt
-- shared/src/androidMain/kotlin/ai/OnDeviceAiService.android.kt
-- shared/src/iosMain/kotlin/ai/OnDeviceAiService.ios.kt
-
-Current behavior:
-- When thread summary mode or AI post filter is enabled, FutachaApp polls aiService.getAvailability() every 60 seconds.
-- The first availability check also runs immediately.
-- Android availability checks can touch service/model status paths; iOS bridges to the platform AI capability implementation.
-
-Risk:
-- Users who enable AI features pay a recurring background-ish cost even when no thread is open or no AI action is requested.
-- If service binding or model status is slow, this can contend with actual AI inference and other IO work.
-- Failures only update availability text, so repeated cost may not be obvious in normal logs.
-
-Kaizen:
-- Poll only while an AI-capable screen is visible, or back off when availability has been stable.
-- Do not add availability runtime logs. Cache availability and test service-binding decisions with fakes.
-- Expose a manual refresh path in settings instead of continuous polling when features are idle.
 
 
 33. Read-aloud progress can trigger full watch snapshots during long playback

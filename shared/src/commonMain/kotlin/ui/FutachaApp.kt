@@ -121,13 +121,17 @@ fun FutachaApp(
             isUnlockedForSession = false
         }
     }
+    var navigationState by rememberSaveable(stateSaver = FutachaNavigationState.Saver) {
+        mutableStateOf(FutachaNavigationState())
+    }
     val observedRuntimeState = rememberFutachaObservedRuntimeState(
         stateStore = stateStore,
         boardList = boardList,
         history = history,
         versionChecker = versionChecker,
         fileSystem = fileSystem,
-        platformContext = platformContext
+        platformContext = platformContext,
+        isThreadScreenVisible = navigationState.selectedThreadId != null
     )
     FutachaTheme(
         themeMode = observedRuntimeState.themeMode,
@@ -227,9 +231,6 @@ fun FutachaApp(
 
                 val persistedBoards = observedRuntimeState.persistedBoards
                 val persistedHistory = observedRuntimeState.persistedHistory
-                var navigationState by rememberSaveable(stateSaver = FutachaNavigationState.Saver) {
-                    mutableStateOf(FutachaNavigationState())
-                }
                 LaunchedEffect(navigationState.selectedBoardId) {
                     if (navigationState.selectedBoardId == null) {
                         navigationState = clearFutachaThreadSelection(

@@ -35,6 +35,14 @@ import kotlinx.coroutines.delay
 private const val FUTACHA_APP_STATE_TAG = "FutachaApp"
 private const val AI_AVAILABILITY_REFRESH_INTERVAL_MILLIS = 60_000L
 
+internal fun shouldContinuouslyRefreshFutachaAiAvailability(
+    isThreadSummaryModeEnabled: Boolean,
+    isAiPostFilterEnabled: Boolean,
+    isThreadScreenVisible: Boolean
+): Boolean {
+    return isThreadScreenVisible && (isThreadSummaryModeEnabled || isAiPostFilterEnabled)
+}
+
 internal data class FutachaObservedRuntimeState(
     val persistedBoards: List<BoardSummary>,
     val persistedHistory: List<ThreadHistoryEntry>,
@@ -69,7 +77,8 @@ internal fun rememberFutachaObservedRuntimeState(
     history: List<ThreadHistoryEntry>,
     versionChecker: VersionChecker?,
     fileSystem: FileSystem?,
-    platformContext: Any?
+    platformContext: Any?,
+    isThreadScreenVisible: Boolean
 ): FutachaObservedRuntimeState {
     val persistedBoards by stateStore.boards.collectAsState(initial = boardList)
     val persistedHistory by stateStore.history.collectAsState(initial = history)
@@ -82,7 +91,11 @@ internal fun rememberFutachaObservedRuntimeState(
     val isAiCommandEnabled by stateStore.isAiCommandEnabled.collectAsState(initial = false)
     val appLockPasswordHash by stateStore.appLockPasswordHash.collectAsState(initial = null)
     val aiService = remember(platformContext) { createOnDeviceAiService(platformContext) }
-    val shouldContinuouslyRefreshAiAvailability = isThreadSummaryModeEnabled || isAiPostFilterEnabled
+    val shouldContinuouslyRefreshAiAvailability = shouldContinuouslyRefreshFutachaAiAvailability(
+        isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
+        isAiPostFilterEnabled = isAiPostFilterEnabled,
+        isThreadScreenVisible = isThreadScreenVisible
+    )
     val aiAvailability by produceState(
         initialValue = AiAvailability(
             isAvailable = false,
