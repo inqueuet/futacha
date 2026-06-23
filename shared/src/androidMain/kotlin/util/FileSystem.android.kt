@@ -12,7 +12,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -27,6 +29,8 @@ import kotlin.coroutines.cancellation.CancellationException
  * FIX: ユーザーに適切なエラーメッセージを提供するための専用例外クラス
  */
 class PermissionRevokedException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+class SaveProviderTimeoutException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
  * Android版FileSystem実装
@@ -45,6 +49,7 @@ class AndroidFileSystem(
         private const val FILE_TREE_DELETE_MAX_ITEMS = 10_000
         private const val FILE_TREE_DELETE_MAX_DURATION_MILLIS = 30_000L
         private const val SAF_WRITE_CHUNK_BYTES = 64 * 1024
+        private const val SAF_WRITE_TIMEOUT_MILLIS = 30_000L
     }
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
@@ -56,6 +61,19 @@ class AndroidFileSystem(
     private suspend fun backoffAfterZeroRead() {
         coroutineContext.ensureActive()
         delay(ZERO_READ_BACKOFF_MILLIS)
+    }
+
+    private suspend fun <T> withSafWriteTimeout(block: suspend () -> T): T {
+        return try {
+            withTimeout(SAF_WRITE_TIMEOUT_MILLIS) {
+                block()
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw SaveProviderTimeoutException(
+                "保存先プロバイダの応答待ちがタイムアウトしました。保存先フォルダを選び直すか、別の保存先を試してください。",
+                e
+            )
+        }
     }
 
     override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -539,32 +557,34 @@ class AndroidFileSystem(
             }
             is SaveLocation.TreeUri -> {
                 runTreeUriCatching(base, requireWrite = true) { baseDir ->
-                    val (parentDir, fileName) = resolveTreeParentDirectory(
-                        baseDir = baseDir,
-                        relativePath = relativePath,
-                        createDirectories = true
-                    )
-                    val file = findOrCreateTreeFile(parentDir, fileName)
-                    val output = runInterruptible {
-                        context.contentResolver.openOutputStream(file.uri, "wt")
-                    } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
-                    try {
-                        var offset = 0
-                        while (offset < bytes.size) {
-                            coroutineContext.ensureActive()
-                            val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
-                            runInterruptible {
-                                output.write(bytes, offset, length)
-                            }
-                            offset += length
-                        }
-                        runInterruptible {
-                            output.flush()
-                        }
-                    } finally {
+                    withSafWriteTimeout {
+                        val (parentDir, fileName) = resolveTreeParentDirectory(
+                            baseDir = baseDir,
+                            relativePath = relativePath,
+                            createDirectories = true
+                        )
+                        val file = findOrCreateTreeFile(parentDir, fileName)
+                        val output = runInterruptible {
+                            context.contentResolver.openOutputStream(file.uri, "wt")
+                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
                         try {
-                            runInterruptible { output.close() }
-                        } catch (_: Throwable) {
+                            var offset = 0
+                            while (offset < bytes.size) {
+                                coroutineContext.ensureActive()
+                                val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
+                                runInterruptible {
+                                    output.write(bytes, offset, length)
+                                }
+                                offset += length
+                            }
+                            runInterruptible {
+                                output.flush()
+                            }
+                        } finally {
+                            try {
+                                runInterruptible { output.close() }
+                            } catch (_: Throwable) {
+                            }
                         }
                     }
                 }
@@ -590,32 +610,34 @@ class AndroidFileSystem(
             }
             is SaveLocation.TreeUri -> {
                 runTreeUriCatching(base, requireWrite = true) { baseDir ->
-                    val (parentDir, fileName) = resolveTreeParentDirectory(
-                        baseDir = baseDir,
-                        relativePath = relativePath,
-                        createDirectories = true
-                    )
-                    val file = findOrCreateTreeFile(parentDir, fileName)
-                    val output = runInterruptible {
-                        context.contentResolver.openOutputStream(file.uri, "wa")
-                    } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
-                    try {
-                        var offset = 0
-                        while (offset < bytes.size) {
-                            coroutineContext.ensureActive()
-                            val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
-                            runInterruptible {
-                                output.write(bytes, offset, length)
-                            }
-                            offset += length
-                        }
-                        runInterruptible {
-                            output.flush()
-                        }
-                    } finally {
+                    withSafWriteTimeout {
+                        val (parentDir, fileName) = resolveTreeParentDirectory(
+                            baseDir = baseDir,
+                            relativePath = relativePath,
+                            createDirectories = true
+                        )
+                        val file = findOrCreateTreeFile(parentDir, fileName)
+                        val output = runInterruptible {
+                            context.contentResolver.openOutputStream(file.uri, "wa")
+                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
                         try {
-                            runInterruptible { output.close() }
-                        } catch (_: Throwable) {
+                            var offset = 0
+                            while (offset < bytes.size) {
+                                coroutineContext.ensureActive()
+                                val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
+                                runInterruptible {
+                                    output.write(bytes, offset, length)
+                                }
+                                offset += length
+                            }
+                            runInterruptible {
+                                output.flush()
+                            }
+                        } finally {
+                            try {
+                                runInterruptible { output.close() }
+                            } catch (_: Throwable) {
+                            }
                         }
                     }
                 }
@@ -644,15 +666,21 @@ class AndroidFileSystem(
             is SaveLocation.TreeUri -> {
                 try {
                     val result = runTreeUriCatching(base, requireWrite = true) { baseDir ->
-                        val (parentDir, fileName) = resolveTreeParentDirectory(
-                            baseDir = baseDir,
-                            relativePath = relativePath,
-                            createDirectories = true
-                        )
-                        val file = findOrCreateTreeFile(parentDir, fileName)
-                        val output = runInterruptible {
-                            context.contentResolver.openOutputStream(file.uri, "wt")
-                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        val (parentDir, fileName) = withSafWriteTimeout {
+                            resolveTreeParentDirectory(
+                                baseDir = baseDir,
+                                relativePath = relativePath,
+                                createDirectories = true
+                            )
+                        }
+                        val file = withSafWriteTimeout {
+                            findOrCreateTreeFile(parentDir, fileName)
+                        }
+                        val output = withSafWriteTimeout {
+                            runInterruptible {
+                                context.contentResolver.openOutputStream(file.uri, "wt")
+                            } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        }
                         try {
                             var totalWritten = 0L
                             val sink = object : FileWriteSink {
@@ -664,20 +692,26 @@ class AndroidFileSystem(
                                     val nextTotal = totalWritten + length
                                     validateFileSize(nextTotal, "file")
                                     if (length > 0) {
-                                        runInterruptible {
-                                            output.write(bytes, offset, length)
+                                        withSafWriteTimeout {
+                                            runInterruptible {
+                                                output.write(bytes, offset, length)
+                                            }
                                         }
                                         totalWritten = nextTotal
                                     }
                                 }
                             }
                             block(sink)
-                            runInterruptible {
-                                output.flush()
+                            withSafWriteTimeout {
+                                runInterruptible {
+                                    output.flush()
+                                }
                             }
                         } finally {
                             try {
-                                runInterruptible { output.close() }
+                                withSafWriteTimeout {
+                                    runInterruptible { output.close() }
+                                }
                             } catch (_: Throwable) {
                             }
                         }
