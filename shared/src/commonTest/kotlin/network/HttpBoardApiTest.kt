@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.model.CatalogMode
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
@@ -345,6 +346,47 @@ class HttpBoardApiTest {
             assertEquals("0", form["cm"])
             assertEquals("0", form["ci"])
             assertEquals("on", form["vh"])
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun fetchCatalog_retriesRetryableServerFailureOnce() = runBlocking {
+        var requestCount = 0
+        val api = createApi {
+            requestCount += 1
+            if (requestCount == 1) {
+                htmlResponse("server error", status = HttpStatusCode.InternalServerError)
+            } else {
+                htmlResponse("<html>catalog</html>")
+            }
+        }
+
+        try {
+            val html = api.fetchCatalog("https://may.2chan.net/b/", CatalogMode.Catalog)
+
+            assertEquals("<html>catalog</html>", html)
+            assertEquals(2, requestCount)
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun fetchThreadHead_doesNotRetryHelperServerFailure() = runBlocking {
+        var requestCount = 0
+        val api = createApi {
+            requestCount += 1
+            htmlResponse("server error", status = HttpStatusCode.InternalServerError)
+        }
+
+        try {
+            assertFailsWith<NetworkException> {
+                api.fetchThreadHead("https://may.2chan.net/b/", "123", maxLines = 16)
+            }
+
+            assertEquals(1, requestCount)
         } finally {
             api.close()
         }

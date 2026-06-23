@@ -20,7 +20,9 @@ class HttpBoardApi(
         val readMode: HttpBoardApiTextReadMode,
         val maxLines: Int? = null,
         val rangeHeader: String? = null,
-        val failureDescription: String
+        val failureDescription: String,
+        val requestAttemptTimeoutMillis: Long = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
+        val maxAttempts: Int = REQUEST_MAX_ATTEMPTS
     )
 
     private data class PostSubmission(
@@ -70,7 +72,9 @@ class HttpBoardApi(
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
         private const val RESPONSE_TOTAL_TIMEOUT_MILLIS = 20_000L
         private const val REQUEST_ATTEMPT_TIMEOUT_MILLIS = 25_000L
+        private const val HELPER_REQUEST_ATTEMPT_TIMEOUT_MILLIS = 5_000L
         private const val REQUEST_MAX_ATTEMPTS = 2
+        private const val HELPER_REQUEST_MAX_ATTEMPTS = 1
     }
 
     private suspend fun readResponseBodyAsString(response: HttpResponse): String {
@@ -141,7 +145,9 @@ class HttpBoardApi(
                 readMode = HttpBoardApiTextReadMode.HEAD,
                 maxLines = maxLines,
                 rangeHeader = "bytes=0-${estimatedRangeBytes - 1}",
-                failureDescription = "Failed to fetch thread head from $url"
+                failureDescription = "Failed to fetch thread head from $url",
+                requestAttemptTimeoutMillis = HELPER_REQUEST_ATTEMPT_TIMEOUT_MILLIS,
+                maxAttempts = HELPER_REQUEST_MAX_ATTEMPTS
             )
         )
     }
@@ -231,8 +237,8 @@ class HttpBoardApi(
         return try {
             withHttpBoardApiRetry(
                 logTag = TAG,
-                requestAttemptTimeoutMillis = REQUEST_ATTEMPT_TIMEOUT_MILLIS,
-                maxAttempts = REQUEST_MAX_ATTEMPTS
+                requestAttemptTimeoutMillis = fetch.requestAttemptTimeoutMillis,
+                maxAttempts = fetch.maxAttempts
             ) {
                 executeHttpBoardApiTextGet(
                     client = client,
