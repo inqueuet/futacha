@@ -176,6 +176,40 @@ class CatalogViewTransformerTest {
     }
 
     @Test
+    fun buildVisibleCatalogItems_matchesQueryAndNgCaseInsensitively() {
+        val items = listOf(
+            catalogItem(id = "ABC", title = "Safe Cat", threadUrl = "https://may.2chan.net/b/res/ABC.htm"),
+            catalogItem(id = "200", title = "Ng Target"),
+            catalogItem(id = "300", title = "safe dog")
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Catalog,
+            watchWords = emptyList(),
+            catalogNgWords = listOf("ng"),
+            catalogNgFilteringEnabled = true,
+            query = "cat"
+        )
+
+        assertEquals(listOf("ABC"), result.map { it.id })
+    }
+
+    @Test
+    fun buildVisibleCatalogItems_returnsEmptyWatchModeWhenNoWatchWords() {
+        val result = buildVisibleCatalogItems(
+            items = listOf(catalogItem(id = "100", title = "猫")),
+            mode = CatalogMode.WatchWords,
+            watchWords = emptyList(),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(emptyList(), result)
+    }
+
+    @Test
     fun filterByCatalogNgWords_returnsOriginalListWhenDisabled() {
         val items = listOf(
             catalogItem(id = "100", title = "NG target"),
