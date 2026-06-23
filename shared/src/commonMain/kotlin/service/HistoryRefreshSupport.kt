@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.network.NetworkException
+import com.valoser.futacha.shared.model.resolveHistoryReplyCount
 import com.valoser.futacha.shared.service.ThreadSaveService
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.Logger
@@ -252,7 +253,7 @@ internal class HistoryRefreshRunProcessor(
                 title = resolvedTitle,
                 titleImageUrl = opPost?.thumbnailUrl ?: entry.titleImageUrl,
                 boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
-                replyCount = page.posts.size,
+                replyCount = page.resolveHistoryReplyCount(entry.replyCount),
                 hasAutoSave = entry.hasAutoSave,
                 isAutoRefreshDisabled = false
             )
@@ -266,7 +267,9 @@ internal class HistoryRefreshRunProcessor(
                         resolvedTitle = resolvedTitle,
                         boardName = page.boardTitle ?: entry.boardName.ifBlank { board?.name.orEmpty() },
                         expiresAtLabel = page.expiresAtLabel,
-                        posts = page.posts
+                        posts = page.posts,
+                        isTruncated = page.isTruncated,
+                        truncationReason = page.truncationReason
                     )
                 )
             }

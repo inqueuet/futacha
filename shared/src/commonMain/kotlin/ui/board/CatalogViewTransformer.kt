@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.mergePageParseWarnings
 import com.valoser.futacha.shared.model.matchesNormalizedWatchWords
 import com.valoser.futacha.shared.model.normalizeWatchWords
 import com.valoser.futacha.shared.model.numericId
@@ -321,6 +322,7 @@ private fun buildWatchWordsCatalogPage(
         items = mergeWatchSourceCatalogItems(successfulCatalogs.map { it.items }),
         embeddedHtml = successfulCatalogs.firstNotNullOfOrNull { page ->
             page.embeddedHtml.takeIf { it.isNotEmpty() }
-        }.orEmpty()
+        }.orEmpty(),
+        parseWarning = mergePageParseWarnings(successfulCatalogs.map { it.parseWarning })
     )
 }

@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.parser
 
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogPageContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.parser.CatalogHtmlParserCore
@@ -9,6 +10,9 @@ import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
 class JsoupHtmlParser : HtmlParser {
     override suspend fun parseCatalog(html: String, baseUrl: String?): List<CatalogItem> =
         CatalogHtmlParserCore.parseCatalog(html, baseUrl)
+
+    override suspend fun parseCatalogPage(html: String, baseUrl: String?): CatalogPageContent =
+        CatalogHtmlParserCore.parseCatalogPage(html, baseUrl)
 
     override suspend fun parseThread(html: String, baseUrl: String?): ThreadPage =
         ThreadHtmlParserCore.parseThread(html, baseUrl)

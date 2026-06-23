@@ -2033,6 +2033,41 @@ class ThreadScreenBindingsLogicTest {
     }
 
     @Test
+    fun threadScreenDerivedStateSupport_marksTruncatedPagesInStatusLabel() {
+        val successState = ThreadUiState.Success(
+            ThreadPage(
+                threadId = "123",
+                boardTitle = "board",
+                posts = listOf(
+                    Post(
+                        id = "1",
+                        author = null,
+                        subject = "subject",
+                        timestamp = "now",
+                        messageHtml = "body",
+                        imageUrl = null,
+                        thumbnailUrl = null
+                    )
+                ),
+                expiresAtLabel = null,
+                deletedNotice = null,
+                isTruncated = true,
+                truncationReason = "Thread has more than 3000 posts"
+            )
+        )
+
+        val derived = buildThreadScreenDerivedUiState(
+            currentState = successState,
+            initialReplyCount = null,
+            threadTitle = null,
+            isReadAloudControlsVisible = false,
+            readAloudStatus = ReadAloudStatus.Idle
+        )
+
+        assertEquals("1レス / 一部のみ表示（投稿数上限）", derived.statusLabel)
+    }
+
+    @Test
     fun threadScreenDerivedRuntimeSupport_buildsSnapshot() {
         val successState = ThreadUiState.Success(
             ThreadPage(

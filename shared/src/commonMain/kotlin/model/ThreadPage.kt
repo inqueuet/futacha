@@ -9,3 +9,12 @@ data class ThreadPage(
     val isTruncated: Boolean = false,
     val truncationReason: String? = null
 )
+
+fun ThreadPage.resolveHistoryReplyCount(previousReplyCount: Int? = null): Int {
+    val parsedReplyCount = posts.size
+    return if (isTruncated && previousReplyCount != null) {
+        maxOf(previousReplyCount, parsedReplyCount)
+    } else {
+        parsedReplyCount
+    }
+}

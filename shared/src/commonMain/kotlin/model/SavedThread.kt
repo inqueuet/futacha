@@ -49,6 +49,8 @@ data class SavedThreadMetadata(
     val totalSize: Long,
     val rawHtmlPath: String? = null,   // 取得した元HTMLのローカルパス
     val strippedExternalResources: Boolean = false, // 外部JS/広告を除去したかどうか
+    val isTruncated: Boolean = false,  // パーサ上限などで本文が一部のみかどうか
+    val truncationReason: String? = null,
     val version: Int = 1              // メタデータバージョン（将来の互換性）
 )
 

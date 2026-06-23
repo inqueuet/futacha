@@ -83,12 +83,33 @@ class SavedThreadExtensionsTest {
         assertEquals("https://may.2chan.net/b/thumb/123s.jpg", page.posts[0].thumbnailUrl)
     }
 
+    @Test
+    fun toThreadPage_preservesTruncationState() = runBlocking {
+        val metadata = savedMetadata(
+            storageId = null,
+            imagePath = null,
+            thumbnailPath = null,
+            isTruncated = true,
+            truncationReason = "Parse timeout exceeded (5001ms > 5000ms)"
+        )
+
+        val page = metadata.toThreadPage(
+            fileSystem = InMemoryFileSystem(),
+            baseDirectory = "autosave"
+        )
+
+        assertEquals(true, page.isTruncated)
+        assertEquals("Parse timeout exceeded (5001ms > 5000ms)", page.truncationReason)
+    }
+
     private fun savedMetadata(
         storageId: String?,
         imagePath: String?,
         thumbnailPath: String?,
         originalImageUrl: String? = null,
-        originalThumbnailUrl: String? = null
+        originalThumbnailUrl: String? = null,
+        isTruncated: Boolean = false,
+        truncationReason: String? = null
     ): SavedThreadMetadata {
         return SavedThreadMetadata(
             threadId = "123",
@@ -115,7 +136,9 @@ class SavedThreadExtensionsTest {
                     localThumbnailPath = thumbnailPath
                 )
             ),
-            totalSize = 10L
+            totalSize = 10L,
+            isTruncated = isTruncated,
+            truncationReason = truncationReason
         )
     }
 }

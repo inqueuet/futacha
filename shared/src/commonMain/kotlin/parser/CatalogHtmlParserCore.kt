@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.parser
 
 import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.PageParseWarning
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.stripHtmlTagsLinear
@@ -65,7 +67,11 @@ internal object CatalogHtmlParserCore {
     )
 
     // FIX: サスペンド関数に変更してバックグラウンドで実行
-    suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> = withContext(AppDispatchers.parsing) {
+    suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> {
+        return parseCatalogPage(html, baseUrl).items
+    }
+
+    suspend fun parseCatalogPage(html: String, baseUrl: String? = null): CatalogPageContent = withContext(AppDispatchers.parsing) {
         if (html.length > MAX_HTML_SIZE) {
             throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
         }
@@ -73,6 +79,17 @@ internal object CatalogHtmlParserCore {
         try {
             val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
             val normalized = normalizeLineBreaksIfNeeded(html)
+            var isTruncated = false
+            var truncationReason: String? = null
+            var skippedItemCount = 0
+            var oversizedBlockCount = 0
+
+            fun markTruncated(reason: String) {
+                isTruncated = true
+                if (truncationReason.isNullOrBlank()) {
+                    truncationReason = reason
+                }
+            }
 
             // Find table start and end using indexOf for better performance
             val tableStartTag = "<table"
@@ -95,6 +112,7 @@ internal object CatalogHtmlParserCore {
                         "CatalogHtmlParserCore",
                         "Stopped catalog table search after $maxTableSearchIterations iterations"
                     )
+                    markTruncated("Stopped catalog table search after $maxTableSearchIterations iterations")
                     break
                 }
                 val tableTagEnd = normalized.indexOf(">", tableStartIndex)
@@ -109,10 +127,22 @@ internal object CatalogHtmlParserCore {
                 tableStartIndex = normalized.indexOf(tableStartTag, tableTagEnd, ignoreCase = true)
             }
             
-            if (!foundTable) return@withContext emptyList()
+            if (!foundTable) {
+                return@withContext CatalogPageContent(
+                    items = emptyList(),
+                    parseWarning = PageParseWarning(
+                        isTruncated = isTruncated,
+                        reason = truncationReason,
+                        skippedItemCount = skippedItemCount,
+                        oversizedBlockCount = oversizedBlockCount
+                    )
+                )
+            }
             
             val tableEndIndex = normalized.indexOf("</table>", startIndex = tableStartIndex, ignoreCase = true)
-            if (tableEndIndex == -1) return@withContext emptyList()
+            if (tableEndIndex == -1) {
+                return@withContext CatalogPageContent(items = emptyList())
+            }
             
             // Process body without substringing the whole table to save memory
             val items = mutableListOf<CatalogItem>()
@@ -140,6 +170,7 @@ internal object CatalogHtmlParserCore {
                         "CatalogHtmlParserCore",
                         "Stopped catalog parsing after reaching maximum iteration limit ($maxIterations)"
                     )
+                    markTruncated("Stopped catalog parsing after reaching maximum iteration limit ($maxIterations)")
                     break
                 }
 
@@ -158,6 +189,9 @@ internal object CatalogHtmlParserCore {
                         "CatalogHtmlParserCore",
                         "Skipping oversized catalog cell ($cellSize bytes > $MAX_CHUNK_SIZE)"
                     )
+                    skippedItemCount += 1
+                    oversizedBlockCount += 1
+                    markTruncated("Skipped oversized catalog cell ($cellSize bytes > $MAX_CHUNK_SIZE)")
                     searchStart = cellEndIndex + tdEnd.length
                     continue
                 }
@@ -236,9 +270,18 @@ internal object CatalogHtmlParserCore {
 
             if (items.size >= maxCatalogItems) {
                 Logger.w("CatalogHtmlParserCore", "Reached maximum catalog items limit ($maxCatalogItems)")
+                markTruncated("Reached maximum catalog items limit ($maxCatalogItems)")
             }
 
-            items
+            CatalogPageContent(
+                items = items,
+                parseWarning = PageParseWarning(
+                    isTruncated = isTruncated,
+                    reason = truncationReason,
+                    skippedItemCount = skippedItemCount,
+                    oversizedBlockCount = oversizedBlockCount
+                )
+            )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // FIX: キャンセル例外は再スロー
             throw e

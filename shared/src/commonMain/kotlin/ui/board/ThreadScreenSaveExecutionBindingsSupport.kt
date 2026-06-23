@@ -184,6 +184,8 @@ internal fun buildThreadScreenManualSaveBindings(
                         title = resolvedTitle,
                         expiresAtLabel = page.expiresAtLabel,
                         posts = page.posts,
+                        isTruncated = page.isTruncated,
+                        truncationReason = page.truncationReason,
                         baseSaveLocation = dependencies.manualSaveLocation,
                         baseDirectory = dependencies.manualSaveDirectory
                     )
@@ -411,6 +413,8 @@ internal fun buildThreadScreenAutoSaveBindings(
                             title = resolvedTitle,
                             expiresAtLabel = page.expiresAtLabel,
                             posts = page.posts,
+                            isTruncated = page.isTruncated,
+                            truncationReason = page.truncationReason,
                             previousTimestampMillis = stateBindings.currentLastAutoSaveTimestampMillis(),
                             attemptStartedAtMillis = attemptStartedAt,
                             completionTimestampMillis = attemptStartedAt

@@ -98,6 +98,8 @@ class ThreadSaveService(
         title: String,
         expiresAtLabel: String?,
         posts: List<Post>,
+        isTruncated: Boolean = false,
+        truncationReason: String? = null,
         baseSaveLocation: SaveLocation? = null,
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
@@ -180,6 +182,8 @@ class ThreadSaveService(
                             savedPosts = initialSavedPosts,
                             rawHtmlRelativePath = null,
                             strippedExternalResources = rawHtmlOptions.stripExternalResources,
+                            isTruncated = isTruncated,
+                            truncationReason = truncationReason,
                             baseTotalSize = 0L
                         ),
                         encodeMetadata = json::encodeToString
@@ -201,6 +205,7 @@ class ThreadSaveService(
                             downloadFailureCount = 0,
                             skippedMediaCount = 0,
                             totalMediaCount = mediaPlan.totalMediaCount,
+                            isContentTruncated = isTruncated,
                             statusOverride = SaveStatus.DOWNLOADING
                         )
                     )
@@ -324,6 +329,8 @@ class ThreadSaveService(
                         savedPosts = savedPosts,
                         rawHtmlRelativePath = rawHtmlRelativePath,
                         strippedExternalResources = rawHtmlOptions.stripExternalResources,
+                        isTruncated = isTruncated,
+                        truncationReason = truncationReason,
                         baseTotalSize = totalSize
                     ),
                     encodeMetadata = json::encodeToString
@@ -345,7 +352,8 @@ class ThreadSaveService(
                     totalSize = finalTotalSize,
                     downloadFailureCount = downloadFailureCount,
                     skippedMediaCount = skippedMediaCount,
-                    totalMediaCount = totalMediaCount
+                    totalMediaCount = totalMediaCount,
+                    isContentTruncated = isTruncated
                 )
             })
         } catch (e: CancellationException) {

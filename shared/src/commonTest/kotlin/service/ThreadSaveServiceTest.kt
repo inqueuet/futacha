@@ -99,6 +99,47 @@ class ThreadSaveServiceTest {
     }
 
     @Test
+    fun saveThread_preservesTruncationStateInMetadata() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val service = ThreadSaveService(
+            httpClient = createClient(),
+            fileSystem = fileSystem
+        )
+
+        val saved = service.saveThread(
+            threadId = "457",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "truncated",
+            expiresAtLabel = null,
+            posts = listOf(
+                Post(
+                    id = "1",
+                    author = "author",
+                    subject = "subject",
+                    timestamp = "24/01/01(月)00:00:00",
+                    messageHtml = "body",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            ),
+            isTruncated = true,
+            truncationReason = "Thread has more than 3000 posts",
+            baseDirectory = "manual",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false)
+        ).getOrThrow()
+
+        val storageId = requireNotNull(saved.storageId)
+        val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
+
+        assertEquals(SaveStatus.PARTIAL, saved.status)
+        assertTrue(metadata.isTruncated)
+        assertEquals("Thread has more than 3000 posts", metadata.truncationReason)
+    }
+
+    @Test
     fun saveThread_canWriteInitialMetadataBeforeMediaDownloads() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val service = ThreadSaveService(

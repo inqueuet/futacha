@@ -14,6 +14,8 @@ internal data class ThreadManualSaveRunnerConfig(
     val title: String,
     val expiresAtLabel: String?,
     val posts: List<Post>,
+    val isTruncated: Boolean,
+    val truncationReason: String?,
     val baseSaveLocation: SaveLocation?,
     val baseDirectory: String
 )
@@ -26,6 +28,8 @@ internal fun buildThreadManualSaveRunnerConfig(
     title: String,
     expiresAtLabel: String?,
     posts: List<Post>,
+    isTruncated: Boolean = false,
+    truncationReason: String? = null,
     baseSaveLocation: SaveLocation?,
     baseDirectory: String
 ): ThreadManualSaveRunnerConfig {
@@ -37,6 +41,8 @@ internal fun buildThreadManualSaveRunnerConfig(
         title = title,
         expiresAtLabel = expiresAtLabel,
         posts = posts,
+        isTruncated = isTruncated,
+        truncationReason = truncationReason,
         baseSaveLocation = baseSaveLocation,
         baseDirectory = baseDirectory
     )
@@ -67,6 +73,8 @@ internal fun buildThreadManualSaveRunnerCallbacks(
                 title = config.title,
                 expiresAtLabel = config.expiresAtLabel,
                 posts = config.posts,
+                isTruncated = config.isTruncated,
+                truncationReason = config.truncationReason,
                 baseSaveLocation = config.baseSaveLocation,
                 baseDirectory = config.baseDirectory,
                 writeMetadata = true

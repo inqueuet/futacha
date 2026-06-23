@@ -30,11 +30,16 @@ internal fun buildThreadScreenDerivedUiState(
         ?: threadTitle
         ?: "スレッド"
     val expiresLabel = currentPage?.expiresAtLabel?.takeIf { it.isNotBlank() }
+    val truncationLabel = currentPage?.takeIf { it.isTruncated }?.let(::buildThreadTruncationStatusLabel)
     val statusLabel = buildString {
         resolvedReplyCount?.let { append("${it}レス") }
         if (!expiresLabel.isNullOrBlank()) {
             if (isNotEmpty()) append(" / ")
             append(expiresLabel)
+        }
+        if (!truncationLabel.isNullOrBlank()) {
+            if (isNotEmpty()) append(" / ")
+            append(truncationLabel)
         }
     }.ifBlank { null }
     val shouldPrepareReadAloudSegments = isReadAloudControlsVisible ||
@@ -50,4 +55,22 @@ internal fun buildThreadScreenDerivedUiState(
         statusLabel = statusLabel,
         shouldPrepareReadAloudSegments = shouldPrepareReadAloudSegments
     )
+}
+
+internal fun buildThreadTruncationStatusLabel(page: ThreadPage): String {
+    val reason = when {
+        page.truncationReason.isNullOrBlank() -> null
+        page.truncationReason.contains("more than", ignoreCase = true) -> "投稿数上限"
+        page.truncationReason.contains("maximum post", ignoreCase = true) -> "投稿数上限"
+        page.truncationReason.contains("oversized", ignoreCase = true) -> "大きすぎるレスをスキップ"
+        page.truncationReason.contains("timeout", ignoreCase = true) -> "解析時間上限"
+        page.truncationReason.contains("iteration", ignoreCase = true) -> "解析回数上限"
+        page.truncationReason.contains("Reference rebuild", ignoreCase = true) -> "参照解析上限"
+        else -> "解析上限"
+    }
+    return if (reason == null) {
+        "一部のみ表示"
+    } else {
+        "一部のみ表示（$reason）"
+    }
 }

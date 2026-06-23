@@ -208,8 +208,7 @@ class DefaultBoardRepository(
             }
             val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
             withContext(AppDispatchers.parsing) {
-                CatalogPageContent(
-                    items = parser.parseCatalog(html, baseUrl),
+                parser.parseCatalogPage(html, baseUrl).copy(
                     embeddedHtml = parser.extractCatalogEmbeddedHtml(html, baseUrl)
                 )
             }

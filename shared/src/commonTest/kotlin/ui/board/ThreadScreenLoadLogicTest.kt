@@ -1433,6 +1433,8 @@ class ThreadScreenLoadLogicTest {
             title = "title",
             expiresAtLabel = "12:34",
             posts = emptyList(),
+            isTruncated = false,
+            truncationReason = null,
             previousTimestampMillis = 10L,
             attemptStartedAtMillis = 20L,
             completionTimestampMillis = 30L

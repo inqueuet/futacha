@@ -109,6 +109,58 @@ class BoardUtilsTest {
     }
 
     @Test
+    fun buildHistoryEntryFromPageAt_keepsExistingReplyCountWhenPageIsTruncated() {
+        val board = BoardSummary(
+            id = "b",
+            name = "二次元裏",
+            category = "",
+            url = "https://may.2chan.net/b/futaba.php",
+            description = "",
+            pinned = false
+        )
+        val existing = ThreadHistoryEntry(
+            threadId = "123",
+            boardId = "b",
+            title = "old",
+            titleImageUrl = "",
+            boardName = "二次元裏",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            lastVisitedEpochMillis = 1L,
+            replyCount = 120
+        )
+        val page = ThreadPage(
+            threadId = "123",
+            boardTitle = "board",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = listOf(
+                Post(
+                    id = "123",
+                    author = null,
+                    subject = null,
+                    timestamp = "24/01/01(月)00:00:00",
+                    messageHtml = "body",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            ),
+            isTruncated = true,
+            truncationReason = "Parse timeout exceeded (5001ms > 5000ms)"
+        )
+
+        val updated = buildHistoryEntryFromPageAt(
+            page = page,
+            history = listOf(existing),
+            threadId = "123",
+            threadTitle = null,
+            board = board,
+            timestampMillis = 999L
+        )
+
+        assertEquals(120, updated.replyCount)
+    }
+
+    @Test
     fun resolveEffectiveBoardUrl_returnsFallbackForBlankAndRootUrl() {
         assertEquals(
             "https://may.2chan.net/b/futaba.php",

@@ -19,7 +19,9 @@ internal data class HistoryRefreshAutoSavePlan(
     val resolvedTitle: String,
     val boardName: String,
     val expiresAtLabel: String?,
-    val posts: List<Post>
+    val posts: List<Post>,
+    val isTruncated: Boolean,
+    val truncationReason: String?
 )
 
 internal class HistoryRefreshAutoSaveLauncher(
@@ -81,6 +83,8 @@ internal class HistoryRefreshAutoSaveLauncher(
                             title = plan.resolvedTitle,
                             expiresAtLabel = plan.expiresAtLabel,
                             posts = plan.posts,
+                            isTruncated = plan.isTruncated,
+                            truncationReason = plan.truncationReason,
                             baseDirectory = AUTO_SAVE_DIRECTORY,
                             writeMetadata = true
                         ).getOrThrow()

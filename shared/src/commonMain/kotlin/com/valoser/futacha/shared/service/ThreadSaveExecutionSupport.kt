@@ -52,6 +52,8 @@ internal data class ThreadSaveMetadataWriteRequest(
     val savedPosts: List<SavedPost>,
     val rawHtmlRelativePath: String?,
     val strippedExternalResources: Boolean,
+    val isTruncated: Boolean,
+    val truncationReason: String?,
     val baseTotalSize: Long
 )
 
@@ -230,6 +232,8 @@ internal suspend fun writeThreadSaveMetadataIfEnabled(
         totalSize = 0L,
         rawHtmlPath = request.rawHtmlRelativePath,
         strippedExternalResources = request.strippedExternalResources,
+        isTruncated = request.isTruncated,
+        truncationReason = request.truncationReason,
         version = 1
     )
     val (metadataPayload, payloadSize) = buildThreadSaveMetadataPayloadWithStableSize(
@@ -297,6 +301,7 @@ internal fun buildThreadSaveSavedThread(
     downloadFailureCount: Int,
     skippedMediaCount: Int,
     totalMediaCount: Int,
+    isContentTruncated: Boolean = false,
     statusOverride: SaveStatus? = null
 ): SavedThread {
     return SavedThread(
@@ -313,7 +318,8 @@ internal fun buildThreadSaveSavedThread(
         totalSize = totalSize,
         status = statusOverride ?: resolveThreadSaveStatus(
             incompleteMediaCount = downloadFailureCount + skippedMediaCount,
-            totalMediaCount = totalMediaCount
+            totalMediaCount = totalMediaCount,
+            isContentTruncated = isContentTruncated
         )
     )
 }

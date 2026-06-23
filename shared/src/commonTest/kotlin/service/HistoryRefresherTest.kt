@@ -73,6 +73,40 @@ class HistoryRefresherTest {
     }
 
     @Test
+    fun refresh_keepsExistingReplyCountWhenFetchedThreadIsTruncated() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old").copy(replyCount = 120)
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val repository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board-new",
+                titleLine = "new title",
+                thumbnailUrl = "thumb-new",
+                replyCount = 1,
+                isTruncated = true,
+                truncationReason = "Parse timeout exceeded (5001ms > 5000ms)"
+            )
+        }
+        val refresher = HistoryRefresher(
+            stateStore = store,
+            repository = repository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        refresher.refresh(
+            boardsSnapshot = listOf(board),
+            historySnapshot = listOf(entry)
+        )
+
+        val updated = store.history.first().single()
+        assertEquals("new title", updated.title)
+        assertEquals(120, updated.replyCount)
+    }
+
+    @Test
     fun refresh_skips404ThreadOnSubsequentRuns() = runBlocking {
         val board = boardSummary()
         val entry = historyEntry(threadId = "404")
@@ -579,7 +613,9 @@ private fun threadPage(
     boardTitle: String,
     titleLine: String,
     thumbnailUrl: String,
-    replyCount: Int
+    replyCount: Int,
+    isTruncated: Boolean = false,
+    truncationReason: String? = null
 ): ThreadPage {
     val posts = buildList {
         add(
@@ -612,7 +648,9 @@ private fun threadPage(
         boardTitle = boardTitle,
         expiresAtLabel = null,
         deletedNotice = null,
-        posts = posts
+        posts = posts,
+        isTruncated = isTruncated,
+        truncationReason = truncationReason
     )
 }
 

@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.ui.board
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.resolveHistoryReplyCount
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.util.resolveThreadTitle
 import io.ktor.http.Url
@@ -69,7 +70,7 @@ internal fun buildHistoryEntryFromPageAt(
         boardId = board.id,
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
-        replyCount = page.posts.size,
+        replyCount = page.resolveHistoryReplyCount(existingEntry.replyCount),
         lastVisitedEpochMillis = timestampMillis,
         isAutoRefreshDisabled = false
     ) ?: ThreadHistoryEntry(
@@ -80,7 +81,7 @@ internal fun buildHistoryEntryFromPageAt(
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
         lastVisitedEpochMillis = timestampMillis,
-        replyCount = page.posts.size
+        replyCount = page.resolveHistoryReplyCount()
     )
 }
 

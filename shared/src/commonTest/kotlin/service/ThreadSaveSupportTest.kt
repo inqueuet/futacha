@@ -448,6 +448,8 @@ class ThreadSaveSupportTest {
                 savedPosts = emptyList(),
                 rawHtmlRelativePath = "123.htm",
                 strippedExternalResources = true,
+                isTruncated = false,
+                truncationReason = null,
                 baseTotalSize = 100L
             ),
             encodeMetadata = {
@@ -738,6 +740,14 @@ class ThreadSaveSupportTest {
         assertEquals(SaveStatus.COMPLETED, resolveThreadSaveStatus(incompleteMediaCount = 0, totalMediaCount = 3))
         assertEquals(SaveStatus.PARTIAL, resolveThreadSaveStatus(incompleteMediaCount = 1, totalMediaCount = 3))
         assertEquals(SaveStatus.FAILED, resolveThreadSaveStatus(incompleteMediaCount = 3, totalMediaCount = 3))
+        assertEquals(
+            SaveStatus.PARTIAL,
+            resolveThreadSaveStatus(
+                incompleteMediaCount = 0,
+                totalMediaCount = 0,
+                isContentTruncated = true
+            )
+        )
 
         assertTrue(
             resolveThreadSavedPostDownloadSuccess(

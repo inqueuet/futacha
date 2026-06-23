@@ -79,8 +79,8 @@ fun SavedThreadMetadata.toThreadPage(
         expiresAtLabel = expiresAtLabel,
         deletedNotice = null,
         posts = postsWithReferences,
-        isTruncated = false,
-        truncationReason = null
+        isTruncated = isTruncated,
+        truncationReason = truncationReason
     )
 }
 

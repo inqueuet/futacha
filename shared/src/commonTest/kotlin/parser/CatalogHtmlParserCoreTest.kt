@@ -3,6 +3,7 @@ package com.valoser.futacha.shared.parser
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class CatalogHtmlParserCoreTest {
     @Test
@@ -112,6 +113,36 @@ class CatalogHtmlParserCoreTest {
         assertEquals(1, items.size)
         assertEquals("6000000001", items.single().id)
         assertEquals(4, items.single().replyCount)
+    }
+
+    @Test
+    fun parseCatalogPage_reportsOversizedSkippedCells() {
+        val oversizedTitle = "x".repeat(100_100)
+        val html = """
+            <html>
+            <body>
+            <table id='cattable'>
+                <tr>
+                    <td>
+                        <a href='res/6100000000.htm'>thread</a>
+                        <small>$oversizedTitle</small>
+                    </td>
+                    <td>
+                        <a href='res/6100000001.htm'><img src='/t/cat/6100000001s.jpg'></a>
+                        <br><font size=2>4</font>
+                    </td>
+                </tr>
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val page = runBlocking { CatalogHtmlParserCore.parseCatalogPage(html) }
+
+        assertEquals(1, page.items.size)
+        assertTrue(page.parseWarning.isTruncated)
+        assertEquals(1, page.parseWarning.skippedItemCount)
+        assertEquals(1, page.parseWarning.oversizedBlockCount)
     }
 
     @Test

@@ -20,6 +20,8 @@ internal data class ThreadAutoSaveRunnerConfig(
     val title: String,
     val expiresAtLabel: String?,
     val posts: List<Post>,
+    val isTruncated: Boolean,
+    val truncationReason: String?,
     val previousTimestampMillis: Long,
     val attemptStartedAtMillis: Long,
     val completionTimestampMillis: Long
@@ -33,6 +35,8 @@ internal fun buildThreadAutoSaveRunnerConfig(
     title: String,
     expiresAtLabel: String?,
     posts: List<Post>,
+    isTruncated: Boolean = false,
+    truncationReason: String? = null,
     previousTimestampMillis: Long,
     attemptStartedAtMillis: Long,
     completionTimestampMillis: Long
@@ -45,6 +49,8 @@ internal fun buildThreadAutoSaveRunnerConfig(
         title = title,
         expiresAtLabel = expiresAtLabel,
         posts = posts,
+        isTruncated = isTruncated,
+        truncationReason = truncationReason,
         previousTimestampMillis = previousTimestampMillis,
         attemptStartedAtMillis = attemptStartedAtMillis,
         completionTimestampMillis = completionTimestampMillis
@@ -72,6 +78,8 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
                 title = config.title,
                 expiresAtLabel = config.expiresAtLabel,
                 posts = config.posts,
+                isTruncated = config.isTruncated,
+                truncationReason = config.truncationReason,
                 baseDirectory = com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY,
                 writeMetadata = true,
                 rawHtmlOptions = RawHtmlSaveOptions(enable = false),

@@ -350,12 +350,18 @@ internal fun updateThreadSaveMediaCounts(
 
 internal fun resolveThreadSaveStatus(
     incompleteMediaCount: Int,
-    totalMediaCount: Int
+    totalMediaCount: Int,
+    isContentTruncated: Boolean = false
 ): SaveStatus {
-    return when {
+    val mediaStatus = when {
         incompleteMediaCount <= 0 -> SaveStatus.COMPLETED
         incompleteMediaCount < totalMediaCount -> SaveStatus.PARTIAL
         else -> SaveStatus.FAILED
+    }
+    return if (isContentTruncated && mediaStatus == SaveStatus.COMPLETED) {
+        SaveStatus.PARTIAL
+    } else {
+        mediaStatus
     }
 }
 

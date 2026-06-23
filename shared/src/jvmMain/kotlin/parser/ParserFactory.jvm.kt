@@ -6,6 +6,9 @@ actual fun createHtmlParser(): HtmlParser = object : HtmlParser {
     override suspend fun parseCatalog(html: String, baseUrl: String?) =
         CatalogHtmlParserCore.parseCatalog(html, baseUrl)
 
+    override suspend fun parseCatalogPage(html: String, baseUrl: String?) =
+        CatalogHtmlParserCore.parseCatalogPage(html, baseUrl)
+
     override suspend fun parseThread(html: String, baseUrl: String?) =
         ThreadHtmlParserCore.parseThread(html, baseUrl)
 
