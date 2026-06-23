@@ -103,7 +103,9 @@ private suspend fun retryThreadSaveMediaDownload(
 ): Result<ThreadSaveLocalFileInfo>? {
     var downloadResult: Result<ThreadSaveLocalFileInfo>? = null
     var lastError: Throwable? = null
+    var attemptCount = 0
     for (attempt in 1..execution.maxRetries) {
+        attemptCount = attempt
         coroutineContext.ensureActive()
         execution.checkBudget()
         downloadResult = try {
@@ -116,6 +118,9 @@ private suspend fun retryThreadSaveMediaDownload(
         if (downloadResult.isSuccess) break
 
         lastError = downloadResult.exceptionOrNull()
+        if (!isThreadSaveMediaDownloadRetryable(lastError)) {
+            break
+        }
         if (attempt < execution.maxRetries) {
             execution.checkBudget()
             Logger.w(
@@ -129,7 +134,7 @@ private suspend fun retryThreadSaveMediaDownload(
     if (downloadResult?.isFailure == true) {
         Logger.e(
             execution.logTag,
-            "Failed to download ${mediaItem.url} after ${execution.maxRetries} attempts: ${lastError?.message}"
+            "Failed to download ${mediaItem.url} after $attemptCount attempts: ${lastError?.message}"
         )
     }
     return downloadResult

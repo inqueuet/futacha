@@ -168,7 +168,10 @@ internal suspend fun streamThreadSaveResponseToStorage(
             zeroReadCount = 0
             val requiredSize = totalBytesRead + read
             if (requiredSize > request.maxFileSizeBytes) {
-                throw IllegalStateException("Actual file size exceeds limit: ${requiredSize / 1024}KB")
+                throw ThreadSaveMediaDownloadFailure(
+                    message = "Actual file size exceeds limit: ${requiredSize / 1024}KB",
+                    retryable = false
+                )
             }
             if (request.nowMillis() - request.startedAtMillis > request.maxSaveDurationMs) {
                 throw IllegalStateException("Save aborted: exceeded time limit during download")
@@ -214,12 +217,18 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
                 )
                 try {
                     if (!response.status.isSuccess()) {
-                        throw Exception("Download failed: ${response.status}")
+                        throw ThreadSaveMediaDownloadFailure(
+                            message = "Download failed: ${response.status}",
+                            retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value)
+                        )
                     }
 
                     val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
                     if (contentLength > request.maxFileSizeBytes) {
-                        throw Exception("File too large: ${contentLength / 1024}KB (max: 8000KB)")
+                        throw ThreadSaveMediaDownloadFailure(
+                            message = "File too large: ${contentLength / 1024}KB (max: 8000KB)",
+                            retryable = false
+                        )
                     }
 
                     val extension = (
@@ -229,7 +238,10 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
                             )
                         ).lowercase()
                     if (!isThreadSaveSupportedExtension(extension)) {
-                        throw Exception("Unsupported file type: $extension")
+                        throw ThreadSaveMediaDownloadFailure(
+                            message = "Unsupported file type: $extension",
+                            retryable = false
+                        )
                     }
 
                     val fileType = resolveThreadSaveFileType(request.requestType, extension)

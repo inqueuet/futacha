@@ -178,6 +178,52 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun threadSaveMediaDownloadSupport_stopsRetryingNonRetryableFailure() = runBlocking {
+        var attempts = 0
+        val results = executeThreadSaveMediaBatch(
+            itemBatch = listOf(
+                ThreadSaveScheduledMediaItem(
+                    url = "https://may.2chan.net/b/src/missing.jpg",
+                    requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                    postId = "101"
+                )
+            ),
+            firstProgressIndex = 1,
+            execution = ThreadSaveMediaDownloadExecutionContext(
+                maxRetries = 3,
+                retryDelayMillis = 0L,
+                progressTotal = 1,
+                logTag = "ThreadSaveSupportTest",
+                updateProgress = { _, _ -> },
+                checkBudget = {},
+                downloadMedia = {
+                    attempts += 1
+                    Result.failure(
+                        ThreadSaveMediaDownloadFailure(
+                            message = "not found",
+                            retryable = false
+                        )
+                    )
+                }
+            )
+        )
+
+        assertEquals(1, attempts)
+        assertEquals(1, results.size)
+        assertTrue(results.first().result?.isFailure == true)
+    }
+
+    @Test
+    fun threadSaveMediaDownloadSupport_classifiesHttpRetryability() {
+        assertFalse(isThreadSaveMediaHttpStatusRetryable(404))
+        assertFalse(isThreadSaveMediaHttpStatusRetryable(410))
+        assertFalse(isThreadSaveMediaHttpStatusRetryable(415))
+        assertTrue(isThreadSaveMediaHttpStatusRetryable(408))
+        assertTrue(isThreadSaveMediaHttpStatusRetryable(429))
+        assertTrue(isThreadSaveMediaHttpStatusRetryable(500))
+    }
+
+    @Test
     fun threadSaveMediaDownloadSupport_checksBudgetBeforeRetryDelay() = runBlocking {
         var attempts = 0
         var budgetChecks = 0
