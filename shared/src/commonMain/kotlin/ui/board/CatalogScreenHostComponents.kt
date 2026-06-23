@@ -97,6 +97,7 @@ internal fun CatalogScreenScaffold(
                 is CatalogUiState.Success -> {
                     val visibleItems by rememberCatalogVisibleItemsState(
                         buildCatalogVisibleItemsRequest(
+                            sourceKey = bindings.board?.id ?: bindings.board?.url,
                             items = state.content.items,
                             mode = bindings.catalogMode,
                             watchWords = bindings.watchWords,

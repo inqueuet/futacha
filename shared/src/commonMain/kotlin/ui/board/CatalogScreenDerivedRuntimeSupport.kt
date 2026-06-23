@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.withContext
 
 internal data class CatalogVisibleItemsRequest(
+    val sourceKey: String?,
     val items: List<CatalogItem>,
     val mode: CatalogMode,
     val watchWords: List<String>,
@@ -27,23 +28,28 @@ private data class CatalogVisibleItemsFilterKey(
 )
 
 private class CatalogVisibleItemsItemsKey(
+    private val sourceKey: String?,
     private val items: List<CatalogItem>
 ) {
     override fun equals(other: Any?): Boolean {
-        return other is CatalogVisibleItemsItemsKey && other.items === items
+        return other is CatalogVisibleItemsItemsKey &&
+            other.sourceKey == sourceKey &&
+            other.items === items
     }
 
     override fun hashCode(): Int {
-        return items.size
+        return 31 * sourceKey.hashCode() + items.size
     }
 }
 
 private class CatalogVisibleItemsPreviousResult(
+    var sourceKey: String?,
     var items: List<CatalogItem>,
     var visibleItems: List<CatalogItem>? = null
 )
 
 internal fun buildCatalogVisibleItemsRequest(
+    sourceKey: String?,
     items: List<CatalogItem>,
     mode: CatalogMode,
     watchWords: List<String>,
@@ -52,6 +58,7 @@ internal fun buildCatalogVisibleItemsRequest(
     query: String
 ): CatalogVisibleItemsRequest {
     return CatalogVisibleItemsRequest(
+        sourceKey = sourceKey,
         items = items,
         mode = mode,
         watchWords = watchWords,
@@ -61,18 +68,33 @@ internal fun buildCatalogVisibleItemsRequest(
     )
 }
 
+internal fun shouldResetCatalogVisibleItemsForSourceChange(
+    previousSourceKey: String?,
+    currentSourceKey: String?
+): Boolean {
+    return previousSourceKey != currentSourceKey
+}
+
 @Composable
 internal fun rememberCatalogVisibleItemsState(
     request: CatalogVisibleItemsRequest
 ): State<List<CatalogItem>> {
     val previousResult = remember {
-        CatalogVisibleItemsPreviousResult(request.items)
+        CatalogVisibleItemsPreviousResult(request.sourceKey, request.items)
     }
-    if (previousResult.items !== request.items) {
-        previousResult.items = request.items
+    if (
+        shouldResetCatalogVisibleItemsForSourceChange(
+            previousSourceKey = previousResult.sourceKey,
+            currentSourceKey = request.sourceKey
+        )
+    ) {
         previousResult.visibleItems = null
+        previousResult.sourceKey = request.sourceKey
+        previousResult.items = request.items
+    } else if (previousResult.items !== request.items) {
+        previousResult.items = request.items
     }
-    val itemsKey = CatalogVisibleItemsItemsKey(request.items)
+    val itemsKey = CatalogVisibleItemsItemsKey(request.sourceKey, request.items)
     val filterKey = CatalogVisibleItemsFilterKey(
         mode = request.mode,
         watchWords = request.watchWords,

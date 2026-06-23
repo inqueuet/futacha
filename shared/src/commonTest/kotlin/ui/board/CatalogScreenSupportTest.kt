@@ -720,6 +720,7 @@ class CatalogScreenSupportTest {
     fun catalogDerivedRuntimeSupport_buildsVisibleItemsRequest() {
         val items = emptyList<CatalogItem>()
         val request = buildCatalogVisibleItemsRequest(
+            sourceKey = "board",
             items = items,
             mode = CatalogMode.New,
             watchWords = listOf("watch"),
@@ -728,12 +729,29 @@ class CatalogScreenSupportTest {
             query = "query"
         )
 
+        assertEquals("board", request.sourceKey)
         assertEquals(items, request.items)
         assertEquals(CatalogMode.New, request.mode)
         assertEquals(listOf("watch"), request.watchWords)
         assertEquals(listOf("ng"), request.catalogNgWords)
         assertTrue(request.catalogNgFilteringEnabled)
         assertEquals("query", request.query)
+    }
+
+    @Test
+    fun catalogDerivedRuntimeSupport_resetsVisibleItemsOnlyWhenSourceChanges() {
+        assertFalse(
+            shouldResetCatalogVisibleItemsForSourceChange(
+                previousSourceKey = "board-a",
+                currentSourceKey = "board-a"
+            )
+        )
+        assertTrue(
+            shouldResetCatalogVisibleItemsForSourceChange(
+                previousSourceKey = "board-a",
+                currentSourceKey = "board-b"
+            )
+        )
     }
 
     @Test
