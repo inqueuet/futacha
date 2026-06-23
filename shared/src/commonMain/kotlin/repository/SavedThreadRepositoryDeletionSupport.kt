@@ -84,28 +84,38 @@ internal fun buildSavedThreadDeletionErrorMessage(
 
 internal suspend fun SavedThreadRepository.executeSavedThreadDeleteOperation(
     request: SavedThreadDeleteOperationRequest
-) {
-    deleteMutex.withLock {
+): SavedThreadIndex {
+    return deleteMutex.withLock {
         executeSavedThreadDeleteOperationLocked(request)
     }
 }
 
 private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocked(
     request: SavedThreadDeleteOperationRequest
-) {
-    val plan = withIndexLock {
+): SavedThreadIndex {
+    data class DeletePlanState(
+        val currentIndex: SavedThreadIndex,
+        val plan: SavedThreadDeletePlan?
+    )
+
+    val planState = withIndexLock {
         val currentIndex = readSavedThreadIndexUnlocked()
-        buildSavedThreadDeletePlan(
+        DeletePlanState(
             currentIndex = currentIndex,
-            threadsToDelete = request.selectThreadsToDelete(currentIndex),
-            backupIndexPath = request.backupIndexPath,
-            encodeIndex = json::encodeToString
+            plan = buildSavedThreadDeletePlan(
+                currentIndex = currentIndex,
+                threadsToDelete = request.selectThreadsToDelete(currentIndex),
+                backupIndexPath = request.backupIndexPath,
+                encodeIndex = json::encodeToString
+            )
         )
-    } ?: return
+    }
+    val plan = planState.plan ?: return planState.currentIndex
     writeStringAt(plan.backupIndexPath, plan.backupIndexJson).getOrThrow()
 
     var keepBackup = false
     var deletionResult: SavedThreadStorageDeletionResult? = null
+    var latestIndex = planState.currentIndex
     try {
         deletionResult = executeSavedThreadDeletePlan(
             plan = plan,
@@ -122,6 +132,7 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
                 }
                 try {
                     saveSavedThreadIndexUnlocked(updatedIndex)
+                    latestIndex = updatedIndex
                 } catch (e: Throwable) {
                     if (e is CancellationException) throw e
                     throw Exception(request.indexUpdateFailureMessage, e)
@@ -148,6 +159,7 @@ private suspend fun SavedThreadRepository.executeSavedThreadDeleteOperationLocke
         deletionErrors = deletionResult.deletionErrors,
         subjectLabel = request.deletionErrorSubjectLabel
     )?.let { throw Exception(it) }
+    return latestIndex
 }
 
 internal suspend fun SavedThreadRepository.finalizeDeleteBackup(

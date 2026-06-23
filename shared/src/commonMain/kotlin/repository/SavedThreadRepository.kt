@@ -209,20 +209,22 @@ class SavedThreadRepository(
     suspend fun deleteThread(threadId: String, boardId: String? = null): Result<Unit> = runSuspendCatchingNonCancellation {
         withContext(AppDispatchers.io) {
             this@SavedThreadRepository.executeSavedThreadDeleteOperation(
-                SavedThreadDeleteOperationRequest(
-                    backupIndexPath = "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}$OPERATION_BACKUP_THREAD_DELETE_SUFFIX",
-                    deletionErrorSubjectLabel = "thread directory(s)",
-                    indexUpdateFailureMessage =
-                        "Failed to update index after deleting thread $threadId. Index may be inconsistent.",
-                    selectThreadsToDelete = { index ->
-                        index.threads
-                            .filter { isSameSavedThreadIdentity(it, threadId, boardId) }
-                            .sortedByDescending { it.savedAt }
-                    }
-                )
-            )
+                buildDeleteThreadOperationRequest(threadId = threadId, boardId = boardId)
+            ).let { }
         }
     }
+
+    /**
+     * スレッドを削除し、削除後のインデックスを返す。
+     */
+    suspend fun deleteThreadAndLoadIndex(threadId: String, boardId: String? = null): Result<SavedThreadIndex> =
+        runSuspendCatchingNonCancellation {
+            withContext(AppDispatchers.io) {
+                this@SavedThreadRepository.executeSavedThreadDeleteOperation(
+                    buildDeleteThreadOperationRequest(threadId = threadId, boardId = boardId)
+                )
+            }
+        }
 
     /**
      * すべてのスレッドを削除
@@ -237,7 +239,7 @@ class SavedThreadRepository(
                         "Failed to update index after deleting all threads. Index may be inconsistent.",
                     selectThreadsToDelete = { index -> index.threads }
                 )
-            )
+            ).let { }
         }
     }
 
@@ -399,6 +401,23 @@ class SavedThreadRepository(
             storageId = relativePath,
             baseDirectory = baseDirectory,
             baseSaveLocation = baseLocationForLock
+        )
+    }
+
+    private fun buildDeleteThreadOperationRequest(
+        threadId: String,
+        boardId: String?
+    ): SavedThreadDeleteOperationRequest {
+        return SavedThreadDeleteOperationRequest(
+            backupIndexPath = "$indexRelativePath.${Clock.System.now().toEpochMilliseconds()}$OPERATION_BACKUP_THREAD_DELETE_SUFFIX",
+            deletionErrorSubjectLabel = "thread directory(s)",
+            indexUpdateFailureMessage =
+                "Failed to update index after deleting thread $threadId. Index may be inconsistent.",
+            selectThreadsToDelete = { index ->
+                index.threads
+                    .filter { isSameSavedThreadIdentity(it, threadId, boardId) }
+                    .sortedByDescending { it.savedAt }
+            }
         )
     }
 

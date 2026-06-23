@@ -36,14 +36,16 @@ internal suspend fun deleteSavedThreadAndReload(
     timeoutMillis: Long = 15_000L
 ): Result<SavedThreadsSnapshot> {
     return runCatching {
-        repository.deleteThread(
-            threadId = thread.threadId,
-            boardId = thread.boardId.ifBlank { null }
-        ).getOrThrow()
-        loadSavedThreadsSnapshot(
-            repository = repository,
-            timeoutMillis = timeoutMillis
-        ).getOrThrow()
+        withTimeout(timeoutMillis) {
+            val index = repository.deleteThreadAndLoadIndex(
+                threadId = thread.threadId,
+                boardId = thread.boardId.ifBlank { null }
+            ).getOrThrow()
+            SavedThreadsSnapshot(
+                threads = index.threads,
+                totalSize = index.totalSize
+            )
+        }
     }
 }
 

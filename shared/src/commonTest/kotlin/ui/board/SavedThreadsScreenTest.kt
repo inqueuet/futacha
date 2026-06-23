@@ -198,7 +198,7 @@ class SavedThreadsScreenTest {
 
     @Test
     fun deleteSavedThreadAndReload_returnsUpdatedSnapshot() = runBlocking {
-        val fileSystem = InMemoryFileSystem()
+        val fileSystem = CountingIndexReadFileSystem(InMemoryFileSystem())
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
         val target = savedThread(
             threadId = "1",
@@ -216,11 +216,13 @@ class SavedThreadsScreenTest {
         repository.addThreadToIndex(other).getOrThrow()
         fileSystem.writeString("saved_threads/${target.storageId}/metadata.json", "{}").getOrThrow()
         fileSystem.writeString("saved_threads/${other.storageId}/metadata.json", "{}").getOrThrow()
+        fileSystem.indexReadCount = 0
 
         val snapshot = deleteSavedThreadAndReload(repository, target).getOrThrow()
 
         assertEquals(listOf(other), snapshot.threads)
         assertEquals(20L, snapshot.totalSize)
+        assertTrue(fileSystem.indexReadCount <= 2)
         assertFalse(repository.threadExists(target.threadId, target.boardId))
         assertFalse(fileSystem.exists("saved_threads/${target.storageId}"))
         assertTrue(fileSystem.exists("saved_threads/${other.storageId}"))
@@ -302,5 +304,18 @@ private class DeleteFailingFileSystem(
 ) : FileSystem by delegate {
     override suspend fun deleteRecursively(path: String): Result<Unit> {
         return Result.failure(IllegalStateException("cannot delete"))
+    }
+}
+
+private class CountingIndexReadFileSystem(
+    private val delegate: InMemoryFileSystem
+) : FileSystem by delegate {
+    var indexReadCount: Int = 0
+
+    override suspend fun readString(path: String): Result<String> {
+        if (path == "saved_threads/index.json") {
+            indexReadCount += 1
+        }
+        return delegate.readString(path)
     }
 }
