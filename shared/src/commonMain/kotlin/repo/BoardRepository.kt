@@ -20,10 +20,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -109,6 +107,8 @@ class DefaultBoardRepository(
     private val parser: HtmlParser,
     private val opImageCacheTtlMillis: Long = DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS,
     private val opImageCacheMaxEntries: Int = DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES,
+    private val helperPermitTimeoutMillis: Long = DEFAULT_HELPER_PERMIT_TIMEOUT_MILLIS,
+    private val helperFetchTimeoutMillis: Long = DEFAULT_HELPER_FETCH_TIMEOUT_MILLIS,
     private val cookieRepository: CookieRepository? = null
 ) : BoardRepository {
     // Track which boards have been initialized with cookies.
@@ -141,8 +141,8 @@ class DefaultBoardRepository(
         private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
         private const val DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS = 30_000L // 30 seconds
         private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
-        // Timeout for semaphore acquisition to avoid permanent wait.
-        private const val SEMAPHORE_TIMEOUT_MILLIS = 30_000L // 30 seconds
+        private const val DEFAULT_HELPER_PERMIT_TIMEOUT_MILLIS = 5_000L
+        private const val DEFAULT_HELPER_FETCH_TIMEOUT_MILLIS = 30_000L
     }
 
     private val opImageSemaphore = Semaphore(OP_IMAGE_CONCURRENCY)
@@ -225,17 +225,13 @@ class DefaultBoardRepository(
         getCachedOpImageUrl(key)?.let { return it.url }
 
         val fetchResult = fetchDefaultBoardRepositoryOpImageWithPermit(
-            threadId = threadId,
-            semaphoreTimeoutMillis = SEMAPHORE_TIMEOUT_MILLIS,
-            semaphore = opImageSemaphore,
-            logTag = TAG
+            semaphoreTimeoutMillis = helperPermitTimeoutMillis,
+            fetchTimeoutMillis = helperFetchTimeoutMillis,
+            semaphore = opImageSemaphore
         ) {
             withRetryOnAuthFailure(board) {
                 resolveOpImageUrl(board, threadId)
             }
-        }
-        if (fetchResult == null) {
-            return null
         }
         saveOpImageUrlToCache(key, fetchResult.url)
         return fetchResult.url
@@ -252,20 +248,20 @@ class DefaultBoardRepository(
         val key = DefaultBoardRepositoryOpImageKey(board, item.id)
         getCachedCatalogTitle(key)?.let { return it.title ?: item.title }
 
-        val resolvedTitle = withTimeoutOrNull(SEMAPHORE_TIMEOUT_MILLIS) {
-            catalogTitleSemaphore.withPermit {
-                withRetryOnAuthFailure(board) {
-                    resolveCatalogThreadTitle(
-                        board = board,
-                        threadId = item.id,
-                        allowFallbackHeadScan = allowFallbackHeadScan
-                    )
-                }
+        val titleResult = runDefaultBoardRepositoryHelperWithPermit(
+            semaphoreTimeoutMillis = helperPermitTimeoutMillis,
+            fetchTimeoutMillis = helperFetchTimeoutMillis,
+            semaphore = catalogTitleSemaphore
+        ) {
+            withRetryOnAuthFailure(board) {
+                resolveCatalogThreadTitle(
+                    board = board,
+                    threadId = item.id,
+                    allowFallbackHeadScan = allowFallbackHeadScan
+                )
             }
-        } ?: run {
-            Logger.w(TAG, "Timeout waiting for catalog title fetch permit for thread ${item.id}")
-            null
         }
+        val resolvedTitle = titleResult.value
 
         saveCatalogTitleToCache(key, resolvedTitle)
         return resolvedTitle ?: item.title

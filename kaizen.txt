@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, and item 36 read-only board requests now skip recent failed Cookie setup attempts.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, and item 37 OP image/title helper timeouts are split and timeout misses are cached.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -28,7 +28,7 @@ This is the primary classification for the remaining findings below. Original it
    - SaveLocation/manual save settings and cache/storage cleanup boundaries.
 
 2. Catalog, board list, search, and archive discovery
-   Items: 37, 52, 53, 67
+   Items: 52, 53, 67
 
    Scope:
    - Catalog transforms, search/NG/watch filtering, and visible-item replacement.
@@ -108,29 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-37. OP image/title helper timeout covers both semaphore wait and network fetch
-------------------------------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/repo/BoardRepository.kt
-- shared/src/commonMain/kotlin/repo/DefaultBoardRepositoryExecutionSupport.kt
-- shared/src/commonMain/kotlin/ui/board/CatalogHeadMetadataSupport.kt
-
-Current behavior:
-- fetchDefaultBoardRepositoryOpImageWithPermit() wraps semaphore.withPermit { fetch() } in withTimeoutOrNull(30s).
-- resolveCatalogDisplayTitle() uses the same opImageSemaphore and timeout.
-- When the timeout fires, fetchOpImageUrl() returns null without saving a miss-cache entry.
-
-Risk:
-- A slow helper network fetch consumes one of the 4 permits until timeout.
-- Timed-out helper requests are not negatively cached, so visible catalog movement can retry the same thread soon after.
-- Because image and title helpers share the semaphore, slow title resolution can delay OP image completion and vice versa.
-
-Kaizen:
-- Split "wait for permit" timeout from "network helper request" timeout.
-- Save a short miss/timeout cache entry for helper timeouts.
-- Track separate semaphores or priority for visible image helpers versus title-only helpers.
 
 
 38. Android SAF writes have no overall write/flush timeout
@@ -938,6 +915,7 @@ These findings were completed and removed from the active backlog:
 - Item 34: iOS video preview now remembers the last applied muted/volume/controls state and skips unchanged WKWebView JavaScript sync.
 - Item 35: Cookie snapshot files now carry monotonically increasing revisions, and disk writes are serialized so stale snapshots cannot overwrite newer persisted Cookie state.
 - Item 36: Read-only board requests now negative-cache recent Cookie setup failures, while forced setup remains enabled for posting/deletion/vote operations and auth retry.
+- Item 37: OP image and catalog title helper work now separates permit-wait timeout from fetch timeout, and timeout results are cached as short misses.
 
 
 Removed obsolete findings

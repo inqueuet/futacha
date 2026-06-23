@@ -12,7 +12,6 @@ import io.ktor.http.Url
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
@@ -22,7 +21,13 @@ private const val DEFAULT_BOARD_REPOSITORY_POSTTIME_INFERRED_WAIT_SECONDS = 3600
 internal const val DEFAULT_BOARD_REPOSITORY_COOKIE_SETUP_FAILURE_TTL_MILLIS = 60_000L
 
 internal data class DefaultBoardRepositoryOpImageFetchResult(
-    val url: String?
+    val url: String?,
+    val timedOut: Boolean = false
+)
+
+internal data class DefaultBoardRepositoryHelperFetchResult<T>(
+    val value: T?,
+    val timedOut: Boolean
 )
 
 internal data class DefaultBoardRepositoryBoardInitLock(
@@ -242,21 +247,51 @@ private fun StoredCookie.matchesDefaultBoardRepositoryCookieScope(url: Url): Boo
 }
 
 internal suspend fun fetchDefaultBoardRepositoryOpImageWithPermit(
-    threadId: String,
     semaphoreTimeoutMillis: Long,
+    fetchTimeoutMillis: Long,
     semaphore: Semaphore,
-    logTag: String,
     fetch: suspend () -> String?
-): DefaultBoardRepositoryOpImageFetchResult? {
-    val fetchResult = withTimeoutOrNull(semaphoreTimeoutMillis) {
-        semaphore.withPermit {
-            DefaultBoardRepositoryOpImageFetchResult(fetch())
+): DefaultBoardRepositoryOpImageFetchResult {
+    val fetchResult = runDefaultBoardRepositoryHelperWithPermit(
+        semaphoreTimeoutMillis = semaphoreTimeoutMillis,
+        fetchTimeoutMillis = fetchTimeoutMillis,
+        semaphore = semaphore,
+        fetch = fetch
+    )
+    return DefaultBoardRepositoryOpImageFetchResult(
+        url = fetchResult.value,
+        timedOut = fetchResult.timedOut
+    )
+}
+
+internal suspend fun <T> runDefaultBoardRepositoryHelperWithPermit(
+    semaphoreTimeoutMillis: Long,
+    fetchTimeoutMillis: Long,
+    semaphore: Semaphore,
+    fetch: suspend () -> T?
+): DefaultBoardRepositoryHelperFetchResult<T> {
+    val acquired = withTimeoutOrNull(semaphoreTimeoutMillis.coerceAtLeast(1L)) {
+        semaphore.acquire()
+        true
+    } ?: false
+    if (!acquired) {
+        return DefaultBoardRepositoryHelperFetchResult(value = null, timedOut = true)
+    }
+
+    return try {
+        var completed = false
+        val value = withTimeoutOrNull(fetchTimeoutMillis.coerceAtLeast(1L)) {
+            val fetched = fetch()
+            completed = true
+            fetched
         }
+        DefaultBoardRepositoryHelperFetchResult(
+            value = value,
+            timedOut = !completed
+        )
+    } finally {
+        semaphore.release()
     }
-    if (fetchResult == null) {
-        Logger.w(logTag, "Timeout waiting for image fetch permit for thread $threadId")
-    }
-    return fetchResult
 }
 
 internal suspend fun resolveDefaultBoardRepositoryOpImageUrl(

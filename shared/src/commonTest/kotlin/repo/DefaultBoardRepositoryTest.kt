@@ -185,6 +185,26 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
+    fun fetchOpImageUrl_cachesHelperTimeoutsAsMisses() = runBlocking {
+        val boardUrl = "https://dec.2chan.net/b/"
+        val api = FakeBoardApi(fetchThreadHeadDelayMillis = 50L)
+        val parser = FakeHtmlParser(opImageUrl = "https://dec.2chan.net/src/late.jpg")
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = parser,
+            helperFetchTimeoutMillis = 1L
+        )
+
+        val first = repository.fetchOpImageUrl(boardUrl, "789")
+        val second = repository.fetchOpImageUrl(boardUrl, "789")
+
+        assertNull(first)
+        assertNull(second)
+        assertEquals(1, api.fetchThreadHeadCalls)
+        assertEquals(0, parser.extractOpImageUrlCalls)
+    }
+
+    @Test
     fun resolveCatalogDisplayTitle_usesSmallThreadHeadFirst() = runBlocking {
         val boardUrl = "https://img.2chan.net/b/"
         val api = FakeBoardApi(
@@ -294,6 +314,35 @@ class DefaultBoardRepositoryTest {
 
         assertEquals("通常タイトル", title)
         assertEquals(emptyList(), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_cachesHelperTimeoutsAsMisses() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            fetchThreadHeadDelayMillis = 50L,
+            threadHeadHtmlByMaxLines = { "<blockquote>遅い補完</blockquote>" }
+        )
+        val repository = DefaultBoardRepository(
+            api = api,
+            parser = FakeHtmlParser(),
+            helperFetchTimeoutMillis = 1L
+        )
+        val item = CatalogItem(
+            id = "790",
+            threadUrl = "$boardUrl/res/790.htm",
+            title = "20",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 20
+        )
+
+        val first = repository.resolveCatalogDisplayTitle(boardUrl, item)
+        val second = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("20", first)
+        assertEquals("20", second)
+        assertEquals(listOf(16), api.fetchThreadHeadMaxLines)
     }
 
     @Test
@@ -647,10 +696,9 @@ class DefaultBoardRepositoryTest {
         assertTrue(failedPostingCookieRepository.hasValidCookieFor(boardUrl, preferredNames = setOf("posttime")))
 
         val opImage = fetchDefaultBoardRepositoryOpImageWithPermit(
-            threadId = "123",
             semaphoreTimeoutMillis = 100L,
+            fetchTimeoutMillis = 100L,
             semaphore = Semaphore(1),
-            logTag = "DefaultBoardRepositoryTest"
         ) {
             resolveDefaultBoardRepositoryOpImageUrl(
                 threadId = "123",
@@ -659,7 +707,24 @@ class DefaultBoardRepositoryTest {
                 extractOpImageUrl = { "https://dec.2chan.net/src/a.jpg" }
             )
         }
-        assertEquals("https://dec.2chan.net/src/a.jpg", opImage?.url)
+        assertEquals("https://dec.2chan.net/src/a.jpg", opImage.url)
+        assertFalse(opImage.timedOut)
+
+        val busySemaphore = Semaphore(1)
+        busySemaphore.acquire()
+        try {
+            val timedOutOpImage = fetchDefaultBoardRepositoryOpImageWithPermit(
+                semaphoreTimeoutMillis = 1L,
+                fetchTimeoutMillis = 100L,
+                semaphore = busySemaphore
+            ) {
+                "unused"
+            }
+            assertNull(timedOutOpImage.url)
+            assertTrue(timedOutOpImage.timedOut)
+        } finally {
+            busySemaphore.release()
+        }
     }
 
     @Test
@@ -742,6 +807,7 @@ class DefaultBoardRepositoryTest {
 private class FakeBoardApi(
     private val threadHeadHtml: String = "<img src=\"/src/default.jpg\">",
     private val threadHeadHtmlByMaxLines: ((Int) -> String)? = null,
+    private val fetchThreadHeadDelayMillis: Long = 0L,
     private val fetchCatalogSetupError: Exception? = null,
     private val fetchCatalogSetupDelayMillis: Long = 0L,
     private val replyResult: String? = null,
@@ -781,6 +847,9 @@ private class FakeBoardApi(
     override suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int): String {
         fetchThreadHeadCalls += 1
         fetchThreadHeadMaxLines += maxLines
+        if (fetchThreadHeadDelayMillis > 0L) {
+            delay(fetchThreadHeadDelayMillis)
+        }
         return threadHeadHtmlByMaxLines?.invoke(maxLines) ?: threadHeadHtml
     }
 
