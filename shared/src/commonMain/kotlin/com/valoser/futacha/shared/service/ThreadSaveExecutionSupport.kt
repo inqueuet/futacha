@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThreadMetadata
@@ -295,7 +296,8 @@ internal fun buildThreadSaveSavedThread(
     totalSize: Long,
     downloadFailureCount: Int,
     skippedMediaCount: Int,
-    totalMediaCount: Int
+    totalMediaCount: Int,
+    statusOverride: SaveStatus? = null
 ): SavedThread {
     return SavedThread(
         threadId = threadId,
@@ -309,7 +311,7 @@ internal fun buildThreadSaveSavedThread(
         imageCount = imageCount,
         videoCount = videoCount,
         totalSize = totalSize,
-        status = resolveThreadSaveStatus(
+        status = statusOverride ?: resolveThreadSaveStatus(
             incompleteMediaCount = downloadFailureCount + skippedMediaCount,
             totalMediaCount = totalMediaCount
         )

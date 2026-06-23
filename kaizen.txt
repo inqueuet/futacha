@@ -101,18 +101,20 @@ Relevant code:
 Current behavior:
 - Thread screen autosave can run every 60s.
 - Autosave allows up to 300 media items and 90s duration.
-- It writes metadata and may download media to AUTO_SAVE_DIRECTORY.
+- Foreground Thread autosave writes metadata first and indexes the thread as DOWNLOADING before continuing media download in the same autosave run.
+- It then waits briefly, downloads media to AUTO_SAVE_DIRECTORY with foreground autosave media concurrency reduced to 1, and rewrites metadata/index with final media paths and status.
+- Foreground autosave checks readiness before building the post fingerprint, so throttled/in-progress/offline states avoid a full post fingerprint scan.
 - HistoryRefresher can also autosave changed history entries, mainly in background/worker paths.
 
 Risk:
-- Thread display, image loading, manual refresh, and autosave may compete for network and storage IO.
-- Autosave fingerprinting and media planning still scan posts before determining whether work is needed.
+- Thread display, image loading, manual refresh, and autosave may still compete for network and storage IO on very large media sets or slow providers.
+- Autosave fingerprinting and media planning still scan posts when a save is actually ready to run.
 
 Kaizen:
-- Separate quick metadata save from slower media download.
-- Keep metadata save early, but delay media download until idle, screen exit, or background refresh.
-- Lower autosave media concurrency or make it conditional on network/battery/user setting.
-- Replace full post fingerprinting with lighter revision information where possible.
+- Keep metadata save early and preserve the partially usable autosave snapshot if media download is interrupted.
+- Keep foreground autosave media download delayed and serial unless profiling shows it can safely be relaxed.
+- Consider making media download conditional on network/battery/user setting if foreground contention remains noticeable.
+- Replace full post fingerprinting with lighter revision information only if profiling shows ready-state fingerprint scans are still material.
 - Do not add autosave runtime logs. Verify autosave scheduling and contention with tests/fakes that record calls in memory.
 
 

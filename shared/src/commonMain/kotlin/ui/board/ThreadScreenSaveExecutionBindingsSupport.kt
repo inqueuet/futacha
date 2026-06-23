@@ -40,8 +40,13 @@ internal data class ThreadScreenAutoSaveDependencies(
     val board: BoardSummary,
     val effectiveBoardUrl: String,
     val currentTimeMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    val buildPostsFingerprint: (List<Post>) -> String = ::buildThreadAutoSavePostsFingerprint,
     val buildSaveRuntime: (HttpClient, FileSystem) -> ThreadSaveRuntime = ::buildThreadSaveRuntime,
-    val performAutoSave: suspend (ThreadAutoSaveRunnerConfig, ThreadAutoSaveRunnerCallbacks) -> ThreadAutoSaveRunResult = ::performThreadAutoSave,
+    val performAutoSave: suspend (
+        ThreadAutoSaveRunnerConfig,
+        ThreadAutoSaveRunnerCallbacks,
+        suspend (SavedThread) -> Unit
+    ) -> ThreadAutoSaveRunResult = ::performThreadAutoSave,
     val indexSavedThread: suspend (SavedThreadRepository?, SavedThread?, String?) -> Result<Unit>? = { repository, savedThread, failureMessage ->
         indexSavedThreadOrLog(repository, savedThread, THREAD_AUTO_SAVE_TAG, failureMessage)
     },
@@ -370,11 +375,6 @@ internal fun buildThreadScreenAutoSaveBindings(
             val client = dependencies.httpClient ?: return@start
             val localFileSystem = dependencies.fileSystem ?: return@start
             val now = dependencies.currentTimeMillis()
-            val postsSnapshot = page.posts
-            val postsFingerprint = buildThreadAutoSavePostsFingerprint(postsSnapshot)
-            if (stateBindings.currentLastAutoSavePosts() == postsFingerprint) {
-                return@start
-            }
             if (
                 resolveThreadAutoSaveAvailability(
                     pageThreadId = page.threadId,
@@ -389,6 +389,11 @@ internal fun buildThreadScreenAutoSaveBindings(
                     minIntervalMillis = minIntervalMillis
                 ) != ThreadAutoSaveAvailability.Ready
             ) {
+                return@start
+            }
+            val postsSnapshot = page.posts
+            val postsFingerprint = dependencies.buildPostsFingerprint(postsSnapshot)
+            if (stateBindings.currentLastAutoSavePosts() == postsFingerprint) {
                 return@start
             }
             val nextJob = coroutineScope.launch(start = CoroutineStart.LAZY) {
@@ -410,7 +415,14 @@ internal fun buildThreadScreenAutoSaveBindings(
                             attemptStartedAtMillis = attemptStartedAt,
                             completionTimestampMillis = attemptStartedAt
                         ),
-                        saveRuntime.autoCallbacks
+                        saveRuntime.autoCallbacks,
+                        { initialSavedThread ->
+                            dependencies.indexSavedThread(
+                                repository,
+                                initialSavedThread,
+                                buildThreadAutoSaveIndexFailureMessage(dependencies.threadId)
+                            )
+                        }
                     )
                     val completedAt = dependencies.currentTimeMillis()
                     val applyState = buildThreadAutoSaveUiApplyState(

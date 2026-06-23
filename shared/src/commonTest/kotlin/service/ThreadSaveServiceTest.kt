@@ -97,6 +97,51 @@ class ThreadSaveServiceTest {
     }
 
     @Test
+    fun saveThread_canWriteInitialMetadataBeforeMediaDownloads() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val service = ThreadSaveService(
+            httpClient = createClient(),
+            fileSystem = fileSystem
+        )
+        var initialSavedThread: com.valoser.futacha.shared.model.SavedThread? = null
+        var initialMetadata: SavedThreadMetadata? = null
+
+        val saved = service.saveThread(
+            threadId = "456",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "title",
+            expiresAtLabel = null,
+            posts = listOf(samplePost()),
+            baseDirectory = "manual",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false, stripExternalResources = false),
+            writeInitialMetadataBeforeMedia = true,
+            onInitialSavedThread = { initial ->
+                initialSavedThread = initial
+                initialMetadata = readMetadata(fileSystem, "manual/${initial.storageId}/metadata.json")
+            }
+        ).getOrThrow()
+
+        val storageId = requireNotNull(saved.storageId)
+        val firstSnapshot = requireNotNull(initialSavedThread)
+        val firstMetadata = requireNotNull(initialMetadata)
+        val finalMetadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
+
+        assertEquals(storageId, firstSnapshot.storageId)
+        assertEquals(SaveStatus.DOWNLOADING, firstSnapshot.status)
+        assertNull(firstMetadata.posts.single().localImagePath)
+        assertNull(firstMetadata.posts.single().localThumbnailPath)
+
+        assertEquals(SaveStatus.COMPLETED, saved.status)
+        assertEquals("b/src/1.jpg", finalMetadata.posts.single().localImagePath)
+        assertEquals("b/thumb/1s.jpg", finalMetadata.posts.single().localThumbnailPath)
+        assertTrue(finalMetadata.posts.single().messageHtml.contains("""src="b/thumb/1s.jpg""""))
+        assertTrue(finalMetadata.posts.single().messageHtml.contains("""href="b/src/1.jpg""""))
+    }
+
+    @Test
     fun saveThread_marksPartialWhenMediaLimitSkipsItems() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val service = ThreadSaveService(

@@ -870,9 +870,10 @@ class ThreadScreenBindingsLogicTest {
                 buildSaveRuntime = { _, _ ->
                     buildThreadSaveRuntime(ThreadSaveService(HttpClient(), fileSystem))
                 },
-                performAutoSave = { config, _ ->
+                performAutoSave = { config, _, onInitialSavedThread ->
                     autoSaveRunCount += 1
                     assertEquals("123", config.threadId)
+                    onInitialSavedThread(savedThread.copy(status = SaveStatus.DOWNLOADING))
                     nowMillis = 100_200L
                     ThreadAutoSaveRunResult(
                         completionState = ThreadAutoSaveCompletionState(
@@ -894,14 +895,82 @@ class ThreadScreenBindingsLogicTest {
 
         assertEquals(100_200L, lastAutoSaveTimestamp)
         assertEquals(buildThreadAutoSavePostsFingerprint(page.posts), lastAutoSavePosts)
-        assertEquals(listOf(savedThread), indexedThreads)
+        assertEquals(listOf(savedThread.copy(status = SaveStatus.DOWNLOADING), savedThread), indexedThreads)
         assertNull(autoSaveJob)
 
         nowMillis = 200_200L
         bindings.startAutoSave(page)
 
         assertEquals(1, autoSaveRunCount)
-        assertEquals(listOf(savedThread), indexedThreads)
+        assertEquals(listOf(savedThread.copy(status = SaveStatus.DOWNLOADING), savedThread), indexedThreads)
+    }
+
+    @Test
+    fun threadScreenExecutionBindingsSupport_skipsAutoSaveFingerprintWhenThrottled() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val autoSaveRepository = SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
+        var autoSaveJob: Job? = null
+        var lastAutoSaveTimestamp = 95_000L
+        var lastAutoSavePosts: String? = null
+        var fingerprintCalls = 0
+        val page = ThreadPage(
+            threadId = "123",
+            boardTitle = "board",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = listOf(
+                Post(
+                    id = "1",
+                    author = null,
+                    subject = "subject",
+                    timestamp = "now",
+                    messageHtml = "body",
+                    imageUrl = null,
+                    thumbnailUrl = null
+                )
+            )
+        )
+        val bindings = buildThreadScreenAutoSaveBindings(
+            coroutineScope = this,
+            minIntervalMillis = AUTO_SAVE_INTERVAL_MS,
+            stateBindings = ThreadScreenAutoSaveStateBindings(
+                currentAutoSaveJob = { autoSaveJob },
+                setAutoSaveJob = { autoSaveJob = it },
+                currentLastAutoSaveTimestampMillis = { lastAutoSaveTimestamp },
+                setLastAutoSaveTimestampMillis = { lastAutoSaveTimestamp = it },
+                currentLastAutoSavePosts = { lastAutoSavePosts },
+                setLastAutoSavePosts = { lastAutoSavePosts = it },
+                currentIsShowingOfflineCopy = { false }
+            ),
+            dependencies = ThreadScreenAutoSaveDependencies(
+                autoSaveRepository = autoSaveRepository,
+                httpClient = HttpClient(),
+                fileSystem = fileSystem,
+                threadId = "123",
+                threadTitle = "title",
+                board = BoardSummary(
+                    id = "test",
+                    name = "Test",
+                    category = "cat",
+                    url = "https://example.com/test",
+                    description = "desc"
+                ),
+                effectiveBoardUrl = "https://example.com/test",
+                currentTimeMillis = { 100_000L },
+                buildPostsFingerprint = {
+                    fingerprintCalls += 1
+                    buildThreadAutoSavePostsFingerprint(it)
+                },
+                performAutoSave = { _, _, _ -> error("auto-save should not run while throttled") }
+            )
+        )
+
+        bindings.startAutoSave(page)
+
+        assertEquals(0, fingerprintCalls)
+        assertNull(autoSaveJob)
+        assertEquals(95_000L, lastAutoSaveTimestamp)
+        assertNull(lastAutoSavePosts)
     }
 
     @Test

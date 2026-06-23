@@ -4,6 +4,7 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
+import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
@@ -11,6 +12,7 @@ import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,7 +36,9 @@ data class RawHtmlSaveOptions(
 
 data class ThreadSaveLimits(
     val maxMediaItems: Int = ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS,
-    val maxSaveDurationMs: Long = ThreadSaveService.DEFAULT_MAX_SAVE_DURATION_MS
+    val maxSaveDurationMs: Long = ThreadSaveService.DEFAULT_MAX_SAVE_DURATION_MS,
+    val maxParallelDownloads: Int = ThreadSaveService.DEFAULT_MAX_PARALLEL_DOWNLOADS,
+    val mediaDownloadStartDelayMs: Long = 0L
 )
 
 /**
@@ -77,7 +81,7 @@ class ThreadSaveService(
         private const val STREAM_READ_BUFFER_BYTES = 512 * 1024
         private const val MAX_ZERO_READ_RETRIES = 100
         private const val ZERO_READ_BACKOFF_MILLIS = 25L
-        private const val MAX_PARALLEL_DOWNLOADS = 2
+        const val DEFAULT_MAX_PARALLEL_DOWNLOADS = 2
     }
 
     /**
@@ -98,11 +102,15 @@ class ThreadSaveService(
         baseDirectory: String = MANUAL_SAVE_DIRECTORY,
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions(),
-        limits: ThreadSaveLimits = ThreadSaveLimits()
+        limits: ThreadSaveLimits = ThreadSaveLimits(),
+        writeInitialMetadataBeforeMedia: Boolean = false,
+        onInitialSavedThread: suspend (SavedThread) -> Unit = {}
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
         val effectiveLimits = limits.copy(
             maxMediaItems = limits.maxMediaItems.coerceAtLeast(0),
-            maxSaveDurationMs = limits.maxSaveDurationMs.coerceAtLeast(1L)
+            maxSaveDurationMs = limits.maxSaveDurationMs.coerceAtLeast(1L),
+            maxParallelDownloads = limits.maxParallelDownloads.coerceAtLeast(1),
+            mediaDownloadStartDelayMs = limits.mediaDownloadStartDelayMs.coerceAtLeast(0L)
         )
         val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
         val storageId = buildThreadSaveGenerationStorageId(
@@ -116,6 +124,7 @@ class ThreadSaveService(
             baseDirectory = baseDirectory,
             storageId = storageId
         )
+        var hasWrittenInitialMetadata = false
         try {
             Result.success(run {
                 val startedAtMillis = savedAtTimestamp
@@ -140,6 +149,70 @@ class ThreadSaveService(
                     maxMediaItems = effectiveLimits.maxMediaItems
                 )
 
+                if (writeMetadata && writeInitialMetadataBeforeMedia) {
+                    updateProgress(SavePhase.CONVERTING, 0, posts.size, "投稿変換中...")
+                    val initialSavedPosts = buildThreadSaveSavedPosts(
+                        posts = posts,
+                        mediaKeyToFileInfoMap = emptyMap(),
+                        urlToPathMap = emptyMap(),
+                        updateProgress = { current, total ->
+                            updateProgress(
+                                SavePhase.CONVERTING,
+                                current,
+                                total,
+                                "投稿変換中... ($current/$total)"
+                            )
+                        }
+                    )
+                    val initialMetadataSize = writeThreadSaveMetadataIfEnabled(
+                        writeMetadata = true,
+                        fileSystem = fileSystem,
+                        target = storageTarget,
+                        request = ThreadSaveMetadataWriteRequest(
+                            threadId = threadId,
+                            boardId = boardId,
+                            boardName = boardName,
+                            boardUrl = boardUrl,
+                            title = title,
+                            storageId = storageId,
+                            savedAtTimestamp = savedAtTimestamp,
+                            expiresAtLabel = expiresAtLabel,
+                            savedPosts = initialSavedPosts,
+                            rawHtmlRelativePath = null,
+                            strippedExternalResources = rawHtmlOptions.stripExternalResources,
+                            baseTotalSize = 0L
+                        ),
+                        encodeMetadata = json::encodeToString
+                    )
+                    hasWrittenInitialMetadata = true
+                    onInitialSavedThread(
+                        buildThreadSaveSavedThread(
+                            threadId = threadId,
+                            boardId = boardId,
+                            boardName = boardName,
+                            title = title,
+                            storageId = storageId,
+                            thumbnailPath = null,
+                            savedAtTimestamp = savedAtTimestamp,
+                            postCount = posts.size,
+                            imageCount = 0,
+                            videoCount = 0,
+                            totalSize = initialMetadataSize,
+                            downloadFailureCount = 0,
+                            skippedMediaCount = 0,
+                            totalMediaCount = mediaPlan.totalMediaCount,
+                            statusOverride = SaveStatus.DOWNLOADING
+                        )
+                    )
+                }
+
+                if (
+                    effectiveLimits.mediaDownloadStartDelayMs > 0L &&
+                    mediaPlan.scheduledItems.isNotEmpty()
+                ) {
+                    delay(effectiveLimits.mediaDownloadStartDelayMs)
+                }
+
                 // FIX: メディア数が異常に多い場合は警告
                 if (mediaPlan.totalMediaCount > effectiveLimits.maxMediaItems) {
                     Logger.w(
@@ -152,7 +225,7 @@ class ThreadSaveService(
                     plan = mediaPlan,
                     opPostId = opPostId,
                     chunkSize = 50,
-                    maxParallelDownloads = MAX_PARALLEL_DOWNLOADS,
+                    maxParallelDownloads = effectiveLimits.maxParallelDownloads,
                     maxRetries = MAX_RETRIES,
                     retryDelayMillis = RETRY_DELAY_MS,
                     logTag = "ThreadSaveService",
@@ -276,28 +349,32 @@ class ThreadSaveService(
                 )
             })
         } catch (e: CancellationException) {
-            withContext(NonCancellable) {
+            if (!hasWrittenInitialMetadata) {
+                withContext(NonCancellable) {
+                    runCatching {
+                        cleanupThreadSaveFailedOutput(
+                            fileSystem = fileSystem,
+                            target = storageTarget
+                        )
+                    }.onFailure { cleanupError ->
+                        Logger.w(
+                            "ThreadSaveService",
+                            "Failed to cleanup canceled save for $storageId: ${cleanupError.message}"
+                        )
+                    }
+                }
+            }
+            throw e
+        } catch (t: Throwable) {
+            if (!hasWrittenInitialMetadata) {
                 runCatching {
                     cleanupThreadSaveFailedOutput(
                         fileSystem = fileSystem,
                         target = storageTarget
                     )
                 }.onFailure { cleanupError ->
-                    Logger.w(
-                        "ThreadSaveService",
-                        "Failed to cleanup canceled save for $storageId: ${cleanupError.message}"
-                    )
+                    Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
                 }
-            }
-            throw e
-        } catch (t: Throwable) {
-            runCatching {
-                cleanupThreadSaveFailedOutput(
-                    fileSystem = fileSystem,
-                    target = storageTarget
-                )
-            }.onFailure { cleanupError ->
-                Logger.w("ThreadSaveService", "Failed to cleanup failed save for $storageId: ${cleanupError.message}")
             }
             Result.failure(t)
         }

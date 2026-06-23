@@ -9,6 +9,8 @@ import kotlinx.coroutines.CancellationException
 
 private const val THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS = 300
 private const val THREAD_AUTO_SAVE_MAX_DURATION_MS = 90_000L
+private const val THREAD_AUTO_SAVE_MAX_PARALLEL_DOWNLOADS = 1
+private const val THREAD_AUTO_SAVE_MEDIA_START_DELAY_MS = 2_000L
 
 internal data class ThreadAutoSaveRunnerConfig(
     val threadId: String,
@@ -54,14 +56,14 @@ internal data class ThreadAutoSaveRunResult(
 )
 
 internal data class ThreadAutoSaveRunnerCallbacks(
-    val saveThread: suspend (ThreadAutoSaveRunnerConfig) -> Result<SavedThread>
+    val saveThread: suspend (ThreadAutoSaveRunnerConfig, suspend (SavedThread) -> Unit) -> Result<SavedThread>
 )
 
 internal fun buildThreadAutoSaveRunnerCallbacks(
     saveService: ThreadSaveService
 ): ThreadAutoSaveRunnerCallbacks {
     return ThreadAutoSaveRunnerCallbacks(
-        saveThread = { config ->
+        saveThread = { config, onInitialSavedThread ->
             saveService.saveThread(
                 threadId = config.threadId,
                 boardId = config.boardId,
@@ -75,8 +77,12 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
                 rawHtmlOptions = RawHtmlSaveOptions(enable = false),
                 limits = ThreadSaveLimits(
                     maxMediaItems = THREAD_AUTO_SAVE_MAX_MEDIA_ITEMS,
-                    maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS
-                )
+                    maxSaveDurationMs = THREAD_AUTO_SAVE_MAX_DURATION_MS,
+                    maxParallelDownloads = THREAD_AUTO_SAVE_MAX_PARALLEL_DOWNLOADS,
+                    mediaDownloadStartDelayMs = THREAD_AUTO_SAVE_MEDIA_START_DELAY_MS
+                ),
+                writeInitialMetadataBeforeMedia = true,
+                onInitialSavedThread = onInitialSavedThread
             )
         }
     )
@@ -84,10 +90,11 @@ internal fun buildThreadAutoSaveRunnerCallbacks(
 
 internal suspend fun performThreadAutoSave(
     config: ThreadAutoSaveRunnerConfig,
-    callbacks: ThreadAutoSaveRunnerCallbacks
+    callbacks: ThreadAutoSaveRunnerCallbacks,
+    onInitialSavedThread: suspend (SavedThread) -> Unit = {}
 ): ThreadAutoSaveRunResult {
     val saveResult = try {
-        callbacks.saveThread(config)
+        callbacks.saveThread(config, onInitialSavedThread)
     } catch (error: CancellationException) {
         throw error
     } catch (error: Throwable) {

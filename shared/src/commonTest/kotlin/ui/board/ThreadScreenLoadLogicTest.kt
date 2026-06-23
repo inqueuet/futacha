@@ -1352,14 +1352,20 @@ class ThreadScreenLoadLogicTest {
             performThreadAutoSave(
                 config = config,
                 callbacks = ThreadAutoSaveRunnerCallbacks(
-                    saveThread = { Result.success(savedThread) }
-                )
+                    saveThread = { _, onInitialSavedThread ->
+                        onInitialSavedThread(savedThread.copy(status = com.valoser.futacha.shared.model.SaveStatus.DOWNLOADING))
+                        Result.success(savedThread)
+                    }
+                ),
+                onInitialSavedThread = { initialSavedThread ->
+                    assertEquals(com.valoser.futacha.shared.model.SaveStatus.DOWNLOADING, initialSavedThread.status)
+                }
             )
         )
         val failureResult = performThreadAutoSave(
             config = config,
             callbacks = ThreadAutoSaveRunnerCallbacks(
-                saveThread = { Result.failure(IllegalStateException("boom")) }
+                saveThread = { _, _ -> Result.failure(IllegalStateException("boom")) }
             )
         )
         assertEquals(20L, failureResult.completionState.nextTimestampMillis)
