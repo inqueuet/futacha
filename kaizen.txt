@@ -51,7 +51,7 @@ This is the primary classification for the remaining findings below. Original it
    - Response/body reads that create media-related memory spikes.
 
 5. Background refresh, Watch sync, autosave scheduling, and command orchestration
-   Items: 28, 32, 33, 39, 40, 42
+   Items: 32, 33, 39, 40, 42
 
    Scope:
    - Background refresh scheduling and duplicated refresh instances.
@@ -107,31 +107,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-28. Watch sync can contend with UI/history refresh and storage work
-------------------------------------------------------------------
-Relevant code:
-- app-android/src/main/java/com/valoser/futacha/WatchSyncManager.kt
-- app-android/src/main/java/com/valoser/futacha/HistoryRefreshWorker.kt
-- shared/src/commonMain/kotlin/service/HistoryRefresher.kt
-- shared/src/commonMain/kotlin/repository/SavedThreadRepository.kt
-
-Current behavior:
-- WatchSyncManager observes history and sends snapshots to Wear.
-- It can also trigger HistoryRefresher.refresh() from watch-side refresh requests.
-- Snapshot building sorts history and may load saved-thread metadata before sending payloads.
-- HistoryRefresher itself serializes refreshes with a mutex, while auto-save and saved-thread repositories have their own locks.
-
-Risk:
-- A watch refresh, periodic WorkManager refresh, and foreground UI refresh can overlap in intent even if HistoryRefresher later skips duplicates.
-- Snapshot building and metadata reads can add IO pressure at the same time auto-save or delete work is running.
-- If watch connectivity is flaky, send/ack retries can hide extra background work from normal app logs.
-
-Kaizen:
-- Do not add refresh source logs. Pass source labels through in-memory result/state only if needed for tests or UI behavior.
-- Throttle watch-triggered refresh requests separately from UI refresh.
-- Build a lightweight watch snapshot when saved metadata/index locks are busy.
 
 
 29. Image/video attachment posting keeps full bytes in memory
