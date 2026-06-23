@@ -4,7 +4,6 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.repository.SavedThreadRepository
-import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -24,7 +23,7 @@ internal data class HistoryRefreshAutoSavePlan(
 )
 
 internal class HistoryRefreshAutoSaveLauncher(
-    private val stateStore: AppStateStore,
+    private val updates: HistoryRefreshUpdateBuffer,
     private val autoSaveScope: CoroutineScope,
     private val autoSaveSemaphore: Semaphore,
     private val autoSaveService: ThreadSaveService?,
@@ -91,7 +90,10 @@ internal class HistoryRefreshAutoSaveLauncher(
                     val indexResult = autoSavedThreadRepository.addThreadToIndex(saved)
                     if (indexResult.isSuccess) {
                         runCatching {
-                            stateStore.upsertHistoryEntry(plan.updatedEntry.copy(hasAutoSave = true))
+                            updates.put(
+                                plan.resolvedEntry.key,
+                                plan.updatedEntry.copy(hasAutoSave = true)
+                            )
                         }.onFailure {
                             Logger.w(
                                 tag,

@@ -13,6 +13,7 @@ import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.BaseInMemoryPlatformStateStorage
 import com.valoser.futacha.shared.state.FakePlatformStateStorage
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.FileSystem
@@ -183,8 +184,10 @@ class HistoryRefresherTest {
             fileSystem = fileSystem,
             baseDirectory = AUTO_SAVE_DIRECTORY
         )
-        val store = AppStateStore(FakePlatformStateStorage())
+        val storage = CountingHistoryWriteStorage()
+        val store = AppStateStore(storage)
         store.setHistory(listOf(entry))
+        storage.historyWriteCount = 0
         val repository = FakeHistoryBoardRepository().apply {
             threadPages[board.url to "777"] = threadPage(
                 threadId = "777",
@@ -213,6 +216,7 @@ class HistoryRefresherTest {
         assertEquals("777", saved.threadId)
         assertTrue(updated.hasAutoSave)
         assertEquals("auto saved title", updated.title)
+        assertEquals(1, storage.historyWriteCount)
     }
 
     @Test
@@ -648,5 +652,14 @@ private class IndexWriteFailingFileSystem(
         } else {
             delegate.writeString(base, relativePath, content)
         }
+    }
+}
+
+private class CountingHistoryWriteStorage : BaseInMemoryPlatformStateStorage() {
+    var historyWriteCount = 0
+
+    override suspend fun updateHistoryJson(value: String) {
+        historyWriteCount += 1
+        super.updateHistoryJson(value)
     }
 }

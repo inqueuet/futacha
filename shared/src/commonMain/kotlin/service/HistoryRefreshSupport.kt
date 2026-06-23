@@ -173,7 +173,7 @@ internal class HistoryRefreshRunProcessor(
     private val tag: String
 ) {
     private val autoSaveLauncher = HistoryRefreshAutoSaveLauncher(
-        stateStore = stateStore,
+        updates = updates,
         autoSaveScope = autoSaveScope,
         autoSaveSemaphore = autoSaveSemaphore,
         autoSaveService = autoSaveService,
