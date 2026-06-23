@@ -214,9 +214,11 @@ class SavedThreadRepositoryTest {
             totalSize = 10L
         )
         repository.addThreadToIndex(indexed).getOrThrow()
+        val indexJson = fileSystem.readString("saved_threads/index.json").getOrThrow()
 
         val path = repository.getThreadHtmlPath("123", "b")
 
+        assertTrue(!indexJson.contains('\n'))
         assertEquals("/virtual/saved_threads/b__123_generation/123.htm", path)
     }
 

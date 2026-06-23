@@ -53,7 +53,7 @@ class ThreadSaveService(
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
     private val mediaWriteLocksGuard = Mutex()
     private val mediaWriteLocks = mutableMapOf<String, ThreadSaveMediaPathLock>()
-    private val json = Json { prettyPrint = true }
+    private val json = Json
 
     companion object {
         // ファイルサイズ制限: 8000KB = 8,192,000 bytes

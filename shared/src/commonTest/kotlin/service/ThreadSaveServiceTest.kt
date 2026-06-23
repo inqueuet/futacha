@@ -46,10 +46,12 @@ class ThreadSaveServiceTest {
         ).getOrThrow()
 
         val storageId = requireNotNull(saved.storageId)
-        val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
+        val metadataJson = fileSystem.readString("manual/$storageId/metadata.json").getOrThrow()
+        val metadata = json.decodeFromString<SavedThreadMetadata>(metadataJson)
         val rawHtml = fileSystem.readString("manual/$storageId/123.htm").getOrThrow()
 
         assertEquals(SaveStatus.COMPLETED, saved.status)
+        assertFalse(metadataJson.contains('\n'))
         assertEquals("b/thumb/1s.jpg", saved.thumbnailPath)
         assertEquals(1, saved.imageCount)
         assertEquals(0, saved.videoCount)

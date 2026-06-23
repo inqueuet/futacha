@@ -42,7 +42,6 @@ class SavedThreadRepository(
     internal var lastOperationBackupCleanupEpochMillis = 0L
 
     internal val json = Json {
-        prettyPrint = true
         ignoreUnknownKeys = true
     }
 
