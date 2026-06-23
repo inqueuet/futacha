@@ -31,6 +31,8 @@ class IosFileSystem : FileSystem {
     private val fileManager = NSFileManager.defaultManager
     private val cleanupMaxAgeMillis = 60 * 60 * 1000L
     private val streamWriteChunkBytes = 64 * 1024
+    private val fileTreeDeleteMaxItems = 10_000
+    private val fileTreeDeleteMaxDurationMillis = 30_000L
 
     private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
 
@@ -42,6 +44,9 @@ class IosFileSystem : FileSystem {
         // NSFileNoSuchFileError
         return error?.code == 4L
     }
+
+    private fun currentTimeMillis(): Long =
+        (NSDate().timeIntervalSince1970 * 1000.0).toLong()
 
     private fun readFileHandleChunk(fileHandle: NSFileHandle, length: Int): NSData {
         memScoped {
@@ -269,23 +274,73 @@ class IosFileSystem : FileSystem {
     }
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(AppDispatchers.io) {
-        runFsCatching {
+        try {
             validatePath(path, "path") // FIX: 入力検証
             val absolutePath = resolveAbsolutePath(path)
-            memScoped {
-                val error = alloc<ObjCObjectVar<NSError?>>()
-                val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
-                if (!success) {
-                    val nsError = error.value
-                    if (isNoSuchFileError(nsError)) {
-                        return@runFsCatching Unit
-                    }
-                    throw Exception(
-                        "Failed to delete recursively: ${nsError?.localizedDescription ?: "Unknown error"}"
-                    )
-                }
+            if (!deleteFileRecursivelyBounded(absolutePath) && fileManager.fileExistsAtPath(absolutePath)) {
+                throw IllegalStateException("Failed to delete recursively: $absolutePath")
             }
-            Unit
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun deleteFileRecursivelyBounded(root: String): Boolean {
+        val deadlineMillis = currentTimeMillis() + fileTreeDeleteMaxDurationMillis
+        val stack = mutableListOf(root to false)
+        var count = 0
+        while (stack.isNotEmpty()) {
+            coroutineContext.ensureActive()
+            if (currentTimeMillis() > deadlineMillis) {
+                throw IllegalStateException("Timed out while deleting file tree item: $root")
+            }
+            count += 1
+            if (count > fileTreeDeleteMaxItems) {
+                throw IllegalStateException("Too many files while deleting file tree item: $root")
+            }
+            val (currentPath, visitedChildren) = stack.removeAt(stack.lastIndex)
+            val (exists, isDirectory) = fileExistsAndIsDirectory(currentPath)
+            if (!exists) continue
+            if (isDirectory && !visitedChildren) {
+                stack.add(currentPath to true)
+                val children = fileManager.contentsOfDirectoryAtPath(currentPath, error = null)
+                    ?.filterIsInstance<String>()
+                    .orEmpty()
+                children.forEach { child ->
+                    stack.add(joinPathSegments(currentPath, child) to false)
+                }
+                continue
+            }
+            if (!deleteFileSystemItem(currentPath) && fileManager.fileExistsAtPath(currentPath)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun fileExistsAndIsDirectory(path: String): Pair<Boolean, Boolean> {
+        memScoped {
+            val isDirectory = alloc<BooleanVar>()
+            val exists = fileManager.fileExistsAtPath(path, isDirectory = isDirectory.ptr)
+            return exists to isDirectory.value
+        }
+    }
+
+    private fun deleteFileSystemItem(path: String): Boolean {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileManager.removeItemAtPath(path, error = error.ptr)
+            if (!success) {
+                val nsError = error.value
+                if (isNoSuchFileError(nsError)) {
+                    return true
+                }
+                return false
+            }
+            return true
         }
     }
 
