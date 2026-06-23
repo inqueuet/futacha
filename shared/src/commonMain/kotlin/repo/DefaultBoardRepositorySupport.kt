@@ -212,12 +212,13 @@ internal suspend fun beginDefaultBoardRepositoryClose(
 internal suspend fun resolveDefaultBoardRepositoryCatalogThreadTitle(
     threadId: String,
     logTag: String,
-    fetchThreadHead: suspend () -> String,
+    fetchInitialThreadHead: suspend () -> String,
+    fetchFallbackThreadHead: suspend () -> String,
     extractTitle: suspend (String) -> String?
 ): String? {
     return try {
-        val snippet = fetchThreadHead()
-        extractTitle(snippet)
+        val initialSnippet = fetchInitialThreadHead()
+        extractTitle(initialSnippet) ?: extractTitle(fetchFallbackThreadHead())
     } catch (e: CancellationException) {
         throw e
     } catch (e: Throwable) {

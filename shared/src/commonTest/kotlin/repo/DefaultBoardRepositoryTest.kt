@@ -185,6 +185,62 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
+    fun resolveCatalogDisplayTitle_usesSmallThreadHeadFirst() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = { maxLines ->
+                if (maxLines == 16) {
+                    "<blockquote>補完タイトル</blockquote>"
+                } else {
+                    "<blockquote>大きい取得</blockquote>"
+                }
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "123",
+            threadUrl = "$boardUrl/res/123.htm",
+            title = "10",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 10
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("補完タイトル", title)
+        assertEquals(listOf(16), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
+    fun resolveCatalogDisplayTitle_fetchesLargerThreadHeadOnlyWhenInitialHeadHasNoTitle() = runBlocking {
+        val boardUrl = "https://img.2chan.net/b/"
+        val api = FakeBoardApi(
+            threadHeadHtmlByMaxLines = { maxLines ->
+                if (maxLines == 16) {
+                    "<html></html>"
+                } else {
+                    "<blockquote>フォールバックタイトル</blockquote>"
+                }
+            }
+        )
+        val repository = DefaultBoardRepository(api = api, parser = FakeHtmlParser())
+        val item = CatalogItem(
+            id = "456",
+            threadUrl = "$boardUrl/res/456.htm",
+            title = "20",
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = 20
+        )
+
+        val title = repository.resolveCatalogDisplayTitle(boardUrl, item)
+
+        assertEquals("フォールバックタイトル", title)
+        assertEquals(listOf(16, 65), api.fetchThreadHeadMaxLines)
+    }
+
+    @Test
     fun voteDeleteOperations_forwardArgumentsAfterSingleCookieSetup() = runBlocking {
         val boardUrl = "https://dec.2chan.net/b/"
         val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
@@ -598,6 +654,7 @@ class DefaultBoardRepositoryTest {
 
 private class FakeBoardApi(
     private val threadHeadHtml: String = "<img src=\"/src/default.jpg\">",
+    private val threadHeadHtmlByMaxLines: ((Int) -> String)? = null,
     private val fetchCatalogSetupError: Exception? = null,
     private val fetchCatalogSetupDelayMillis: Long = 0L,
     private val replyResult: String? = null,
@@ -608,6 +665,7 @@ private class FakeBoardApi(
     var fetchCatalogSetupCalls = 0
     var fetchCatalogCalls = 0
     var fetchThreadHeadCalls = 0
+    val fetchThreadHeadMaxLines = mutableListOf<Int>()
     var fetchThreadCalls = 0
     val voteCalls = mutableListOf<VoteCall>()
     val requestDeletionCalls = mutableListOf<DeletionCall>()
@@ -635,7 +693,8 @@ private class FakeBoardApi(
 
     override suspend fun fetchThreadHead(board: String, threadId: String, maxLines: Int): String {
         fetchThreadHeadCalls += 1
-        return threadHeadHtml
+        fetchThreadHeadMaxLines += maxLines
+        return threadHeadHtmlByMaxLines?.invoke(maxLines) ?: threadHeadHtml
     }
 
     override suspend fun fetchThread(board: String, threadId: String): String {

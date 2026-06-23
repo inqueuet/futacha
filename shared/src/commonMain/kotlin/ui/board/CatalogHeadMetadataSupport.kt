@@ -23,9 +23,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.cancellation.CancellationException
 
-private const val CATALOG_HEAD_METADATA_TIMEOUT_MS = 3_000L
-private const val MAX_CATALOG_HEAD_METADATA_BATCH_SIZE = 24
-private const val MAX_CATALOG_HEAD_METADATA_CONCURRENCY = 4
+private const val CATALOG_HEAD_METADATA_TIMEOUT_MS = 1_800L
+private const val MAX_CATALOG_HEAD_METADATA_BATCH_SIZE = 12
+private const val MAX_CATALOG_HEAD_METADATA_CONCURRENCY = 2
 
 @Composable
 internal fun rememberCatalogHeadMetadataTitles(

@@ -131,6 +131,8 @@ class DefaultBoardRepository(
         private const val TAG = "DefaultBoardRepository"
         private const val OP_IMAGE_LINE_LIMIT = 65
         private const val OP_IMAGE_CONCURRENCY = 4
+        private const val CATALOG_TITLE_INITIAL_LINE_LIMIT = 16
+        private const val CATALOG_TITLE_CONCURRENCY = 2
         private const val DEFAULT_OP_IMAGE_CACHE_TTL_MILLIS = 15 * 60 * 1000L // 15 minutes
         private const val DEFAULT_OP_IMAGE_MISS_CACHE_TTL_MILLIS = 30_000L // 30 seconds
         private const val DEFAULT_OP_IMAGE_CACHE_MAX_ENTRIES = 512
@@ -139,6 +141,7 @@ class DefaultBoardRepository(
     }
 
     private val opImageSemaphore = Semaphore(OP_IMAGE_CONCURRENCY)
+    private val catalogTitleSemaphore = Semaphore(CATALOG_TITLE_CONCURRENCY)
 
     /**
      * Ensures cookies are initialized for the given board.
@@ -239,7 +242,7 @@ class DefaultBoardRepository(
         getCachedCatalogTitle(key)?.let { return it.title ?: item.title }
 
         val resolvedTitle = withTimeoutOrNull(SEMAPHORE_TIMEOUT_MILLIS) {
-            opImageSemaphore.withPermit {
+            catalogTitleSemaphore.withPermit {
                 withRetryOnAuthFailure(board) {
                     resolveCatalogThreadTitle(board, item.id)
                 }
@@ -493,7 +496,12 @@ class DefaultBoardRepository(
         return resolveDefaultBoardRepositoryCatalogThreadTitle(
             threadId = threadId,
             logTag = TAG,
-            fetchThreadHead = {
+            fetchInitialThreadHead = {
+                withContext(AppDispatchers.io) {
+                    api.fetchThreadHead(board, threadId, CATALOG_TITLE_INITIAL_LINE_LIMIT)
+                }
+            },
+            fetchFallbackThreadHead = {
                 withContext(AppDispatchers.io) {
                     api.fetchThreadHead(board, threadId, OP_IMAGE_LINE_LIMIT)
                 }
