@@ -229,14 +229,17 @@ Relevant code:
 
 Current behavior:
 - buildVisibleCatalogItems() deduplicates, transforms by mode, prioritizes watch matches, filters NG words, and filters query.
-- Query and NG filtering lowercase item fields during each full pass.
+- When search/NG/watch matching is needed, buildVisibleCatalogItems() creates per-item normalized title/id/threadUrl once for that transform and reuses it across watch priority, NG filtering, and query filtering.
+- If normal catalog mode has no watch words, NG words, or query, it skips normalized text creation and returns the deduplicated items.
 
 Risk:
-- Large catalogs plus search/NG/watch word changes can repeatedly allocate lowercased strings and lists.
+- Large catalogs plus search/NG/watch word changes still require a full pass over the visible source list.
+- Normalized strings are scoped to one transform; there is no long-lived cache across repeated query edits.
 
 Kaizen:
-- Cache normalized title/id/threadUrl per CatalogItem identity/revision.
-- Cache NG/watch match results for the active word sets.
+- Keep normalized title/id/threadUrl sharing within each transform.
+- Consider a small identity/revision cache only if repeated query edits still show allocation pressure.
+- Cache NG/watch match results for active word sets only if profiling shows the current single-pass sharing is insufficient.
 - Avoid full scan for too-short search queries if product behavior allows it.
 - Do not add catalog transform runtime logs. Cover allocation-sensitive paths with tests and bounded input caps.
 
