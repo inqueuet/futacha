@@ -203,6 +203,105 @@ class WatchSnapshotBuilderTest {
     }
 
     @Test
+    fun withReadAloudStatusUpdate_appliesStatusToMatchingThreadOnly() {
+        val snapshot = watchSnapshot(
+            threads = listOf(
+                watchThread(threadId = "100"),
+                watchThread(threadId = "200")
+            )
+        )
+
+        val updated = snapshot.withReadAloudStatusUpdate(
+            update = WatchReadAloudStatusUpdate(
+                status = WatchReadAloudStatus(
+                    boardId = "b",
+                    boardUrl = "https://may.2chan.net/b/",
+                    threadId = "100",
+                    state = WatchReadAloudPlaybackState.Speaking,
+                    postId = "42",
+                    currentIndex = 3,
+                    totalPosts = 10,
+                    updatedAtMillis = 1_000L
+                ),
+                updatedAtMillis = 1_000L
+            ),
+            nowMillis = 1_001L
+        )
+
+        assertEquals(WatchReadAloudPlaybackState.Speaking, updated.threads[0].readAloudStatus?.state)
+        assertEquals(null, updated.threads[1].readAloudStatus)
+    }
+
+    @Test
+    fun withReadAloudStatusUpdate_clearsStatusWhenUpdateIsNull() {
+        val snapshot = watchSnapshot(
+            threads = listOf(
+                watchThread(
+                    threadId = "100",
+                    readAloudStatus = WatchReadAloudStatus(
+                        boardId = "b",
+                        boardUrl = "https://may.2chan.net/b/",
+                        threadId = "100",
+                        state = WatchReadAloudPlaybackState.Paused,
+                        postId = "42",
+                        currentIndex = 3,
+                        totalPosts = 10,
+                        updatedAtMillis = 1_000L
+                    )
+                )
+            )
+        )
+
+        val updated = snapshot.withReadAloudStatusUpdate(
+            update = WatchReadAloudStatusUpdate(
+                status = null,
+                updatedAtMillis = 2_000L
+            ),
+            nowMillis = 2_001L
+        )
+
+        assertEquals(null, updated.threads.single().readAloudStatus)
+    }
+
+    @Test
+    fun withReadAloudStatusUpdate_doesNotOverwriteNewerStatusWithOlderUpdate() {
+        val currentStatus = WatchReadAloudStatus(
+            boardId = "b",
+            boardUrl = "https://may.2chan.net/b/",
+            threadId = "100",
+            state = WatchReadAloudPlaybackState.Paused,
+            postId = "50",
+            currentIndex = 5,
+            totalPosts = 10,
+            updatedAtMillis = 3_000L
+        )
+        val snapshot = watchSnapshot(
+            threads = listOf(
+                watchThread(threadId = "100", readAloudStatus = currentStatus)
+            )
+        )
+
+        val updated = snapshot.withReadAloudStatusUpdate(
+            update = WatchReadAloudStatusUpdate(
+                status = WatchReadAloudStatus(
+                    boardId = "b",
+                    boardUrl = "https://may.2chan.net/b/",
+                    threadId = "100",
+                    state = WatchReadAloudPlaybackState.Speaking,
+                    postId = "42",
+                    currentIndex = 3,
+                    totalPosts = 10,
+                    updatedAtMillis = 2_000L
+                ),
+                updatedAtMillis = 2_000L
+            ),
+            nowMillis = 3_001L
+        )
+
+        assertEquals(currentStatus, updated.threads.single().readAloudStatus)
+    }
+
+    @Test
     fun build_capsBoardsWatchWordsAndSerializedPayloadSize() {
         val boards = (1..100).map { index ->
             board(id = "b$index", name = "板$index", pinned = index % 10 == 0)
@@ -293,5 +392,35 @@ class WatchSnapshotBuilderTest {
         imageUrl = null,
         thumbnailUrl = null,
         isDeleted = isDeleted
+    )
+
+    private fun watchSnapshot(
+        threads: List<WatchThreadSummary>
+    ): WatchSnapshot = WatchSnapshot(
+        generatedAtMillis = 1L,
+        boards = emptyList(),
+        threads = threads,
+        watchWords = emptyList(),
+        unreadTotal = 0,
+        watchMatchTotal = 0
+    )
+
+    private fun watchThread(
+        threadId: String,
+        readAloudStatus: WatchReadAloudStatus? = null
+    ): WatchThreadSummary = WatchThreadSummary(
+        threadId = threadId,
+        boardId = "b",
+        boardName = "b",
+        boardUrl = "https://may.2chan.net/b/",
+        title = "title",
+        thumbnailUrl = null,
+        replyCount = 0,
+        previousReplyCount = null,
+        newReplyCount = 0,
+        lastVisitedEpochMillis = 1L,
+        isWatchWordMatch = false,
+        previewPosts = emptyList(),
+        readAloudStatus = readAloudStatus
     )
 }

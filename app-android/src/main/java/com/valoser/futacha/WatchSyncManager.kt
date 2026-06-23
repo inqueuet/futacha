@@ -19,13 +19,17 @@ import com.valoser.futacha.shared.service.HistoryRefresher
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_KEY
+import com.valoser.futacha.shared.watch.WATCH_READ_ALOUD_STATUS_PATH
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_ACK_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
+import com.valoser.futacha.shared.watch.WATCH_UPDATED_AT_KEY
 import com.valoser.futacha.shared.watch.WatchCommand
 import com.valoser.futacha.shared.watch.WatchCommandType
 import com.valoser.futacha.shared.watch.WatchReadAloudStatus
 import com.valoser.futacha.shared.watch.WatchReadAloudStatusStore
+import com.valoser.futacha.shared.watch.WatchReadAloudStatusUpdate
 import com.valoser.futacha.shared.watch.WatchSnapshot
 import com.valoser.futacha.shared.watch.WatchSnapshotBuilder
 import com.valoser.futacha.shared.watch.WatchThreadKey
@@ -80,6 +84,8 @@ class WatchSyncManager(
     private val handledCommandIds = LinkedHashSet<String>()
     private val watchRefreshRequestMutex = Mutex()
     private val previewMetadataSuppressedUntilElapsedMillis = AtomicLong(0L)
+    private val lastReadAloudStatusSentElapsedMillis = AtomicLong(0L)
+    private val lastReadAloudStatusSent = AtomicReference<WatchReadAloudStatus?>(null)
     private var isSnapshotRequestInFlight = false
     private var shouldSendSnapshotAfterCurrentRequest = false
     private var pendingSnapshotRequestIncludesPreview = false
@@ -105,14 +111,12 @@ class WatchSyncManager(
                             previous.fingerprint == next.fingerprint
                         }
                         .map { it.history },
-                    stateStore.watchWords,
-                    WatchReadAloudStatusStore.status
-                ) { boards, history, watchWords, readAloudStatus ->
+                    stateStore.watchWords
+                ) { boards, history, watchWords ->
                     WatchSnapshotInputs(
                         boards = boards,
                         history = history,
-                        watchWords = watchWords,
-                        readAloudStatus = readAloudStatus
+                        watchWords = watchWords
                     )
                 }
                     .debounce(WATCH_SNAPSHOT_DEBOUNCE_MILLIS)
@@ -135,7 +139,7 @@ class WatchSyncManager(
                                     boards = inputs.boards,
                                     history = inputs.history,
                                     watchWords = inputs.watchWords,
-                                    readAloudStatus = inputs.readAloudStatus
+                                    readAloudStatus = WatchReadAloudStatusStore.status.value
                                 )
                             )
                         } catch (error: CancellationException) {
@@ -150,6 +154,33 @@ class WatchSyncManager(
             } finally {
                 isStarted.set(false)
             }
+        }
+        scope.launch {
+            var hasObservedInitialStatus = false
+            WatchReadAloudStatusStore.status
+                .debounce(WATCH_READ_ALOUD_STATUS_DEBOUNCE_MILLIS)
+                .distinctUntilChanged()
+                .collect { status ->
+                    if (!hasObservedInitialStatus) {
+                        hasObservedInitialStatus = true
+                        if (status == null) return@collect
+                    }
+                    val nowElapsedMillis = SystemClock.elapsedRealtime()
+                    if (!shouldSendWatchReadAloudStatusUpdate(
+                            status = status,
+                            lastSentStatus = lastReadAloudStatusSent.get(),
+                            lastSentElapsedMillis = lastReadAloudStatusSentElapsedMillis.get(),
+                            nowElapsedMillis = nowElapsedMillis,
+                            minIntervalMillis = WATCH_READ_ALOUD_STATUS_MIN_INTERVAL_MILLIS
+                        )
+                    ) {
+                        return@collect
+                    }
+                    if (sendReadAloudStatusUpdate(status)) {
+                        lastReadAloudStatusSentElapsedMillis.set(nowElapsedMillis)
+                        lastReadAloudStatusSent.set(status)
+                    }
+                }
         }
     }
 
@@ -548,6 +579,56 @@ class WatchSyncManager(
         return sent
     }
 
+    private suspend fun sendReadAloudStatusUpdate(status: WatchReadAloudStatus?): Boolean {
+        val update = WatchReadAloudStatusUpdate(
+            status = status,
+            updatedAtMillis = System.currentTimeMillis()
+        )
+        val encoded = json.encodeToString(WatchReadAloudStatusUpdate.serializer(), update)
+        if (encoded.encodeToByteArray().size > WATCH_READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES) {
+            return false
+        }
+        val request = PutDataMapRequest.create(WATCH_READ_ALOUD_STATUS_PATH).apply {
+            dataMap.putString(WATCH_READ_ALOUD_STATUS_KEY, encoded)
+            dataMap.putLong(WATCH_UPDATED_AT_KEY, update.updatedAtMillis)
+        }.asPutDataRequest().setUrgent()
+
+        val sentDataItem = (Wearable.getDataClient(context.applicationContext)
+            .putDataItem(request)
+            .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS) != null)
+        val sentMessage = sendReadAloudStatusMessage(encoded)
+        return sentDataItem || sentMessage
+    }
+
+    private suspend fun sendReadAloudStatusMessage(encoded: String): Boolean {
+        val payload = DataMap().apply {
+            putString(WATCH_READ_ALOUD_STATUS_KEY, encoded)
+        }.toByteArray()
+        if (payload.size > WATCH_READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES) {
+            return false
+        }
+        val appContext = context.applicationContext
+        val connectedNodes = Wearable.getNodeClient(appContext)
+            .connectedNodes
+            .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS)
+            .orEmpty()
+        val nodes = connectedNodes
+            .filter { it.isNearby }
+            .ifEmpty { connectedNodes }
+        if (nodes.isEmpty()) return false
+
+        var sent = false
+        nodes.forEach { node ->
+            val messageId = Wearable.getMessageClient(appContext)
+                .sendMessage(node.id, WATCH_READ_ALOUD_STATUS_PATH, payload)
+                .awaitOrNull(WATCH_DATA_LAYER_SEND_TIMEOUT_MILLIS)
+            if (messageId != null) {
+                sent = true
+            }
+        }
+        return sent
+    }
+
     private suspend fun registerPendingSnapshotAck(ackId: String, snapshot: WatchSnapshot) {
         pendingSnapshotAckMutex.withLock {
             pendingSnapshotAcks[ackId] = snapshot
@@ -617,8 +698,7 @@ class WatchSyncManager(
     private data class WatchSnapshotInputs(
         val boards: List<BoardSummary>,
         val history: List<ThreadHistoryEntry>,
-        val watchWords: List<String>,
-        val readAloudStatus: WatchReadAloudStatus?
+        val watchWords: List<String>
     )
 
     private data class WatchHistorySnapshotInput(
@@ -671,6 +751,9 @@ class WatchSyncManager(
         private const val WATCH_PENDING_SNAPSHOT_ACK_MAX_COUNT = 8
         private const val WATCH_HANDLED_COMMAND_ID_MAX_COUNT = 128
         private const val WATCH_SNAPSHOT_DEBOUNCE_MILLIS = 1_000L
+        private const val WATCH_READ_ALOUD_STATUS_DEBOUNCE_MILLIS = 500L
+        private const val WATCH_READ_ALOUD_STATUS_MIN_INTERVAL_MILLIS = 5_000L
+        private const val WATCH_READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES = 4 * 1024
         private const val WATCH_SNAPSHOT_RETRY_BASE_DELAY_MILLIS = 1_000L
         private const val WATCH_SNAPSHOT_RETRY_MAX_DELAY_MILLIS = 60_000L
         private const val WATCH_SNAPSHOT_RETRY_MAX_SHIFT = 6

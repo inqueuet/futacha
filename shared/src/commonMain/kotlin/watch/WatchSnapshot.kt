@@ -65,6 +65,12 @@ data class WatchReadAloudStatus(
 )
 
 @Serializable
+data class WatchReadAloudStatusUpdate(
+    val status: WatchReadAloudStatus?,
+    val updatedAtMillis: Long
+)
+
+@Serializable
 enum class WatchReadAloudPlaybackState {
     Speaking,
     Paused

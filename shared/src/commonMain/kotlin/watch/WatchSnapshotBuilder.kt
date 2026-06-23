@@ -164,13 +164,13 @@ private fun String.matchesAnyWatchWord(normalizedWatchWords: List<String>): Bool
     return normalizedWatchWords.any { target.contains(it) }
 }
 
-private fun WatchReadAloudStatus.matches(key: WatchThreadKey): Boolean {
+internal fun WatchReadAloudStatus.matches(key: WatchThreadKey): Boolean {
     return boardId == key.boardId &&
         boardUrl == key.boardUrl &&
         threadId == key.threadId
 }
 
-private fun WatchReadAloudStatus.isFreshAt(nowMillis: Long): Boolean {
+internal fun WatchReadAloudStatus.isFreshAt(nowMillis: Long): Boolean {
     return updatedAtMillis > 0 &&
         nowMillis - updatedAtMillis <= WATCH_READ_ALOUD_STATUS_MAX_AGE_MILLIS
 }

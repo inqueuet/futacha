@@ -8,8 +8,10 @@ import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
 import com.valoser.futacha.shared.watch.WatchSnapshot
+import com.valoser.futacha.shared.watch.WatchReadAloudStatusUpdate
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
 import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
+import com.valoser.futacha.shared.watch.withReadAloudStatusUpdate
 import com.valoser.futacha.wear.live.ReadAloudLiveUpdateNotifier
 import com.valoser.futacha.wear.tile.FutachaTileService
 import androidx.wear.tiles.TileService
@@ -30,6 +32,7 @@ object WatchSnapshotStore {
     private const val PREFS_NAME = "futacha_watch_snapshot"
     private const val SNAPSHOT_JSON_KEY = "snapshot_json"
     private const val SNAPSHOT_PAYLOAD_MAX_BYTES = 128 * 1024
+    private const val READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES = 4 * 1024
     private const val DATA_LAYER_LOAD_TIMEOUT_MILLIS = 3_000L
 
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -83,6 +86,18 @@ object WatchSnapshotStore {
         }
     }
 
+    fun saveReadAloudStatusUpdateEncodedAsync(
+        context: Context,
+        encoded: String
+    ) {
+        if (!isValidReadAloudStatusPayload(encoded)) return
+        val appContext = context.applicationContext
+        storeScope.launch {
+            val update = decodeReadAloudStatusUpdate(encoded) ?: return@launch
+            applyReadAloudStatusUpdate(appContext, update)
+        }
+    }
+
     suspend fun save(context: Context, snapshot: WatchSnapshot): Boolean {
         val encoded = withContext(Dispatchers.Default) {
             json.encodeToString(WatchSnapshot.serializer(), snapshot)
@@ -110,11 +125,32 @@ object WatchSnapshotStore {
         }
     }
 
+    suspend fun applyReadAloudStatusUpdate(
+        context: Context,
+        update: WatchReadAloudStatusUpdate
+    ): Boolean {
+        val baseSnapshot = snapshotState.value ?: load(context) ?: return false
+        val updatedSnapshot = baseSnapshot.withReadAloudStatusUpdate(
+            update = update,
+            nowMillis = System.currentTimeMillis()
+        )
+        return save(context, updatedSnapshot)
+    }
+
     suspend fun decodeSnapshot(encoded: String): WatchSnapshot? {
         if (!isValidSnapshotPayload(encoded)) return null
         return withContext(Dispatchers.Default) {
             runCatching {
                 json.decodeFromString(WatchSnapshot.serializer(), encoded)
+            }.getOrNull()
+        }
+    }
+
+    suspend fun decodeReadAloudStatusUpdate(encoded: String): WatchReadAloudStatusUpdate? {
+        if (!isValidReadAloudStatusPayload(encoded)) return null
+        return withContext(Dispatchers.Default) {
+            runCatching {
+                json.decodeFromString(WatchReadAloudStatusUpdate.serializer(), encoded)
             }.getOrNull()
         }
     }
@@ -173,6 +209,11 @@ object WatchSnapshotStore {
 
     private fun isValidSnapshotPayload(encoded: String): Boolean {
         return encoded.isNotBlank() && encoded.encodeToByteArray().size <= SNAPSHOT_PAYLOAD_MAX_BYTES
+    }
+
+    private fun isValidReadAloudStatusPayload(encoded: String): Boolean {
+        return encoded.isNotBlank() &&
+            encoded.encodeToByteArray().size <= READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES
     }
 
     private const val TAG = "WatchSnapshotStore"
