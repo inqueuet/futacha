@@ -29,11 +29,11 @@ class MainActivity : ComponentActivity() {
         val app = application as? FutachaApplication
         enableEdgeToEdge()
         setContent {
-            val stateStore = remember(app) {
-                app?.appStateStore ?: createAppStateStore(applicationContext)
-            }
             val fileSystem = remember(app) {
                 app?.fileSystem ?: createFileSystem(applicationContext)
+            }
+            val stateStore = remember(app, fileSystem) {
+                app?.appStateStore ?: createAppStateStore(applicationContext, fileSystem)
             }
             val cookieStorage = remember(app, fileSystem) {
                 app?.cookieStorage ?: PersistentCookieStorage(fileSystem)

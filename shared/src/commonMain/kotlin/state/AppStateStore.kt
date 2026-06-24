@@ -24,6 +24,7 @@ import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
 import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
@@ -35,6 +36,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -52,6 +54,7 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalTime::class)
 class AppStateStore internal constructor(
     private val storage: PlatformStateStorage,
+    private val historyFileStore: AppStateHistoryFileStore? = null,
     private val json: Json = Json {
         ignoreUnknownKeys = true
     }
@@ -93,6 +96,7 @@ class AppStateStore internal constructor(
     )
     private val historyCoordinator = AppStateHistoryCoordinator(
         storage = storage,
+        historyFileStore = historyFileStore,
         json = json,
         tag = TAG,
         rethrowIfCancellation = ::rethrowIfCancellation
@@ -147,16 +151,30 @@ class AppStateStore internal constructor(
         tag = TAG
     )
 
-    val history: Flow<List<ThreadHistoryEntry>> = storage.historyJson
-        .distinctUntilChanged()
-        .map { stored ->
-            if (stored == null) {
-                emptyList()
-            } else {
-                withContext(AppDispatchers.parsing) {
-                    decodeAppStateHistory(stored, json, TAG)
+    val history: Flow<List<ThreadHistoryEntry>> =
+        if (historyFileStore != null) {
+            merge(
+                historyFileStore.changes.map { Unit },
+                storage.historyJson.map { Unit }
+            )
+                .map {
+                    historyFileStore.readHistorySnapshot {
+                        storage.historyJson.first()
+                    }
                 }
-            }
+                .distinctUntilChanged()
+        } else {
+            storage.historyJson
+                .distinctUntilChanged()
+                .map { stored ->
+                    if (stored == null) {
+                        emptyList()
+                    } else {
+                        withContext(AppDispatchers.parsing) {
+                            decodeAppStateHistory(stored, json, TAG)
+                        }
+                    }
+                }
         }
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
@@ -429,8 +447,18 @@ class AppStateStore internal constructor(
     }
 }
 
-fun createAppStateStore(platformContext: Any? = null): AppStateStore {
-    return AppStateStore(createPlatformStateStorage(platformContext))
+fun createAppStateStore(platformContext: Any? = null, fileSystem: FileSystem? = null): AppStateStore {
+    val storage = createPlatformStateStorage(platformContext)
+    val historyFileStore = fileSystem?.let {
+        AppStateHistoryFileStore(
+            fileSystem = it,
+            json = Json {
+                ignoreUnknownKeys = true
+            },
+            tag = "AppStateStore"
+        )
+    }
+    return AppStateStore(storage, historyFileStore)
 }
 
 internal interface PlatformStateStorage {

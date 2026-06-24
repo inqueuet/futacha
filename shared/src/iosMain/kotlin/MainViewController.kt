@@ -59,8 +59,8 @@ import kotlin.coroutines.cancellation.CancellationException
 
 private object IosAppGraph {
     private val resourceLock = NSLock()
-    val stateStore by lazy { createAppStateStore() }
     val fileSystem by lazy { createFileSystem() }
+    val stateStore by lazy { createAppStateStore(fileSystem = fileSystem) }
     val autoSavedThreadRepository by lazy {
         SavedThreadRepository(fileSystem, baseDirectory = AUTO_SAVE_DIRECTORY)
     }

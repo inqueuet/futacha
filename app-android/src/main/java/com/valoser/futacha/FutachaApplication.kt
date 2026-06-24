@@ -82,8 +82,8 @@ class FutachaApplication : Application() {
             return
         }
         initializeVersionCheckerContext(applicationContext)
-        appStateStoreValue = createAppStateStore(applicationContext)
         fileSystemValue = createFileSystem(applicationContext)
+        appStateStoreValue = createAppStateStore(applicationContext, fileSystem)
 
         // FIX: 起動時ANR防止 - 一時ファイルクリーンアップはバックグラウンドで実行
         applicationScope.launch {

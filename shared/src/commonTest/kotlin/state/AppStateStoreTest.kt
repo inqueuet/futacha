@@ -3,8 +3,10 @@ package com.valoser.futacha.shared.state
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.repository.InMemoryFileSystem
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.PreferredFileManager
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.flow.first
@@ -17,6 +19,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AppStateStoreTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -122,6 +125,107 @@ class AppStateStoreTest {
         assertEquals(initial, store.history.first())
         assertNull(store.lastStorageError.value?.takeIf { it.operation != "setHistory" })
         assertEquals("setHistory", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun historyFileStore_migratesLegacyJsonIntoSplitFiles() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val legacyHistory = listOf(historyEntry(threadId = "111"))
+        storage.updateHistoryJson(encodeAppStateHistory(legacyHistory, json))
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        assertEquals(legacyHistory, store.history.first())
+        assertTrue(fileSystem.exists("private/history_store/manifest.json"))
+        assertEquals(1, fileSystem.listFiles("private/history_store/entries").size)
+
+        storage.updateHistoryJson(encodeAppStateHistory(emptyList(), json))
+        assertEquals(legacyHistory, store.history.first())
+    }
+
+    @Test
+    fun setHistory_withHistoryFileStoreWritesSplitFilesWithoutUpdatingLegacyJson() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = InMemoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+
+        assertNull(storage.historyJson.first())
+        assertTrue(fileSystem.exists("private/history_store/manifest.json"))
+        assertEquals(1, fileSystem.listFiles("private/history_store/entries").size)
+    }
+
+    @Test
+    fun setHistory_withHistoryFileStoreRollsBackWhenManifestWriteFails() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = ManifestWriteFailingFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        val initial = listOf(historyEntry(threadId = "111"))
+        val updated = listOf(historyEntry(threadId = "222"))
+        store.setHistory(initial)
+
+        fileSystem.failManifestWrites = true
+        assertFailsWith<IllegalStateException> {
+            store.setHistory(updated)
+        }
+
+        assertEquals(initial, store.history.first())
+        assertEquals("setHistory", store.lastStorageError.value?.operation)
+    }
+
+    @Test
+    fun upsertHistoryEntry_withHistoryFileStoreWritesOnlyChangedEntryWhenOrderIsUnchanged() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = CountingHistoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        val first = historyEntry(threadId = "111")
+        val second = historyEntry(threadId = "222")
+        store.setHistory(listOf(first, second))
+        fileSystem.entryWriteCount = 0
+        fileSystem.manifestWriteCount = 0
+
+        store.upsertHistoryEntry(first.copy(title = "updated"))
+
+        assertEquals(listOf("111", "222"), store.history.first().map { it.threadId })
+        assertEquals(1, fileSystem.entryWriteCount)
+        assertEquals(0, fileSystem.manifestWriteCount)
+    }
+
+    @Test
+    fun prependHistoryEntry_withHistoryFileStoreUpdatesManifestWhenOrderChanges() = runBlocking {
+        val storage = FakePlatformStateStorage()
+        val fileSystem = CountingHistoryFileSystem()
+        val store = AppStateStore(
+            storage = storage,
+            historyFileStore = AppStateHistoryFileStore(fileSystem, json, "AppStateStoreTest"),
+            json = json
+        )
+        store.setHistory(listOf(historyEntry(threadId = "111")))
+        fileSystem.entryWriteCount = 0
+        fileSystem.manifestWriteCount = 0
+
+        store.prependOrReplaceHistoryEntry(historyEntry(threadId = "222"))
+
+        assertEquals(listOf("222", "111"), store.history.first().map { it.threadId })
+        assertEquals(1, fileSystem.entryWriteCount)
+        assertEquals(1, fileSystem.manifestWriteCount)
     }
 
     @Test
@@ -501,5 +605,34 @@ internal class FakePlatformStateStorage : BaseInMemoryPlatformStateStorage() {
     override suspend fun updatePreferredFileManager(packageName: String, label: String) {
         if (failPreferredFileManagerUpdate) error("preferred file manager write failed")
         super.updatePreferredFileManager(packageName, label)
+    }
+}
+
+private class ManifestWriteFailingFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    var failManifestWrites = false
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return if (failManifestWrites && path.endsWith("private/history_store/manifest.json")) {
+            Result.failure(IllegalStateException("manifest write failed"))
+        } else {
+            delegate.writeString(path, content)
+        }
+    }
+}
+
+private class CountingHistoryFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    var entryWriteCount = 0
+    var manifestWriteCount = 0
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        when {
+            path.startsWith("private/history_store/entries/") -> entryWriteCount += 1
+            path == "private/history_store/manifest.json" -> manifestWriteCount += 1
+        }
+        return delegate.writeString(path, content)
     }
 }

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 
 internal class AppStateHistoryCoordinator(
     private val storage: PlatformStateStorage,
+    private val historyFileStore: AppStateHistoryFileStore?,
     private val json: Json,
     private val tag: String,
     private val rethrowIfCancellation: (Throwable) -> Unit
@@ -62,11 +63,17 @@ internal class AppStateHistoryCoordinator(
             historyMutex = historyMutex,
             currentCachedHistory = { cachedHistory },
             readStorageHistory = {
-                val raw = storage.historyJson.first()
-                if (raw == null) {
-                    emptyList()
+                if (historyFileStore != null) {
+                    historyFileStore.readHistorySnapshot {
+                        storage.historyJson.first()
+                    }
                 } else {
-                    decodeAppStateHistory(raw, json, tag)
+                    val raw = storage.historyJson.first()
+                    if (raw == null) {
+                        emptyList()
+                    } else {
+                        decodeAppStateHistory(raw, json, tag)
+                    }
                 }
             },
             setCachedHistory = { cachedHistory = it },
@@ -145,13 +152,17 @@ internal class AppStateHistoryCoordinator(
             revision = revision,
             history = history,
             writeHistoryJson = { _, updatedHistory ->
-                writeAppStateHistoryJson(
-                    history = updatedHistory,
-                    encodeHistoryJson = { targetHistory ->
-                        encodeAppStateHistoryMeasured(targetHistory, json)
-                    },
-                    updateHistoryJson = storage::updateHistoryJson
-                )
+                if (historyFileStore != null) {
+                    historyFileStore.persistHistorySnapshot(updatedHistory)
+                } else {
+                    writeAppStateHistoryJson(
+                        history = updatedHistory,
+                        encodeHistoryJson = { targetHistory ->
+                            encodeAppStateHistoryMeasured(targetHistory, json)
+                        },
+                        updateHistoryJson = storage::updateHistoryJson
+                    )
+                }
             },
             readLatestHistoryContinuation = { targetRevision ->
                 historyMutex.withLock {
