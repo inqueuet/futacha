@@ -19,7 +19,8 @@ internal data class ThreadLoadRunnerConfig(
     val archiveFallbackTimeoutMillis: Long,
     val offlineFallbackTimeoutMillis: Long,
     val localStaleLoadTimeoutMillis: Long,
-    val remoteLoadTimeoutMillis: Long
+    val remoteLoadTimeoutMillis: Long,
+    val preferOfflineFallbackAfterLocalStale: Boolean
 )
 
 internal fun buildThreadLoadRunnerConfig(
@@ -30,7 +31,8 @@ internal fun buildThreadLoadRunnerConfig(
     archiveFallbackTimeoutMillis: Long,
     offlineFallbackTimeoutMillis: Long,
     localStaleLoadTimeoutMillis: Long = THREAD_LOCAL_STALE_LOAD_TIMEOUT_MS,
-    remoteLoadTimeoutMillis: Long = THREAD_REMOTE_LOAD_TIMEOUT_MS
+    remoteLoadTimeoutMillis: Long = THREAD_REMOTE_LOAD_TIMEOUT_MS,
+    preferOfflineFallbackAfterLocalStale: Boolean = false
 ): ThreadLoadRunnerConfig {
     return ThreadLoadRunnerConfig(
         threadId = threadId,
@@ -40,7 +42,8 @@ internal fun buildThreadLoadRunnerConfig(
         archiveFallbackTimeoutMillis = archiveFallbackTimeoutMillis,
         offlineFallbackTimeoutMillis = offlineFallbackTimeoutMillis,
         localStaleLoadTimeoutMillis = localStaleLoadTimeoutMillis.coerceAtLeast(1L),
-        remoteLoadTimeoutMillis = remoteLoadTimeoutMillis.coerceAtLeast(1_000L)
+        remoteLoadTimeoutMillis = remoteLoadTimeoutMillis.coerceAtLeast(1_000L),
+        preferOfflineFallbackAfterLocalStale = preferOfflineFallbackAfterLocalStale
     )
 }
 
@@ -189,7 +192,11 @@ internal suspend fun performThreadLoadWithOfflineFallback(
             error = e,
             allowOfflineFallback = config.allowOfflineFallback
         )
-        val archiveOutcome = if (fallbackState.shouldTryArchiveFallback) {
+        val shouldPreferOffline = shouldPreferOfflineFallbackAfterLocalStale(
+            config = config,
+            fallbackState = fallbackState
+        )
+        val archiveOutcome = if (!shouldPreferOffline && fallbackState.shouldTryArchiveFallback) {
             withTimeoutOrNull(config.archiveFallbackTimeoutMillis) {
                 callbacks.loadArchiveFallback()
             } ?: run {
@@ -205,11 +212,15 @@ internal suspend fun performThreadLoadWithOfflineFallback(
             ArchiveFallbackOutcome.NoMatch
         }
         return when (
-            val archiveDecision = resolveThreadLoadPostArchiveDecision(
-                primaryError = e,
-                fallbackState = fallbackState,
-                archiveOutcome = archiveOutcome
-            )
+            val archiveDecision = if (shouldPreferOffline) {
+                ThreadLoadPostArchiveDecision.TryOffline
+            } else {
+                resolveThreadLoadPostArchiveDecision(
+                    primaryError = e,
+                    fallbackState = fallbackState,
+                    archiveOutcome = archiveOutcome
+                )
+            }
         ) {
             is ThreadLoadPostArchiveDecision.UseArchive -> ThreadLoadExecutionResult(
                 page = archiveDecision.page,

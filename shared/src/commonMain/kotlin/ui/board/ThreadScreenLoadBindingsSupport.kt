@@ -108,6 +108,11 @@ internal fun buildThreadScreenLoadBindings(
                     config = loadRunnerConfig,
                     callbacks = loadRunnerCallbacks
                 )
+                val activeLoadRunnerConfig = if (localStaleResult != null) {
+                    loadRunnerConfig.copy(preferOfflineFallbackAfterLocalStale = true)
+                } else {
+                    loadRunnerConfig
+                }
                 if (localStaleResult != null && isActive) {
                     stateBindings.setResolvedThreadUrlOverride(localStaleResult.nextThreadUrlOverride)
                     stateBindings.setIsShowingOfflineCopy(true)
@@ -125,7 +130,7 @@ internal fun buildThreadScreenLoadBindings(
                     )
                 }
                 val loadResult = performThreadLoadWithOfflineFallback(
-                    config = loadRunnerConfig,
+                    config = activeLoadRunnerConfig,
                     callbacks = loadRunnerCallbacks
                 )
                 stateBindings.setResolvedThreadUrlOverride(loadResult.nextThreadUrlOverride)

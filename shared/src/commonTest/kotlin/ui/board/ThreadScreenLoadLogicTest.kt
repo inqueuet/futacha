@@ -117,6 +117,47 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun performThreadLoadWithOfflineFallback_skipsArchiveAfterLocalStalePage() = runBlocking {
+        val remoteFailure = NetworkException("HTTP error", statusCode = 404)
+        val page = ThreadPage(
+            threadId = "123",
+            boardTitle = "may/b",
+            expiresAtLabel = null,
+            deletedNotice = null,
+            posts = emptyList()
+        )
+        var archiveCalled = false
+
+        val result = performThreadLoadWithOfflineFallback(
+            config = buildThreadLoadRunnerConfig(
+                threadId = "123",
+                effectiveBoardUrl = "https://may.2chan.net/b",
+                threadUrlOverride = "https://may.2chan.net/b/res/123.htm",
+                allowOfflineFallback = true,
+                archiveFallbackTimeoutMillis = 100L,
+                offlineFallbackTimeoutMillis = 100L,
+                preferOfflineFallbackAfterLocalStale = true
+            ),
+            callbacks = ThreadLoadRunnerCallbacks(
+                loadRemoteByUrl = { throw remoteFailure },
+                loadRemoteByBoard = { _, _ -> error("unused") },
+                loadArchiveFallback = {
+                    archiveCalled = true
+                    ArchiveFallbackOutcome.Success(
+                        page = page.copy(boardTitle = "archive"),
+                        threadUrl = "https://may.2chan.net/b/res/123.htm"
+                    )
+                },
+                loadOfflineFallback = { page }
+            )
+        )
+
+        assertEquals(page, result.page)
+        assertTrue(result.usedOffline)
+        assertFalse(archiveCalled)
+    }
+
+    @Test
     fun loadThreadLocalStalePageIfAvailable_usesDedicatedOfflineCallback() = runBlocking {
         val page = ThreadPage(
             threadId = "123",

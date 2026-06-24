@@ -422,3 +422,11 @@ internal fun resolveThreadLoadFallbackState(
         shouldThrowWhenArchiveNotFound = !allowOfflineFallback
     )
 }
+
+internal fun shouldPreferOfflineFallbackAfterLocalStale(
+    config: ThreadLoadRunnerConfig,
+    fallbackState: ThreadLoadFallbackState
+): Boolean {
+    return config.preferOfflineFallbackAfterLocalStale &&
+        fallbackState.shouldTryOfflineFallback
+}
