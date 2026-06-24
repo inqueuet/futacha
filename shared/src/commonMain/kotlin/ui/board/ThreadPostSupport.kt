@@ -165,11 +165,41 @@ internal data class QuotePreviewState(
     val posterIdLabels: Map<String, PosterIdLabel>
 )
 
+internal const val QUOTE_PREVIEW_TARGET_PAGE_SIZE = 20
+
 internal fun resolveQuotePreviewTargets(
     targetPostIds: List<String>,
     postIndex: Map<String, Post>
 ): List<Post> {
     return targetPostIds.mapNotNull { postIndex[it] }
+}
+
+internal fun initialQuotePreviewVisibleLimit(
+    totalCount: Int,
+    pageSize: Int = QUOTE_PREVIEW_TARGET_PAGE_SIZE
+): Int {
+    return pageSize.coerceAtLeast(1).coerceAtMost(totalCount.coerceAtLeast(0))
+}
+
+internal fun nextQuotePreviewVisibleLimit(
+    currentLimit: Int,
+    totalCount: Int,
+    pageSize: Int = QUOTE_PREVIEW_TARGET_PAGE_SIZE
+): Int {
+    val safeTotal = totalCount.coerceAtLeast(0)
+    val safeCurrent = currentLimit.coerceIn(0, safeTotal)
+    return (safeCurrent + pageSize.coerceAtLeast(1)).coerceAtMost(safeTotal)
+}
+
+internal fun remainingQuotePreviewTargetCount(
+    totalCount: Int,
+    visibleLimit: Int
+): Int {
+    return (totalCount.coerceAtLeast(0) - visibleLimit.coerceAtLeast(0)).coerceAtLeast(0)
+}
+
+internal fun quotePreviewPostLazyKey(post: Post, index: Int): String {
+    return "quote-preview-post-${post.id}-$index"
 }
 
 internal fun resolveQuotePreviewState(

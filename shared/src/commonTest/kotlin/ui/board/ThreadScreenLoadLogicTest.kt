@@ -942,6 +942,35 @@ class ThreadScreenLoadLogicTest {
     }
 
     @Test
+    fun quotePreviewPagingShowsInitialPageAndAdditionalTargetsOnDemand() {
+        val totalCount = 45
+        val initialLimit = initialQuotePreviewVisibleLimit(totalCount)
+        val secondLimit = nextQuotePreviewVisibleLimit(initialLimit, totalCount)
+        val finalLimit = nextQuotePreviewVisibleLimit(secondLimit, totalCount)
+
+        assertEquals(20, initialLimit)
+        assertEquals(25, remainingQuotePreviewTargetCount(totalCount, initialLimit))
+        assertEquals(40, secondLimit)
+        assertEquals(5, remainingQuotePreviewTargetCount(totalCount, secondLimit))
+        assertEquals(45, finalLimit)
+        assertEquals(0, remainingQuotePreviewTargetCount(totalCount, finalLimit))
+    }
+
+    @Test
+    fun quotePreviewLazyKeysIncludeIndexForDuplicatePostIds() {
+        val duplicate = post(id = "10", messageHtml = "duplicate")
+
+        assertEquals(
+            "quote-preview-post-10-0",
+            quotePreviewPostLazyKey(duplicate, 0)
+        )
+        assertEquals(
+            "quote-preview-post-10-1",
+            quotePreviewPostLazyKey(duplicate, 1)
+        )
+    }
+
+    @Test
     fun nextAndPreviousThreadSearchResultIndex_wrapAround() {
         assertEquals(0, nextThreadSearchResultIndex(currentIndex = 2, matchCount = 3))
         assertEquals(2, previousThreadSearchResultIndex(currentIndex = 0, matchCount = 3))
