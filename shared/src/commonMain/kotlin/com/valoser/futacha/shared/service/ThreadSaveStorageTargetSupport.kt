@@ -50,22 +50,29 @@ internal fun buildThreadSaveStorageTarget(
 internal suspend fun prepareThreadSaveStorageTarget(
     fileSystem: FileSystem,
     target: ThreadSaveStorageTarget,
-    boardPath: String
+    boardPath: String,
+    clearExistingOutput: Boolean = true
 ) {
     if (target.saveLocation != null) {
-        fileSystem.delete(target.saveLocation, target.storageId).getOrNull()
+        if (clearExistingOutput) {
+            fileSystem.delete(target.saveLocation, target.storageId).getOrNull()
+        }
         fileSystem.createDirectory(target.saveLocation, target.storageId).getOrThrow()
         val boardMediaPath = target.relativeStoragePath(boardPath)
         fileSystem.createDirectory(target.saveLocation, "$boardMediaPath/src").getOrThrow()
         fileSystem.createDirectory(target.saveLocation, "$boardMediaPath/thumb").getOrThrow()
+        fileSystem.createDirectory(target.saveLocation, "$boardMediaPath/videos").getOrThrow()
     } else {
-        fileSystem.deleteRecursively(target.absoluteBaseDir).getOrNull()
+        if (clearExistingOutput) {
+            fileSystem.deleteRecursively(target.absoluteBaseDir).getOrNull()
+        }
         fileSystem.createDirectory(target.baseDirectory).getOrThrow()
         fileSystem.createDirectory(target.absoluteBaseDir).getOrThrow()
         val boardMediaRoot = target.absoluteStoragePath(boardPath)
         fileSystem.createDirectory(boardMediaRoot).getOrThrow()
         fileSystem.createDirectory("$boardMediaRoot/src").getOrThrow()
         fileSystem.createDirectory("$boardMediaRoot/thumb").getOrThrow()
+        fileSystem.createDirectory("$boardMediaRoot/videos").getOrThrow()
     }
 }
 

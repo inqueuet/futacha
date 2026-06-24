@@ -161,11 +161,29 @@ class SavedThreadRepository(
             val triedPaths = linkedSetOf<String>()
             var lastError: Throwable? = null
 
+            suspend fun tryLoadMetadataBackupAt(path: String): SavedThreadMetadata? {
+                if (!path.endsWith("/metadata.json")) return null
+                val backupPath = "$path.backup"
+                if (!triedPaths.add(backupPath)) return null
+                val backupJson = this@SavedThreadRepository.readStringAt(backupPath).getOrElse { error ->
+                    lastError = error
+                    return null
+                }
+                return runCatching {
+                    withContext(AppDispatchers.parsing) {
+                        json.decodeFromString<SavedThreadMetadata>(backupJson)
+                    }
+                }.getOrElse { error ->
+                    lastError = error
+                    null
+                }
+            }
+
             suspend fun tryLoadMetadataAt(path: String): SavedThreadMetadata? {
                 if (!triedPaths.add(path)) return null
                 val jsonString = this@SavedThreadRepository.readStringAt(path).getOrElse { error ->
                     lastError = error
-                    return null
+                    return tryLoadMetadataBackupAt(path)
                 }
                 val metadata = runCatching {
                     withContext(AppDispatchers.parsing) {
@@ -173,7 +191,7 @@ class SavedThreadRepository(
                     }
                 }.getOrElse { error ->
                     lastError = error
-                    return null
+                    return tryLoadMetadataBackupAt(path)
                 }
                 return metadata
             }

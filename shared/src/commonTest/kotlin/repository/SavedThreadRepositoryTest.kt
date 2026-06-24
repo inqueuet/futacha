@@ -121,6 +121,27 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
+    fun loadThreadMetadata_fallsBackToMetadataBackupWhenPrimaryIsCorrupted() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val storageId = buildThreadStorageId("b", "123")
+        val metadata = savedMetadata(threadId = "123", boardId = "b", storageId = storageId)
+
+        fileSystem.writeString(
+            "saved_threads/$storageId/metadata.json",
+            "{broken"
+        ).getOrThrow()
+        fileSystem.writeString(
+            "saved_threads/$storageId/metadata.json.backup",
+            json.encodeToString(metadata)
+        ).getOrThrow()
+
+        val loaded = repository.loadThreadMetadata("123", "b").getOrThrow()
+
+        assertEquals(metadata, loaded)
+    }
+
+    @Test
     fun loadIndex_usesBackupWhenPrimaryIsCorrupted() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")

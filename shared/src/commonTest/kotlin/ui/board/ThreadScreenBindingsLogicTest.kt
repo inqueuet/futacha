@@ -1006,14 +1006,14 @@ class ThreadScreenBindingsLogicTest {
 
         assertEquals(100_200L, lastAutoSaveTimestamp)
         assertEquals(buildThreadAutoSavePostsFingerprint(page.posts), lastAutoSavePosts)
-        assertEquals(listOf(savedThread.copy(status = SaveStatus.DOWNLOADING), savedThread), indexedThreads)
+        assertEquals(listOf(savedThread), indexedThreads)
         assertNull(autoSaveJob)
 
         nowMillis = 200_200L
         bindings.startAutoSave(page)
 
         assertEquals(1, autoSaveRunCount)
-        assertEquals(listOf(savedThread.copy(status = SaveStatus.DOWNLOADING), savedThread), indexedThreads)
+        assertEquals(listOf(savedThread), indexedThreads)
     }
 
     @Test

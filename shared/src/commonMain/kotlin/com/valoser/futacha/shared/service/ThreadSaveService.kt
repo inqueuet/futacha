@@ -1,11 +1,14 @@
 package com.valoser.futacha.shared.service
 
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SavePhase
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.SaveStatus
+import com.valoser.futacha.shared.model.SavedPost
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.SavedThreadMetadata
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
@@ -23,6 +26,7 @@ import kotlin.coroutines.coroutineContext
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlin.random.Random
 
@@ -39,6 +43,13 @@ data class ThreadSaveLimits(
     val maxSaveDurationMs: Long = ThreadSaveService.DEFAULT_MAX_SAVE_DURATION_MS,
     val maxParallelDownloads: Int = ThreadSaveService.DEFAULT_MAX_PARALLEL_DOWNLOADS,
     val mediaDownloadStartDelayMs: Long = 0L
+)
+
+data class ThreadSaveStorageOptions(
+    val storageIdOverride: String? = null,
+    val clearExistingOutput: Boolean = true,
+    val reuseExistingMedia: Boolean = false,
+    val pruneUnreferencedExistingMedia: Boolean = false
 )
 
 /**
@@ -105,6 +116,7 @@ class ThreadSaveService(
         writeMetadata: Boolean = baseDirectory == AUTO_SAVE_DIRECTORY,
         rawHtmlOptions: RawHtmlSaveOptions = RawHtmlSaveOptions(),
         limits: ThreadSaveLimits = ThreadSaveLimits(),
+        storageOptions: ThreadSaveStorageOptions = ThreadSaveStorageOptions(),
         writeInitialMetadataBeforeMedia: Boolean = false,
         onInitialSavedThread: suspend (SavedThread) -> Unit = {}
     ): Result<SavedThread> = withContext(AppDispatchers.io) {
@@ -115,12 +127,14 @@ class ThreadSaveService(
             mediaDownloadStartDelayMs = limits.mediaDownloadStartDelayMs.coerceAtLeast(0L)
         )
         val savedAtTimestamp = Clock.System.now().toEpochMilliseconds()
-        val storageId = buildThreadSaveGenerationStorageId(
-            boardId = boardId,
-            threadId = threadId,
-            savedAtEpochMillis = savedAtTimestamp,
-            nonce = Random.nextInt(0, Int.MAX_VALUE).toString(36)
-        )
+        val storageId = storageOptions.storageIdOverride
+            ?.takeIf { it.isNotBlank() }
+            ?: buildThreadSaveGenerationStorageId(
+                boardId = boardId,
+                threadId = threadId,
+                savedAtEpochMillis = savedAtTimestamp,
+                nonce = Random.nextInt(0, Int.MAX_VALUE).toString(36)
+            )
         val storageTarget = buildThreadSaveStorageTarget(
             saveLocation = baseSaveLocation,
             baseDirectory = baseDirectory,
@@ -140,7 +154,8 @@ class ThreadSaveService(
                     fileSystem = fileSystem,
                     target = storageTarget,
                     request = ThreadSaveOutputPreparationRequest(
-                        boardPath = boardPath
+                        boardPath = boardPath,
+                        clearExistingOutput = storageOptions.clearExistingOutput
                     )
                 )
 
@@ -211,9 +226,39 @@ class ThreadSaveService(
                     )
                 }
 
+                val existingMetadata = if (storageOptions.reuseExistingMedia) {
+                    loadThreadSaveExistingMetadata(storageTarget)
+                } else {
+                    null
+                }
+                val previousMetadata = existingMetadata?.metadata
+                val reusableMediaSeed = if (previousMetadata != null) {
+                    buildReusableThreadSaveMediaSeed(
+                        target = storageTarget,
+                        metadata = previousMetadata,
+                        boardPath = boardPath,
+                        scheduledItems = mediaPlan.scheduledItems,
+                        opPostId = opPostId
+                    )
+                } else {
+                    ThreadSaveMediaDownloadSeed()
+                }
+                val remainingMediaPlan = if (reusableMediaSeed.mediaKeyToFileInfoMap.isEmpty()) {
+                    mediaPlan
+                } else {
+                    mediaPlan.copy(
+                        scheduledItems = mediaPlan.scheduledItems.filterNot { mediaItem ->
+                            buildThreadSaveMediaDownloadKey(
+                                mediaItem.url,
+                                mediaItem.requestType
+                            ) in reusableMediaSeed.mediaKeyToFileInfoMap
+                        }
+                    )
+                }
+
                 if (
                     effectiveLimits.mediaDownloadStartDelayMs > 0L &&
-                    mediaPlan.scheduledItems.isNotEmpty()
+                    remainingMediaPlan.scheduledItems.isNotEmpty()
                 ) {
                     delay(effectiveLimits.mediaDownloadStartDelayMs)
                 }
@@ -227,7 +272,7 @@ class ThreadSaveService(
                 }
 
                 val mediaDownloadResult = executeThreadSaveMediaDownloadPlan(
-                    plan = mediaPlan,
+                    plan = remainingMediaPlan,
                     opPostId = opPostId,
                     chunkSize = 50,
                     maxParallelDownloads = effectiveLimits.maxParallelDownloads,
@@ -236,6 +281,7 @@ class ThreadSaveService(
                     logTag = "ThreadSaveService",
                     createUrlToPathMap = { createThreadSaveLruCache(effectiveLimits.maxMediaItems) },
                     createMediaKeyToFileInfoMap = { createThreadSaveLruCache(effectiveLimits.maxMediaItems) },
+                    initialSeed = reusableMediaSeed,
                     updateProgress = { current, total ->
                         updateProgress(
                             SavePhase.DOWNLOADING,
@@ -313,6 +359,12 @@ class ThreadSaveService(
                 updateProgress(SavePhase.FINALIZING, 1, 1, "完了")
 
                 // メタデータを書き出す（オフライン復元とインデックス用） - 自動保存のみ
+                if (existingMetadata != null && !storageOptions.clearExistingOutput) {
+                    writeThreadSaveMetadataBackup(
+                        target = storageTarget,
+                        payload = existingMetadata.payload
+                    )
+                }
                 val metadataSize = writeThreadSaveMetadataIfEnabled(
                     writeMetadata = writeMetadata,
                     fileSystem = fileSystem,
@@ -337,6 +389,13 @@ class ThreadSaveService(
                 )
                 val finalTotalSize = totalSize + metadataSize
                 enforceBudget(finalTotalSize, startedAtMillis, effectiveLimits.maxSaveDurationMs)
+                if (storageOptions.pruneUnreferencedExistingMedia && previousMetadata != null) {
+                    pruneUnreferencedThreadSaveMedia(
+                        target = storageTarget,
+                        previousMetadata = previousMetadata,
+                        currentSavedPosts = savedPosts
+                    )
+                }
 
                 buildThreadSaveSavedThread(
                     threadId = threadId,
@@ -357,7 +416,7 @@ class ThreadSaveService(
                 )
             })
         } catch (e: CancellationException) {
-            if (!hasWrittenInitialMetadata) {
+            if (!hasWrittenInitialMetadata && storageOptions.clearExistingOutput) {
                 withContext(NonCancellable) {
                     runCatching {
                         cleanupThreadSaveFailedOutput(
@@ -374,7 +433,7 @@ class ThreadSaveService(
             }
             throw e
         } catch (t: Throwable) {
-            if (!hasWrittenInitialMetadata) {
+            if (!hasWrittenInitialMetadata && storageOptions.clearExistingOutput) {
                 runCatching {
                     cleanupThreadSaveFailedOutput(
                         fileSystem = fileSystem,
@@ -386,6 +445,276 @@ class ThreadSaveService(
             }
             Result.failure(t)
         }
+    }
+
+    private data class ExistingThreadSaveMedia(
+        val relativePath: String,
+        val fileType: FileType
+    )
+
+    private data class ExistingThreadSaveMetadata(
+        val metadata: SavedThreadMetadata,
+        val payload: String
+    )
+
+    private suspend fun loadThreadSaveExistingMetadata(
+        target: ThreadSaveStorageTarget
+    ): ExistingThreadSaveMetadata? {
+        return readThreadSaveMetadataPayload(target, "metadata.json")
+            ?: readThreadSaveMetadataPayload(target, "metadata.json.backup")
+    }
+
+    private suspend fun readThreadSaveMetadataPayload(
+        target: ThreadSaveStorageTarget,
+        relativePath: String
+    ): ExistingThreadSaveMetadata? {
+        return runCatching {
+            val payload = readThreadSaveText(target, relativePath)
+            withContext(AppDispatchers.parsing) {
+                ExistingThreadSaveMetadata(
+                    metadata = json.decodeFromString<SavedThreadMetadata>(payload),
+                    payload = payload
+                )
+            }
+        }.getOrNull()
+    }
+
+    private suspend fun readThreadSaveText(
+        target: ThreadSaveStorageTarget,
+        relativePath: String
+    ): String {
+        return if (target.saveLocation != null) {
+            fileSystem.readString(target.saveLocation, target.relativeStoragePath(relativePath)).getOrThrow()
+        } else {
+            fileSystem.readString(target.absoluteStoragePath(relativePath)).getOrThrow()
+        }
+    }
+
+    private suspend fun writeThreadSaveMetadataBackup(
+        target: ThreadSaveStorageTarget,
+        payload: String
+    ) {
+        runCatching {
+            if (target.saveLocation != null) {
+                fileSystem.writeString(
+                    target.saveLocation,
+                    target.relativeStoragePath("metadata.json.backup"),
+                    payload
+                ).getOrThrow()
+            } else {
+                fileSystem.writeString(
+                    target.absoluteStoragePath("metadata.json.backup"),
+                    payload
+                ).getOrThrow()
+            }
+        }.onFailure { error ->
+            Logger.w(
+                "ThreadSaveService",
+                "Failed to write auto-save metadata backup: ${error.message}"
+            )
+        }
+    }
+
+    private suspend fun buildReusableThreadSaveMediaSeed(
+        target: ThreadSaveStorageTarget,
+        metadata: SavedThreadMetadata,
+        boardPath: String,
+        scheduledItems: List<ThreadSaveScheduledMediaItem>,
+        opPostId: String?
+    ): ThreadSaveMediaDownloadSeed {
+        val existingMediaByKey = buildExistingThreadSaveMediaMap(metadata.posts)
+        if (existingMediaByKey.isEmpty()) return ThreadSaveMediaDownloadSeed()
+        val existingMediaByPath = existingMediaByKey.values.associateBy { it.relativePath }
+
+        val urlToPathMap = linkedMapOf<String, String>()
+        val mediaKeyToFileInfoMap = linkedMapOf<String, ThreadSaveLocalFileInfo>()
+        val countedRelativePaths = linkedSetOf<String>()
+        var mediaCounts = ThreadSaveMediaCounts()
+        var totalSizeBytes = 0L
+
+        scheduledItems.forEach { mediaItem ->
+            val mediaKey = buildThreadSaveMediaDownloadKey(mediaItem.url, mediaItem.requestType)
+            val existingMedia = existingMediaByKey[mediaKey]
+                ?: resolveExpectedExistingThreadSaveMedia(
+                    boardPath = boardPath,
+                    mediaItem = mediaItem,
+                    existingMediaByPath = existingMediaByPath
+                )
+                ?: return@forEach
+            val sizeBytes = measureExistingThreadSaveMedia(target, existingMedia.relativePath) ?: return@forEach
+            val fileInfo = ThreadSaveLocalFileInfo(
+                relativePath = existingMedia.relativePath,
+                fileType = existingMedia.fileType,
+                byteSize = sizeBytes
+            )
+            mediaKeyToFileInfoMap[mediaKey] = fileInfo
+            when (mediaItem.requestType) {
+                ThreadSaveMediaRequestType.THUMBNAIL -> {
+                    if (urlToPathMap[mediaItem.url] == null) {
+                        urlToPathMap[mediaItem.url] = existingMedia.relativePath
+                    }
+                }
+                ThreadSaveMediaRequestType.FULL_IMAGE -> {
+                    urlToPathMap[mediaItem.url] = existingMedia.relativePath
+                }
+            }
+            mediaCounts = updateThreadSaveMediaCounts(
+                current = mediaCounts,
+                fileType = existingMedia.fileType,
+                relativePath = existingMedia.relativePath,
+                postId = mediaItem.postId,
+                opPostId = opPostId
+            )
+            if (countedRelativePaths.add(existingMedia.relativePath)) {
+                totalSizeBytes += sizeBytes
+            }
+        }
+
+        return ThreadSaveMediaDownloadSeed(
+            urlToPathMap = urlToPathMap,
+            mediaKeyToFileInfoMap = mediaKeyToFileInfoMap,
+            mediaCounts = mediaCounts,
+            totalSizeBytes = totalSizeBytes
+        )
+    }
+
+    private fun buildExistingThreadSaveMediaMap(
+        posts: List<SavedPost>
+    ): Map<String, ExistingThreadSaveMedia> {
+        val result = linkedMapOf<String, ExistingThreadSaveMedia>()
+        posts.forEach { post ->
+            addExistingThreadSaveMedia(
+                result = result,
+                url = post.originalThumbnailUrl,
+                requestType = ThreadSaveMediaRequestType.THUMBNAIL,
+                relativePath = post.localThumbnailPath,
+                fileType = FileType.THUMBNAIL
+            )
+            addExistingThreadSaveMedia(
+                result = result,
+                url = post.originalImageUrl,
+                requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                relativePath = post.localImagePath,
+                fileType = FileType.FULL_IMAGE
+            )
+            addExistingThreadSaveMedia(
+                result = result,
+                url = post.originalVideoUrl,
+                requestType = ThreadSaveMediaRequestType.FULL_IMAGE,
+                relativePath = post.localVideoPath,
+                fileType = FileType.VIDEO
+            )
+        }
+        return result
+    }
+
+    private fun resolveExpectedExistingThreadSaveMedia(
+        boardPath: String,
+        mediaItem: ThreadSaveScheduledMediaItem,
+        existingMediaByPath: Map<String, ExistingThreadSaveMedia>
+    ): ExistingThreadSaveMedia? {
+        val extension = getThreadSaveExtensionFromUrl(mediaItem.url)
+            ?.lowercase()
+            ?.takeIf(::isThreadSaveSupportedExtension)
+            ?: return null
+        val fileType = resolveThreadSaveFileType(mediaItem.requestType, extension)
+        val fileName = resolveThreadSaveFileName(
+            url = mediaItem.url,
+            extension = extension,
+            postId = mediaItem.postId,
+            timestampMillis = 0L
+        )
+        val relativePath = buildThreadSaveRelativePath(boardPath, fileType, fileName)
+        return existingMediaByPath[relativePath]?.takeIf { it.fileType == fileType }
+    }
+
+    private fun addExistingThreadSaveMedia(
+        result: MutableMap<String, ExistingThreadSaveMedia>,
+        url: String?,
+        requestType: ThreadSaveMediaRequestType,
+        relativePath: String?,
+        fileType: FileType
+    ) {
+        val normalizedUrl = url?.takeIf { it.isNotBlank() } ?: return
+        val normalizedPath = relativePath
+            ?.trim()
+            ?.takeIf(::isReusableThreadSaveRelativePath)
+            ?: return
+        val mediaKey = buildThreadSaveMediaDownloadKey(normalizedUrl, requestType)
+        if (mediaKey !in result) {
+            result[mediaKey] = ExistingThreadSaveMedia(
+                relativePath = normalizedPath,
+                fileType = fileType
+            )
+        }
+    }
+
+    private fun isReusableThreadSaveRelativePath(path: String): Boolean {
+        return path.isNotBlank() &&
+            !path.startsWith("/") &&
+            !path.startsWith("content://") &&
+            !path.startsWith("file://") &&
+            !path.contains("../") &&
+            !path.contains("/..")
+    }
+
+    private suspend fun measureExistingThreadSaveMedia(
+        target: ThreadSaveStorageTarget,
+        relativePath: String
+    ): Long? {
+        return runCatching {
+            val exists = if (target.saveLocation != null) {
+                fileSystem.exists(target.saveLocation, target.relativeStoragePath(relativePath))
+            } else {
+                fileSystem.exists(target.absoluteStoragePath(relativePath))
+            }
+            if (!exists) return null
+            val size = if (target.saveLocation != null) {
+                fileSystem.getFileSize(target.saveLocation, target.relativeStoragePath(relativePath))
+            } else {
+                fileSystem.getFileSize(target.absoluteStoragePath(relativePath))
+            }
+            size.takeIf { it > 0L }
+        }.getOrNull()
+    }
+
+    private suspend fun pruneUnreferencedThreadSaveMedia(
+        target: ThreadSaveStorageTarget,
+        previousMetadata: SavedThreadMetadata,
+        currentSavedPosts: List<SavedPost>
+    ) {
+        val previousPaths = collectThreadSaveMediaPaths(previousMetadata.posts)
+        if (previousPaths.isEmpty()) return
+        val currentPaths = collectThreadSaveMediaPaths(currentSavedPosts)
+        previousPaths
+            .filterNot { it in currentPaths }
+            .forEach { relativePath ->
+                runCatching {
+                    if (target.saveLocation != null) {
+                        fileSystem.delete(target.saveLocation, target.relativeStoragePath(relativePath)).getOrThrow()
+                    } else {
+                        fileSystem.delete(target.absoluteStoragePath(relativePath)).getOrThrow()
+                    }
+                }.onFailure { error ->
+                    Logger.w(
+                        "ThreadSaveService",
+                        "Failed to prune unreferenced auto-save media $relativePath: ${error.message}"
+                    )
+                }
+            }
+    }
+
+    private fun collectThreadSaveMediaPaths(posts: List<SavedPost>): Set<String> {
+        val result = linkedSetOf<String>()
+        posts.forEach { post ->
+            listOf(post.localThumbnailPath, post.localImagePath, post.localVideoPath)
+                .forEach { path ->
+                    path?.trim()
+                        ?.takeIf(::isReusableThreadSaveRelativePath)
+                        ?.let(result::add)
+                }
+        }
+        return result
     }
 
     /**

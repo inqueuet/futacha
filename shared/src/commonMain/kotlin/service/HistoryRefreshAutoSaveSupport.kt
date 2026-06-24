@@ -75,19 +75,33 @@ internal class HistoryRefreshAutoSaveLauncher(
                         return@withPermit null
                     }
                     withTimeoutOrNull(autoSaveThreadTimeoutMillis) {
-                        autoSaveService.saveThread(
-                            threadId = entry.threadId,
-                            boardId = resolvedBoardId,
-                            boardName = plan.boardName,
-                            boardUrl = baseUrl,
-                            title = plan.resolvedTitle,
-                            expiresAtLabel = plan.expiresAtLabel,
-                            posts = plan.posts,
-                            isTruncated = plan.isTruncated,
-                            truncationReason = plan.truncationReason,
-                            baseDirectory = AUTO_SAVE_DIRECTORY,
-                            writeMetadata = true
-                        ).getOrThrow()
+                        val stableStorageId = buildThreadStorageId(resolvedBoardId, entry.threadId)
+                        ThreadStorageLockRegistry.withStorageLock(
+                            buildThreadStorageLockKey(
+                                storageId = stableStorageId,
+                                baseDirectory = AUTO_SAVE_DIRECTORY
+                            )
+                        ) {
+                            autoSaveService.saveThread(
+                                threadId = entry.threadId,
+                                boardId = resolvedBoardId,
+                                boardName = plan.boardName,
+                                boardUrl = baseUrl,
+                                title = plan.resolvedTitle,
+                                expiresAtLabel = plan.expiresAtLabel,
+                                posts = plan.posts,
+                                isTruncated = plan.isTruncated,
+                                truncationReason = plan.truncationReason,
+                                baseDirectory = AUTO_SAVE_DIRECTORY,
+                                writeMetadata = true,
+                                storageOptions = ThreadSaveStorageOptions(
+                                    storageIdOverride = stableStorageId,
+                                    clearExistingOutput = false,
+                                    reuseExistingMedia = true,
+                                    pruneUnreferencedExistingMedia = true
+                                )
+                            ).getOrThrow()
+                        }
                     }
                 }
                 if (saved != null) {

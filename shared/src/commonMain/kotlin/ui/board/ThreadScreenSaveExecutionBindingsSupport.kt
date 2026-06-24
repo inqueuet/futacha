@@ -420,13 +420,7 @@ internal fun buildThreadScreenAutoSaveBindings(
                             completionTimestampMillis = attemptStartedAt
                         ),
                         saveRuntime.autoCallbacks,
-                        { initialSavedThread ->
-                            dependencies.indexSavedThread(
-                                repository,
-                                initialSavedThread,
-                                buildThreadAutoSaveIndexFailureMessage(dependencies.threadId)
-                            )
-                        }
+                        { }
                     )
                     val completedAt = dependencies.currentTimeMillis()
                     val applyState = buildThreadAutoSaveUiApplyState(

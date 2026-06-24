@@ -99,6 +99,62 @@ class ThreadSaveServiceTest {
     }
 
     @Test
+    fun saveThread_reusesExistingMediaWhenStableStorageIsUsed() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val stableStorageId = buildThreadStorageId("b", "456")
+        val firstService = ThreadSaveService(
+            httpClient = createClient(),
+            fileSystem = fileSystem
+        )
+        val storageOptions = ThreadSaveStorageOptions(
+            storageIdOverride = stableStorageId,
+            clearExistingOutput = false,
+            reuseExistingMedia = true,
+            pruneUnreferencedExistingMedia = true
+        )
+
+        val first = firstService.saveThread(
+            threadId = "456",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "title",
+            expiresAtLabel = null,
+            posts = listOf(samplePost()),
+            baseDirectory = "auto",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+            storageOptions = storageOptions
+        ).getOrThrow()
+
+        val secondService = ThreadSaveService(
+            httpClient = createFailingClient(),
+            fileSystem = fileSystem
+        )
+        val second = secondService.saveThread(
+            threadId = "456",
+            boardId = "b",
+            boardName = "may/b",
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            title = "title",
+            expiresAtLabel = null,
+            posts = listOf(samplePost()),
+            baseDirectory = "auto",
+            writeMetadata = true,
+            rawHtmlOptions = RawHtmlSaveOptions(enable = false),
+            storageOptions = storageOptions
+        ).getOrThrow()
+        val metadata = readMetadata(fileSystem, "auto/$stableStorageId/metadata.json")
+
+        assertEquals(stableStorageId, first.storageId)
+        assertEquals(stableStorageId, second.storageId)
+        assertEquals(SaveStatus.COMPLETED, second.status)
+        assertEquals("b/src/1.jpg", metadata.posts.single().localImagePath)
+        assertEquals("b/thumb/1s.jpg", metadata.posts.single().localThumbnailPath)
+        assertTrue(fileSystem.exists("auto/$stableStorageId/metadata.json.backup"))
+    }
+
+    @Test
     fun saveThread_preservesTruncationStateInMetadata() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val service = ThreadSaveService(
@@ -408,6 +464,17 @@ class ThreadSaveServiceTest {
                         )
                         else -> error("Unexpected request: ${request.url}")
                     }
+                }
+            }
+        )
+        return HttpClient(engine)
+    }
+
+    private fun createFailingClient(): HttpClient {
+        val engine = MockEngine(
+            MockEngineConfig().apply {
+                addHandler { request ->
+                    error("Unexpected request: ${request.url}")
                 }
             }
         )

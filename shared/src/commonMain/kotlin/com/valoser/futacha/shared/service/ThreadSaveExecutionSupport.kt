@@ -40,6 +40,13 @@ internal data class ThreadSaveMediaDownloadBatchResult(
     val skippedMediaCount: Int
 )
 
+internal data class ThreadSaveMediaDownloadSeed(
+    val urlToPathMap: Map<String, String> = emptyMap(),
+    val mediaKeyToFileInfoMap: Map<String, ThreadSaveLocalFileInfo> = emptyMap(),
+    val mediaCounts: ThreadSaveMediaCounts = ThreadSaveMediaCounts(),
+    val totalSizeBytes: Long = 0L
+)
+
 internal data class ThreadSaveMetadataWriteRequest(
     val threadId: String,
     val boardId: String,
@@ -63,7 +70,8 @@ internal data class ThreadSaveRawHtmlWriteResult(
 )
 
 internal data class ThreadSaveOutputPreparationRequest(
-    val boardPath: String
+    val boardPath: String,
+    val clearExistingOutput: Boolean = true
 )
 
 internal data class ThreadSaveMediaPathLock(
@@ -120,13 +128,18 @@ internal suspend fun executeThreadSaveMediaDownloadPlan(
     logTag: String,
     createUrlToPathMap: () -> MutableMap<String, String>,
     createMediaKeyToFileInfoMap: () -> MutableMap<String, ThreadSaveLocalFileInfo>,
+    initialSeed: ThreadSaveMediaDownloadSeed = ThreadSaveMediaDownloadSeed(),
     updateProgress: (current: Int, total: Int) -> Unit,
     downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>,
     enforceBudget: (Long) -> Unit
 ): ThreadSaveMediaDownloadBatchResult {
     val accumulator = ThreadSaveMediaDownloadAccumulator(
-        urlToPathMap = createUrlToPathMap(),
-        mediaKeyToFileInfoMap = createMediaKeyToFileInfoMap()
+        urlToPathMap = createUrlToPathMap().also { it.putAll(initialSeed.urlToPathMap) },
+        mediaKeyToFileInfoMap = createMediaKeyToFileInfoMap().also {
+            it.putAll(initialSeed.mediaKeyToFileInfoMap)
+        },
+        mediaCounts = initialSeed.mediaCounts,
+        totalSizeBytes = initialSeed.totalSizeBytes
     )
     val progressTotal = minOf(plan.totalMediaCount, plan.scheduledItems.size)
     var processedMediaCount = 0
@@ -206,7 +219,12 @@ internal suspend fun prepareThreadSaveOutput(
     target: ThreadSaveStorageTarget,
     request: ThreadSaveOutputPreparationRequest
 ) {
-    prepareThreadSaveStorageTarget(fileSystem, target, request.boardPath)
+    prepareThreadSaveStorageTarget(
+        fileSystem = fileSystem,
+        target = target,
+        boardPath = request.boardPath,
+        clearExistingOutput = request.clearExistingOutput
+    )
 }
 
 internal suspend fun writeThreadSaveMetadataIfEnabled(
