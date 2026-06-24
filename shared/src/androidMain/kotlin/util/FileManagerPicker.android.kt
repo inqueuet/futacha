@@ -4,17 +4,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.os.Build
+import com.valoser.futacha.shared.ui.board.distinctFileManagerPackages
 
 /**
  * ファイラーアプリの情報
  * @property packageName パッケージ名
  * @property label 表示名
- * @property icon アイコン（nullable）
  */
 data class FileManagerApp(
     val packageName: String,
-    val label: String,
-    val icon: android.graphics.drawable.Drawable?
+    val label: String
 )
 
 /**
@@ -39,7 +38,8 @@ fun getAvailableFileManagers(packageManager: PackageManager): List<FileManagerAp
         Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_FILES) } // 一般的なファイラー向けカテゴリ
     )
 
-    val resolveInfos: List<ResolveInfo> = intents
+    val resolveInfos: List<ResolveInfo> = distinctFileManagerPackages(
+        intents
         .flatMap { intent ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 packageManager.queryIntentActivities(
@@ -51,14 +51,13 @@ fun getAvailableFileManagers(packageManager: PackageManager): List<FileManagerAp
                 packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
             }
         }
-        .distinctBy { it.activityInfo?.packageName to it.activityInfo?.name }
+    ) { it.activityInfo?.packageName }
 
     return resolveInfos.mapNotNull { resolveInfo ->
         val activityInfo = resolveInfo.activityInfo ?: return@mapNotNull null
         val packageName = activityInfo.packageName
         val label = resolveInfo.loadLabel(packageManager).toString()
-        val icon = resolveInfo.loadIcon(packageManager)
 
-        FileManagerApp(packageName, label, icon)
-    }.distinctBy { it.packageName }
+        FileManagerApp(packageName, label)
+    }
 }

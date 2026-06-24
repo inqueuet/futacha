@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -36,6 +37,7 @@ import com.valoser.futacha.shared.util.FileManagerApp
 import com.valoser.futacha.shared.util.getAvailableFileManagers
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.time.Clock
 
 @Composable
 actual fun FileManagerPickerDialog(
@@ -45,9 +47,7 @@ actual fun FileManagerPickerDialog(
     val context = LocalContext.current
     val packageManager = context.packageManager
     val fileManagers by produceState<List<FileManagerApp>?>(initialValue = null, key1 = packageManager) {
-        value = withContext(Dispatchers.Default) {
-            getAvailableFileManagers(packageManager)
-        }
+        value = loadCachedFileManagers(packageManager)
     }
 
     AlertDialog(
@@ -87,11 +87,31 @@ actual fun FileManagerPickerDialog(
     )
 }
 
+private suspend fun loadCachedFileManagers(
+    packageManager: android.content.pm.PackageManager
+): List<FileManagerApp> {
+    val nowMillis = Clock.System.now().toEpochMilliseconds()
+    synchronized(fileManagerCacheLock) {
+        fileManagerPickerCachedValueOrNull(fileManagerCache, nowMillis)?.let { return it }
+    }
+    val resolved = withContext(Dispatchers.Default) {
+        getAvailableFileManagers(packageManager)
+    }
+    synchronized(fileManagerCacheLock) {
+        fileManagerCache = FileManagerPickerCacheState(
+            value = resolved,
+            loadedAtMillis = Clock.System.now().toEpochMilliseconds()
+        )
+    }
+    return resolved
+}
+
 @Composable
 private fun FileManagerItem(
     fileManager: FileManagerApp,
     onClick: () -> Unit
 ) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -99,12 +119,12 @@ private fun FileManagerItem(
     ) {
         val iconBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
             initialValue = null,
-            key1 = fileManager.packageName,
-            key2 = fileManager.icon
+            key1 = fileManager.packageName
         ) {
-            value = withContext(Dispatchers.Default) {
-                fileManager.icon?.toBitmap(48, 48)?.asImageBitmap()
-            }
+            value = loadCachedFileManagerIcon(
+                packageManager = context.packageManager,
+                packageName = fileManager.packageName
+            )
         }
         Row(
             modifier = Modifier
@@ -134,3 +154,34 @@ private fun FileManagerItem(
         }
     }
 }
+
+private suspend fun loadCachedFileManagerIcon(
+    packageManager: android.content.pm.PackageManager,
+    packageName: String
+): ImageBitmap? {
+    synchronized(fileManagerIconCacheLock) {
+        fileManagerIconCache[packageName]?.let { return it }
+    }
+    val bitmap = withContext(Dispatchers.Default) {
+        runCatching {
+            packageManager
+                .getApplicationIcon(packageName)
+                .toBitmap(48, 48)
+                .asImageBitmap()
+        }.getOrNull()
+    } ?: return null
+    synchronized(fileManagerIconCacheLock) {
+        fileManagerIconCache[packageName] = bitmap
+        val keysToRemove = trimFileManagerIconCacheKeys(
+            keysInAccessOrder = fileManagerIconCache.keys.toList(),
+            maxEntries = FILE_MANAGER_ICON_CACHE_MAX_ENTRIES
+        )
+        keysToRemove.forEach(fileManagerIconCache::remove)
+    }
+    return bitmap
+}
+
+private val fileManagerCacheLock = Any()
+private var fileManagerCache: FileManagerPickerCacheState<List<FileManagerApp>>? = null
+private val fileManagerIconCacheLock = Any()
+private val fileManagerIconCache = LinkedHashMap<String, ImageBitmap>(16, 0.75f, true)
