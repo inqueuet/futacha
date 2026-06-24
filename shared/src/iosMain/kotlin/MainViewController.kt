@@ -109,6 +109,7 @@ private const val IOS_BG_MAX_THREADS_PER_RUN = 40
 private const val IOS_BG_AUTO_SAVE_BUDGET_MILLIS = 90 * 1000L
 private const val IOS_BG_MAX_AUTO_SAVES_PER_RUN = 2
 private const val IOS_BG_REFRESH_TIMEOUT_MILLIS = 9 * 60 * 1000L
+private const val IOS_BG_REPOSITORY_CLOSE_TIMEOUT_MILLIS = 2_000L
 private const val IOS_BACKGROUND_FLOW_MAX_RETRIES = 12L
 private const val IOS_BACKGROUND_REFRESH_KEY = "background_refresh_enabled"
 private const val IOS_WATCH_PREVIEW_THREAD_LIMIT = 8
@@ -572,8 +573,12 @@ private suspend fun runIosBackgroundRefresh(
     } finally {
         refresher.close()
         Logger.d("BackgroundRefresh", "Closing temporary iOS background repository")
+        val closeJob = repo.closeAsync()
         withContext(NonCancellable) {
-            repo.closeAsync().join()
+            awaitIosBackgroundRepositoryClose(
+                closeJob = closeJob,
+                timeoutMillis = IOS_BG_REPOSITORY_CLOSE_TIMEOUT_MILLIS
+            )
         }
     }
 }

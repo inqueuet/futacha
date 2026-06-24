@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -30,5 +34,37 @@ class MainViewControllerSupportTest {
         )
         assertFalse(blocked.shouldRetry)
         assertNull(blocked.backoffMillis)
+    }
+
+    @Test
+    fun awaitIosBackgroundRepositoryClose_returnsTrueForCompletedJob() = runBlocking {
+        val closeJob = launch { }
+
+        val completed = awaitIosBackgroundRepositoryClose(
+            closeJob = closeJob,
+            timeoutMillis = 1_000L
+        )
+
+        assertTrue(completed)
+        assertTrue(closeJob.isCompleted)
+        assertFalse(closeJob.isCancelled)
+    }
+
+    @Test
+    fun awaitIosBackgroundRepositoryClose_cancelsJobAfterTimeout() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val closeJob = launch {
+            started.complete(Unit)
+            delay(60_000L)
+        }
+        started.await()
+
+        val completed = awaitIosBackgroundRepositoryClose(
+            closeJob = closeJob,
+            timeoutMillis = 1L
+        )
+
+        assertFalse(completed)
+        assertTrue(closeJob.isCancelled)
     }
 }

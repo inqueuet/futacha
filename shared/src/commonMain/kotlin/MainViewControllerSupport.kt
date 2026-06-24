@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeoutOrNull
+
 internal data class IosBackgroundRefreshFlowRetryState(
     val shouldRetry: Boolean,
     val backoffMillis: Long?
@@ -17,4 +20,18 @@ internal fun resolveIosBackgroundRefreshFlowRetryState(
         shouldRetry = shouldRetry,
         backoffMillis = if (shouldRetry) calculateIosBackgroundRefreshFlowBackoffMillis(attempt) else null
     )
+}
+
+internal suspend fun awaitIosBackgroundRepositoryClose(
+    closeJob: Job,
+    timeoutMillis: Long
+): Boolean {
+    val completed = withTimeoutOrNull(timeoutMillis.coerceAtLeast(1L)) {
+        closeJob.join()
+        true
+    } ?: false
+    if (!completed) {
+        closeJob.cancel()
+    }
+    return completed
 }
