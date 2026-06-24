@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, item 37 OP image/title helper timeouts are split and timeout misses are cached, item 38 Android SAF writes now have an overall provider-response timeout, and item 39 HistoryRefresher now has a process-wide duplicate refresh gate.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, item 37 OP image/title helper timeouts are split and timeout misses are cached, item 38 Android SAF writes now have an overall provider-response timeout, item 39 HistoryRefresher now has a process-wide duplicate refresh gate, and item 40 iOS BGTask repository close now has a bounded wait.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -52,7 +52,7 @@ This is the primary classification for the remaining findings below. Original it
    - Response/body reads that create media-related memory spikes.
 
 5. Background refresh, Watch sync, autosave scheduling, and command orchestration
-   Items: 40, 42
+   Items: 42
 
    Scope:
    - Background refresh scheduling and duplicated refresh instances.
@@ -108,29 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-40. iOS BGTask cancellation still performs non-cancellable repository close
---------------------------------------------------------------------------
-Relevant code:
-- shared/src/iosMain/kotlin/MainViewController.kt
-- shared/src/iosMain/kotlin/background/BackgroundRefreshManager.kt
-- shared/src/commonMain/kotlin/repo/BoardRepository.kt
-
-Current behavior:
-- BackgroundRefreshManager cancels the active job when iOS calls expirationHandler.
-- runIosBackgroundRefresh() catches timeout/cancellation, then always enters finally.
-- finally closes the temporary repository with withContext(NonCancellable) { repo.closeAsync().join() }.
-
-Risk:
-- After iOS has already expired the BGTask, cleanup can still spend time closing repository state.
-- If close waits behind helper work or IO cleanup, the process may continue doing work past the useful background window.
-- This can make expiration behavior harder to diagnose because logs show cancellation followed by more cleanup activity.
-
-Kaizen:
-- Bound repository close with a short timeout in BGTask cleanup.
-- Avoid starting helper work that outlives the BGTask deadline.
-- Do not add close-duration logs. Separate close from refresh control flow and cover cancellation behavior with tests.
 
 
 41. Android DataStore read fallback can temporarily expose empty/default state
