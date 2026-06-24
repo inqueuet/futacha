@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, item 37 OP image/title helper timeouts are split and timeout misses are cached, item 38 Android SAF writes now have an overall provider-response timeout, item 39 HistoryRefresher now has a process-wide duplicate refresh gate, item 40 iOS BGTask repository close now has a bounded wait, item 41 Android DataStore cold-read failures no longer emit empty preferences or unlock the app, item 42 AI command handling now coalesces history refreshes and avoids overwriting pending UI commands, item 43 thread load now prefers offline fallback after showing a local stale copy, item 44 Android thread banner ads now wait for stable screen visibility before creating AdView, item 45 Android AppFunction responses now return command IDs, pending statuses, and duplicate-command acknowledgements instead of implying execution completion, and item 47 quote preview rendering now uses lazy composition with paged target expansion.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, item 37 OP image/title helper timeouts are split and timeout misses are cached, item 38 Android SAF writes now have an overall provider-response timeout, item 39 HistoryRefresher now has a process-wide duplicate refresh gate, item 40 iOS BGTask repository close now has a bounded wait, item 41 Android DataStore cold-read failures no longer emit empty preferences or unlock the app, item 42 AI command handling now coalesces history refreshes and avoids overwriting pending UI commands, item 43 thread load now prefers offline fallback after showing a local stale copy, item 44 Android thread banner ads now wait for stable screen visibility before creating AdView, item 45 Android AppFunction responses now return command IDs, pending statuses, and duplicate-command acknowledgements instead of implying execution completion, item 47 quote preview rendering now uses lazy composition with paged target expansion, and item 48 thread filter caching now stores post index results while keeping the previous visible page during recomputation.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -36,7 +36,7 @@ This is the primary classification for the remaining findings below. Original it
    - Archive search response and thumbnail enrichment.
 
 3. Thread rendering, derived data, navigation, and dialogs
-   Items: 46, 48, 54, 56, 57
+   Items: 46, 54, 56, 57
 
    Scope:
    - Thread navigation, search/read-aloud/filter behavior, AI summaries, and quote UI.
@@ -131,31 +131,6 @@ Kaizen:
 - Build tree nodes around a stable post key that includes duplicate ordinal or original list index.
 - Keep quote target resolution by canonical post ID, but map target IDs to all matching candidate nodes and choose the nearest earlier candidate.
 - Add a unit test with duplicated post.id values and verify tree mode preserves all posts.
-
-
-48. Thread filter cache stores whole ThreadPage copies
------------------------------------------------------
-Relevant code:
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenContentHost.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenMutableStateSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadFilterSupport.kt
-- shared/src/commonMain/kotlin/ui/board/ThreadScreenRuntimeSupport.kt
-
-Current behavior:
-- threadFilterCache is a per-thread LinkedHashMap with THREAD_FILTER_CACHE_MAX_ENTRIES = 8.
-- Each entry stores a full ThreadPage copy containing a filtered posts list.
-- Cache keys include post fingerprint, NG state, filter options, keyword, self identifiers, and sort state.
-- When a filter is active and no cache entry exists, the initial filteredPage is state.page.copy(posts = emptyList()) until background parsing finishes.
-
-Risk:
-- Rapid keyword edits or NG/filter toggles can keep several full filtered post lists alive for the same large thread.
-- Repeated ThreadPage copies increase allocation and GC pressure in the screen that is already doing search, highlight, image, and scroll work.
-- The empty-list initial value can briefly blank the thread during recomputation, which looks like a rendering glitch or short freeze.
-
-Kaizen:
-- Cache only filtered post IDs, original indices, or small filter results instead of whole ThreadPage objects.
-- Keep the previous filtered result visible while recomputing a new key, with an explicit loading flag if needed.
-- Clear or coalesce keyword-derived cache entries during active typing.
 
 
 49. Cache cleanup actions can run concurrently with active image cache users
