@@ -11,7 +11,6 @@ import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
-import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.util.FileSystem
@@ -49,7 +48,7 @@ internal data class ThreadScreenHostRuntimeInputs(
     val ngHeaders: List<String>,
     val ngWords: List<String>,
     val ngFilteringEnabled: Boolean,
-    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadFilterResult>,
     val postTextCache: ThreadPostTextCache?,
     val lazyListState: LazyListState,
     val saidaneOverrides: Map<String, String>,
@@ -142,7 +141,7 @@ internal data class ThreadScreenHostContentInputs(
     val ngHeaders: List<String>,
     val ngWords: List<String>,
     val ngFilteringEnabled: Boolean,
-    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadFilterResult>,
     val postTextCache: ThreadPostTextCache?,
     val lazyListState: LazyListState,
     val saidaneOverrides: Map<String, String>,

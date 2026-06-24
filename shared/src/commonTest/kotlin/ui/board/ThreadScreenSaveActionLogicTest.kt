@@ -1364,6 +1364,36 @@ class ThreadScreenSaveActionLogicTest {
         )
         assertEquals(listOf("2"), deletedFiltered.posts.map { it.id })
 
+        val cachedKeywordResult = applyThreadFilterResult(
+            page = page,
+            criteria = ThreadFilterCriteria(
+                options = setOf(ThreadFilterOption.Keyword),
+                keyword = "猫",
+                selfPostIdentifiers = emptyList(),
+                sortOption = ThreadFilterSortOption.Saidane
+            ),
+            ngHeaders = emptyList(),
+            ngWords = emptyList(),
+            ngEnabled = false
+        )
+        assertEquals(listOf(2, 0), cachedKeywordResult.postIndices)
+        assertEquals(listOf("3", "1"), cachedKeywordResult.toThreadPage(page).posts.map { it.id })
+
+        val cachedNgResult = applyThreadFilterResult(
+            page = page,
+            criteria = ThreadFilterCriteria(
+                options = emptySet(),
+                keyword = "",
+                selfPostIdentifiers = emptyList(),
+                sortOption = null
+            ),
+            ngHeaders = emptyList(),
+            ngWords = listOf("猫"),
+            ngEnabled = true
+        )
+        assertEquals(listOf(1), cachedNgResult.postIndices)
+        assertEquals(listOf("2"), cachedNgResult.toThreadPage(page).posts.map { it.id })
+
         val sortedBySaidane = sortThreadPosts(posts, ThreadFilterSortOption.Saidane)
         assertEquals(listOf("3", "1", "2"), sortedBySaidane.map { it.id })
 

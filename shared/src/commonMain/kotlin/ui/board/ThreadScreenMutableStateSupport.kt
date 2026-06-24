@@ -7,7 +7,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.valoser.futacha.shared.model.SaveProgress
-import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.util.ImageData
 import kotlinx.coroutines.Job
 
@@ -86,7 +85,7 @@ internal data class ThreadScreenMutableStateBundle(
     val selectedThreadFilterOptions: MutableState<Set<ThreadFilterOption>>,
     val selectedThreadSortOption: MutableState<ThreadFilterSortOption?>,
     val threadFilterKeyword: MutableState<String>,
-    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadFilterResult>,
     val modalOverlayState: MutableState<ThreadModalOverlayState>,
     val ngFilteringEnabled: MutableState<Boolean>,
     val replyName: MutableState<String>,
@@ -146,7 +145,7 @@ internal data class ThreadScreenFormMutableStateRefs(
     val selectedThreadFilterOptions: MutableState<Set<ThreadFilterOption>>,
     val selectedThreadSortOption: MutableState<ThreadFilterSortOption?>,
     val threadFilterKeyword: MutableState<String>,
-    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadPage>,
+    val threadFilterCache: LinkedHashMap<ThreadFilterCacheKey, ThreadFilterResult>,
     val replyName: MutableState<String>,
     val replyEmail: MutableState<String>,
     val replySubject: MutableState<String>,

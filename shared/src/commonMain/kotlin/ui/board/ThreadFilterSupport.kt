@@ -65,6 +65,90 @@ internal fun applyThreadFilters(
     return page.copy(posts = sortedPosts)
 }
 
+internal data class ThreadFilterResult(
+    val postIndices: List<Int>
+) {
+    fun toThreadPage(page: ThreadPage): ThreadPage {
+        val filteredPosts = postIndices.mapNotNull { index -> page.posts.getOrNull(index) }
+        return page.copy(posts = filteredPosts)
+    }
+}
+
+internal fun applyThreadFilterResult(
+    page: ThreadPage,
+    criteria: ThreadFilterCriteria,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    ngEnabled: Boolean,
+    precomputedLowerBodyByPost: Map<Post, String>? = null
+): ThreadFilterResult {
+    val indexedPosts = page.posts.mapIndexed { index, post -> IndexedValue(index, post) }
+    val ngFilteredPosts = applyNgFiltersToIndexedPosts(
+        posts = indexedPosts,
+        ngHeaders = ngHeaders,
+        ngWords = ngWords,
+        enabled = ngEnabled,
+        precomputedLowerBodyByPost = precomputedLowerBodyByPost
+    )
+    val threadFilteredPosts = applyThreadFiltersToIndexedPosts(
+        posts = ngFilteredPosts,
+        criteria = criteria,
+        precomputedLowerBodyByPost = precomputedLowerBodyByPost
+    )
+    return ThreadFilterResult(threadFilteredPosts.map { it.index })
+}
+
+private fun applyNgFiltersToIndexedPosts(
+    posts: List<IndexedValue<Post>>,
+    ngHeaders: List<String>,
+    ngWords: List<String>,
+    enabled: Boolean,
+    precomputedLowerBodyByPost: Map<Post, String>?
+): List<IndexedValue<Post>> {
+    if (!enabled) return posts
+    val headerFilters = ngHeaders.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    val wordFilters = ngWords.mapNotNull { it.trim().takeIf { trimmed -> trimmed.isNotBlank() }?.lowercase() }
+    if (headerFilters.isEmpty() && wordFilters.isEmpty()) return posts
+    val lowerBodyByPost = if (wordFilters.isEmpty()) {
+        emptyMap()
+    } else {
+        precomputedLowerBodyByPost ?: buildLowerBodyByPost(posts.map { it.value })
+    }
+    return posts.filterNot { indexedPost ->
+        matchesNgFilters(indexedPost.value, headerFilters, wordFilters, lowerBodyByPost)
+    }
+}
+
+private fun applyThreadFiltersToIndexedPosts(
+    posts: List<IndexedValue<Post>>,
+    criteria: ThreadFilterCriteria,
+    precomputedLowerBodyByPost: Map<Post, String>?
+): List<IndexedValue<Post>> {
+    if (criteria.options.isEmpty()) return posts
+    val normalizedSelfPostIdentifiers = criteria.selfPostIdentifiers
+        .asSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toSet()
+    val needsLowerBodyByPost = criteria.options.any {
+        it == ThreadFilterOption.Url || it == ThreadFilterOption.Keyword
+    }
+    val lowerBodyByPost = if (needsLowerBodyByPost) {
+        precomputedLowerBodyByPost ?: buildLowerBodyByPost(posts.map { it.value })
+    } else {
+        emptyMap()
+    }
+    val filteredPosts = posts.filter { indexedPost ->
+        matchesThreadFilters(
+            post = indexedPost.value,
+            criteria = criteria,
+            lowerBodyByPost = lowerBodyByPost,
+            normalizedSelfPostIdentifiers = normalizedSelfPostIdentifiers
+        )
+    }
+    return sortIndexedThreadPosts(filteredPosts, criteria.sortOption)
+}
+
 internal fun matchesThreadFilters(
     post: Post,
     criteria: ThreadFilterCriteria,
@@ -107,6 +191,17 @@ internal fun sortThreadPosts(
     return when (sortOption) {
         ThreadFilterSortOption.Saidane -> posts.sortedByDescending { parseSaidaneCount(it.saidaneLabel) ?: 0 }
         ThreadFilterSortOption.Replies -> posts.sortedByDescending { it.referencedCount }
+        null -> posts
+    }
+}
+
+private fun sortIndexedThreadPosts(
+    posts: List<IndexedValue<Post>>,
+    sortOption: ThreadFilterSortOption?
+): List<IndexedValue<Post>> {
+    return when (sortOption) {
+        ThreadFilterSortOption.Saidane -> posts.sortedByDescending { parseSaidaneCount(it.value.saidaneLabel) ?: 0 }
+        ThreadFilterSortOption.Replies -> posts.sortedByDescending { it.value.referencedCount }
         null -> posts
     }
 }
