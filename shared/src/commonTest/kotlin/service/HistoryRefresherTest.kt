@@ -27,13 +27,16 @@ import io.ktor.client.request.HttpResponseData
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class HistoryRefresherTest {
@@ -70,6 +73,69 @@ class HistoryRefresherTest {
         assertEquals("board-new", updated.boardName)
         assertEquals(2, updated.replyCount)
         assertEquals(1, repository.getThreadCalls)
+    }
+
+    @Test
+    fun refresh_rejectsConcurrentRunsAcrossInstances() = runBlocking {
+        val board = boardSummary()
+        val entry = historyEntry(threadId = "123", title = "old")
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val store = AppStateStore(FakePlatformStateStorage())
+        store.setHistory(listOf(entry))
+        val firstRepository = FakeHistoryBoardRepository().apply {
+            onGetThread = {
+                firstStarted.complete(Unit)
+                releaseFirst.await()
+            }
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board",
+                titleLine = "first",
+                thumbnailUrl = "thumb-first",
+                replyCount = 1
+            )
+        }
+        val secondRepository = FakeHistoryBoardRepository().apply {
+            threadPages[board.url to "123"] = threadPage(
+                threadId = "123",
+                boardTitle = "board",
+                titleLine = "second",
+                thumbnailUrl = "thumb-second",
+                replyCount = 2
+            )
+        }
+        val firstRefresher = HistoryRefresher(
+            stateStore = store,
+            repository = firstRepository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+        val secondRefresher = HistoryRefresher(
+            stateStore = store,
+            repository = secondRepository,
+            dispatcher = Dispatchers.Default,
+            maxConcurrency = 1
+        )
+
+        val firstRefresh = async {
+            firstRefresher.refresh(
+                boardsSnapshot = listOf(board),
+                historySnapshot = listOf(entry)
+            )
+        }
+        firstStarted.await()
+
+        assertFailsWith<HistoryRefresher.RefreshAlreadyRunningException> {
+            secondRefresher.refresh(
+                boardsSnapshot = listOf(board),
+                historySnapshot = listOf(entry)
+            )
+        }
+
+        releaseFirst.complete(Unit)
+        firstRefresh.await()
+        assertEquals(0, secondRepository.getThreadCalls)
     }
 
     @Test
@@ -451,6 +517,7 @@ private class FakeHistoryBoardRepository : BoardRepository {
     val threadPagesByUrl = mutableMapOf<String, ThreadPage>()
     var getThreadCalls = 0
     var getThreadByUrlCalls = 0
+    var onGetThread: suspend () -> Unit = {}
 
     override suspend fun getCatalog(board: String, mode: CatalogMode): List<CatalogItem> = emptyList()
 
@@ -458,6 +525,7 @@ private class FakeHistoryBoardRepository : BoardRepository {
 
     override suspend fun getThread(board: String, threadId: String): ThreadPage {
         getThreadCalls += 1
+        onGetThread()
         threadErrors[board to threadId]?.let { throw it }
         return threadPages[board to threadId] ?: error("Missing thread for $board/$threadId")
     }
