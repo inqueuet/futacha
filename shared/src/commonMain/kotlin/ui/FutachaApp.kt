@@ -279,6 +279,7 @@ fun FutachaApp(
                 var aiResultMessage by remember { mutableStateOf<String?>(null) }
                 var isAiGlobalSettingsVisible by remember { mutableStateOf(false) }
                 var aiFileManagerPickerRequest by remember { mutableStateOf(0) }
+                var isAiHistoryRefreshCommandRunning by remember { mutableStateOf(false) }
                 val handledAiCommandIds = remember { LinkedHashSet<String>() }
                 val onAiScreenCommandConsumed: (FutachaAiCommand) -> Unit = { consumedCommand ->
                     if (pendingAiScreenCommand == consumedCommand) {
@@ -300,7 +301,9 @@ fun FutachaApp(
                             aiResultMessage = outcome.message
                         }
                         is FutachaAiCommandOutcome.NeedsConfirmation -> {
-                            pendingAiConfirmation = outcome.request
+                            if (shouldReplacePendingAiConfirmation(pendingAiConfirmation, outcome)) {
+                                pendingAiConfirmation = outcome.request
+                            }
                         }
                         is FutachaAiCommandOutcome.NeedsForeground -> {
                             if (!suppressResultDialog) {
@@ -348,7 +351,10 @@ fun FutachaApp(
                     }
                     val shouldForward = shouldForwardAiCommandToScreen(command, outcome)
                     if (shouldForward) {
-                        pendingAiScreenCommand = command
+                        pendingAiScreenCommand = resolvePendingAiScreenCommand(
+                            current = pendingAiScreenCommand,
+                            incoming = command
+                        )
                     }
                     handleAiOutcome(outcome, suppressResultDialog = shouldForward)
                 }
@@ -367,8 +373,16 @@ fun FutachaApp(
                 LaunchedEffect(Unit) {
                     FutachaAiCommandBridge.commands.collect { command ->
                         if (shouldLaunchAiCommandFromBridge(command)) {
+                            if (!shouldStartAiBridgeCommand(command, isAiHistoryRefreshCommandRunning)) {
+                                return@collect
+                            }
+                            isAiHistoryRefreshCommandRunning = true
                             launch {
-                                currentHandleAiCommand(command)
+                                try {
+                                    currentHandleAiCommand(command)
+                                } finally {
+                                    isAiHistoryRefreshCommandRunning = false
+                                }
                             }
                         } else {
                             currentHandleAiCommand(command)
@@ -480,7 +494,10 @@ fun FutachaApp(
                                             outcome
                                         )
                                         if (shouldForward) {
-                                            pendingAiScreenCommand = confirmedRequest.command
+                                            pendingAiScreenCommand = resolvePendingAiScreenCommand(
+                                                current = pendingAiScreenCommand,
+                                                incoming = confirmedRequest.command
+                                            )
                                         }
                                         handleAiOutcome(outcome, suppressResultDialog = shouldForward)
                                     }
