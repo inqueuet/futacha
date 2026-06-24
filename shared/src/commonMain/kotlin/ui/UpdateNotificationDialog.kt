@@ -1,24 +1,21 @@
 package com.valoser.futacha.shared.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.version.UpdateInfo
 
 /**
  * アプリ更新通知ダイアログ
  */
 private fun buildUpdateNotificationMessage(updateInfo: UpdateInfo): String {
-    return buildString {
-        append(updateInfo.message)
-        append("\n\n")
-        append("広告はデフォルトで表示されます。")
-        append("\n")
-        append("広告表示は設定からいつでもOFFにできます。")
-        append("\n")
-        append("広告収益はサーバ運用費や開発費に充てますので、協力いただける方はよろしくおねがいします。")
-    }
+    return updateInfo.message
 }
 
 @Composable
@@ -29,10 +26,15 @@ fun UpdateNotificationDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("お詫びとアップデートのお知らせ")
+            Text("アップデートのお知らせ")
         },
         text = {
-            Text(buildUpdateNotificationMessage(updateInfo))
+            Text(
+                text = buildUpdateNotificationMessage(updateInfo),
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState())
+            )
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {

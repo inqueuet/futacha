@@ -66,6 +66,17 @@ private const val GITHUB_RELEASE_MAX_ZERO_READ_RETRIES = 5
 private const val GITHUB_RELEASE_ZERO_READ_BACKOFF_MILLIS = 50L
 private const val GITHUB_RELEASE_RESPONSE_TIMEOUT_MILLIS = 10_000L
 private const val GITHUB_RELEASE_READ_IDLE_TIMEOUT_MILLIS = 10_000L
+private const val MAX_RELEASE_NOTES_DISPLAY_CHARS = 4_000
+private val markdownLinkRegex = Regex("""!?\[([^\]]*)\]\([^)]+\)""")
+private val markdownAutolinkRegex = Regex("""<https?://[^>]+>""")
+private val markdownBareUrlRegex = Regex("""https?://\S+""")
+private val markdownHeadingRegex = Regex("""^\s{0,3}#{1,6}\s*""")
+private val markdownListMarkerRegex = Regex("""^\s{0,3}([-*+])\s+""")
+private val markdownOrderedListMarkerRegex = Regex("""^\s{0,3}\d+[.)]\s+""")
+private val markdownQuoteRegex = Regex("""^\s{0,3}>\s?""")
+private val markdownHrRegex = Regex("""^\s{0,3}([-*_]\s*){3,}$""")
+private val markdownHtmlTagRegex = Regex("""<[^>]+>""")
+private val markdownEmphasisRegex = Regex("""[*_~`]+""")
 
 /**
  * バージョン文字列を比較
@@ -75,6 +86,91 @@ fun isNewerVersion(currentVersion: String, latestVersion: String): Boolean {
     val current = parseSemVer(currentVersion) ?: return false
     val latest = parseSemVer(latestVersion) ?: return false
     return compareSemVer(latest, current) > 0
+}
+
+internal fun buildUpdateMessage(
+    current: String,
+    latest: String,
+    releaseName: String?,
+    releaseBody: String?
+): String {
+    return buildString {
+        append("新しいバージョンが利用可能です\n\n")
+        append("現在: v$current\n")
+        append("最新: v$latest")
+        if (!releaseName.isNullOrBlank() && releaseName != latest) {
+            append("\n\n")
+            append(sanitizeGitHubReleaseTextForDisplay(releaseName))
+        }
+        val releaseNotes = sanitizeGitHubReleaseTextForDisplay(releaseBody)
+        if (releaseNotes.isNotBlank()) {
+            append("\n\n")
+            append(releaseNotes)
+        }
+    }
+}
+
+internal fun sanitizeGitHubReleaseTextForDisplay(value: String?): String {
+    val text = value.orEmpty()
+    if (text.isBlank()) return ""
+
+    val cleanedLines = mutableListOf<String>()
+    var inCodeBlock = false
+    for (rawLine in text.lines()) {
+        val trimmedLine = rawLine.trim()
+        if (trimmedLine.startsWith("```") || trimmedLine.startsWith("~~~")) {
+            inCodeBlock = !inCodeBlock
+            continue
+        }
+        if (!inCodeBlock && markdownHrRegex.matches(trimmedLine)) {
+            continue
+        }
+
+        val line = if (inCodeBlock) {
+            trimmedLine
+        } else {
+            sanitizeGitHubReleaseMarkdownLine(rawLine)
+        }
+        cleanedLines += line
+    }
+
+    val compacted = cleanedLines
+        .joinToString("\n")
+        .replace(Regex("""[ \t]+"""), " ")
+        .replace(Regex("""\n{3,}"""), "\n\n")
+        .trim()
+
+    return if (compacted.length <= MAX_RELEASE_NOTES_DISPLAY_CHARS) {
+        compacted
+    } else {
+        compacted.take(MAX_RELEASE_NOTES_DISPLAY_CHARS).trimEnd() + "\n..."
+    }
+}
+
+private fun sanitizeGitHubReleaseMarkdownLine(line: String): String {
+    val isUnorderedList = markdownListMarkerRegex.containsMatchIn(line)
+    val isOrderedList = markdownOrderedListMarkerRegex.containsMatchIn(line)
+    val withoutBlockMarkers = line
+        .replace(markdownQuoteRegex, "")
+        .replace(markdownHeadingRegex, "")
+        .replace(markdownOrderedListMarkerRegex, "")
+        .replace(markdownListMarkerRegex, "")
+    val withoutLinks = withoutBlockMarkers
+        .replace(markdownLinkRegex) { match ->
+            match.groupValues.getOrNull(1).orEmpty()
+        }
+        .replace(markdownAutolinkRegex, "")
+        .replace(markdownBareUrlRegex, "")
+    val withoutInlineMarkers = withoutLinks
+        .replace(markdownHtmlTagRegex, "")
+        .replace(markdownEmphasisRegex, "")
+        .trim()
+
+    return when {
+        withoutInlineMarkers.isBlank() -> ""
+        isUnorderedList || isOrderedList -> "・$withoutInlineMarkers"
+        else -> withoutInlineMarkers
+    }
 }
 
 private data class SemVer(

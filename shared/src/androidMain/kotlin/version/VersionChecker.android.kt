@@ -43,7 +43,7 @@ class AndroidVersionChecker(
         }
 
         // 更新メッセージを生成
-        val message = buildUpdateMessage(currentVersion, latestVersion, release.name)
+        val message = buildUpdateMessage(currentVersion, latestVersion, release.name, release.body)
 
         return UpdateInfo(
             currentVersion = currentVersion,
@@ -52,16 +52,6 @@ class AndroidVersionChecker(
         )
     }
 
-    private fun buildUpdateMessage(current: String, latest: String, releaseName: String?): String {
-        return buildString {
-            append("新しいバージョンが利用可能です\n\n")
-            append("現在: v$current\n")
-            append("最新: v$latest")
-            if (!releaseName.isNullOrBlank() && releaseName != latest) {
-                append("\n\n$releaseName")
-            }
-        }
-    }
 }
 
 @Volatile
