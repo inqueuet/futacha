@@ -374,10 +374,10 @@ internal fun GlobalSettingsDisplaySection(
         }
         HorizontalDivider()
         ListItem(
-            headlineContent = { Text("レス文字サイズ") },
+            headlineContent = { Text("文字サイズ") },
             supportingContent = {
                 Text(
-                    text = "レス本文、ID、日時、引用数、そうだねなどレス内の文字サイズを変更します。",
+                    text = "板画面、設定画面、履歴、レス、投稿フォームなどアプリ全体の文字サイズを変更します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -388,10 +388,10 @@ internal fun GlobalSettingsDisplaySection(
             GlobalSettingsRadioOptionRow(
                 label = size.label,
                 description = when (size) {
-                    ThreadBodyTextSize.Small -> "情報量を優先してレス内の文字を少し小さく表示します。"
-                    ThreadBodyTextSize.Standard -> "標準のレス文字サイズで表示します。"
-                    ThreadBodyTextSize.Large -> "読みやすさを優先してレス内の文字を少し大きく表示します。"
-                    ThreadBodyTextSize.ExtraLarge -> "レス内の文字を大きく表示します。"
+                    ThreadBodyTextSize.Small -> "情報量を優先してアプリ内の文字を少し小さく表示します。"
+                    ThreadBodyTextSize.Standard -> "標準の文字サイズで表示します。"
+                    ThreadBodyTextSize.Large -> "読みやすさを優先してアプリ内の文字を少し大きく表示します。"
+                    ThreadBodyTextSize.ExtraLarge -> "アプリ内の文字を大きく表示します。"
                 },
                 selected = threadBodyTextSize == size,
                 onClick = { onThreadBodyTextSizeChanged(size) }

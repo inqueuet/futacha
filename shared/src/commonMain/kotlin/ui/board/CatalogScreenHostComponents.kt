@@ -171,7 +171,8 @@ internal fun CatalogScreenOverlayHost(
             isSubmitEnabled = isCreateThreadSubmitEnabled,
             onDismiss = createThreadDialogCallbacks.onDismiss,
             onSubmit = createThreadDialogCallbacks.onSubmit,
-            onClear = createThreadDialogCallbacks.onClear
+            onClear = createThreadDialogCallbacks.onClear,
+            bodyTextSize = bindings.preferencesState.threadBodyTextSize
         )
     }
 

@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.ImageData
 
@@ -76,7 +77,8 @@ internal fun ThreadFormDialog(
     isSubmitEnabled: Boolean,
     sendDescription: String,
     showSubject: Boolean = true,
-    showPassword: Boolean = true
+    showPassword: Boolean = true,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
     val commentLineCount = remember(comment) {
         if (comment.isBlank()) 0 else comment.count { it == '\n' } + 1
@@ -112,6 +114,7 @@ internal fun ThreadFormDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        ProvideThreadTextSizeTypography(bodyTextSize) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
@@ -381,6 +384,7 @@ internal fun ThreadFormDialog(
                     }
                 }
             }
+        }
         }
     }
 }

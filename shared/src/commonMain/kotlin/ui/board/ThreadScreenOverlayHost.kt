@@ -161,7 +161,8 @@ internal fun ThreadScreenOverlayHost(
                     hasDeleteKeyForSubmit(bindings.replyDialogState.draft.password),
                 sendDescription = "返信",
                 showSubject = true,
-                showPassword = true
+                showPassword = true,
+                bodyTextSize = bindings.preferencesState.threadBodyTextSize
             )
         }
     }

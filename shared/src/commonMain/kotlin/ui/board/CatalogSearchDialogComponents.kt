@@ -41,6 +41,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -67,7 +68,8 @@ internal fun CreateThreadDialog(
     isSubmitEnabled: Boolean,
     onDismiss: () -> Unit,
     onSubmit: () -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
     val emailPresets = remember { listOf("ID表示", "IP表示", "sage") }
 
@@ -96,7 +98,8 @@ internal fun CreateThreadDialog(
         isSubmitEnabled = isSubmitEnabled,
         sendDescription = "スレ立て",
         showSubject = true,
-        showPassword = true
+        showPassword = true,
+        bodyTextSize = bodyTextSize
     )
 }
 
