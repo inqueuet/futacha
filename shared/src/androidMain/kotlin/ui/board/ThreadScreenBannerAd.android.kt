@@ -27,7 +27,6 @@ import com.google.android.gms.ads.LoadAdError
 import kotlinx.coroutines.delay
 
 private const val THREAD_SCREEN_BANNER_AD_UNIT_ID = "ca-app-pub-6403856201304924/8151063815"
-private const val THREAD_SCREEN_BANNER_AD_LOAD_DELAY_MS = 1_200L
 
 @Composable
 internal actual fun ThreadScreenBannerAd(
@@ -37,7 +36,7 @@ internal actual fun ThreadScreenBannerAd(
         Box(
             modifier = modifier
                 .fillMaxWidth()
-                .height(50.dp)
+                .height(THREAD_SCREEN_BANNER_AD_HEIGHT_DP.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
@@ -50,17 +49,38 @@ internal actual fun ThreadScreenBannerAd(
     val adSize = remember(context) {
         AdSize.BANNER
     }
+    var shouldCreateAdView by remember(context, adSize) { mutableStateOf(false) }
     var isBannerVisible by remember(context, adSize) { mutableStateOf(false) }
-    val adView = remember(context, adSize) {
+    var isLoadFinished by remember(context, adSize) { mutableStateOf(false) }
+
+    LaunchedEffect(context, adSize) {
+        delay(THREAD_SCREEN_BANNER_AD_STABLE_VISIBILITY_DELAY_MS)
+        if (shouldCreateThreadBannerAd(THREAD_SCREEN_BANNER_AD_STABLE_VISIBILITY_DELAY_MS)) {
+            shouldCreateAdView = true
+        }
+    }
+
+    if (!shouldCreateAdView) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(THREAD_SCREEN_BANNER_AD_HEIGHT_DP.dp)
+        )
+        return
+    }
+
+    val adView = remember(context, adSize, shouldCreateAdView) {
         AdView(context).apply {
             adUnitId = THREAD_SCREEN_BANNER_AD_UNIT_ID
             setAdSize(adSize)
             adListener = object : AdListener() {
                 override fun onAdLoaded() {
+                    isLoadFinished = true
                     isBannerVisible = true
                 }
 
                 override fun onAdFailedToLoad(error: LoadAdError) {
+                    isLoadFinished = true
                     isBannerVisible = false
                 }
             }
@@ -68,14 +88,15 @@ internal actual fun ThreadScreenBannerAd(
     }
 
     LaunchedEffect(adView) {
-        delay(THREAD_SCREEN_BANNER_AD_LOAD_DELAY_MS)
         adView.loadAd(AdRequest.Builder().build())
     }
 
-    if (isBannerVisible) {
+    if (!isLoadFinished || isBannerVisible) {
         AndroidView(
             factory = { adView },
-            modifier = modifier.fillMaxWidth()
+            modifier = modifier
+                .fillMaxWidth()
+                .height(THREAD_SCREEN_BANNER_AD_HEIGHT_DP.dp)
         )
     }
 
