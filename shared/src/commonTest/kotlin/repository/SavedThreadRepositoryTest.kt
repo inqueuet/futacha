@@ -278,6 +278,27 @@ class SavedThreadRepositoryTest {
     }
 
     @Test
+    fun updateThread_skipsIndexWriteWhenEntryIsUnchanged() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val original = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(original).getOrThrow()
+        val indexWritesBefore = fileSystem.writeCount("saved_threads/index.json")
+        val backupWritesBefore = fileSystem.writeCount("saved_threads/index.json.backup")
+
+        repository.updateThread(original).getOrThrow()
+
+        assertEquals(indexWritesBefore, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(backupWritesBefore, fileSystem.writeCount("saved_threads/index.json.backup"))
+    }
+
+    @Test
     fun removeThreadFromIndex_removesMatchingEntryAndRecalculatesStats() = runBlocking {
         val fileSystem = InMemoryFileSystem()
         val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
@@ -303,6 +324,217 @@ class SavedThreadRepositoryTest {
 
         assertEquals(listOf(other), repository.getAllThreads())
         assertEquals(20L, repository.getTotalSize())
+    }
+
+    @Test
+    fun removeThreadFromIndex_skipsIndexWriteWhenNoEntryMatches() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        repository.addThreadToIndex(target).getOrThrow()
+        val indexWritesBefore = fileSystem.writeCount("saved_threads/index.json")
+        val backupWritesBefore = fileSystem.writeCount("saved_threads/index.json.backup")
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        assertEquals(indexWritesBefore, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(backupWritesBefore, fileSystem.writeCount("saved_threads/index.json.backup"))
+    }
+
+    @Test
+    fun removeThreadFromIndex_skipsIndexWriteWhenIndexIsMissingAndEmpty() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        assertEquals(0, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(0, fileSystem.writeCount("saved_threads/index.json.backup"))
+        assertTrue(!fileSystem.exists("saved_threads/index.json"))
+    }
+
+    @Test
+    fun removeThreadFromIndex_persistsRepairedIndexEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val storageId = buildThreadStorageId("b", "123")
+        val newerThread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = storageId,
+            savedAt = 200L,
+            totalSize = 20L
+        )
+        val olderThread = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = storageId,
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(olderThread, newerThread),
+                    totalSize = 999L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val persisted = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json").getOrThrow()
+        )
+        assertEquals(listOf(newerThread), persisted.threads)
+        assertEquals(20L, persisted.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_restoresPrimaryIndexFromBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString("saved_threads/index.json", "{broken").getOrThrow()
+        fileSystem.writeString(
+            "saved_threads/index.json.backup",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(target),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val persisted = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json").getOrThrow()
+        )
+        assertEquals(listOf(target), persisted.threads)
+        assertEquals(10L, persisted.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_restoresMissingPrimaryFromEmptyBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        fileSystem.writeString(
+            "saved_threads/index.json.backup",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = emptyList(),
+                    totalSize = 0L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val persisted = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json").getOrThrow()
+        )
+        assertEquals(emptyList(), persisted.threads)
+        assertEquals(0L, persisted.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_recreatesMissingBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(target),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val backup = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json.backup").getOrThrow()
+        )
+        assertEquals(listOf(target), backup.threads)
+        assertEquals(10L, backup.totalSize)
+    }
+
+    @Test
+    fun removeThreadFromIndex_recreatesCorruptedBackupEvenWhenMutationIsNoOp() = runBlocking {
+        val fileSystem = InMemoryFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+        fileSystem.writeString(
+            "saved_threads/index.json",
+            json.encodeToString(
+                SavedThreadIndex(
+                    threads = listOf(target),
+                    totalSize = 10L,
+                    lastUpdated = 1L
+                )
+            )
+        ).getOrThrow()
+        fileSystem.writeString("saved_threads/index.json.backup", "{broken").getOrThrow()
+
+        repository.removeThreadFromIndex("missing", "b").getOrThrow()
+
+        val backup = json.decodeFromString<SavedThreadIndex>(
+            fileSystem.readString("saved_threads/index.json.backup").getOrThrow()
+        )
+        assertEquals(listOf(target), backup.threads)
+        assertEquals(10L, backup.totalSize)
+    }
+
+    @Test
+    fun addThreadToIndex_writesPrimaryAndBackupWithoutTempIndex() = runBlocking {
+        val fileSystem = CountingIndexWriteFileSystem()
+        val repository = SavedThreadRepository(fileSystem, baseDirectory = "saved_threads")
+        val target = savedThread(
+            threadId = "123",
+            boardId = "b",
+            storageId = buildThreadStorageId("b", "123"),
+            savedAt = 100L,
+            totalSize = 10L
+        )
+
+        repository.addThreadToIndex(target).getOrThrow()
+
+        assertEquals(1, fileSystem.writeCount("saved_threads/index.json"))
+        assertEquals(1, fileSystem.writeCount("saved_threads/index.json.backup"))
+        assertEquals(0, fileSystem.writeCount("saved_threads/index.json.tmp"))
+        assertTrue(!fileSystem.exists("saved_threads/index.json.tmp"))
     }
 
     @Test
@@ -669,5 +901,48 @@ internal class InMemoryFileSystem : FileSystem {
         if (trimmed.isBlank()) return "/"
         val parts = trimmed.split('/').filter { it.isNotBlank() }
         return "/" + parts.joinToString("/")
+    }
+}
+
+private class CountingIndexWriteFileSystem(
+    private val delegate: InMemoryFileSystem = InMemoryFileSystem()
+) : FileSystem by delegate {
+    private val writeCounts = linkedMapOf<String, Int>()
+
+    fun writeCount(path: String): Int {
+        return writeCounts[normalizeKey(path)] ?: 0
+    }
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        recordIndexWrite(path)
+        return delegate.writeString(path, content)
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        recordIndexWrite("${baseKey(base)}/$relativePath")
+        return delegate.writeString(base, relativePath, content)
+    }
+
+    private fun recordIndexWrite(path: String) {
+        val key = normalizeKey(path)
+        if (
+            key.endsWith("index.json") ||
+            key.endsWith("index.json.backup") ||
+            key.endsWith("index.json.tmp")
+        ) {
+            writeCounts[key] = (writeCounts[key] ?: 0) + 1
+        }
+    }
+
+    private fun baseKey(base: SaveLocation): String {
+        return when (base) {
+            is SaveLocation.Path -> base.path
+            is SaveLocation.TreeUri -> base.uri
+            is SaveLocation.Bookmark -> base.bookmarkData
+        }
+    }
+
+    private fun normalizeKey(path: String): String {
+        return path.trim().replace('\\', '/').trim('/')
     }
 }

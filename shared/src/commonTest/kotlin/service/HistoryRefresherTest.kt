@@ -741,7 +741,7 @@ private class IndexWriteFailingFileSystem(
     private val delegate: InMemoryFileSystem = InMemoryFileSystem()
 ) : FileSystem by delegate {
     override suspend fun writeString(path: String, content: String): Result<Unit> {
-        return if (path.endsWith("/index.json") || path.endsWith("/index.json.tmp") || path.endsWith("/index.json.backup")) {
+        return if (path.endsWith("/index.json") || path.endsWith("/index.json.backup")) {
             Result.failure(IllegalStateException("index write failed for $path"))
         } else {
             delegate.writeString(path, content)
@@ -751,7 +751,6 @@ private class IndexWriteFailingFileSystem(
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
         return if (
             relativePath == "index.json" ||
-            relativePath == "index.json.tmp" ||
             relativePath == "index.json.backup"
         ) {
             Result.failure(IllegalStateException("index write failed for $relativePath"))

@@ -4,6 +4,8 @@ import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.SavedThreadIndex
 import com.valoser.futacha.shared.service.buildLegacyThreadStorageId
 import com.valoser.futacha.shared.service.buildThreadStorageId
+import com.valoser.futacha.shared.util.AppDispatchers
+import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 
 internal fun List<SavedThread>.safeSavedThreadTotalSize(
@@ -156,5 +158,52 @@ internal suspend fun SavedThreadRepository.buildUpdatedIndexUnlocked(
 internal suspend fun SavedThreadRepository.mutateIndexThreadsUnlocked(
     transform: (List<SavedThread>) -> List<SavedThread>
 ) {
-    saveSavedThreadIndexUnlocked(buildUpdatedIndexUnlocked(transform))
+    val currentIndex = readSavedThreadIndexUnlocked()
+    val updatedThreads = transform(currentIndex.threads)
+    val updatedTotalSize = updatedThreads.safeSavedThreadTotalSize(::logTotalSizeOverflow)
+    if (updatedThreads == currentIndex.threads && updatedTotalSize == currentIndex.totalSize) {
+        if (!isPersistedSavedThreadIndexAlreadyNormalizedUnlocked(currentIndex)) {
+            saveSavedThreadIndexUnlocked(
+                currentIndex.copy(lastUpdated = Clock.System.now().toEpochMilliseconds())
+            )
+        }
+        return
+    }
+    saveSavedThreadIndexUnlocked(
+        SavedThreadIndex(
+            threads = updatedThreads,
+            totalSize = updatedTotalSize,
+            lastUpdated = Clock.System.now().toEpochMilliseconds()
+        )
+    )
+}
+
+private suspend fun SavedThreadRepository.isPersistedSavedThreadIndexAlreadyNormalizedUnlocked(
+    currentIndex: SavedThreadIndex
+): Boolean {
+    if (!existsAt(indexRelativePath)) {
+        return !existsAt("$indexRelativePath.backup") &&
+            currentIndex.threads.isEmpty() &&
+            currentIndex.totalSize == 0L
+    }
+    val primaryIndex = readNormalizedPersistedSavedThreadIndexOrNull(indexRelativePath) ?: return false
+    val backupIndex = readNormalizedPersistedSavedThreadIndexOrNull("$indexRelativePath.backup") ?: return false
+    return primaryIndex == currentIndex && backupIndex == currentIndex
+}
+
+private suspend fun SavedThreadRepository.readNormalizedPersistedSavedThreadIndexOrNull(
+    relativePath: String
+): SavedThreadIndex? {
+    val payload = readStringAt(relativePath).getOrNull() ?: return null
+    val persistedIndex = runCatching {
+        withContext(AppDispatchers.parsing) {
+            json.decodeFromString<SavedThreadIndex>(payload)
+        }
+    }.getOrNull() ?: return null
+    val sanitized = sanitizeSavedThreadIndex(
+        index = persistedIndex,
+        nowMillis = persistedIndex.lastUpdated,
+        onOverflow = ::logTotalSizeOverflow
+    )
+    return sanitized.index.takeIf { it == persistedIndex }
 }

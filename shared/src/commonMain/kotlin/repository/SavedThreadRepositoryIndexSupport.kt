@@ -137,35 +137,20 @@ internal suspend fun SavedThreadRepository.saveSavedThreadIndexUnlocked(index: S
         }
     }
 
-    suspend fun deleteBestEffort(relativePath: String) {
-        runCatching {
-            if (useSaveLocationApi) {
-                fileSystem.delete(resolvedSaveLocation, relativePath).getOrThrow()
-            } else {
-                fileSystem.delete(buildStoragePath(relativePath)).getOrThrow()
-            }
-        }
-    }
-
     ensureSavedThreadBaseDirectoryPreparedUnlocked()
     val jsonString = withContext(AppDispatchers.parsing) {
         json.encodeToString(index)
     }
-    val tempPath = "$indexRelativePath.tmp"
     val backupPath = "$indexRelativePath.backup"
     runCatching {
-        writeIndexPayload(tempPath, jsonString)
         writeIndexPayload(backupPath, jsonString)
         writeIndexPayload(indexRelativePath, jsonString)
-        deleteBestEffort(tempPath)
     }.getOrElse { firstError ->
         isBaseDirectoryPrepared = false
         ensureSavedThreadBaseDirectoryPreparedUnlocked()
         runCatching {
-            writeIndexPayload(tempPath, jsonString)
             writeIndexPayload(backupPath, jsonString)
             writeIndexPayload(indexRelativePath, jsonString)
-            deleteBestEffort(tempPath)
         }.getOrElse { retryError ->
             throw Exception(
                 "Failed to persist index after directory re-prepare. first=${firstError.message}, retry=${retryError.message}",
