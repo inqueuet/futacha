@@ -16,14 +16,24 @@ fun describeFutachaAiCommandReception(actionId: String?): FutachaAiCommandRecept
         actionId = action.id,
         actionLabel = action.label,
         risk = action.risk,
-        status = if (requiresConfirmation) "queued_needs_confirmation" else "queued",
+        status = action.acceptedPendingStatus(),
         message = if (requiresConfirmation) {
             "「${action.label}」を受け付けました。${action.confirmationReason()}、アプリ内で確認してから実行します。"
+        } else if (action.risk == FutachaAiCommandRisk.OpenOnly) {
+            "「${action.label}」を受け付けました。対象画面を開いてからアプリ側で実行します。"
         } else {
-            "「${action.label}」をキューに追加しました。アプリ側で順番に実行します。"
+            "「${action.label}」を受け付けました。アプリ側で順番に実行します。"
         },
         requiresConfirmation = requiresConfirmation
     )
+}
+
+fun FutachaAiAction.acceptedPendingStatus(): String {
+    return when (risk) {
+        FutachaAiCommandRisk.Safe -> "accepted_pending_execution"
+        FutachaAiCommandRisk.Confirm -> "accepted_pending_user_action"
+        FutachaAiCommandRisk.OpenOnly -> "accepted_pending_foreground"
+    }
 }
 
 internal fun FutachaAiAction.confirmationReason(): String {

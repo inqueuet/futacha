@@ -13,9 +13,11 @@ import android.os.OutcomeReceiver
 import com.valoser.futacha.shared.ai.FutachaAiAction
 import com.valoser.futacha.shared.ai.FutachaAiCommand
 import com.valoser.futacha.shared.ai.FutachaAiCommandBridge
+import com.valoser.futacha.shared.ai.FutachaAiCommandReception
 import com.valoser.futacha.shared.ai.describeFutachaAiCommandReception
 import com.valoser.futacha.shared.ai.sanitizeFutachaAiCommandParameters
 import com.valoser.futacha.shared.util.Logger
+import java.util.UUID
 
 @TargetApi(36)
 class FutachaAppFunctionService : AppFunctionService() {
@@ -57,14 +59,32 @@ class FutachaAppFunctionService : AppFunctionService() {
                     "Unsupported Futacha AI action: $requestedAction"
                 )
             )
+        val sanitizedParameters = sanitizeFutachaAiCommandParameters(request.parameters.toStringParameters())
+        val commandId = sanitizedParameters.validCommandIdOrNull() ?: UUID.randomUUID().toString()
+        val commandParameters = sanitizedParameters.withoutCommandIdAliases() + ("commandId" to commandId)
+        if (!markCommandIdAccepted(commandId)) {
+            callback.onResult(
+                ExecuteAppFunctionResponse(
+                    buildResultDocument(
+                        reception = reception,
+                        commandId = commandId,
+                        status = APP_FUNCTION_DUPLICATE_STATUS,
+                        message = "同じ commandId の Futacha AI 操作は既に受け付け済みです。",
+                        duplicate = true
+                    )
+                )
+            )
+            return
+        }
         val accepted = FutachaAiCommandBridge.enqueue(
             FutachaAiCommand(
                 action = action,
-                parameters = sanitizeFutachaAiCommandParameters(request.parameters.toStringParameters()),
+                parameters = commandParameters,
                 source = "android-app-functions"
             )
         )
         if (!accepted) {
+            forgetAcceptedCommandId(commandId)
             callback.onError(
                 AppFunctionException(
                     AppFunctionException.ERROR_CANCELLED,
@@ -82,19 +102,41 @@ class FutachaAppFunctionService : AppFunctionService() {
             Logger.w(TAG, "Failed to open MainActivity for AppFunction command: ${error.message}")
         }
 
+        callback.onResult(
+            ExecuteAppFunctionResponse(
+                buildResultDocument(
+                    reception = reception,
+                    commandId = commandId,
+                    status = reception.status,
+                    message = reception.message,
+                    duplicate = false
+                )
+            )
+        )
+    }
+
+    private fun buildResultDocument(
+        reception: FutachaAiCommandReception,
+        commandId: String,
+        status: String,
+        message: String,
+        duplicate: Boolean
+    ): GenericDocument {
         val result = GenericDocument.Builder<GenericDocument.Builder<*>>(
             "futacha",
             "ai-command-result",
             "FutachaAiCommandResult"
         )
-            .setPropertyString("status", reception.status)
+            .setPropertyString("commandId", commandId)
+            .setPropertyString("status", status)
             .setPropertyString("action", reception.actionId)
             .setPropertyString("label", reception.actionLabel)
             .setPropertyString("risk", reception.risk.name)
-            .setPropertyString("message", reception.message)
+            .setPropertyString("message", message)
             .setPropertyBoolean("requiresConfirmation", reception.requiresConfirmation)
+            .setPropertyBoolean("duplicate", duplicate)
             .build()
-        callback.onResult(ExecuteAppFunctionResponse(result))
+        return result
     }
 
     private fun GenericDocument?.toStringParameters(): Map<String, String> {
@@ -121,7 +163,56 @@ class FutachaAppFunctionService : AppFunctionService() {
         }.getOrNull()?.trim()
     }
 
+    private fun Map<String, String>.validCommandIdOrNull(): String? {
+        return entries
+            .firstOrNull { (key, value) ->
+                key.isCommandIdKey() && value.isValidCommandId()
+            }
+            ?.value
+            ?.trim()
+    }
+
+    private fun Map<String, String>.withoutCommandIdAliases(): Map<String, String> {
+        return filterKeys { key -> !key.isCommandIdKey() }
+    }
+
+    private fun String.isCommandIdKey(): Boolean {
+        val normalized = trim()
+            .lowercase()
+            .filter { it != '_' && it != '-' && !it.isWhitespace() }
+        return normalized == "commandid"
+    }
+
+    private fun String.isValidCommandId(): Boolean {
+        val trimmed = trim()
+        return trimmed.isNotBlank() && trimmed.encodeToByteArray().size <= APP_FUNCTION_COMMAND_ID_MAX_BYTES
+    }
+
+    private fun markCommandIdAccepted(commandId: String): Boolean {
+        synchronized(acceptedCommandIdsLock) {
+            if (!acceptedCommandIds.add(commandId)) {
+                return false
+            }
+            while (acceptedCommandIds.size > APP_FUNCTION_ACCEPTED_COMMAND_ID_MAX_COUNT) {
+                val oldestCommandId = acceptedCommandIds.firstOrNull() ?: break
+                acceptedCommandIds.remove(oldestCommandId)
+            }
+            return true
+        }
+    }
+
+    private fun forgetAcceptedCommandId(commandId: String) {
+        synchronized(acceptedCommandIdsLock) {
+            acceptedCommandIds.remove(commandId)
+        }
+    }
+
     private companion object {
         private const val TAG = "FutachaAppFunctionService"
+        private const val APP_FUNCTION_COMMAND_ID_MAX_BYTES = 128
+        private const val APP_FUNCTION_ACCEPTED_COMMAND_ID_MAX_COUNT = 256
+        private const val APP_FUNCTION_DUPLICATE_STATUS = "accepted_duplicate"
+        private val acceptedCommandIdsLock = Any()
+        private val acceptedCommandIds = LinkedHashSet<String>()
     }
 }

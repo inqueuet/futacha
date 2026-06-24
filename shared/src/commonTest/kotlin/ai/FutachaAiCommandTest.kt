@@ -24,17 +24,27 @@ class FutachaAiCommandTest {
         val confirm = describeFutachaAiCommandReception("save_current_thread")
 
         assertNotNull(safe)
-        assertEquals("queued", safe.status)
+        assertEquals("accepted_pending_execution", safe.status)
         assertFalse(safe.requiresConfirmation)
         assertEquals("open_board", safe.actionId)
-        assertTrue(safe.message.contains("キュー"))
+        assertTrue(safe.message.contains("受け付け"))
 
         assertNotNull(confirm)
-        assertEquals("queued_needs_confirmation", confirm.status)
+        assertEquals("accepted_pending_user_action", confirm.status)
         assertTrue(confirm.requiresConfirmation)
         assertEquals("save_current_thread", confirm.actionId)
         assertTrue(confirm.message.contains("スレ保存"))
         assertTrue(confirm.message.contains("アプリ内で確認"))
+    }
+
+    @Test
+    fun commandReceptionMarksOpenOnlyActionsAsPendingForeground() {
+        val reception = describeFutachaAiCommandReception("refresh_current_thread")
+
+        assertNotNull(reception)
+        assertEquals("accepted_pending_foreground", reception.status)
+        assertFalse(reception.requiresConfirmation)
+        assertTrue(reception.message.contains("対象画面"))
     }
 
     @Test
