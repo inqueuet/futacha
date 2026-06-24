@@ -31,7 +31,8 @@ enum class ThreadBodyTextSize(val label: String) {
 }
 
 enum class ThreadPostImageSize(val label: String) {
-    Small("小"),
-    Medium("中"),
-    Large("大")
+    ExtraSmall("小"),
+    Small("中"),
+    Medium("大"),
+    Large("特大")
 }

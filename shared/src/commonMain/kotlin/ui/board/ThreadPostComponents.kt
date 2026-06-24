@@ -238,6 +238,7 @@ internal fun ThreadPostCard(
 
 internal fun resolveThreadPostThumbnailMaxHeight(size: ThreadPostImageSize): Dp {
     return when (size) {
+        ThreadPostImageSize.ExtraSmall -> 120.dp
         ThreadPostImageSize.Small -> 200.dp
         ThreadPostImageSize.Medium -> 320.dp
         ThreadPostImageSize.Large -> 480.dp

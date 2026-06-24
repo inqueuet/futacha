@@ -44,6 +44,7 @@ class ThreadTextSizeSupportTest {
 
     @Test
     fun resolveThreadPostThumbnailMaxHeight_matchesConfiguredThumbnailSizes() {
+        assertEquals(120.dp, resolveThreadPostThumbnailMaxHeight(ThreadPostImageSize.ExtraSmall))
         assertEquals(200.dp, resolveThreadPostThumbnailMaxHeight(ThreadPostImageSize.Small))
         assertEquals(320.dp, resolveThreadPostThumbnailMaxHeight(ThreadPostImageSize.Medium))
         assertEquals(480.dp, resolveThreadPostThumbnailMaxHeight(ThreadPostImageSize.Large))
@@ -51,6 +52,15 @@ class ThreadTextSizeSupportTest {
 
     @Test
     fun resolveThreadPostThumbnailDisplayBounds_scalesThumbnailUpToSelectedHeight() {
+        assertEquals(
+            ThreadPostThumbnailDisplayBounds(width = 120.dp, height = 120.dp),
+            resolveThreadPostThumbnailDisplayBounds(
+                intrinsicWidth = 250f,
+                intrinsicHeight = 250f,
+                maxWidth = 360.dp,
+                maxHeight = 120.dp
+            )
+        )
         assertEquals(
             ThreadPostThumbnailDisplayBounds(width = 200.dp, height = 200.dp),
             resolveThreadPostThumbnailDisplayBounds(

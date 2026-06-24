@@ -418,6 +418,7 @@ internal fun GlobalSettingsDisplaySection(
             GlobalSettingsRadioOptionRow(
                 label = size.label,
                 description = when (size) {
+                    ThreadPostImageSize.ExtraSmall -> "最大 120px 相当で表示します。"
                     ThreadPostImageSize.Small -> "最大 200px 相当で表示します。"
                     ThreadPostImageSize.Medium -> "最大 320px 相当で表示します。"
                     ThreadPostImageSize.Large -> "最大 480px 相当で表示します。"
