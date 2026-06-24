@@ -11,7 +11,7 @@ Scope:
 
 Current summary:
 - The largest remaining risks are response buffering, duplicate post identity handling, storage/cookie consistency, and unbounded external inputs.
-- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, item 37 OP image/title helper timeouts are split and timeout misses are cached, item 38 Android SAF writes now have an overall provider-response timeout, item 39 HistoryRefresher now has a process-wide duplicate refresh gate, and item 40 iOS BGTask repository close now has a bounded wait.
+- Several older findings are no longer valid: SavedThreadsScreen is wired, Catalog has Grid/List display modes, Thread LazyList keys are stable, embeddedHtml extraction is skipped on Android/iOS parser actuals, several small thumbnail requests now specify size() with crossfade disabled, history archive/export work is complete, catalog head metadata/title completion is policy-controlled, item 3 thread-wide derived work has been reduced enough to treat as complete, item 4 WatchWords mode now stages primary catalog display before merging additional sources, item 30 history persistence now coalesces to one latest revision write while skipping already persisted queued revisions, item 31 iOS storage writes now use separate locks for large JSON and scalar settings, item 32 AI availability now refreshes continuously only while a Thread screen is visible, item 33 read-aloud watch progress now uses dedicated small status updates instead of full snapshots, item 34 iOS video preview now skips unchanged WKWebView JavaScript sync, item 35 cookie snapshot writes are serialized and revision-gated, item 36 read-only board requests now skip recent failed Cookie setup attempts, item 37 OP image/title helper timeouts are split and timeout misses are cached, item 38 Android SAF writes now have an overall provider-response timeout, item 39 HistoryRefresher now has a process-wide duplicate refresh gate, item 40 iOS BGTask repository close now has a bounded wait, and item 41 Android DataStore cold-read failures no longer emit empty preferences or unlock the app.
 - Item 29 is intentionally skipped for now because replacing full-byte attachment posting with file/URI streaming is a broad API and platform-storage change.
 
 Major classification
@@ -20,7 +20,7 @@ Major classification
 This is the primary classification for the remaining findings below. Original item numbers are retained after completed items are removed so code/history references stay stable.
 
 1. State, persistence, storage, and settings data
-   Items: 41, 49, 58, 59, 60, 65, 68, 69
+   Items: 49, 58, 59, 60, 65, 68, 69
 
    Scope:
    - AppStateStore/DataStore/NSUserDefaults JSON growth and locking.
@@ -108,31 +108,6 @@ Kaizen:
 - Do not add response-size runtime logs. Prefer parser/API tests and code changes that avoid duplicate buffering.
 - Avoid extra full-string normalization copies where possible.
 - Consider a streaming or segmented parse path for catalog/thread HTML before raising size limits.
-
-
-41. Android DataStore read fallback can temporarily expose empty/default state
-------------------------------------------------------------------------------
-Relevant code:
-- shared/src/androidMain/kotlin/state/AppStateStore.android.kt
-- shared/src/commonMain/kotlin/state/AppStateStore.kt
-- shared/src/commonMain/kotlin/ui/FutachaAppObservedRuntimeStateSupport.kt
-- shared/src/commonMain/kotlin/ui/FutachaApp.kt
-
-Current behavior:
-- safeData caches the last readable Preferences snapshot.
-- On IOException, it emits the cached snapshot while retrying.
-- If no cached snapshot exists, catch emits emptyPreferences().
-- FutachaApp observes these flows and also calls seedIfEmpty() at startup.
-
-Risk:
-- On a cold start with DataStore read failures, the UI can temporarily see empty/default values for boards, history, app lock, ads, background refresh, and settings.
-- seedIfEmpty() only fills missing keys during edit, so it avoids normal overwrites, but the user-visible state can still flicker to defaults.
-- App lock is especially sensitive: a transient null appLockPasswordHash can allow the main UI to appear before the real hash is readable.
-
-Kaizen:
-- Treat "no cached snapshot + DataStore read failure" as a loading/error state instead of emitting emptyPreferences().
-- Keep app lock in a conservative locked/loading state until the first successful appLockPasswordHash read.
-- Add a test for cold-start DataStore IOException before any readable snapshot exists.
 
 
 42. AI command bridge can enqueue more work than the UI can apply coherently

@@ -85,7 +85,7 @@ fun FutachaApp(
             .catch { error ->
                 if (error is CancellationException) throw error
                 Logger.e(TAG, "Failed to load app lock password hash", error)
-                value = null
+                value = APP_LOCK_HASH_LOADING
             }
             .collect { storedHash ->
                 value = storedHash

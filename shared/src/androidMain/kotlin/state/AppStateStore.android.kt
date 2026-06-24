@@ -90,12 +90,10 @@ private class AndroidPlatformStateStorage(
                     is CancellationException -> throw cause
                     is IOException -> {
                         val cached = lastReadablePreferences.get()
-                        if (cached != null && attempt < MAX_DATASTORE_READ_RETRIES) {
-                            Logger.w(
-                                "AndroidPlatformStateStorage",
-                                "DataStore read failure detected; using last known preferences snapshot and retrying: ${cause.message}"
-                            )
-                            emit(cached)
+                        if (attempt < MAX_DATASTORE_READ_RETRIES) {
+                            if (shouldEmitStorageReadFallback(cached != null)) {
+                                emit(cached!!)
+                            }
                             val backoffMillis = (250L shl attempt.toInt().coerceAtMost(4)).coerceAtMost(4_000L)
                             delay(backoffMillis)
                             true
@@ -115,12 +113,12 @@ private class AndroidPlatformStateStorage(
                 when (e) {
                     is CancellationException -> throw e
                     is IOException -> {
-                        Logger.e(
-                            "AndroidPlatformStateStorage",
-                            "Using fallback preferences after DataStore read failure",
-                            e
-                        )
-                        emit(lastReadablePreferences.get() ?: emptyPreferences())
+                        val cached = lastReadablePreferences.get()
+                        if (shouldEmitStorageReadFallback(cached != null)) {
+                            emit(cached!!)
+                        } else {
+                            throw StorageException("Failed to read DataStore preferences before any snapshot was available", e)
+                        }
                     }
                     else -> throw StorageException("Failed to read DataStore preferences", e)
                 }
