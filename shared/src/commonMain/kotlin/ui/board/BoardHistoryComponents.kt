@@ -52,6 +52,7 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreviewEntry
@@ -88,8 +89,10 @@ internal fun HistoryDrawerContent(
     onLoadImportPreview: suspend () -> FutachaHistoryArchivePreview? = { null },
     onImportClick: () -> Unit = {},
     onImportSelectedClick: (Set<String>) -> Unit = {},
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
+    bodyTextSize: ThreadBodyTextSize? = null
 ) {
+    val content: @Composable () -> Unit = {
     val drawerWidth = 320.dp
     val coroutineScope = rememberCoroutineScope()
     var archiveActionDialog by remember { mutableStateOf<HistoryArchiveAction?>(null) }
@@ -224,6 +227,12 @@ internal fun HistoryDrawerContent(
                 }
             )
         }
+    }
+    }
+    if (bodyTextSize != null) {
+        ProvideThreadTextSizeTypography(bodyTextSize, content)
+    } else {
+        content()
     }
 }
 

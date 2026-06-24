@@ -227,7 +227,9 @@ private fun BoardManagementScreenContent(
         lifecycleBindings.onBack()
     }
 
-    BoardManagementScaffold(bindings = scaffoldBindings, modifier = modifier)
+    ProvideThreadTextSizeTypography(preferencesState.threadBodyTextSize) {
+        BoardManagementScaffold(bindings = scaffoldBindings, modifier = modifier)
 
-    BoardManagementOverlayHost(bindings = overlayBindings)
+        BoardManagementOverlayHost(bindings = overlayBindings)
+    }
 }

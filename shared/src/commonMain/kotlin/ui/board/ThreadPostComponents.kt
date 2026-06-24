@@ -8,12 +8,14 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
@@ -44,11 +47,17 @@ import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import kotlin.math.min
 
 private val ThreadPostFooterTextColor = FutabaTextDim
 private val ThreadPostFooterAccentColor = FutabaAccentRed
 private val ThreadPostFooterAuthorColor = FutabaNameGreen
 private val ThreadPostThumbnailMaxWidth = 800.dp
+
+internal data class ThreadPostThumbnailDisplayBounds(
+    val width: Dp,
+    val height: Dp
+)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -110,7 +119,8 @@ internal fun ThreadPostCard(
             onPosterIdClick = onPosterIdClick,
             onReferencedByClick = onReferencedByClick,
             onMediaClick = onMediaClick,
-            onMediaLongPress = onMediaLongPress
+            onMediaLongPress = onMediaLongPress,
+            bodyTextSize = bodyTextSize
         )
         onAiHideAgain?.let { hideAgain ->
             AiHiddenPostRestoreAction(onClick = hideAgain)
@@ -146,13 +156,10 @@ internal fun ThreadPostCard(
             )
             val thumbnailPainterState by thumbnailPainter.state.collectAsState()
             val shouldShowThumbnailFallback = thumbnailPainterState is AsyncImagePainter.State.Error
-            Box(
+            BoxWithConstraints(
                 modifier = run {
                     val baseModifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = thumbnailMaxHeight)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(backgroundColor)
                     val targetUrl = resolvePostTargetMediaUrl(post) ?: displayUrl
                     val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
                     if (onMediaLongPress != null) {
@@ -171,26 +178,49 @@ internal fun ThreadPostCard(
                     }
                 }
             ) {
-                if (shouldShowThumbnailFallback) {
-                    MediaThumbnailFallbackIcon(
-                        url = displayUrl,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center)
+                val thumbnailDisplayBounds = remember(
+                    thumbnailPainter.intrinsicSize,
+                    maxWidth,
+                    thumbnailMaxHeight
+                ) {
+                    resolveThreadPostThumbnailDisplayBounds(
+                        intrinsicWidth = thumbnailPainter.intrinsicSize.width,
+                        intrinsicHeight = thumbnailPainter.intrinsicSize.height,
+                        maxWidth = maxWidth,
+                        maxHeight = thumbnailMaxHeight
                     )
-                } else {
-                    Image(
-                        painter = thumbnailPainter,
-                        contentDescription = "添付画像",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                }
+                val imageContainerModifier = Modifier
+                    .fillMaxWidth()
+                    .height(thumbnailDisplayBounds.height)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(backgroundColor)
+                Box(modifier = imageContainerModifier) {
+                    if (shouldShowThumbnailFallback) {
+                        MediaThumbnailFallbackIcon(
+                            url = displayUrl,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    } else {
+                        Image(
+                            painter = thumbnailPainter,
+                            contentDescription = "添付画像",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .width(thumbnailDisplayBounds.width)
+                                .height(thumbnailDisplayBounds.height)
+                        )
+                    }
                 }
             }
         }
         if (shouldCollapseDeletedBody) {
             DeletedPostBodyPlaceholder(
                 hasBody = post.messageHtml.isNotBlank(),
-                onReveal = { showDeletedBody = true }
+                onReveal = { showDeletedBody = true },
+                bodyTextSize = bodyTextSize
             )
         } else {
             ThreadMessageText(
@@ -206,12 +236,55 @@ internal fun ThreadPostCard(
     }
 }
 
-private fun resolveThreadPostThumbnailMaxHeight(size: ThreadPostImageSize): Dp {
+internal fun resolveThreadPostThumbnailMaxHeight(size: ThreadPostImageSize): Dp {
     return when (size) {
         ThreadPostImageSize.Small -> 200.dp
         ThreadPostImageSize.Medium -> 320.dp
         ThreadPostImageSize.Large -> 480.dp
     }
+}
+
+internal fun resolveThreadPostThumbnailDisplayBounds(
+    intrinsicWidth: Float,
+    intrinsicHeight: Float,
+    maxWidth: Dp,
+    maxHeight: Dp
+): ThreadPostThumbnailDisplayBounds {
+    val resolvedMaxWidth = if (maxWidth.value.isFinite() && maxWidth > 0.dp) {
+        maxWidth
+    } else {
+        ThreadPostThumbnailMaxWidth
+    }
+    val resolvedMaxHeight = if (maxHeight.value.isFinite() && maxHeight > 0.dp) {
+        maxHeight
+    } else {
+        resolveThreadPostThumbnailMaxHeight(ThreadPostImageSize.Small)
+    }
+    if (
+        !intrinsicWidth.isFinite() ||
+        !intrinsicHeight.isFinite() ||
+        intrinsicWidth <= 0f ||
+        intrinsicHeight <= 0f
+    ) {
+        return ThreadPostThumbnailDisplayBounds(
+            width = resolvedMaxWidth,
+            height = resolvedMaxHeight
+        )
+    }
+    val scale = min(
+        resolvedMaxWidth.value / intrinsicWidth,
+        resolvedMaxHeight.value / intrinsicHeight
+    )
+    if (!scale.isFinite() || scale <= 0f) {
+        return ThreadPostThumbnailDisplayBounds(
+            width = resolvedMaxWidth,
+            height = resolvedMaxHeight
+        )
+    }
+    return ThreadPostThumbnailDisplayBounds(
+        width = (intrinsicWidth * scale).dp,
+        height = (intrinsicHeight * scale).dp
+    )
 }
 
 @Composable
@@ -232,8 +305,14 @@ private fun AiHiddenPostRestoreAction(
 @Composable
 private fun DeletedPostBodyPlaceholder(
     hasBody: Boolean,
-    onReveal: () -> Unit
+    onReveal: () -> Unit,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
+    val textStyle = MaterialTheme.typography.bodySmall.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 12.sp,
+        fallbackLineHeight = 16.sp
+    )
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -241,7 +320,7 @@ private fun DeletedPostBodyPlaceholder(
     ) {
         Text(
             text = "削除されたレスです",
-            style = MaterialTheme.typography.bodySmall,
+            style = textStyle,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
@@ -267,8 +346,34 @@ internal fun ThreadPostMetadata(
     onPosterIdClick: (() -> Unit)? = null,
     onReferencedByClick: (() -> Unit)? = null,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
-    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null
+    onMediaLongPress: ((Post, String, MediaType) -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
+    val orderStyle = MaterialTheme.typography.labelLarge.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 14.sp,
+        fallbackLineHeight = 20.sp
+    )
+    val subjectStyle = MaterialTheme.typography.titleMedium.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 16.sp,
+        fallbackLineHeight = 24.sp
+    )
+    val authorStyle = MaterialTheme.typography.bodyMedium.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 14.sp,
+        fallbackLineHeight = 20.sp
+    )
+    val secondaryStyle = MaterialTheme.typography.bodySmall.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 12.sp,
+        fallbackLineHeight = 16.sp
+    )
+    val labelStyle = MaterialTheme.typography.labelMedium.withThreadTextSize(
+        bodyTextSize = bodyTextSize,
+        fallbackFontSize = 12.sp,
+        fallbackLineHeight = 16.sp
+    )
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -280,34 +385,36 @@ internal fun ThreadPostMetadata(
             isOp -> MaterialTheme.colorScheme.onSurface
             else -> MaterialTheme.colorScheme.onSurface
         }
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
                 text = (post.order ?: 0).toString(),
-                style = MaterialTheme.typography.labelLarge,
+                style = orderStyle,
                 fontWeight = FontWeight.Bold,
                 color = ThreadPostFooterAccentColor
             )
             Text(
                 text = subjectText,
-                style = MaterialTheme.typography.titleMedium,
+                style = subjectStyle,
                 color = subjectColor,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = authorText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = ThreadPostFooterAuthorColor
+                style = authorStyle,
+                color = ThreadPostFooterAuthorColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.weight(1f))
             if (post.referencedCount > 0) {
                 ReplyCountLabel(
                     count = post.referencedCount,
-                    onClick = onReferencedByClick
+                    onClick = onReferencedByClick,
+                    bodyTextSize = bodyTextSize
                 )
             }
         }
@@ -318,13 +425,13 @@ internal fun ThreadPostMetadata(
             val timestampText = remember(post.timestamp) {
                 extractTimestampWithoutId(post.timestamp)
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
                     text = timestampText,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = secondaryStyle,
                     color = ThreadPostFooterTextColor
                 )
                 posterIdLabel?.let { label ->
@@ -336,7 +443,7 @@ internal fun ThreadPostMetadata(
                     Text(
                         modifier = idModifier,
                         text = label.text,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = labelStyle,
                         color = if (label.highlight) {
                             ThreadPostFooterAccentColor
                         } else {
@@ -349,13 +456,14 @@ internal fun ThreadPostMetadata(
                     SaidaneLink(
                         label = saidaneLabel,
                         enabled = canSendSaidane,
-                        onClick = onSaidaneClick
+                        onClick = onSaidaneClick,
+                        bodyTextSize = bodyTextSize
                     )
                 }
             }
             Text(
                 text = "No.${post.id}",
-                style = MaterialTheme.typography.labelMedium,
+                style = labelStyle,
                 color = ThreadPostFooterTextColor
             )
             val targetUrl = resolvePostTargetMediaUrl(post)
@@ -364,9 +472,11 @@ internal fun ThreadPostMetadata(
                 val targetMediaType = resolvePostTargetMediaType(post, targetUrl)
                 Text(
                     text = fileName,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = secondaryStyle,
                     color = FutabaLinkColor,
                     textDecoration = TextDecoration.None,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = if (onMediaLongPress != null) {
                         Modifier.combinedClickable(
                             onClick = {
@@ -390,13 +500,18 @@ internal fun ThreadPostMetadata(
 @Composable
 private fun ReplyCountLabel(
     count: Int,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
     val labelModifier = onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
     Text(
         modifier = labelModifier,
         text = "${count}レス",
-        style = MaterialTheme.typography.labelMedium,
+        style = MaterialTheme.typography.labelMedium.withThreadTextSize(
+            bodyTextSize = bodyTextSize,
+            fallbackFontSize = 12.sp,
+            fallbackLineHeight = 16.sp
+        ),
         fontWeight = FontWeight.Bold,
         color = ThreadPostFooterAccentColor
     )
@@ -406,12 +521,17 @@ private fun ReplyCountLabel(
 private fun SaidaneLink(
     label: String,
     enabled: Boolean = true,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
     val normalized = if (label == "+") "そうだね" else label
     Text(
         text = normalized,
-        style = MaterialTheme.typography.labelMedium.copy(
+        style = MaterialTheme.typography.labelMedium.withThreadTextSize(
+            bodyTextSize = bodyTextSize,
+            fallbackFontSize = 12.sp,
+            fallbackLineHeight = 16.sp
+        ).copy(
             color = ThreadPostFooterTextColor,
             fontWeight = FontWeight.SemiBold
         ),

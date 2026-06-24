@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -156,10 +157,12 @@ internal fun ThreadMessageText(
     }
     val baseTextStyle = MaterialTheme.typography.bodyMedium
     val textSizeTokens = remember(bodyTextSize, baseTextStyle.fontSize, baseTextStyle.lineHeight) {
-        resolveThreadBodyTextSizeTokens(
+        resolveThreadTextSizeTokens(
             size = bodyTextSize,
             standardFontSize = baseTextStyle.fontSize,
-            standardLineHeight = baseTextStyle.lineHeight
+            standardLineHeight = baseTextStyle.lineHeight,
+            fallbackFontSize = 14.sp,
+            fallbackLineHeight = 20.sp
         )
     }
     val textLayoutResult = remember { ThreadMessageTextLayoutHolder() }
@@ -212,25 +215,58 @@ internal fun ThreadMessageText(
     )
 }
 
-private data class ThreadBodyTextSizeTokens(
+internal data class ThreadTextSizeTokens(
     val fontSize: TextUnit,
     val lineHeight: TextUnit
 )
 
-private fun resolveThreadBodyTextSizeTokens(
+internal fun resolveThreadTextSizeTokens(
     size: ThreadBodyTextSize,
     standardFontSize: TextUnit,
-    standardLineHeight: TextUnit
-): ThreadBodyTextSizeTokens {
-    return when (size) {
-        ThreadBodyTextSize.Small -> ThreadBodyTextSizeTokens(fontSize = 13.sp, lineHeight = 18.sp)
-        ThreadBodyTextSize.Standard -> ThreadBodyTextSizeTokens(
-            fontSize = standardFontSize.takeOrFallback(14.sp),
-            lineHeight = standardLineHeight.takeOrFallback(20.sp)
-        )
-        ThreadBodyTextSize.Large -> ThreadBodyTextSizeTokens(fontSize = 17.sp, lineHeight = 24.sp)
-        ThreadBodyTextSize.ExtraLarge -> ThreadBodyTextSizeTokens(fontSize = 19.sp, lineHeight = 27.sp)
+    standardLineHeight: TextUnit,
+    fallbackFontSize: TextUnit,
+    fallbackLineHeight: TextUnit
+): ThreadTextSizeTokens {
+    val fontSizeDelta = when (size) {
+        ThreadBodyTextSize.Small -> -1f
+        ThreadBodyTextSize.Standard -> 0f
+        ThreadBodyTextSize.Large -> 3f
+        ThreadBodyTextSize.ExtraLarge -> 5f
     }
+    val lineHeightDelta = when (size) {
+        ThreadBodyTextSize.Small -> -2f
+        ThreadBodyTextSize.Standard -> 0f
+        ThreadBodyTextSize.Large -> 4f
+        ThreadBodyTextSize.ExtraLarge -> 7f
+    }
+    return ThreadTextSizeTokens(
+        fontSize = standardFontSize.applyThreadTextSizeDelta(fallbackFontSize, fontSizeDelta, minValue = 10f),
+        lineHeight = standardLineHeight.applyThreadTextSizeDelta(fallbackLineHeight, lineHeightDelta, minValue = 12f)
+    )
+}
+
+internal fun TextStyle.withThreadTextSize(
+    bodyTextSize: ThreadBodyTextSize,
+    fallbackFontSize: TextUnit,
+    fallbackLineHeight: TextUnit
+): TextStyle {
+    val tokens = resolveThreadTextSizeTokens(
+        size = bodyTextSize,
+        standardFontSize = fontSize,
+        standardLineHeight = lineHeight,
+        fallbackFontSize = fallbackFontSize,
+        fallbackLineHeight = fallbackLineHeight
+    )
+    return copy(fontSize = tokens.fontSize, lineHeight = tokens.lineHeight)
+}
+
+private fun TextUnit.applyThreadTextSizeDelta(
+    fallback: TextUnit,
+    delta: Float,
+    minValue: Float
+): TextUnit {
+    val base = takeOrFallback(fallback)
+    return (base.value + delta).coerceAtLeast(minValue).sp
 }
 
 private fun TextUnit.takeOrFallback(fallback: TextUnit): TextUnit {

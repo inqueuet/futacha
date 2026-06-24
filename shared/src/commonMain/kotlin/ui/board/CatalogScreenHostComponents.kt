@@ -54,7 +54,8 @@ internal fun CatalogScreenScaffold(
                 onLoadImportPreview = bindings.historyDrawerCallbacks.onLoadImportPreview,
                 onImportClick = bindings.historyDrawerCallbacks.onImportClick,
                 onImportSelectedClick = bindings.historyDrawerCallbacks.onImportSelectedClick,
-                onSettingsClick = bindings.historyDrawerCallbacks.onSettingsClick
+                onSettingsClick = bindings.historyDrawerCallbacks.onSettingsClick,
+                bodyTextSize = bindings.historyDrawerTextSize
             )
         }
     ) {

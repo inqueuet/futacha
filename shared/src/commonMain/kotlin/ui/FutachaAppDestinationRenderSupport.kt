@@ -56,7 +56,8 @@ internal fun buildFutachaResolvedDestinationContent(
                 props = activeSavedThreadsRepository?.let {
                     buildFutachaSavedThreadsDestinationProps(
                         repository = it,
-                        navigationCallbacks = assemblyContext.navigationCallbacks
+                        navigationCallbacks = assemblyContext.navigationCallbacks,
+                        preferencesState = assemblyContext.screenContract.preferencesState
                     )
                 },
                 onUnavailable = assemblyContext.navigationCallbacks.onSavedThreadsDismissed

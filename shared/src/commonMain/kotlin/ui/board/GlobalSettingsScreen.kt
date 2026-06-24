@@ -36,12 +36,14 @@ internal fun GlobalSettingsScreen(
     )
 
     PlatformBackHandler(onBack = onBack)
-    GlobalSettingsScaffold(bindings = runtime.scaffoldBindings)
-    GlobalSettingsFileManagerPickerHost(
-        isVisible = runtime.isFileManagerPickerVisible,
-        onDismiss = runtime.onDismissFileManagerPicker,
-        onFileManagerSelected = runtime.onFileManagerSelected
-    )
+    ProvideThreadTextSizeTypography(preferencesState.threadBodyTextSize) {
+        GlobalSettingsScaffold(bindings = runtime.scaffoldBindings)
+        GlobalSettingsFileManagerPickerHost(
+            isVisible = runtime.isFileManagerPickerVisible,
+            onDismiss = runtime.onDismissFileManagerPicker,
+            onFileManagerSelected = runtime.onFileManagerSelected
+        )
+    }
 }
 
 /**

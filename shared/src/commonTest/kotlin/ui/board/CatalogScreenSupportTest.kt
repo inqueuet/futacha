@@ -14,6 +14,7 @@ import com.valoser.futacha.shared.model.CatalogNavEntryId
 import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.network.ArchiveSearchItem
 import com.valoser.futacha.shared.network.ArchiveSearchScope
@@ -536,6 +537,7 @@ class CatalogScreenSupportTest {
             history = history,
             onHistoryEntryDismissed = {},
             historyDrawerCallbacks = runtimeBindings.historyDrawerCallbacks,
+            historyDrawerTextSize = ThreadBodyTextSize.Standard,
             drawerState = drawerState,
             isDrawerOpen = true,
             coroutineScope = this,

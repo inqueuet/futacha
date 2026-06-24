@@ -11,6 +11,7 @@ import com.valoser.futacha.shared.model.CatalogItem
 import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
@@ -22,6 +23,7 @@ internal data class CatalogScreenScaffoldBindings(
     val history: List<ThreadHistoryEntry>,
     val onHistoryEntryDismissed: (ThreadHistoryEntry) -> Unit,
     val historyDrawerCallbacks: CatalogHistoryDrawerCallbacks,
+    val historyDrawerTextSize: ThreadBodyTextSize,
     val drawerState: DrawerState,
     val isDrawerOpen: Boolean,
     val coroutineScope: CoroutineScope,
@@ -140,6 +142,7 @@ internal fun buildCatalogScreenHostBindings(
         history = inputs.history,
         onHistoryEntryDismissed = inputs.onHistoryEntryDismissed,
         historyDrawerCallbacks = inputs.historyDrawerCallbacks,
+        historyDrawerTextSize = inputs.preferencesState.threadBodyTextSize,
         drawerState = inputs.drawerState,
         isDrawerOpen = inputs.isDrawerOpen,
         coroutineScope = inputs.coroutineScope,

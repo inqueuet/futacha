@@ -29,7 +29,8 @@ internal fun FutachaSavedThreadsDestination(
         SavedThreadsScreen(
             repository = props.repository,
             onThreadClick = props.onThreadClick,
-            onBack = props.onBack
+            onBack = props.onBack,
+            bodyTextSize = props.preferencesState.threadBodyTextSize
         )
         return
     }

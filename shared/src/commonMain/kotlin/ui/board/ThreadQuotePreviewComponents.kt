@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.model.QuoteReference
@@ -65,7 +66,11 @@ internal fun QuotePreviewDialog(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     text = state.quoteText,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.withThreadTextSize(
+                        bodyTextSize = bodyTextSize,
+                        fallbackFontSize = 12.sp,
+                        fallbackLineHeight = 16.sp
+                    ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 HorizontalDivider(

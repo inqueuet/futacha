@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.util.isAndroid
 import kotlin.math.abs
@@ -37,6 +38,7 @@ internal data class ThreadScreenScaffoldBindings(
     val snackbarHostState: SnackbarHostState,
     val history: List<ThreadHistoryEntry>,
     val historyDrawerCallbacks: ThreadHistoryDrawerCallbacks,
+    val historyDrawerTextSize: ThreadBodyTextSize,
     val boardName: String,
     val resolvedThreadTitle: String,
     val resolvedReplyCount: Int?,
@@ -82,7 +84,8 @@ internal fun ThreadScreenScaffoldHost(
                 onLoadImportPreview = bindings.historyDrawerCallbacks.onLoadImportPreview,
                 onImportClick = bindings.historyDrawerCallbacks.onImportClick,
                 onImportSelectedClick = bindings.historyDrawerCallbacks.onImportSelectedClick,
-                onSettingsClick = bindings.historyDrawerCallbacks.onSettingsClick
+                onSettingsClick = bindings.historyDrawerCallbacks.onSettingsClick,
+                bodyTextSize = bindings.historyDrawerTextSize
             )
         }
     ) {

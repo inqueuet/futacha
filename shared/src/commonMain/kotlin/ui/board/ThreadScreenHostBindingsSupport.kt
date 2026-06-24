@@ -6,6 +6,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.lazy.LazyListState
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SaveProgress
@@ -110,6 +111,7 @@ internal data class ThreadScreenHostScaffoldInputs(
     val snackbarHostState: SnackbarHostState,
     val history: List<ThreadHistoryEntry>,
     val historyDrawerCallbacks: ThreadHistoryDrawerCallbacks,
+    val historyDrawerTextSize: ThreadBodyTextSize,
     val boardName: String,
     val resolvedThreadTitle: String,
     val resolvedReplyCount: Int?,
@@ -216,6 +218,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             snackbarHostState = scaffoldInputs.snackbarHostState,
             history = scaffoldInputs.history,
             historyDrawerCallbacks = scaffoldInputs.historyDrawerCallbacks,
+            historyDrawerTextSize = scaffoldInputs.historyDrawerTextSize,
             boardName = scaffoldInputs.boardName,
             resolvedThreadTitle = scaffoldInputs.resolvedThreadTitle,
             resolvedReplyCount = scaffoldInputs.resolvedReplyCount,
@@ -326,6 +329,7 @@ internal fun buildThreadScreenHostBindingsBundle(
             snackbarHostState = inputs.snackbarHostState,
             history = inputs.history,
             historyDrawerCallbacks = inputs.historyDrawerCallbacks,
+            historyDrawerTextSize = inputs.preferencesState.threadBodyTextSize,
             boardName = inputs.boardName,
             resolvedThreadTitle = inputs.resolvedThreadTitle,
             resolvedReplyCount = inputs.resolvedReplyCount,

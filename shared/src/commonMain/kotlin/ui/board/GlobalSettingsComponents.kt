@@ -39,6 +39,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonColors
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
@@ -53,6 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
@@ -68,6 +72,7 @@ import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.state.APP_LOCK_PASSWORD_MIN_LENGTH
 import com.valoser.futacha.shared.state.isValidAppLockPassword
+import com.valoser.futacha.shared.ui.theme.LocalFutachaThemePalette
 
 internal data class GlobalSettingsEntry(
     val label: String,
@@ -369,10 +374,10 @@ internal fun GlobalSettingsDisplaySection(
         }
         HorizontalDivider()
         ListItem(
-            headlineContent = { Text("本文サイズ") },
+            headlineContent = { Text("レス文字サイズ") },
             supportingContent = {
                 Text(
-                    text = "スレ本文だけの文字サイズを変更します。ボタンや見出しの大きさはそのままです。",
+                    text = "レス本文、ID、日時、引用数、そうだねなどレス内の文字サイズを変更します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -383,15 +388,20 @@ internal fun GlobalSettingsDisplaySection(
             GlobalSettingsRadioOptionRow(
                 label = size.label,
                 description = when (size) {
-                    ThreadBodyTextSize.Small -> "情報量を優先して少し小さく表示します。"
-                    ThreadBodyTextSize.Standard -> "標準の本文サイズで表示します。"
-                    ThreadBodyTextSize.Large -> "読みやすさを優先して少し大きく表示します。"
-                    ThreadBodyTextSize.ExtraLarge -> "本文を大きく表示します。"
+                    ThreadBodyTextSize.Small -> "情報量を優先してレス内の文字を少し小さく表示します。"
+                    ThreadBodyTextSize.Standard -> "標準のレス文字サイズで表示します。"
+                    ThreadBodyTextSize.Large -> "読みやすさを優先してレス内の文字を少し大きく表示します。"
+                    ThreadBodyTextSize.ExtraLarge -> "レス内の文字を大きく表示します。"
                 },
                 selected = threadBodyTextSize == size,
                 onClick = { onThreadBodyTextSizeChanged(size) }
             )
         }
+        Text(
+            text = "カタログ画面はカード崩れを避けるため、この設定ではなく列数に合わせて文字の見え方が自動で変わります。カタログを見やすくしたい場合は表示切替の列数を調整してください。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         HorizontalDivider()
         ListItem(
             headlineContent = { Text("レス画像サイズ") },
@@ -900,7 +910,8 @@ private fun GlobalSettingsRadioOptionRow(
         trailingContent = {
             RadioButton(
                 selected = selected,
-                onClick = null
+                onClick = null,
+                colors = globalSettingsRadioButtonColors()
             )
         },
         modifier = Modifier
@@ -967,10 +978,28 @@ private fun AppIconVariantOptionCard(
             }
             RadioButton(
                 selected = selected,
-                onClick = null
+                onClick = null,
+                colors = globalSettingsRadioButtonColors()
             )
         }
     }
+}
+
+@Composable
+private fun globalSettingsRadioButtonColors(): RadioButtonColors {
+    val selectedColor = if (LocalFutachaThemePalette.current == ThemePalette.FutabaClassic) {
+        if (MaterialTheme.colorScheme.background.luminance() > 0.5f) {
+            Color(0xFF4A0000)
+        } else {
+            Color(0xFFFFD8C8)
+        }
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    return RadioButtonDefaults.colors(
+        selectedColor = selectedColor,
+        unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable

@@ -9,6 +9,7 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.ui.board.BoardManagementMenuAction
 import com.valoser.futacha.shared.ui.board.BoardManagementScreenDependencies
 import com.valoser.futacha.shared.ui.board.CatalogScreenDependencies
+import com.valoser.futacha.shared.ui.board.ScreenPreferencesState
 import com.valoser.futacha.shared.ui.board.ScreenContract
 import com.valoser.futacha.shared.ui.board.ThreadScreenDependencies
 import com.valoser.futacha.shared.util.FileSystem
@@ -17,7 +18,8 @@ import io.ktor.client.HttpClient
 internal data class FutachaSavedThreadsDestinationProps(
     val repository: SavedThreadRepository,
     val onThreadClick: (SavedThread) -> Unit,
-    val onBack: () -> Unit
+    val onBack: () -> Unit,
+    val preferencesState: ScreenPreferencesState
 )
 
 internal data class FutachaDestinationAssemblyContext(
@@ -72,12 +74,14 @@ internal data class FutachaThreadDestinationProps(
 
 internal fun buildFutachaSavedThreadsDestinationProps(
     repository: SavedThreadRepository,
-    navigationCallbacks: FutachaNavigationCallbacks
+    navigationCallbacks: FutachaNavigationCallbacks,
+    preferencesState: ScreenPreferencesState
 ): FutachaSavedThreadsDestinationProps {
     return FutachaSavedThreadsDestinationProps(
         repository = repository,
         onThreadClick = navigationCallbacks.onSavedThreadSelected,
-        onBack = navigationCallbacks.onSavedThreadsDismissed
+        onBack = navigationCallbacks.onSavedThreadsDismissed,
+        preferencesState = preferencesState
     )
 }
 

@@ -778,7 +778,8 @@ class FutachaAppTest {
 
         val savedProps = buildFutachaSavedThreadsDestinationProps(
             repository = manualRepository,
-            navigationCallbacks = navigationCallbacks
+            navigationCallbacks = navigationCallbacks,
+            preferencesState = screenBindings.screenPreferencesState
         )
         val savedThread = savedThread(threadId = "saved-123", boardId = "img", boardName = "img")
         savedProps.onThreadClick(savedThread)

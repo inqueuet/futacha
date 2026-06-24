@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.model.SavedThread
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import kotlinx.coroutines.launch
 import kotlin.math.pow
@@ -46,7 +47,8 @@ fun SavedThreadsScreen(
     repository: SavedThreadRepository,
     onThreadClick: (SavedThread) -> Unit,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
 ) {
     var threads by remember(repository) { mutableStateOf<List<SavedThread>>(emptyList()) }
     var isLoading by remember(repository) { mutableStateOf(true) }
@@ -91,6 +93,7 @@ fun SavedThreadsScreen(
         reloadSavedThreads(showLoadingState = true, showAsScreenError = true)
     }
 
+    ProvideThreadTextSizeTypography(bodyTextSize) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -216,6 +219,7 @@ fun SavedThreadsScreen(
                 }
             )
         }
+    }
     }
 }
 
