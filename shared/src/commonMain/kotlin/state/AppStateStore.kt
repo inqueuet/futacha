@@ -7,9 +7,11 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -206,6 +208,8 @@ class AppStateStore internal constructor(
     val themePalette: Flow<ThemePalette> = preferenceFlows.themePalette
     val appIconVariant: Flow<AppIconVariant> = preferenceFlows.appIconVariant
     val threadDisplayMode: Flow<ThreadDisplayMode> = preferenceFlows.threadDisplayMode
+    val threadBodyTextSize: Flow<ThreadBodyTextSize> = preferenceFlows.threadBodyTextSize
+    val threadPostImageSize: Flow<ThreadPostImageSize> = preferenceFlows.threadPostImageSize
     val lastUsedDeleteKey: Flow<String> = preferenceFlows.lastUsedDeleteKey
 
     val catalogModes: Flow<Map<String, CatalogMode>> = preferenceFlows.catalogModes
@@ -310,6 +314,12 @@ class AppStateStore internal constructor(
 
     suspend fun setThreadDisplayMode(mode: ThreadDisplayMode) =
         preferenceOperations.setThreadDisplayMode(mode)
+
+    suspend fun setThreadBodyTextSize(size: ThreadBodyTextSize) =
+        preferenceOperations.setThreadBodyTextSize(size)
+
+    suspend fun setThreadPostImageSize(size: ThreadPostImageSize) =
+        preferenceOperations.setThreadPostImageSize(size)
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) =
         preferenceOperations.setPreferredFileManager(packageName, label)
@@ -482,6 +492,8 @@ internal interface PlatformStateStorage {
     val themePalette: Flow<String?>
     val appIconVariant: Flow<String?>
     val threadDisplayMode: Flow<String?>
+    val threadBodyTextSize: Flow<String?>
+    val threadPostImageSize: Flow<String?>
     val lastUsedDeleteKey: Flow<String?>
     val catalogModeMapJson: Flow<String?>
     val catalogDisplayStyle: Flow<String?>
@@ -518,6 +530,8 @@ internal interface PlatformStateStorage {
     suspend fun updateThemePalette(palette: String)
     suspend fun updateAppIconVariant(variant: String)
     suspend fun updateThreadDisplayMode(mode: String)
+    suspend fun updateThreadBodyTextSize(size: String)
+    suspend fun updateThreadPostImageSize(size: String)
     suspend fun updateLastUsedDeleteKey(value: String)
     suspend fun updateCatalogModeMapJson(value: String)
     suspend fun updateCatalogDisplayStyle(style: String)

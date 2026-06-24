@@ -11,11 +11,13 @@ import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
@@ -65,6 +67,8 @@ internal data class FutachaObservedRuntimeState(
     val themePalette: ThemePalette = ThemePalette.FutabaClassic,
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
+    val threadBodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    val threadPostImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
     val preferredFileManager: PreferredFileManager?,
     val appVersion: String,
     val resolvedManualSaveDirectory: String?
@@ -174,6 +178,12 @@ internal fun rememberFutachaObservedRuntimeState(
     val threadDisplayMode by stateStore.threadDisplayMode.collectAsState(
         initial = ThreadDisplayMode.Flat
     )
+    val threadBodyTextSize by stateStore.threadBodyTextSize.collectAsState(
+        initial = ThreadBodyTextSize.Standard
+    )
+    val threadPostImageSize by stateStore.threadPostImageSize.collectAsState(
+        initial = ThreadPostImageSize.Small
+    )
     val preferredFileManagerFlow = remember(stateStore) { stateStore.getPreferredFileManager() }
     val preferredFileManager by preferredFileManagerFlow.collectAsState(initial = null)
     val appVersion = remember(versionChecker) {
@@ -208,6 +218,8 @@ internal fun rememberFutachaObservedRuntimeState(
         themePalette,
         appIconVariant,
         threadDisplayMode,
+        threadBodyTextSize,
+        threadPostImageSize,
         preferredFileManager,
         appVersion,
         resolvedManualSaveDirectory
@@ -234,6 +246,8 @@ internal fun rememberFutachaObservedRuntimeState(
             themePalette = themePalette,
             appIconVariant = appIconVariant,
             threadDisplayMode = threadDisplayMode,
+            threadBodyTextSize = threadBodyTextSize,
+            threadPostImageSize = threadPostImageSize,
             preferredFileManager = preferredFileManager,
             appVersion = appVersion,
             resolvedManualSaveDirectory = resolvedManualSaveDirectory

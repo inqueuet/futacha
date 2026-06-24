@@ -18,7 +18,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.util.AppDispatchers
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -114,6 +117,7 @@ internal fun ThreadMessageText(
     onQuoteClick: (QuoteReference) -> Unit,
     onUrlClick: (String) -> Unit,
     highlightRanges: List<IntRange> = emptyList(),
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
     modifier: Modifier = Modifier
 ) {
     val highlightStyle = SpanStyle(
@@ -149,6 +153,14 @@ internal fun ThreadMessageText(
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
+    }
+    val baseTextStyle = MaterialTheme.typography.bodyMedium
+    val textSizeTokens = remember(bodyTextSize, baseTextStyle.fontSize, baseTextStyle.lineHeight) {
+        resolveThreadBodyTextSizeTokens(
+            size = bodyTextSize,
+            standardFontSize = baseTextStyle.fontSize,
+            standardLineHeight = baseTextStyle.lineHeight
+        )
     }
     val textLayoutResult = remember { ThreadMessageTextLayoutHolder() }
     Text(
@@ -191,9 +203,38 @@ internal fun ThreadMessageText(
             )
         },
         text = annotated,
-        style = MaterialTheme.typography.bodyMedium.copy(color = textColor),
+        style = baseTextStyle.copy(
+            color = textColor,
+            fontSize = textSizeTokens.fontSize,
+            lineHeight = textSizeTokens.lineHeight
+        ),
         onTextLayout = { textLayoutResult.value = it }
     )
+}
+
+private data class ThreadBodyTextSizeTokens(
+    val fontSize: TextUnit,
+    val lineHeight: TextUnit
+)
+
+private fun resolveThreadBodyTextSizeTokens(
+    size: ThreadBodyTextSize,
+    standardFontSize: TextUnit,
+    standardLineHeight: TextUnit
+): ThreadBodyTextSizeTokens {
+    return when (size) {
+        ThreadBodyTextSize.Small -> ThreadBodyTextSizeTokens(fontSize = 13.sp, lineHeight = 18.sp)
+        ThreadBodyTextSize.Standard -> ThreadBodyTextSizeTokens(
+            fontSize = standardFontSize.takeOrFallback(14.sp),
+            lineHeight = standardLineHeight.takeOrFallback(20.sp)
+        )
+        ThreadBodyTextSize.Large -> ThreadBodyTextSizeTokens(fontSize = 17.sp, lineHeight = 24.sp)
+        ThreadBodyTextSize.ExtraLarge -> ThreadBodyTextSizeTokens(fontSize = 19.sp, lineHeight = 27.sp)
+    }
+}
+
+private fun TextUnit.takeOrFallback(fallback: TextUnit): TextUnit {
+    return if (this == TextUnit.Unspecified) fallback else this
 }
 
 private fun buildThreadMessageAnnotationCacheKey(

@@ -37,6 +37,8 @@ private const val THEME_MODE_KEY = "theme_mode"
 private const val THEME_PALETTE_KEY = "theme_palette"
 private const val APP_ICON_VARIANT_KEY = "app_icon_variant"
 private const val THREAD_DISPLAY_MODE_KEY = "thread_display_mode"
+private const val THREAD_BODY_TEXT_SIZE_KEY = "thread_body_text_size"
+private const val THREAD_POST_IMAGE_SIZE_KEY = "thread_post_image_size"
 private const val CATALOG_MODE_MAP_KEY = "catalog_mode_map_json"
 private const val NG_HEADERS_KEY = "ng_headers_json"
 private const val NG_WORDS_KEY = "ng_words_json"
@@ -89,6 +91,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val themePaletteState = MutableStateFlow<String?>(null)
     private val appIconVariantState = MutableStateFlow<String?>(null)
     private val threadDisplayModeState = MutableStateFlow<String?>(null)
+    private val threadBodyTextSizeState = MutableStateFlow<String?>(null)
+    private val threadPostImageSizeState = MutableStateFlow<String?>(null)
     private val catalogModeMapState = MutableStateFlow<String?>(null)
     private val ngHeadersState = MutableStateFlow<String?>(null)
     private val ngWordsState = MutableStateFlow<String?>(null)
@@ -128,6 +132,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     override val themePalette: Flow<String?> = awaitDeferredInitialLoad(themePaletteState)
     override val appIconVariant: Flow<String?> = awaitDeferredInitialLoad(appIconVariantState)
     override val threadDisplayMode: Flow<String?> = awaitDeferredInitialLoad(threadDisplayModeState)
+    override val threadBodyTextSize: Flow<String?> = awaitDeferredInitialLoad(threadBodyTextSizeState)
+    override val threadPostImageSize: Flow<String?> = awaitDeferredInitialLoad(threadPostImageSizeState)
     override val catalogModeMapJson: Flow<String?> = awaitDeferredInitialLoad(catalogModeMapState)
     override val catalogDisplayStyle: Flow<String?> = awaitDeferredInitialLoad(displayStyleState)
     override val catalogGridColumns: Flow<String?> = awaitDeferredInitialLoad(gridColumnsState)
@@ -162,6 +168,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             THEME_PALETTE_KEY to readStringState(THEME_PALETTE_KEY),
             APP_ICON_VARIANT_KEY to readStringState(APP_ICON_VARIANT_KEY),
             THREAD_DISPLAY_MODE_KEY to readStringState(THREAD_DISPLAY_MODE_KEY),
+            THREAD_BODY_TEXT_SIZE_KEY to readStringState(THREAD_BODY_TEXT_SIZE_KEY),
+            THREAD_POST_IMAGE_SIZE_KEY to readStringState(THREAD_POST_IMAGE_SIZE_KEY),
             CATALOG_MODE_MAP_KEY to readStringState(CATALOG_MODE_MAP_KEY),
             NG_HEADERS_KEY to readStringState(NG_HEADERS_KEY),
             NG_WORDS_KEY to readStringState(NG_WORDS_KEY),
@@ -219,6 +227,8 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         applyDeferredStringState(THEME_PALETTE_KEY, stringValues, themePaletteState)
         applyDeferredStringState(APP_ICON_VARIANT_KEY, stringValues, appIconVariantState)
         applyDeferredStringState(THREAD_DISPLAY_MODE_KEY, stringValues, threadDisplayModeState)
+        applyDeferredStringState(THREAD_BODY_TEXT_SIZE_KEY, stringValues, threadBodyTextSizeState)
+        applyDeferredStringState(THREAD_POST_IMAGE_SIZE_KEY, stringValues, threadPostImageSizeState)
         applyDeferredStringState(CATALOG_MODE_MAP_KEY, stringValues, catalogModeMapState)
         applyDeferredStringState(NG_HEADERS_KEY, stringValues, ngHeadersState)
         applyDeferredStringState(NG_WORDS_KEY, stringValues, ngWordsState)
@@ -629,6 +639,16 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             threadDisplayModeState
         )
         seedOptionalStringState(
+            THREAD_BODY_TEXT_SIZE_KEY,
+            seedBundles.preferences.threadBodyTextSize,
+            threadBodyTextSizeState
+        )
+        seedOptionalStringState(
+            THREAD_POST_IMAGE_SIZE_KEY,
+            seedBundles.preferences.threadPostImageSize,
+            threadPostImageSizeState
+        )
+        seedOptionalStringState(
             THREAD_MENU_CONFIG_KEY,
             seedBundles.preferences.threadMenuConfigJson,
             threadMenuConfigState
@@ -750,6 +770,14 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     override suspend fun updateThreadDisplayMode(mode: String) {
         updateStringState(THREAD_DISPLAY_MODE_KEY, mode, threadDisplayModeState)
+    }
+
+    override suspend fun updateThreadBodyTextSize(size: String) {
+        updateStringState(THREAD_BODY_TEXT_SIZE_KEY, size, threadBodyTextSizeState)
+    }
+
+    override suspend fun updateThreadPostImageSize(size: String) {
+        updateStringState(THREAD_POST_IMAGE_SIZE_KEY, size, threadPostImageSizeState)
     }
 
     override suspend fun updateCatalogModeMapJson(value: String) {

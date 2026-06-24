@@ -5,9 +5,11 @@ import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.ai.AiAvailability
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 
@@ -41,7 +43,11 @@ internal data class GlobalSettingsBehaviorSectionBindings(
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val onAppIconVariantChanged: (AppIconVariant) -> Unit = {},
     val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
-    val onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit = {}
+    val onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit = {},
+    val threadBodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    val onThreadBodyTextSizeChanged: (ThreadBodyTextSize) -> Unit = {},
+    val threadPostImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
+    val onThreadPostImageSizeChanged: (ThreadPostImageSize) -> Unit = {}
 )
 
 internal data class GlobalSettingsCatalogMenuSectionBindings(
@@ -156,7 +162,11 @@ internal fun buildGlobalSettingsBehaviorSectionBindings(
         appIconVariant = preferencesState.appIconVariant,
         onAppIconVariantChanged = preferencesCallbacks.onAppIconVariantChanged,
         threadDisplayMode = preferencesState.threadDisplayMode,
-        onThreadDisplayModeChanged = preferencesCallbacks.onThreadDisplayModeChanged
+        onThreadDisplayModeChanged = preferencesCallbacks.onThreadDisplayModeChanged,
+        threadBodyTextSize = preferencesState.threadBodyTextSize,
+        onThreadBodyTextSizeChanged = preferencesCallbacks.onThreadBodyTextSizeChanged,
+        threadPostImageSize = preferencesState.threadPostImageSize,
+        onThreadPostImageSizeChanged = preferencesCallbacks.onThreadPostImageSizeChanged
     )
 }
 

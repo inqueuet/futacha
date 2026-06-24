@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Email
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
@@ -59,8 +62,10 @@ import com.valoser.futacha.shared.ai.AiAvailability
 import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.state.APP_LOCK_PASSWORD_MIN_LENGTH
 import com.valoser.futacha.shared.state.isValidAppLockPassword
 
@@ -105,6 +110,11 @@ internal val globalSettingsEntries = listOf(
     )
 )
 
+private fun isPrivacyOrSecuritySettingsEntry(entry: GlobalSettingsEntry): Boolean {
+    return entry.action == GlobalSettingsAction.Cookies ||
+        entry.action == GlobalSettingsAction.PrivacyPolicy
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun GlobalSettingsScaffold(
@@ -136,40 +146,25 @@ internal fun GlobalSettingsScaffold(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
         ) {
             item {
-                GlobalSettingsBehaviorSection(
-                    text = bindings.behavior.text,
-                    isBackgroundRefreshEnabled = bindings.behavior.isBackgroundRefreshEnabled,
-                    onBackgroundRefreshChanged = bindings.behavior.onBackgroundRefreshChanged,
-                    isAdsEnabled = bindings.behavior.isAdsEnabled,
-                    onAdsEnabledChanged = bindings.behavior.onAdsEnabledChanged,
-                    isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
-                    onLightweightModeChanged = bindings.behavior.onLightweightModeChanged,
-                    isThreadSummaryModeEnabled = bindings.behavior.isThreadSummaryModeEnabled,
-                    onThreadSummaryModeChanged = bindings.behavior.onThreadSummaryModeChanged,
-                    isAiPostFilterEnabled = bindings.behavior.isAiPostFilterEnabled,
-                    onAiPostFilterChanged = bindings.behavior.onAiPostFilterChanged,
-                    isAiCommandEnabled = bindings.behavior.isAiCommandEnabled,
-                    onAiCommandChanged = bindings.behavior.onAiCommandChanged,
-                    isAppLockEnabled = bindings.behavior.isAppLockEnabled,
-                    onAppLockPasswordChanged = bindings.behavior.onAppLockPasswordChanged,
-                    onAppLockCleared = bindings.behavior.onAppLockCleared,
-                    aiAvailability = bindings.behavior.aiAvailability,
-                    threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,
-                    onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged,
+                GlobalSettingsDisplaySection(
                     themeMode = bindings.behavior.themeMode,
                     onThemeModeChanged = bindings.behavior.onThemeModeChanged,
                     themePalette = bindings.behavior.themePalette,
                     onThemePaletteChanged = bindings.behavior.onThemePaletteChanged,
-                    appIconVariant = bindings.behavior.appIconVariant,
-                    onAppIconVariantChanged = bindings.behavior.onAppIconVariantChanged,
+                    threadBodyTextSize = bindings.behavior.threadBodyTextSize,
+                    onThreadBodyTextSizeChanged = bindings.behavior.onThreadBodyTextSizeChanged,
+                    threadPostImageSize = bindings.behavior.threadPostImageSize,
+                    onThreadPostImageSizeChanged = bindings.behavior.onThreadPostImageSizeChanged,
                     threadDisplayMode = bindings.behavior.threadDisplayMode,
-                    onThreadDisplayModeChanged = bindings.behavior.onThreadDisplayModeChanged
+                    onThreadDisplayModeChanged = bindings.behavior.onThreadDisplayModeChanged,
+                    appIconVariant = bindings.behavior.appIconVariant,
+                    onAppIconVariantChanged = bindings.behavior.onAppIconVariantChanged
                 )
             }
             item {
-                GlobalSettingsCatalogMenuSection(
-                    localCatalogNavEntries = bindings.catalogMenu.localCatalogNavEntries,
-                    catalogMenuCallbacks = bindings.catalogMenu.catalogMenuCallbacks
+                GlobalSettingsThreadInteractionSection(
+                    threadGalleryTapAction = bindings.behavior.threadGalleryTapAction,
+                    onThreadGalleryTapActionChanged = bindings.behavior.onThreadGalleryTapActionChanged
                 )
             }
             item {
@@ -179,12 +174,15 @@ internal fun GlobalSettingsScaffold(
                 )
             }
             item {
-                GlobalSettingsSaveSection(
-                    bindings = bindings.save
+                GlobalSettingsCatalogMenuSection(
+                    localCatalogNavEntries = bindings.catalogMenu.localCatalogNavEntries,
+                    catalogMenuCallbacks = bindings.catalogMenu.catalogMenuCallbacks
                 )
             }
             item {
-                GlobalSettingsCacheSection(cacheCallbacks = bindings.cacheCallbacks)
+                GlobalSettingsSaveSection(
+                    bindings = bindings.save
+                )
             }
             item {
                 GlobalSettingsStorageSection(
@@ -193,8 +191,43 @@ internal fun GlobalSettingsScaffold(
                 )
             }
             item {
+                GlobalSettingsCacheSection(cacheCallbacks = bindings.cacheCallbacks)
+            }
+            item {
+                GlobalSettingsBackgroundSection(
+                    text = bindings.behavior.text,
+                    isBackgroundRefreshEnabled = bindings.behavior.isBackgroundRefreshEnabled,
+                    onBackgroundRefreshChanged = bindings.behavior.onBackgroundRefreshChanged,
+                    isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
+                    onLightweightModeChanged = bindings.behavior.onLightweightModeChanged,
+                    isAdsEnabled = bindings.behavior.isAdsEnabled,
+                    onAdsEnabledChanged = bindings.behavior.onAdsEnabledChanged
+                )
+            }
+            item {
+                GlobalSettingsAiSection(
+                    aiAvailability = bindings.behavior.aiAvailability,
+                    isThreadSummaryModeEnabled = bindings.behavior.isThreadSummaryModeEnabled,
+                    onThreadSummaryModeChanged = bindings.behavior.onThreadSummaryModeChanged,
+                    isAiPostFilterEnabled = bindings.behavior.isAiPostFilterEnabled,
+                    onAiPostFilterChanged = bindings.behavior.onAiPostFilterChanged,
+                    isAiCommandEnabled = bindings.behavior.isAiCommandEnabled,
+                    onAiCommandChanged = bindings.behavior.onAiCommandChanged
+                )
+            }
+            item {
+                GlobalSettingsSecuritySection(
+                    isAppLockEnabled = bindings.behavior.isAppLockEnabled,
+                    onAppLockPasswordChanged = bindings.behavior.onAppLockPasswordChanged,
+                    onAppLockCleared = bindings.behavior.onAppLockCleared,
+                    settingsEntries = bindings.links.settingsEntries.filter(::isPrivacyOrSecuritySettingsEntry),
+                    linkCallbacks = bindings.links.linkCallbacks
+                )
+            }
+            item {
                 GlobalSettingsLinksSection(
-                    settingsEntries = bindings.links.settingsEntries,
+                    title = "情報・サポート",
+                    settingsEntries = bindings.links.settingsEntries.filterNot(::isPrivacyOrSecuritySettingsEntry),
                     linkCallbacks = bindings.links.linkCallbacks
                 )
             }
@@ -210,8 +243,11 @@ internal fun SettingsSection(
     title: String,
     icon: ImageVector,
     description: String? = null,
+    initiallyExpanded: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    var isExpanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -222,7 +258,9 @@ internal fun SettingsSection(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -231,57 +269,56 @@ internal fun SettingsSection(
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    if (description != null) {
+                        Text(
+                            text = description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = if (isExpanded) "閉じる" else "開く",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (description != null) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            AnimatedVisibility(visible = isExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    content()
+                }
             }
-            content()
         }
     }
 }
 
 @Composable
-internal fun GlobalSettingsBehaviorSection(
-    text: GlobalSettingsBehaviorText,
-    isBackgroundRefreshEnabled: Boolean,
-    onBackgroundRefreshChanged: (Boolean) -> Unit,
-    isAdsEnabled: Boolean,
-    onAdsEnabledChanged: (Boolean) -> Unit,
-    isLightweightModeEnabled: Boolean,
-    onLightweightModeChanged: (Boolean) -> Unit,
-    isThreadSummaryModeEnabled: Boolean,
-    onThreadSummaryModeChanged: (Boolean) -> Unit,
-    isAiPostFilterEnabled: Boolean,
-    onAiPostFilterChanged: (Boolean) -> Unit,
-    isAiCommandEnabled: Boolean,
-    onAiCommandChanged: (Boolean) -> Unit,
-    isAppLockEnabled: Boolean,
-    onAppLockPasswordChanged: (String) -> Unit,
-    onAppLockCleared: () -> Unit,
-    aiAvailability: AiAvailability,
-    threadGalleryTapAction: ThreadGalleryTapAction,
-    onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit,
+internal fun GlobalSettingsDisplaySection(
     themeMode: ThemeMode,
     onThemeModeChanged: (ThemeMode) -> Unit,
     themePalette: ThemePalette,
     onThemePaletteChanged: (ThemePalette) -> Unit,
-    appIconVariant: AppIconVariant,
-    onAppIconVariantChanged: (AppIconVariant) -> Unit,
+    threadBodyTextSize: ThreadBodyTextSize,
+    onThreadBodyTextSizeChanged: (ThreadBodyTextSize) -> Unit,
+    threadPostImageSize: ThreadPostImageSize,
+    onThreadPostImageSizeChanged: (ThreadPostImageSize) -> Unit,
     threadDisplayMode: ThreadDisplayMode,
-    onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit
+    onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit,
+    appIconVariant: AppIconVariant,
+    onAppIconVariantChanged: (AppIconVariant) -> Unit
 ) {
     SettingsSection(
-        title = "動作",
+        title = "表示",
         icon = Icons.Rounded.Palette,
-        description = "テーマ、アイコン、表示モードと基本動作をまとめています。"
+        description = "テーマ、文字、画像、スレッドの見え方をまとめています。"
     ) {
         ListItem(
             headlineContent = { Text("テーマモード") },
@@ -332,21 +369,51 @@ internal fun GlobalSettingsBehaviorSection(
         }
         HorizontalDivider()
         ListItem(
-            headlineContent = { Text("アプリアイコン") },
+            headlineContent = { Text("本文サイズ") },
             supportingContent = {
                 Text(
-                    text = resolveAppIconSectionDescription(),
+                    text = "スレ本文だけの文字サイズを変更します。ボタンや見出しの大きさはそのままです。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             },
             modifier = Modifier.fillMaxWidth()
         )
-        listOf(AppIconVariant.Current, AppIconVariant.Classic).forEach { variant ->
-            AppIconVariantOptionCard(
-                variant = variant,
-                selected = appIconVariant == variant,
-                onClick = { onAppIconVariantChanged(variant) }
+        ThreadBodyTextSize.entries.forEach { size ->
+            GlobalSettingsRadioOptionRow(
+                label = size.label,
+                description = when (size) {
+                    ThreadBodyTextSize.Small -> "情報量を優先して少し小さく表示します。"
+                    ThreadBodyTextSize.Standard -> "標準の本文サイズで表示します。"
+                    ThreadBodyTextSize.Large -> "読みやすさを優先して少し大きく表示します。"
+                    ThreadBodyTextSize.ExtraLarge -> "本文を大きく表示します。"
+                },
+                selected = threadBodyTextSize == size,
+                onClick = { onThreadBodyTextSizeChanged(size) }
+            )
+        }
+        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("レス画像サイズ") },
+            supportingContent = {
+                Text(
+                    text = "スレ本文内に表示する添付画像の最大高さを変更します。タップ後の画像プレビューは影響しません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        ThreadPostImageSize.entries.forEach { size ->
+            GlobalSettingsRadioOptionRow(
+                label = size.label,
+                description = when (size) {
+                    ThreadPostImageSize.Small -> "最大 200px 相当で表示します。"
+                    ThreadPostImageSize.Medium -> "最大 320px 相当で表示します。"
+                    ThreadPostImageSize.Large -> "最大 480px 相当で表示します。"
+                },
+                selected = threadPostImageSize == size,
+                onClick = { onThreadPostImageSizeChanged(size) }
             )
         }
         HorizontalDivider()
@@ -373,22 +440,42 @@ internal fun GlobalSettingsBehaviorSection(
             )
         }
         HorizontalDivider()
-        GlobalSettingsAiControls(
-            aiAvailability = aiAvailability,
-            isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
-            onThreadSummaryModeChanged = onThreadSummaryModeChanged,
-            isAiPostFilterEnabled = isAiPostFilterEnabled,
-            onAiPostFilterChanged = onAiPostFilterChanged,
-            isAiCommandEnabled = isAiCommandEnabled,
-            onAiCommandChanged = onAiCommandChanged
+        ListItem(
+            headlineContent = { Text("アプリアイコン") },
+            supportingContent = {
+                Text(
+                    text = resolveAppIconSectionDescription(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
         )
-        HorizontalDivider()
-        GlobalSettingsAppLockControls(
-            isAppLockEnabled = isAppLockEnabled,
-            onAppLockPasswordChanged = onAppLockPasswordChanged,
-            onAppLockCleared = onAppLockCleared
-        )
-        HorizontalDivider()
+        listOf(AppIconVariant.Current, AppIconVariant.Classic).forEach { variant ->
+            AppIconVariantOptionCard(
+                variant = variant,
+                selected = appIconVariant == variant,
+                onClick = { onAppIconVariantChanged(variant) }
+            )
+        }
+    }
+}
+
+@Composable
+internal fun GlobalSettingsBackgroundSection(
+    text: GlobalSettingsBehaviorText,
+    isBackgroundRefreshEnabled: Boolean,
+    onBackgroundRefreshChanged: (Boolean) -> Unit,
+    isLightweightModeEnabled: Boolean,
+    onLightweightModeChanged: (Boolean) -> Unit,
+    isAdsEnabled: Boolean,
+    onAdsEnabledChanged: (Boolean) -> Unit
+) {
+    SettingsSection(
+        title = "バックグラウンド・通信",
+        icon = Icons.Rounded.History,
+        description = "自動更新、通信量、広告表示に関わる動作をまとめています。"
+    ) {
         ListItem(
             headlineContent = { Text("バックグラウンド更新") },
             supportingContent = {
@@ -442,7 +529,19 @@ internal fun GlobalSettingsBehaviorSection(
             },
             modifier = Modifier.fillMaxWidth()
         )
-        HorizontalDivider()
+    }
+}
+
+@Composable
+internal fun GlobalSettingsThreadInteractionSection(
+    threadGalleryTapAction: ThreadGalleryTapAction,
+    onThreadGalleryTapActionChanged: (ThreadGalleryTapAction) -> Unit
+) {
+    SettingsSection(
+        title = "スレ操作",
+        icon = Icons.Rounded.History,
+        description = "スレッド閲覧中の操作方法をまとめています。"
+    ) {
         ListItem(
             headlineContent = { Text("添付一覧のタップ動作") },
             supportingContent = {
@@ -466,6 +565,89 @@ internal fun GlobalSettingsBehaviorSection(
             selected = threadGalleryTapAction == ThreadGalleryTapAction.JumpToPost,
             onClick = { onThreadGalleryTapActionChanged(ThreadGalleryTapAction.JumpToPost) }
         )
+    }
+}
+
+@Composable
+internal fun GlobalSettingsAiSection(
+    aiAvailability: AiAvailability,
+    isThreadSummaryModeEnabled: Boolean,
+    onThreadSummaryModeChanged: (Boolean) -> Unit,
+    isAiPostFilterEnabled: Boolean,
+    onAiPostFilterChanged: (Boolean) -> Unit,
+    isAiCommandEnabled: Boolean,
+    onAiCommandChanged: (Boolean) -> Unit
+) {
+    SettingsSection(
+        title = "AI・補助機能",
+        icon = Icons.Rounded.Psychology,
+        description = "端末AIを使った要約、分類、アプリ操作をまとめています。"
+    ) {
+        GlobalSettingsAiControls(
+            aiAvailability = aiAvailability,
+            isThreadSummaryModeEnabled = isThreadSummaryModeEnabled,
+            onThreadSummaryModeChanged = onThreadSummaryModeChanged,
+            isAiPostFilterEnabled = isAiPostFilterEnabled,
+            onAiPostFilterChanged = onAiPostFilterChanged,
+            isAiCommandEnabled = isAiCommandEnabled,
+            onAiCommandChanged = onAiCommandChanged
+        )
+    }
+}
+
+@Composable
+internal fun GlobalSettingsSecuritySection(
+    isAppLockEnabled: Boolean,
+    onAppLockPasswordChanged: (String) -> Unit,
+    onAppLockCleared: () -> Unit,
+    settingsEntries: List<GlobalSettingsEntry>,
+    linkCallbacks: GlobalSettingsLinkCallbacks
+) {
+    SettingsSection(
+        title = "プライバシー・セキュリティ",
+        icon = Icons.Rounded.Lock,
+        description = "起動ロック、Cookie、ポリシーへの導線をまとめています。"
+    ) {
+        GlobalSettingsAppLockControls(
+            isAppLockEnabled = isAppLockEnabled,
+            onAppLockPasswordChanged = onAppLockPasswordChanged,
+            onAppLockCleared = onAppLockCleared
+        )
+        if (settingsEntries.isNotEmpty()) {
+            HorizontalDivider()
+            GlobalSettingsEntryRows(
+                settingsEntries = settingsEntries,
+                linkCallbacks = linkCallbacks
+            )
+        }
+    }
+}
+
+@Composable
+internal fun GlobalSettingsEntryRows(
+    settingsEntries: List<GlobalSettingsEntry>,
+    linkCallbacks: GlobalSettingsLinkCallbacks
+) {
+    settingsEntries.forEachIndexed { index, entry ->
+        ListItem(
+            leadingContent = { Icon(imageVector = entry.icon, contentDescription = null) },
+            headlineContent = { Text(entry.label) },
+            supportingContent = {
+                Text(
+                    text = entry.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    linkCallbacks.onEntrySelected(entry.action)
+                }
+        )
+        if (index != settingsEntries.lastIndex) {
+            HorizontalDivider()
+        }
     }
 }
 

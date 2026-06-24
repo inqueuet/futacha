@@ -5,8 +5,10 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.defaultCatalogNavEntries
 import com.valoser.futacha.shared.model.defaultThreadMenuEntries
@@ -38,6 +40,8 @@ data class ScreenPreferencesState(
     val themePalette: ThemePalette = ThemePalette.FutabaClassic,
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
+    val threadBodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    val threadPostImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
     val preferredFileManagerPackage: String? = null,
     val preferredFileManagerLabel: String? = null,
     val threadMenuEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries(),
@@ -61,6 +65,8 @@ data class ScreenPreferencesCallbacks(
     val onThemePaletteChanged: (ThemePalette) -> Unit = {},
     val onAppIconVariantChanged: (AppIconVariant) -> Unit = {},
     val onThreadDisplayModeChanged: (ThreadDisplayMode) -> Unit = {},
+    val onThreadBodyTextSizeChanged: (ThreadBodyTextSize) -> Unit = {},
+    val onThreadPostImageSizeChanged: (ThreadPostImageSize) -> Unit = {},
     val onOpenSaveDirectoryPicker: (() -> Unit)? = null,
     val onFileManagerSelected: ((packageName: String, label: String) -> Unit)? = null,
     val onClearPreferredFileManager: (() -> Unit)? = null,

@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.EmbeddedHtmlContent
 import com.valoser.futacha.shared.model.EmbeddedHtmlPlacement
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadPage
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.util.AppDispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -136,6 +138,8 @@ internal fun ThreadTreeContent(
     onUrlClick: (String) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    postImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
     modifier: Modifier = Modifier
 ) {
     val computedData by produceState(
@@ -293,6 +297,8 @@ internal fun ThreadTreeContent(
                             } else {
                                 null
                             },
+                            bodyTextSize = bodyTextSize,
+                            postImageSize = postImageSize,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(start = indent)
@@ -351,7 +357,9 @@ internal fun ThreadTreeContent(
             onDismiss = quotePreviewCallbacks.onDismiss,
             onMediaClick = onMediaClick,
             onUrlClick = onUrlClick,
-            onQuoteClick = quotePreviewCallbacks.onQuoteClick
+            onQuoteClick = quotePreviewCallbacks.onQuoteClick,
+            bodyTextSize = bodyTextSize,
+            postImageSize = postImageSize
         )
     }
 }

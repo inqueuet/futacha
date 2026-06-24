@@ -6,11 +6,13 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.ui.FutachaHistoryArchivePreview
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.ui.board.buildScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenContract
 import com.valoser.futacha.shared.ui.board.ScreenHistoryCallbacks
@@ -44,6 +46,8 @@ internal data class FutachaScreenPreferencesStateInputs(
     val themePalette: ThemePalette = ThemePalette.FutabaClassic,
     val appIconVariant: AppIconVariant = AppIconVariant.Current,
     val threadDisplayMode: ThreadDisplayMode = ThreadDisplayMode.Flat,
+    val threadBodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    val threadPostImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
     val preferredFileManagerPackage: String?,
     val preferredFileManagerLabel: String?,
     val threadMenuEntries: List<ThreadMenuEntryConfig>,
@@ -132,6 +136,8 @@ internal fun buildFutachaScreenPreferencesState(
         themePalette = inputs.themePalette,
         appIconVariant = inputs.appIconVariant,
         threadDisplayMode = inputs.threadDisplayMode,
+        threadBodyTextSize = inputs.threadBodyTextSize,
+        threadPostImageSize = inputs.threadPostImageSize,
         preferredFileManagerPackage = inputs.preferredFileManagerPackage,
         preferredFileManagerLabel = inputs.preferredFileManagerLabel,
         threadMenuEntries = inputs.threadMenuEntries,
@@ -159,6 +165,8 @@ internal fun buildFutachaScreenPreferencesCallbacks(
         onThemePaletteChanged = inputs.preferenceMutations.onThemePaletteChanged,
         onAppIconVariantChanged = inputs.preferenceMutations.onAppIconVariantChanged,
         onThreadDisplayModeChanged = inputs.preferenceMutations.onThreadDisplayModeChanged,
+        onThreadBodyTextSizeChanged = inputs.preferenceMutations.onThreadBodyTextSizeChanged,
+        onThreadPostImageSizeChanged = inputs.preferenceMutations.onThreadPostImageSizeChanged,
         onOpenSaveDirectoryPicker = inputs.onOpenSaveDirectoryPicker,
         onFileManagerSelected = inputs.preferenceMutations.onFileManagerSelected,
         onClearPreferredFileManager = inputs.preferenceMutations.onClearPreferredFileManager,

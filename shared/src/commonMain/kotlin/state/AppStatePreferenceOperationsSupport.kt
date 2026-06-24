@@ -8,10 +8,12 @@ import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
 import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
 import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
@@ -161,6 +163,14 @@ internal class AppStatePreferenceOperations(
 
     suspend fun setThreadDisplayMode(mode: ThreadDisplayMode) {
         setSimple(mode.name, storage::updateThreadDisplayMode, "thread display mode")
+    }
+
+    suspend fun setThreadBodyTextSize(size: ThreadBodyTextSize) {
+        setSimple(size.name, storage::updateThreadBodyTextSize, "thread body text size")
+    }
+
+    suspend fun setThreadPostImageSize(size: ThreadPostImageSize) {
+        setSimple(size.name, storage::updateThreadPostImageSize, "thread post image size")
     }
 
     suspend fun setPreferredFileManager(packageName: String?, label: String?) {

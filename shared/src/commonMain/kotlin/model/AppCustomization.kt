@@ -22,3 +22,16 @@ enum class ThreadDisplayMode(val label: String) {
     Flat("通常表示"),
     Tree("ツリー表示")
 }
+
+enum class ThreadBodyTextSize(val label: String) {
+    Small("小"),
+    Standard("標準"),
+    Large("大"),
+    ExtraLarge("特大")
+}
+
+enum class ThreadPostImageSize(val label: String) {
+    Small("小"),
+    Medium("中"),
+    Large("大")
+}

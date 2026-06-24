@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
@@ -40,13 +41,14 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 
 private val ThreadPostFooterTextColor = FutabaTextDim
 private val ThreadPostFooterAccentColor = FutabaAccentRed
 private val ThreadPostFooterAuthorColor = FutabaNameGreen
 private val ThreadPostThumbnailMaxWidth = 800.dp
-private val ThreadPostThumbnailMaxHeight = 200.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -68,6 +70,8 @@ internal fun ThreadPostCard(
     onSaidaneClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     onAiHideAgain: (() -> Unit)? = null,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    postImageSize: ThreadPostImageSize = ThreadPostImageSize.Small,
     modifier: Modifier = Modifier
 ) {
     val platformContext = LocalPlatformContext.current
@@ -115,11 +119,14 @@ internal fun ThreadPostCard(
         val thumbnailForDisplay = if (shouldCollapseDeletedBody) null else resolvePostDisplayMediaUrl(post)
         thumbnailForDisplay?.let { displayUrl ->
             val imageLoader = LocalFutachaImageLoader.current
+            val thumbnailMaxHeight = remember(postImageSize) {
+                resolveThreadPostThumbnailMaxHeight(postImageSize)
+            }
             val thumbnailTargetWidthPx = remember(density) {
                 with(density) { ThreadPostThumbnailMaxWidth.roundToPx() }
             }
-            val thumbnailTargetHeightPx = remember(density) {
-                with(density) { ThreadPostThumbnailMaxHeight.roundToPx() }
+            val thumbnailTargetHeightPx = remember(density, thumbnailMaxHeight) {
+                with(density) { thumbnailMaxHeight.roundToPx() }
             }
             val thumbnailRequest = remember(
                 platformContext,
@@ -143,7 +150,7 @@ internal fun ThreadPostCard(
                 modifier = run {
                     val baseModifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = ThreadPostThumbnailMaxHeight)
+                        .heightIn(max = thumbnailMaxHeight)
                         .clip(MaterialTheme.shapes.small)
                         .background(backgroundColor)
                     val targetUrl = resolvePostTargetMediaUrl(post) ?: displayUrl
@@ -192,9 +199,18 @@ internal fun ThreadPostCard(
                 quoteReferences = post.quoteReferences,
                 onQuoteClick = onQuoteClick,
                 onUrlClick = onUrlClick,
-                highlightRanges = highlightRanges
+                highlightRanges = highlightRanges,
+                bodyTextSize = bodyTextSize
             )
         }
+    }
+}
+
+private fun resolveThreadPostThumbnailMaxHeight(size: ThreadPostImageSize): Dp {
+    return when (size) {
+        ThreadPostImageSize.Small -> 200.dp
+        ThreadPostImageSize.Medium -> 320.dp
+        ThreadPostImageSize.Large -> 480.dp
     }
 }
 

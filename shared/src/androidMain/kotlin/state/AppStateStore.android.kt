@@ -66,6 +66,8 @@ private class AndroidPlatformStateStorage(
     private val themePaletteKey = stringPreferencesKey("theme_palette")
     private val appIconVariantKey = stringPreferencesKey("app_icon_variant")
     private val threadDisplayModeKey = stringPreferencesKey("thread_display_mode")
+    private val threadBodyTextSizeKey = stringPreferencesKey("thread_body_text_size")
+    private val threadPostImageSizeKey = stringPreferencesKey("thread_post_image_size")
     private val catalogModeMapKey = stringPreferencesKey("catalog_mode_map_json")
     private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
     private val ngWordsKey = stringPreferencesKey("ng_words_json")
@@ -182,6 +184,12 @@ private class AndroidPlatformStateStorage(
 
     override val threadDisplayMode: Flow<String?> =
         safeData.map { prefs -> prefs[threadDisplayModeKey] }
+
+    override val threadBodyTextSize: Flow<String?> =
+        safeData.map { prefs -> prefs[threadBodyTextSizeKey] }
+
+    override val threadPostImageSize: Flow<String?> =
+        safeData.map { prefs -> prefs[threadPostImageSizeKey] }
 
     override val catalogModeMapJson: Flow<String?> =
         safeData.map { prefs -> prefs[catalogModeMapKey] }
@@ -335,6 +343,8 @@ private class AndroidPlatformStateStorage(
         seedOptionalStringPreference(themePaletteKey, seedBundles.preferences.themePalette)
         seedOptionalStringPreference(appIconVariantKey, seedBundles.preferences.appIconVariant)
         seedOptionalStringPreference(threadDisplayModeKey, seedBundles.preferences.threadDisplayMode)
+        seedOptionalStringPreference(threadBodyTextSizeKey, seedBundles.preferences.threadBodyTextSize)
+        seedOptionalStringPreference(threadPostImageSizeKey, seedBundles.preferences.threadPostImageSize)
         seedOptionalStringPreference(
             lastUsedDeleteKeyPreferencesKey,
             seedBundles.preferences.lastUsedDeleteKey
@@ -522,6 +532,24 @@ private class AndroidPlatformStateStorage(
             mode,
             "thread display mode",
             "Failed to save thread display mode"
+        )
+    }
+
+    override suspend fun updateThreadBodyTextSize(size: String) {
+        updateStringPreference(
+            threadBodyTextSizeKey,
+            size,
+            "thread body text size",
+            "Failed to save thread body text size"
+        )
+    }
+
+    override suspend fun updateThreadPostImageSize(size: String) {
+        updateStringPreference(
+            threadPostImageSizeKey,
+            size,
+            "thread post image size",
+            "Failed to save thread post image size"
         )
     }
 

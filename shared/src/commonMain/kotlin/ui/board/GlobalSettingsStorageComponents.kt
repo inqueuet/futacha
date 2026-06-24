@@ -1,6 +1,5 @@
 package com.valoser.futacha.shared.ui.board
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -331,34 +330,18 @@ internal fun GlobalSettingsStorageSection(
 
 @Composable
 internal fun GlobalSettingsLinksSection(
+    title: String = "情報・サポート",
     settingsEntries: List<GlobalSettingsEntry>,
     linkCallbacks: GlobalSettingsLinkCallbacks
 ) {
     SettingsSection(
-        title = "リンク・ポリシー",
+        title = title,
         icon = Icons.Rounded.Link
     ) {
-        settingsEntries.forEachIndexed { index, entry ->
-            ListItem(
-                leadingContent = { androidx.compose.material3.Icon(imageVector = entry.icon, contentDescription = null) },
-                headlineContent = { Text(entry.label) },
-                supportingContent = {
-                    Text(
-                        text = entry.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        linkCallbacks.onEntrySelected(entry.action)
-                    }
-            )
-            if (index != settingsEntries.lastIndex) {
-                HorizontalDivider()
-            }
-        }
+        GlobalSettingsEntryRows(
+            settingsEntries = settingsEntries,
+            linkCallbacks = linkCallbacks
+        )
     }
 }
 

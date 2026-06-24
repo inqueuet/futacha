@@ -437,6 +437,8 @@ internal fun ThreadScreenContentHost(
                     onUrlClick = bindings.onUrlClick,
                     onRefresh = bindings.onRefresh,
                     isRefreshing = bindings.isRefreshing,
+                    bodyTextSize = bindings.preferencesState.threadBodyTextSize,
+                    postImageSize = bindings.preferencesState.threadPostImageSize,
                     modifier = modifier.fillMaxSize()
                 )
 
@@ -459,6 +461,8 @@ internal fun ThreadScreenContentHost(
                     onUrlClick = bindings.onUrlClick,
                     onRefresh = bindings.onRefresh,
                     isRefreshing = bindings.isRefreshing,
+                    bodyTextSize = bindings.preferencesState.threadBodyTextSize,
+                    postImageSize = bindings.preferencesState.threadPostImageSize,
                     modifier = modifier.fillMaxSize()
                 )
             }

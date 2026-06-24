@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.valoser.futacha.shared.model.QuoteReference
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 
 @Composable
 internal fun QuotePreviewDialog(
@@ -29,7 +31,9 @@ internal fun QuotePreviewDialog(
     onDismiss: () -> Unit,
     onMediaClick: ((String, MediaType) -> Unit)? = null,
     onUrlClick: (String) -> Unit,
-    onQuoteClick: (QuoteReference) -> Unit
+    onQuoteClick: (QuoteReference) -> Unit,
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    postImageSize: ThreadPostImageSize = ThreadPostImageSize.Small
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -88,6 +92,8 @@ internal fun QuotePreviewDialog(
                             onSaidaneClick = null,
                             onLongPress = null,
                             onMediaClick = onMediaClick,
+                            bodyTextSize = bodyTextSize,
+                            postImageSize = postImageSize,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp, vertical = 4.dp)

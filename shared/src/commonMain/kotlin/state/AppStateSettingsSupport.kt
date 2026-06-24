@@ -6,8 +6,10 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
@@ -174,6 +176,18 @@ internal fun decodeThreadDisplayModeValue(raw: String?): ThreadDisplayMode {
     return runCatching {
         raw?.let { ThreadDisplayMode.valueOf(it) }
     }.getOrNull() ?: ThreadDisplayMode.Flat
+}
+
+internal fun decodeThreadBodyTextSizeValue(raw: String?): ThreadBodyTextSize {
+    return runCatching {
+        raw?.let { ThreadBodyTextSize.valueOf(it) }
+    }.getOrNull() ?: ThreadBodyTextSize.Standard
+}
+
+internal fun decodeThreadPostImageSizeValue(raw: String?): ThreadPostImageSize {
+    return runCatching {
+        raw?.let { ThreadPostImageSize.valueOf(it) }
+    }.getOrNull() ?: ThreadPostImageSize.Small
 }
 
 internal fun decodeThreadMenuConfigValue(

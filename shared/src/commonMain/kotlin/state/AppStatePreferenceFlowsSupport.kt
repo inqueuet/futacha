@@ -7,10 +7,12 @@ import com.valoser.futacha.shared.model.CatalogNavEntryConfig
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadDisplayMode
 import com.valoser.futacha.shared.model.ThreadGalleryTapAction
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadPostImageSize
 import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -34,6 +36,8 @@ internal data class AppStatePreferenceFlows(
     val themePalette: Flow<ThemePalette>,
     val appIconVariant: Flow<AppIconVariant>,
     val threadDisplayMode: Flow<ThreadDisplayMode>,
+    val threadBodyTextSize: Flow<ThreadBodyTextSize>,
+    val threadPostImageSize: Flow<ThreadPostImageSize>,
     val appLockPasswordHash: Flow<String?>,
     val lastUsedDeleteKey: Flow<String>,
     val catalogModes: Flow<Map<String, CatalogMode>>,
@@ -102,6 +106,12 @@ internal fun buildAppStatePreferenceFlows(
             .distinctUntilChanged(),
         threadDisplayMode = storage.threadDisplayMode
             .map { raw -> decodeThreadDisplayModeValue(raw) }
+            .distinctUntilChanged(),
+        threadBodyTextSize = storage.threadBodyTextSize
+            .map { raw -> decodeThreadBodyTextSizeValue(raw) }
+            .distinctUntilChanged(),
+        threadPostImageSize = storage.threadPostImageSize
+            .map { raw -> decodeThreadPostImageSizeValue(raw) }
             .distinctUntilChanged(),
         appLockPasswordHash = storage.appLockPasswordHash
             .map { raw -> sanitizeAppLockPasswordHash(raw) }

@@ -28,6 +28,8 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val themePaletteState = MutableStateFlow<String?>(null)
     val appIconVariantState = MutableStateFlow<String?>(null)
     val threadDisplayModeState = MutableStateFlow<String?>(null)
+    val threadBodyTextSizeState = MutableStateFlow<String?>(null)
+    val threadPostImageSizeState = MutableStateFlow<String?>(null)
     val lastUsedDeleteKeyState = MutableStateFlow<String?>(null)
     val catalogModeMapState = MutableStateFlow<String?>(null)
     val catalogDisplayStyleState = MutableStateFlow<String?>(null)
@@ -64,6 +66,8 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override val themePalette: Flow<String?> = themePaletteState
     override val appIconVariant: Flow<String?> = appIconVariantState
     override val threadDisplayMode: Flow<String?> = threadDisplayModeState
+    override val threadBodyTextSize: Flow<String?> = threadBodyTextSizeState
+    override val threadPostImageSize: Flow<String?> = threadPostImageSizeState
     override val lastUsedDeleteKey: Flow<String?> = lastUsedDeleteKeyState
     override val catalogModeMapJson: Flow<String?> = catalogModeMapState
     override val catalogDisplayStyle: Flow<String?> = catalogDisplayStyleState
@@ -102,6 +106,8 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     override suspend fun updateThemePalette(palette: String) { themePaletteState.value = palette }
     override suspend fun updateAppIconVariant(variant: String) { appIconVariantState.value = variant }
     override suspend fun updateThreadDisplayMode(mode: String) { threadDisplayModeState.value = mode }
+    override suspend fun updateThreadBodyTextSize(size: String) { threadBodyTextSizeState.value = size }
+    override suspend fun updateThreadPostImageSize(size: String) { threadPostImageSizeState.value = size }
     override suspend fun updateLastUsedDeleteKey(value: String) { lastUsedDeleteKeyState.value = value }
     override suspend fun updateCatalogModeMapJson(value: String) { catalogModeMapState.value = value }
     override suspend fun updateCatalogDisplayStyle(style: String) { catalogDisplayStyleState.value = style }
@@ -161,6 +167,12 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
             }
             if (threadDisplayModeState.value == null) {
                 threadDisplayModeState.value = seedBundles.preferences.threadDisplayMode
+            }
+            if (threadBodyTextSizeState.value == null) {
+                threadBodyTextSizeState.value = seedBundles.preferences.threadBodyTextSize
+            }
+            if (threadPostImageSizeState.value == null) {
+                threadPostImageSizeState.value = seedBundles.preferences.threadPostImageSize
             }
             if (lastUsedDeleteKeyState.value == null) {
                 lastUsedDeleteKeyState.value = seedBundles.preferences.lastUsedDeleteKey
