@@ -16,6 +16,7 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import androidx.compose.material3.SnackbarHostState
@@ -388,9 +389,10 @@ class GlobalSettingsSupportTest {
         )
 
         callbacks.clearImageCache()
-        callbacks.clearTemporaryCache()
-        callbacks.refreshStorageStats()
         yield()
+        callbacks.clearTemporaryCache()
+        yield()
+        callbacks.refreshStorageStats()
         yield()
 
         assertTrue(imageCleared)
@@ -400,6 +402,42 @@ class GlobalSettingsSupportTest {
             listOf("画像キャッシュを削除しました", "一時キャッシュを削除しました"),
             messages
         )
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_cacheCallbacks_ignoreSecondCleanupWhileRunning() = runBlocking {
+        val messages = mutableListOf<String>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var imageClearCount = 0
+        var temporaryClearCount = 0
+        val callbacks = buildGlobalSettingsCacheCallbacks(
+            inputs = GlobalSettingsCacheInputs(
+                coroutineScope = this,
+                showSnackbar = { messages += it },
+                clearImageCache = {
+                    imageClearCount += 1
+                    releaseCleanup.await()
+                },
+                clearTemporaryCache = {
+                    temporaryClearCount += 1
+                },
+                refreshAutoSavedStats = {}
+            )
+        )
+
+        callbacks.clearImageCache()
+        yield()
+        assertTrue(callbacks.isCleanupInProgress())
+
+        callbacks.clearTemporaryCache()
+        yield()
+        assertEquals(1, imageClearCount)
+        assertEquals(0, temporaryClearCount)
+
+        releaseCleanup.complete(Unit)
+        yield()
+        assertFalse(callbacks.isCleanupInProgress())
+        assertEquals(listOf("画像キャッシュを削除しました"), messages)
     }
 
     @Test

@@ -18,7 +18,6 @@ import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.encodeAppStateHistory
 import com.valoser.futacha.shared.state.historyJsonByteSize
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
-import com.valoser.futacha.shared.ui.image.resolveImageCacheDirectory
 import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
@@ -217,14 +216,7 @@ internal fun rememberGlobalSettingsScreenRuntime(
             },
             clearTemporaryCache = {
                 withContext(AppDispatchers.io) {
-                    fileSystem
-                        ?.let { fs ->
-                            resolveImageCacheDirectory(platformContext)
-                                ?.toString()
-                                ?.let { pathString ->
-                                    fs.deleteRecursively(pathString).getOrThrow()
-                                }
-                        }
+                    imageLoader.diskCache?.clear()
                 }
             },
             refreshAutoSavedStats = {

@@ -11,7 +11,9 @@ import com.valoser.futacha.shared.model.defaultThreadMenuEntries
 import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 internal data class GlobalSettingsCatalogMenuCallbacks(
     val resetEntries: () -> Unit,
@@ -190,7 +192,8 @@ internal fun buildGlobalSettingsLinkCallbacks(
 internal data class GlobalSettingsCacheCallbacks(
     val clearImageCache: () -> Unit,
     val clearTemporaryCache: () -> Unit,
-    val refreshStorageStats: () -> Unit
+    val refreshStorageStats: () -> Unit,
+    val isCleanupInProgress: () -> Boolean = { false }
 )
 
 internal data class GlobalSettingsSaveCallbacks(
@@ -214,34 +217,43 @@ internal data class GlobalSettingsCacheInputs(
 internal fun buildGlobalSettingsCacheCallbacks(
     inputs: GlobalSettingsCacheInputs
 ): GlobalSettingsCacheCallbacks {
+    var cleanupJob: Job? = null
+
+    fun launchCleanup(
+        target: GlobalSettingsCacheCleanupTarget,
+        action: suspend () -> Unit
+    ) {
+        if (cleanupJob?.isActive == true) return
+        cleanupJob = inputs.coroutineScope.launch {
+            val result = runCatching {
+                withTimeout(GLOBAL_SETTINGS_CACHE_CLEANUP_TIMEOUT_MILLIS) {
+                    action()
+                }
+            }
+            inputs.showSnackbar(
+                buildGlobalSettingsCacheCleanupMessage(
+                    target = target,
+                    result = result
+                )
+            )
+        }
+    }
+
     return GlobalSettingsCacheCallbacks(
         clearImageCache = {
-            inputs.coroutineScope.launch {
-                val result = runCatching { inputs.clearImageCache() }
-                inputs.showSnackbar(
-                    buildGlobalSettingsCacheCleanupMessage(
-                        target = GlobalSettingsCacheCleanupTarget.IMAGE_CACHE,
-                        result = result
-                    )
-                )
-            }
+            launchCleanup(GlobalSettingsCacheCleanupTarget.IMAGE_CACHE, inputs.clearImageCache)
         },
         clearTemporaryCache = {
-            inputs.coroutineScope.launch {
-                val result = runCatching { inputs.clearTemporaryCache() }
-                inputs.showSnackbar(
-                    buildGlobalSettingsCacheCleanupMessage(
-                        target = GlobalSettingsCacheCleanupTarget.TEMPORARY_CACHE,
-                        result = result
-                    )
-                )
-            }
+            launchCleanup(GlobalSettingsCacheCleanupTarget.TEMPORARY_CACHE, inputs.clearTemporaryCache)
         },
         refreshStorageStats = {
             inputs.coroutineScope.launch { inputs.refreshAutoSavedStats() }
-        }
+        },
+        isCleanupInProgress = { cleanupJob?.isActive == true }
     )
 }
+
+private const val GLOBAL_SETTINGS_CACHE_CLEANUP_TIMEOUT_MILLIS = 10_000L
 
 internal data class GlobalSettingsSaveInputs(
     val currentManualSaveInput: () -> String,

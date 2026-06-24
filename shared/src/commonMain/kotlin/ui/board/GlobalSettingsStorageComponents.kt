@@ -239,7 +239,10 @@ internal fun GlobalSettingsCacheSection(
                 )
             },
             trailingContent = {
-                Button(onClick = cacheCallbacks.clearImageCache) {
+                Button(
+                    onClick = cacheCallbacks.clearImageCache,
+                    enabled = !cacheCallbacks.isCleanupInProgress()
+                ) {
                     Text("削除")
                 }
             },
@@ -256,7 +259,10 @@ internal fun GlobalSettingsCacheSection(
                 )
             },
             trailingContent = {
-                OutlinedButton(onClick = cacheCallbacks.clearTemporaryCache) {
+                OutlinedButton(
+                    onClick = cacheCallbacks.clearTemporaryCache,
+                    enabled = !cacheCallbacks.isCleanupInProgress()
+                ) {
                     Text("掃除する")
                 }
             },
