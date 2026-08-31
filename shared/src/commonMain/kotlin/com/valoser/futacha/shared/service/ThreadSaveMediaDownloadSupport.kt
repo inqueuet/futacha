@@ -1,0 +1,155 @@
+package com.valoser.futacha.shared.service
+
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.describeUrlForLog
+import com.valoser.futacha.shared.util.describeFailureForLog
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
+
+internal data class ThreadSaveMediaAttemptResult(
+    val mediaItem: ThreadSaveScheduledMediaItem,
+    val result: Result<ThreadSaveLocalFileInfo>?
+)
+
+internal data class ThreadSaveMediaDownloadExecutionContext(
+    val maxRetries: Int,
+    val retryDelayMillis: Long,
+    val progressTotal: Int,
+    val logTag: String,
+    val updateProgress: (current: Int, total: Int) -> Unit,
+    val checkBudget: () -> Unit,
+    val downloadMedia: suspend (ThreadSaveScheduledMediaItem) -> Result<ThreadSaveLocalFileInfo>
+)
+
+internal data class ThreadSaveMediaDownloadAccumulator(
+    val urlToPathMap: MutableMap<String, String>,
+    val mediaKeyToFileInfoMap: MutableMap<String, ThreadSaveLocalFileInfo>,
+    var mediaCounts: ThreadSaveMediaCounts = ThreadSaveMediaCounts(),
+    var totalSizeBytes: Long = 0L,
+    var downloadFailureCount: Int = 0
+)
+
+internal suspend fun executeThreadSaveMediaBatch(
+    itemBatch: List<ThreadSaveScheduledMediaItem>,
+    firstProgressIndex: Int,
+    execution: ThreadSaveMediaDownloadExecutionContext
+): List<ThreadSaveMediaAttemptResult> = coroutineScope {
+    itemBatch.mapIndexed { offset, mediaItem ->
+        async(AppDispatchers.io) {
+            coroutineContext.ensureActive()
+            execution.updateProgress(firstProgressIndex + offset, execution.progressTotal)
+            ThreadSaveMediaAttemptResult(
+                mediaItem = mediaItem,
+                result = retryThreadSaveMediaDownload(mediaItem, execution)
+            )
+        }
+    }.map { it.await() }
+}
+
+internal fun applyThreadSaveMediaBatchResults(
+    results: List<ThreadSaveMediaAttemptResult>,
+    accumulator: ThreadSaveMediaDownloadAccumulator,
+    opPostId: String?,
+    enforceBudget: (Long) -> Unit,
+    logTag: String
+) {
+    results.forEach { attempt ->
+        val result = attempt.result
+        if (result == null) {
+            accumulator.downloadFailureCount += 1
+            return@forEach
+        }
+
+        result
+            .onSuccess { fileInfo ->
+                accumulator.totalSizeBytes += fileInfo.byteSize
+                enforceBudget(accumulator.totalSizeBytes)
+                val mediaKey = buildThreadSaveMediaDownloadKey(
+                    attempt.mediaItem.url,
+                    attempt.mediaItem.requestType
+                )
+                accumulator.mediaKeyToFileInfoMap[mediaKey] = fileInfo
+                when (attempt.mediaItem.requestType) {
+                    ThreadSaveMediaRequestType.THUMBNAIL -> {
+                        if (accumulator.urlToPathMap[attempt.mediaItem.url] == null) {
+                            accumulator.urlToPathMap[attempt.mediaItem.url] = fileInfo.relativePath
+                        }
+                    }
+                    ThreadSaveMediaRequestType.FULL_IMAGE -> {
+                        accumulator.urlToPathMap[attempt.mediaItem.url] = fileInfo.relativePath
+                    }
+                }
+                accumulator.mediaCounts = updateThreadSaveMediaCounts(
+                    current = accumulator.mediaCounts,
+                    fileType = fileInfo.fileType,
+                    relativePath = fileInfo.relativePath,
+                    postId = attempt.mediaItem.postId,
+                    opPostId = opPostId
+                )
+            }
+            .onFailure { error ->
+                accumulator.downloadFailureCount += 1
+                Logger.e(
+                    logTag,
+                    "Failed to download (${describeUrlForLog(attempt.mediaItem.url)}), " +
+                        "type=${describeFailureForLog(error)}"
+                )
+            }
+    }
+}
+
+private suspend fun retryThreadSaveMediaDownload(
+    mediaItem: ThreadSaveScheduledMediaItem,
+    execution: ThreadSaveMediaDownloadExecutionContext
+): Result<ThreadSaveLocalFileInfo>? {
+    var downloadResult: Result<ThreadSaveLocalFileInfo>? = null
+    var lastError: Throwable? = null
+    var attemptCount = 0
+    val effectiveMaxRetries = execution.maxRetries.coerceIn(1, 10)
+    for (attempt in 1..effectiveMaxRetries) {
+        attemptCount = attempt
+        coroutineContext.ensureActive()
+        execution.checkBudget()
+        downloadResult = try {
+            execution.downloadMedia(mediaItem)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+        if (downloadResult.isSuccess) break
+
+        lastError = downloadResult.exceptionOrNull()
+        if (!isThreadSaveMediaDownloadRetryable(lastError)) {
+            break
+        }
+        if (attempt < effectiveMaxRetries) {
+            execution.checkBudget()
+            Logger.w(
+                execution.logTag,
+                "Download attempt $attempt failed (${describeUrlForLog(mediaItem.url)}), retrying..."
+            )
+            delay(calculateThreadSaveMediaRetryDelay(execution.retryDelayMillis, attempt))
+        }
+    }
+
+    if (downloadResult?.isFailure == true) {
+        Logger.e(
+            execution.logTag,
+            "Failed to download (${describeUrlForLog(mediaItem.url)}) after $attemptCount attempts, " +
+                "type=${lastError?.let(::describeFailureForLog) ?: "unknown"}"
+        )
+    }
+    return downloadResult
+}
+
+internal fun calculateThreadSaveMediaRetryDelay(baseDelayMillis: Long, attempt: Int): Long {
+    val safeBase = baseDelayMillis.coerceIn(0L, 30_000L)
+    val safeAttempt = attempt.coerceIn(1, 10)
+    return if (safeBase > 30_000L / safeAttempt) 30_000L else safeBase * safeAttempt
+}

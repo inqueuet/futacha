@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug-only, separate-process fault injector for SQLite crash recovery tests. -->
+        <service
+            android:name=".CompatibilitySnapshotCrashTestService"
+            android:enabled="true"
+            android:exported="false"
+            android:process=":compat_snapshot_crash_test" />
+
+        <!-- Debug-only, separate-process fault injector for profile journal recovery tests. -->
+        <service
+            android:name=".ProfileSwitchCrashTestService"
+            android:enabled="true"
+            android:exported="false"
+            android:process=":profile_switch_crash_test" />
+
+        <activity
+            android:name=".ProfileActivityResultGateTestActivity"
+            android:enabled="true"
+            android:exported="false" />
+        <activity
+            android:name=".ProfileResultEchoActivity"
+            android:enabled="true"
+            android:exported="false" />
+    </application>
+</manifest>

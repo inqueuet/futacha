@@ -1,0 +1,1201 @@
+package com.valoser.futacha.shared.util
+
+import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.os.SystemClock
+import android.system.Os
+import android.system.OsConstants
+import androidx.documentfile.provider.DocumentFile
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.ArrayDeque
+import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.cancellation.CancellationException
+
+/**
+ * Exception thrown when DocumentFile permissions have been revoked
+ * FIX: ユーザーに適切なエラーメッセージを提供するための専用例外クラス
+ */
+class PermissionRevokedException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+class SaveProviderTimeoutException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+/**
+ * Android版FileSystem実装
+ */
+class AndroidFileSystem(
+    private val context: Context
+) : FileSystem {
+
+    // FIX: 安全性チェックのための定数
+    companion object {
+        private const val ZERO_READ_BACKOFF_MILLIS = 25L
+        private const val SAF_READ_IDLE_TIMEOUT_MILLIS = 15_000L
+        private const val SAF_TREE_NAVIGATION_MAX_DEPTH = 32
+        private const val SAF_TREE_DELETE_MAX_ITEMS = 10_000
+        private const val SAF_TREE_DELETE_MAX_DURATION_MILLIS = 30_000L
+        private const val FILE_TREE_DELETE_MAX_ITEMS = 10_000
+        private const val FILE_TREE_DELETE_MAX_DURATION_MILLIS = 30_000L
+        private const val SAF_WRITE_CHUNK_BYTES = 64 * 1024
+        private const val SAF_WRITE_TIMEOUT_MILLIS = 30_000L
+        private const val TEMP_CLEANUP_MAX_ENTRIES = 2_000
+        private const val TEMP_CLEANUP_MAX_DURATION_MILLIS = 2_000L
+    }
+
+    private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
+
+    private fun validatePath(path: String, paramName: String = "path") {
+        if (paramName == "path") {
+            validateFileSystemPath(path, paramName)
+        } else {
+            validateFileSystemRelativePath(path, paramName)
+        }
+    }
+
+    private fun validateFileSize(size: Long, paramName: String = "file") = validateFileSystemSize(size, paramName)
+
+    private suspend fun backoffAfterZeroRead() {
+        coroutineContext.ensureActive()
+        delay(ZERO_READ_BACKOFF_MILLIS)
+    }
+
+    private suspend fun <T> withSafWriteTimeout(block: suspend () -> T): T {
+        return try {
+            withTimeout(SAF_WRITE_TIMEOUT_MILLIS) {
+                block()
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw SaveProviderTimeoutException(
+                "保存先プロバイダの応答待ちがタイムアウトしました。保存先フォルダを選び直すか、別の保存先を試してください。",
+                e
+            )
+        }
+    }
+
+    override suspend fun createDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            val dir = File(resolveAbsolutePath(path))
+            if (!dir.exists()) {
+                if (!dir.mkdirs() && !dir.exists()) {
+                    throw IllegalStateException("Failed to create directory: ${dir.absolutePath}")
+                }
+            }
+        }
+    }
+
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
+            val file = File(resolveAbsolutePath(path))
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    if (!parent.mkdirs() && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
+
+            // FIX: アトミック書き込み - 一時ファイルに書き込んでからrenameすることで、
+            // 書き込み中のクラッシュでファイルが破損することを防ぐ
+            val tmpFile = File.createTempFile("tmp_", ".tmp", file.parentFile)
+            try {
+                FileOutputStream(tmpFile, false).use { output ->
+                    output.write(bytes)
+                    output.flush()
+                    output.fd.sync()
+                }
+                // POSIX rename replaces an existing destination atomically as long
+                // as both paths are on the same filesystem. The temp file is
+                // deliberately created beside the destination for that guarantee.
+                Os.rename(tmpFile.absolutePath, file.absolutePath)
+            } catch (e: Exception) {
+                // FIX: エラー発生時は一時ファイルを即座にクリーンアップ
+                if (tmpFile.exists()) {
+                    tmpFile.delete()
+                }
+                throw e
+            } finally {
+                // FIX: 念のため再度チェック（renameが成功していれば存在しないはず）
+                if (tmpFile.exists()) {
+                    val deleted = tmpFile.delete()
+                    if (!deleted) {
+                        Logger.w("AndroidFileSystem", "Failed to delete temp file: ${tmpFile.absolutePath}. It will be cleaned up by periodic cleanup.")
+                    }
+                }
+            }
+        }
+    }
+
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
+            val file = File(resolveAbsolutePath(path))
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    if (!parent.mkdirs() && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
+            val existingSize = file.length()
+            require(existingSize <= Long.MAX_VALUE - bytes.size.toLong()) { "file size overflow" }
+            validateFileSize(existingSize + bytes.size.toLong(), "file")
+            file.appendBytes(bytes)
+        }
+    }
+
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            validatePath(path, "path")
+            val file = File(resolveAbsolutePath(path))
+            file.parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    if (!parent.mkdirs() && !parent.exists()) {
+                        throw IllegalStateException("Failed to create parent directory: ${parent.absolutePath}")
+                    }
+                }
+            }
+            FileOutputStream(file, false).use { output ->
+                var totalWritten = 0L
+                val sink = object : FileWriteSink {
+                    override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        coroutineContext.ensureActive()
+                        require(offset >= 0 && length >= 0 && offset + length <= bytes.size) {
+                            "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                        }
+                        val nextTotal = totalWritten + length
+                        validateFileSystemStreamSize(nextTotal, "file")
+                        if (length > 0) {
+                            runInterruptible {
+                                output.write(bytes, offset, length)
+                            }
+                            totalWritten = nextTotal
+                        }
+                    }
+                }
+                block(sink)
+                runInterruptible {
+                    output.flush()
+                }
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証はwriteBytesで実行される
+        // writeBytes uses atomic write, so we delegate to it
+        writeBytes(path, content.toByteArray(Charsets.UTF_8))
+    }
+
+    override suspend fun readBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        try {
+            validatePath(path, "path") // FIX: 入力検証
+            val file = File(resolveAbsolutePath(path))
+            val size = file.length()
+            validateFileSize(size, "file") // FIX: 読み込み前にサイズチェック
+            Result.success(readLocalFileBytes(file))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    override suspend fun readString(path: String): Result<String> {
+        return readBytes(path).mapCatching { bytes ->
+            bytes.toString(Charsets.UTF_8)
+        }
+    }
+
+    /**
+     * Read while enforcing the size ceiling on every chunk. The preliminary
+     * File.length() check alone has a TOCTOU window when another writer grows
+     * the file during the read.
+     */
+    private suspend fun readLocalFileBytes(file: File): ByteArray {
+        return file.inputStream().use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            var totalRead = 0L
+            while (true) {
+                coroutineContext.ensureActive()
+                val read = runInterruptible { input.read(buffer) }
+                if (read < 0) break
+                if (read == 0) {
+                    backoffAfterZeroRead()
+                    continue
+                }
+                totalRead += read
+                validateFileSize(totalRead, "file")
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
+        }
+    }
+
+    override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            val file = File(resolveAbsolutePath(path))
+            if (!file.exists()) {
+                return@runFsCatching Unit
+            }
+            if (!file.delete() && file.exists()) {
+                throw IllegalStateException("Failed to delete: ${file.absolutePath}")
+            }
+            Unit
+        }
+    }
+
+    override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            validatePath(path, "path") // FIX: 入力検証
+            val file = File(resolveAbsolutePath(path))
+            if (!file.exists() && !isSymbolicLink(file)) {
+                return@withContext Result.success(Unit)
+            }
+            if (!deleteFileRecursivelyBounded(file) && file.exists()) {
+                throw IllegalStateException("Failed to delete recursively: ${file.absolutePath}")
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun deleteFileRecursivelyBounded(root: File): Boolean {
+        val deadlineMillis = SystemClock.elapsedRealtime() + FILE_TREE_DELETE_MAX_DURATION_MILLIS
+        val stack = ArrayDeque<Pair<File, Boolean>>()
+        stack.add(root to false)
+        var count = 0
+        while (!stack.isEmpty()) {
+            coroutineContext.ensureActive()
+            if (SystemClock.elapsedRealtime() > deadlineMillis) {
+                throw IllegalStateException("Timed out while deleting file tree item: ${root.absolutePath}")
+            }
+            count += 1
+            if (count > FILE_TREE_DELETE_MAX_ITEMS) {
+                throw IllegalStateException("Too many files while deleting file tree item: ${root.absolutePath}")
+            }
+            val (file, visitedChildren) = stack.removeLast()
+            val symbolicLink = isSymbolicLink(file)
+            if (!file.exists() && !symbolicLink) continue
+            if (symbolicLink) {
+                if (
+                    !runInterruptible { file.delete() } &&
+                    (runInterruptible { file.exists() } || isSymbolicLink(file))
+                ) {
+                    return false
+                }
+                continue
+            }
+            if (file.isDirectory && !visitedChildren) {
+                stack.add(file to true)
+                val children = runInterruptible { file.listFiles() }.orEmpty()
+                children.forEach { child ->
+                    stack.add(child to false)
+                }
+                continue
+            }
+            if (!runInterruptible { file.delete() } && runInterruptible { file.exists() }) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun isSymbolicLink(file: File): Boolean = runCatching {
+        OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+    }.getOrDefault(false)
+
+    override suspend fun exists(path: String): Boolean = withContext(Dispatchers.IO) {
+        val file = File(resolveAbsolutePath(path))
+        file.exists()
+    }
+
+    override suspend fun getFileSize(path: String): Long = withContext(Dispatchers.IO) {
+        val file = File(resolveAbsolutePath(path))
+        if (file.exists()) file.length() else 0L
+    }
+
+    override suspend fun listFiles(directory: String): List<String> = withContext(Dispatchers.IO) {
+        val dir = File(resolveAbsolutePath(directory))
+        dir.listFiles()?.map { it.name } ?: emptyList()
+    }
+
+    override fun getAppDataDirectory(): String {
+        // Modern Android uses app-scoped external storage by default to avoid scoped-storage write failures.
+        return if (isExternalStorageWritable()) {
+            getPublicDocumentsDirectory()
+        } else {
+            // フォールバック: 内部ストレージ
+            context.filesDir.absolutePath
+        }
+    }
+
+    override fun resolveAbsolutePath(relativePath: String): String {
+        return resolveAndroidAbsolutePath(
+            relativePath = relativePath,
+            appDataDirectory = ::getAppDataDirectory,
+            privateAppDataDirectory = ::getPrivateAppDataDirectory,
+            publicDocumentsDirectory = ::getPublicDocumentsDirectory,
+            publicDownloadsDirectory = ::getPublicDownloadsDirectory
+        )
+    }
+
+    /**
+     * Documents 相当の app-scoped 外部ディレクトリを取得。
+     * 共有ストレージへ直接書き込むと scoped storage で失敗しやすいため、
+     * デフォルト経路は SAF 未選択でも安定して書ける app-scoped 領域を使う。
+     */
+    private fun getPublicDocumentsDirectory(): String {
+        return getPublicAppDirectory(
+            directoryType = Environment.DIRECTORY_DOCUMENTS,
+            directoryLabel = "documents"
+        )
+    }
+
+    /**
+     * Downloads 相当の app-scoped 外部ディレクトリを取得。
+     */
+    private fun getPublicDownloadsDirectory(): String {
+        return getPublicAppDirectory(
+            directoryType = Environment.DIRECTORY_DOWNLOADS,
+            directoryLabel = "downloads"
+        )
+    }
+
+    private fun getPublicAppDirectory(
+        directoryType: String,
+        directoryLabel: String
+    ): String {
+        try {
+            val externalDir = context.getExternalFilesDir(directoryType)
+            if (externalDir == null) {
+                Logger.e(
+                    "FileSystem.android",
+                    "App-scoped external $directoryLabel directory is null, falling back to internal storage"
+                )
+                return getFallbackAppDirectory()
+            }
+            return ensureAppDirectory(externalDir).absolutePath
+        } catch (e: SecurityException) {
+            Logger.e("FileSystem.android", "SecurityException accessing external storage", e)
+            return getFallbackAppDirectory(e, "SecurityException")
+        } catch (e: Exception) {
+            Logger.e("FileSystem.android", "Unexpected error accessing storage", e)
+            return getFallbackAppDirectory(e, "unexpected error")
+        }
+    }
+
+    /**
+     * FilesDir 配下のアプリ専用ディレクトリを取得 (ファイラーからは見えない)
+     */
+    private fun getPrivateAppDataDirectory(): String {
+        return ensureAppDirectory(context.filesDir).absolutePath
+    }
+
+    /**
+     * 外部ストレージが書き込み可能か確認
+     */
+    private fun isExternalStorageWritable(): Boolean {
+        return Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED
+    }
+
+    private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
+        val resolvedBase = resolveAbsolutePath(basePath)
+        return if (relativePath.isEmpty()) {
+            resolvedBase
+        } else {
+            File(resolvedBase, relativePath).absolutePath
+        }
+    }
+
+    private fun ensureAppDirectory(baseDirectory: File): File {
+        val appDir = File(baseDirectory, "futacha")
+        if (!appDir.exists()) {
+            val created = appDir.mkdirs()
+            if (!created && !appDir.exists()) {
+                Logger.e("FileSystem.android", "Failed to create app directory at ${appDir.absolutePath}")
+                throw IllegalStateException("Failed to create app directory at ${appDir.absolutePath}")
+            }
+        }
+        return appDir
+    }
+
+    private fun getFallbackAppDirectory(
+        cause: Throwable? = null,
+        reason: String? = null
+    ): String {
+        if (reason != null) {
+            Logger.w("FileSystem.android", "Using internal storage fallback after $reason")
+        }
+        return try {
+            ensureAppDirectory(context.filesDir).absolutePath
+        } catch (fallbackError: Exception) {
+            throw IllegalStateException(
+                "Failed to create fallback app directory",
+                cause ?: fallbackError
+            )
+        }
+    }
+
+    private fun requireTreeBaseDirectory(
+        base: SaveLocation.TreeUri,
+        requireWrite: Boolean = false
+    ): DocumentFile {
+        val treeUri = Uri.parse(base.uri)
+        val baseDir = DocumentFile.fromTreeUri(context, treeUri)
+            ?: throw PermissionRevokedException(
+                "Cannot resolve tree URI: ${base.uri}. Please select the folder again."
+            )
+        if (requireWrite && !baseDir.canWrite()) {
+            throw PermissionRevokedException(
+                "Write permission lost for tree URI: ${base.uri}. Please select the folder again."
+            )
+        }
+        return baseDir
+    }
+
+    private suspend inline fun <T> runTreeUriCatching(
+        base: SaveLocation.TreeUri,
+        requireWrite: Boolean = false,
+        block: suspend (DocumentFile) -> T
+    ): Result<T> {
+        return try {
+            Result.success(block(requireTreeBaseDirectory(base, requireWrite)))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun resolveTreeParentDirectory(
+        baseDir: DocumentFile,
+        relativePath: String,
+        createDirectories: Boolean
+    ): Pair<DocumentFile, String> {
+        val (parentPath, fileName) = splitParentAndFileName(relativePath)
+        val parentDir = when {
+            parentPath.isEmpty() -> baseDir
+            createDirectories -> createOrNavigateToDirectory(baseDir, parentPath)
+            else -> navigateToDirectory(baseDir, parentPath)
+                ?: throw IllegalStateException("Directory not found: $parentPath")
+        }
+        return parentDir to fileName
+    }
+
+    private suspend fun findOrCreateTreeFile(
+        parentDir: DocumentFile,
+        fileName: String
+    ): DocumentFile {
+        val existing = runInterruptible { parentDir.findFile(fileName) }
+        return existing?.takeIf { file -> !runInterruptible { file.isDirectory } }
+            ?: runInterruptible { parentDir.createFile("application/octet-stream", fileName) }
+            ?: throw IllegalStateException("Failed to create file: $fileName")
+    }
+
+    private suspend fun readTreeFileUtf8(file: DocumentFile, fileName: String): String {
+        return readTreeFileBytes(file, fileName).toString(Charsets.UTF_8)
+    }
+
+    private suspend fun readTreeFileBytes(file: DocumentFile, fileName: String): ByteArray {
+        return context.contentResolver.openInputStream(file.uri)?.use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            var totalRead = 0L
+            var zeroReadCount = 0
+            while (true) {
+                coroutineContext.ensureActive()
+                val read = withTimeoutOrNull(SAF_READ_IDLE_TIMEOUT_MILLIS) {
+                    runInterruptible {
+                        input.read(buffer)
+                    }
+                } ?: throw IllegalStateException("Read timed out while loading file: $fileName")
+                when {
+                    read < 0 -> break
+                    read == 0 -> {
+                        zeroReadCount += 1
+                        if (zeroReadCount >= 100) {
+                            throw IllegalStateException("Read stalled while loading file: $fileName")
+                        }
+                        backoffAfterZeroRead()
+                        continue
+                    }
+                    else -> {
+                        zeroReadCount = 0
+                    }
+                }
+                totalRead += read
+                validateFileSize(totalRead, "file")
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
+        } ?: throw IllegalStateException("Failed to open input stream for ${file.uri}")
+    }
+
+    // ========================================
+    // SaveLocation-based implementations
+    // ========================================
+
+    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                createDirectory(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                    if (relativePath.isEmpty()) {
+                        return@runTreeUriCatching Unit
+                    }
+                    createOrNavigateToDirectory(baseDir, relativePath)
+                    Unit
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                writeBytes(fullPath, bytes)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                    withSafWriteTimeout {
+                        val (parentDir, fileName) = resolveTreeParentDirectory(
+                            baseDir = baseDir,
+                            relativePath = relativePath,
+                            createDirectories = true
+                        )
+                        val file = findOrCreateTreeFile(parentDir, fileName)
+                        val output = runInterruptible {
+                            context.contentResolver.openOutputStream(file.uri, "wt")
+                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        try {
+                            var offset = 0
+                            while (offset < bytes.size) {
+                                coroutineContext.ensureActive()
+                                val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
+                                runInterruptible {
+                                    output.write(bytes, offset, length)
+                                }
+                                offset += length
+                            }
+                            runInterruptible {
+                                output.flush()
+                            }
+                        } finally {
+                            try {
+                                runInterruptible { output.close() }
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                appendBytes(fullPath, bytes)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                    withSafWriteTimeout {
+                        val (parentDir, fileName) = resolveTreeParentDirectory(
+                            baseDir = baseDir,
+                            relativePath = relativePath,
+                            createDirectories = true
+                        )
+                        val file = findOrCreateTreeFile(parentDir, fileName)
+                        val existingSize = runInterruptible { file.length() }
+                        require(existingSize <= Long.MAX_VALUE - bytes.size.toLong()) { "file size overflow" }
+                        validateFileSize(existingSize + bytes.size.toLong(), "file")
+                        val output = runInterruptible {
+                            context.contentResolver.openOutputStream(file.uri, "wa")
+                        } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        try {
+                            var offset = 0
+                            while (offset < bytes.size) {
+                                coroutineContext.ensureActive()
+                                val length = minOf(SAF_WRITE_CHUNK_BYTES, bytes.size - offset)
+                                runInterruptible {
+                                    output.write(bytes, offset, length)
+                                }
+                                offset += length
+                            }
+                            runInterruptible {
+                                output.flush()
+                            }
+                        } finally {
+                            try {
+                                runInterruptible { output.close() }
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                writeByteStream(fullPath, block)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val result = runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                        val (parentDir, fileName) = withSafWriteTimeout {
+                            resolveTreeParentDirectory(
+                                baseDir = baseDir,
+                                relativePath = relativePath,
+                                createDirectories = true
+                            )
+                        }
+                        val file = withSafWriteTimeout {
+                            findOrCreateTreeFile(parentDir, fileName)
+                        }
+                        val output = withSafWriteTimeout {
+                            runInterruptible {
+                                context.contentResolver.openOutputStream(file.uri, "wt")
+                            } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
+                        }
+                        try {
+                            var totalWritten = 0L
+                            val sink = object : FileWriteSink {
+                                override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                                    coroutineContext.ensureActive()
+                                    require(offset >= 0 && length >= 0 && offset + length <= bytes.size) {
+                                        "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                                    }
+                                    val nextTotal = totalWritten + length
+                                    validateFileSystemStreamSize(nextTotal, "file")
+                                    if (length > 0) {
+                                        withSafWriteTimeout {
+                                            runInterruptible {
+                                                output.write(bytes, offset, length)
+                                            }
+                                        }
+                                        totalWritten = nextTotal
+                                    }
+                                }
+                            }
+                            block(sink)
+                            withSafWriteTimeout {
+                                runInterruptible {
+                                    output.flush()
+                                }
+                            }
+                        } finally {
+                            try {
+                                withSafWriteTimeout {
+                                    runInterruptible { output.close() }
+                                }
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+                    result
+                } catch (e: CancellationException) {
+                    throw e
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        // FIX: 入力検証はwriteBytesで実行される
+        return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
+    }
+
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                readBytes(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base) { baseDir ->
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    val file = parentDir.findFile(fileName)
+                        ?: throw IllegalStateException("File not found: $fileName")
+                    readTreeFileBytes(file, fileName)
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                readString(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base) { baseDir ->
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    val file = parentDir.findFile(fileName)
+                        ?: throw IllegalStateException("File not found: $fileName")
+                    readTreeFileUtf8(file, fileName)
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(Dispatchers.IO) {
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext false
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                exists(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val baseDir = requireTreeBaseDirectory(base)
+
+                    if (relativePath.isEmpty()) {
+                        return@withContext baseDir.exists()
+                    }
+
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    parentDir.findFile(fileName)?.exists() ?: false
+                } catch (e: Exception) {
+                    Logger.e("AndroidFileSystem", "Error checking existence for TreeUri: ${base.uri}, path: $relativePath", e)
+                    false
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                false
+            }
+        }
+    }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long = withContext(Dispatchers.IO) {
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext 0L
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                getFileSize(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val baseDir = requireTreeBaseDirectory(base)
+                    if (relativePath.isEmpty()) {
+                        return@withContext 0L
+                    }
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    parentDir.findFile(fileName)?.length() ?: 0L
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Logger.e("AndroidFileSystem", "Error reading TreeUri file size: ${base.uri}, path: $relativePath", e)
+                    0L
+                }
+            }
+            is SaveLocation.Bookmark -> 0L
+        }
+    }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> = withContext(Dispatchers.IO) {
+        if (directory.isNotEmpty()) {
+            runFsCatching { validatePath(directory, "directory") }.getOrElse {
+                return@withContext emptyList()
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, directory)
+                listFiles(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                try {
+                    val baseDir = requireTreeBaseDirectory(base)
+                    val targetDir = navigateToDirectory(baseDir, directory) ?: return@withContext emptyList()
+                    runInterruptible { targetDir.listFiles().mapNotNull { it.name } }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Logger.e("AndroidFileSystem", "Error listing TreeUri files: ${base.uri}, path: $directory", e)
+                    emptyList()
+                }
+            }
+            is SaveLocation.Bookmark -> emptyList()
+        }
+    }
+
+    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
+        when (base) {
+            is SaveLocation.Path -> {
+                val fullPath = resolveSaveLocationPath(base.path, relativePath)
+                deleteRecursively(fullPath)
+            }
+            is SaveLocation.TreeUri -> {
+                runTreeUriCatching(base, requireWrite = true) { baseDir ->
+                    if (relativePath.isEmpty()) {
+                        // Safety guard: never delete the user-selected TreeUri root from app code.
+                        Logger.w(
+                            "AndroidFileSystem",
+                            "Refusing to delete TreeUri base directory directly: ${base.uri}"
+                        )
+                        return@runTreeUriCatching Unit
+                    }
+
+                    val (parentDir, fileName) = resolveTreeParentDirectory(
+                        baseDir = baseDir,
+                        relativePath = relativePath,
+                        createDirectories = false
+                    )
+                    val target = parentDir.findFile(fileName) ?: return@runTreeUriCatching Unit
+
+                    if (!deleteDocumentRecursively(target)) {
+                        throw IllegalStateException("Failed to delete: $relativePath")
+                    }
+                }
+            }
+            is SaveLocation.Bookmark -> {
+                Result.failure(UnsupportedOperationException("Bookmark SaveLocation is not supported on Android"))
+            }
+        }
+    }
+
+    // ========================================
+    // Helper methods for DocumentFile navigation
+    // ========================================
+
+    private fun splitParentAndFileName(relativePath: String): Pair<String, String> =
+        com.valoser.futacha.shared.util.splitParentAndFileName(relativePath)
+
+    // FIX: DocumentFileナビゲーションのエラーハンドリングを強化
+    private suspend fun navigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile? {
+        if (relativePath.isEmpty()) return base
+        val segments = relativePath.split('/').filter { it.isNotBlank() }
+        if (segments.size > SAF_TREE_NAVIGATION_MAX_DEPTH) {
+            throw IllegalStateException("Directory path is too deep: $relativePath")
+        }
+        var current = base
+        for ((index, segment) in segments.withIndex()) {
+            coroutineContext.ensureActive()
+            val next = runInterruptible { current.findFile(segment) }
+            if (next == null) {
+                Logger.d("AndroidFileSystem", "Directory not found at segment[$index]: $segment (path: $relativePath)")
+                return null
+            }
+            if (!runInterruptible { next.isDirectory }) {
+                Logger.w("AndroidFileSystem", "Path segment is not a directory at segment[$index]: $segment (path: $relativePath)")
+                return null
+            }
+            current = next
+        }
+        return current
+    }
+
+    // FIX: ディレクトリ作成時のエラーメッセージを詳細化
+    private suspend fun createOrNavigateToDirectory(base: DocumentFile, relativePath: String): DocumentFile {
+        if (relativePath.isEmpty()) return base
+        val segments = relativePath.split('/').filter { it.isNotBlank() }
+        if (segments.size > SAF_TREE_NAVIGATION_MAX_DEPTH) {
+            throw IllegalStateException("Directory path is too deep: $relativePath")
+        }
+        var current = base
+        for ((index, segment) in segments.withIndex()) {
+            coroutineContext.ensureActive()
+            val existing = runInterruptible { current.findFile(segment) }
+            current = if (existing != null && runInterruptible { existing.isDirectory }) {
+                existing
+            } else if (existing == null) {
+                runInterruptible { current.createDirectory(segment) }
+                    ?: throw IllegalStateException("Failed to create directory at segment[$index]: $segment (path: $relativePath, base: ${base.uri})")
+            } else {
+                throw IllegalStateException("Path segment exists but is not a directory at segment[$index]: $segment (path: $relativePath)")
+            }
+        }
+        return current
+    }
+
+    private suspend fun deleteDocumentRecursively(target: DocumentFile): Boolean {
+        val deadlineElapsedMillis = SystemClock.elapsedRealtime() + SAF_TREE_DELETE_MAX_DURATION_MILLIS
+        val stack = ArrayDeque<Pair<DocumentFile, Boolean>>()
+        val visitedUris = hashSetOf<String>()
+        stack.add(target to false)
+        var count = 0
+        while (!stack.isEmpty()) {
+            coroutineContext.ensureActive()
+            if (SystemClock.elapsedRealtime() > deadlineElapsedMillis) {
+                throw IllegalStateException("Timed out while deleting SAF tree item: ${target.uri}")
+            }
+            val (current, visitedChildren) = stack.removeLast()
+            val uriKey = current.uri.toString()
+            if (!visitedChildren) {
+                if (!visitedUris.add(uriKey)) continue
+                count += 1
+                if (count > SAF_TREE_DELETE_MAX_ITEMS) {
+                    throw IllegalStateException("Too many files while deleting SAF tree item: ${target.uri}")
+                }
+                if (runInterruptible { current.isDirectory }) {
+                    stack.add(current to true)
+                    val children = runCatching { runInterruptible { current.listFiles() } }
+                        .getOrElse { emptyArray() }
+                    children.forEach { child -> stack.add(child to false) }
+                    continue
+                }
+            }
+            if (!runInterruptible { current.delete() } && runInterruptible { current.exists() }) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * FIX: 古い一時ファイルをクリーンアップ
+     * アプリ起動時に呼び出して、前回のクラッシュなどで残った一時ファイルを削除
+     *
+     * 改善点:
+     * - キャッシュディレクトリだけでなく、アプリデータディレクトリも検索
+     * - 年齢ベースのクリーンアップ (1時間以上古いファイルのみ削除)
+     * - 再帰的に検索して全ての一時ファイルを見つける
+     */
+    fun cleanupTempFiles(includeExternalStorage: Boolean = false): Result<Int> = runCatching {
+        var deletedCount = 0
+        val now = System.currentTimeMillis()
+        val maxAgeMs = 60 * 60 * 1000L // 1時間
+        val cleanupBudget = TempCleanupBudget(
+            deadlineElapsedMillis = SystemClock.elapsedRealtime() + TEMP_CLEANUP_MAX_DURATION_MILLIS,
+            maxEntries = TEMP_CLEANUP_MAX_ENTRIES
+        )
+
+        // Limit cleanup to app-owned roots. Never scan user-selected or public roots directly.
+        val searchDirs = buildList {
+            add(context.cacheDir)
+            runCatching {
+                add(File(getPrivateAppDataDirectory()))
+            }.onFailure { e ->
+                Logger.w("AndroidFileSystem", "Failed to access private app directory for cleanup: ${e.message}")
+            }
+            if (includeExternalStorage && isExternalStorageWritable()) {
+                runCatching {
+                    add(File(getPublicDocumentsDirectory()))
+                    add(File(getPublicDownloadsDirectory()))
+                }.onFailure { e ->
+                    Logger.w("AndroidFileSystem", "Failed to access app-scoped external directories for cleanup: ${e.message}")
+                }
+            }
+        }
+
+        // FIX: 各ディレクトリを再帰的に検索
+        searchDirs.forEach { dir ->
+            if (dir.exists() && dir.isDirectory && !isSymbolicLink(dir)) {
+                deletedCount += cleanupTempFilesRecursive(
+                    directory = dir,
+                    now = now,
+                    maxAgeMs = maxAgeMs,
+                    currentDepth = 0,
+                    maxDepth = 3,
+                    budget = cleanupBudget
+                )
+            }
+        }
+
+        if (deletedCount > 0) {
+            Logger.i("AndroidFileSystem", "Cleaned up $deletedCount temp files")
+        }
+        deletedCount
+    }
+
+    /**
+     * FIX: ディレクトリを再帰的に検索して古い一時ファイルを削除
+     */
+    private fun cleanupTempFilesRecursive(
+        directory: File,
+        now: Long,
+        maxAgeMs: Long,
+        currentDepth: Int,
+        maxDepth: Int,
+        budget: TempCleanupBudget
+    ): Int {
+        var deletedCount = 0
+        if (budget.isExhausted()) return deletedCount
+
+        runCatching {
+            directory.listFiles()?.forEach { file ->
+                if (!budget.tryConsumeEntry()) return@forEach
+                try {
+                    if (file.isFile && file.name.startsWith("tmp_") && file.name.endsWith(".tmp")) {
+                        // FIX: 年齢チェック - 1時間以上古いファイルのみ削除
+                        val age = now - file.lastModified()
+                        if (age > maxAgeMs) {
+                            if (file.delete()) {
+                                deletedCount++
+                                Logger.d("AndroidFileSystem", "Deleted old temp file: ${file.absolutePath} (age: ${age / 1000}s)")
+                            } else {
+                                Logger.w("AndroidFileSystem", "Failed to delete temp file: ${file.absolutePath}")
+                            }
+                        }
+                    } else if (file.isDirectory && !isSymbolicLink(file)) {
+                        // 再帰的に検索 (最大3レベルまで、無限再帰を防ぐ)
+                        if (currentDepth < maxDepth) {
+                            deletedCount += cleanupTempFilesRecursive(
+                                directory = file,
+                                now = now,
+                                maxAgeMs = maxAgeMs,
+                                currentDepth = currentDepth + 1,
+                                maxDepth = maxDepth,
+                                budget = budget
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.w("AndroidFileSystem", "Error processing file during cleanup: ${file.absolutePath} - ${e.message}")
+                }
+            }
+        }.onFailure { e ->
+            Logger.w("AndroidFileSystem", "Error listing files in ${directory.absolutePath}: ${e.message}")
+        }
+
+        return deletedCount
+    }
+
+    private class TempCleanupBudget(
+        private val deadlineElapsedMillis: Long,
+        private val maxEntries: Int
+    ) {
+        private var examinedEntries = 0
+
+        fun isExhausted(): Boolean =
+            examinedEntries >= maxEntries || SystemClock.elapsedRealtime() >= deadlineElapsedMillis
+
+        fun tryConsumeEntry(): Boolean {
+            if (isExhausted()) return false
+            examinedEntries += 1
+            return true
+        }
+    }
+
+}
+
+actual fun createFileSystem(platformContext: Any?): FileSystem {
+    require(platformContext is Context) { "Android requires Context" }
+    return AndroidFileSystem(platformContext.applicationContext)
+}

@@ -1,0 +1,348 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.PerformanceTracker
+import com.valoser.futacha.shared.analytics.analyticsThreadActionLabel
+import com.valoser.futacha.shared.network.isInqueuetArchiveUrl
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+
+internal data class ThreadActionLaunchState(
+    val shouldLaunch: Boolean,
+    val nextLastBusyNoticeAtMillis: Long,
+    val busyMessage: String? = null
+)
+
+internal fun resolveThreadActionLaunchState(
+    actionInProgress: Boolean,
+    lastBusyActionNoticeAtMillis: Long,
+    nowMillis: Long,
+    busyNoticeIntervalMillis: Long
+): ThreadActionLaunchState {
+    if (!actionInProgress) {
+        return ThreadActionLaunchState(
+            shouldLaunch = true,
+            nextLastBusyNoticeAtMillis = lastBusyActionNoticeAtMillis
+        )
+    }
+    val shouldNotifyBusy = hasEpochIntervalElapsed(
+        nowMillis = nowMillis,
+        startedAtMillis = lastBusyActionNoticeAtMillis,
+        intervalMillis = busyNoticeIntervalMillis
+    )
+    return ThreadActionLaunchState(
+        shouldLaunch = false,
+        nextLastBusyNoticeAtMillis = if (shouldNotifyBusy) nowMillis else lastBusyActionNoticeAtMillis,
+        busyMessage = if (shouldNotifyBusy) buildThreadActionBusyMessage() else null
+    )
+}
+
+internal sealed interface ThreadActionRunResult<out T> {
+    data class Success<T>(val value: T) : ThreadActionRunResult<T>
+    data class Failure(val error: Throwable) : ThreadActionRunResult<Nothing>
+}
+
+internal suspend fun <T> performThreadAction(
+    block: suspend () -> T
+): ThreadActionRunResult<T> {
+    return try {
+        ThreadActionRunResult.Success(block())
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        ThreadActionRunResult.Failure(error)
+    }
+}
+
+internal fun buildThreadActionBusyMessage(): String = "処理中です…"
+
+internal fun buildArchiveReadOnlyActionMessage(): String = "アーカイブは読み取り専用です"
+
+internal fun requireWritableThreadBoard(boardUrl: String) {
+    if (isInqueuetArchiveUrl(boardUrl)) {
+        throw IllegalStateException(buildArchiveReadOnlyActionMessage())
+    }
+}
+
+internal fun buildThreadActionStartLogMessage(
+    successMessage: String,
+    failurePrefix: String
+): String {
+    return "Starting thread action: success='$successMessage', failure='$failurePrefix'"
+}
+
+internal fun buildThreadActionSuccessLogMessage(
+    successMessage: String
+): String {
+    return "Thread action succeeded: $successMessage"
+}
+
+internal fun buildThreadActionFailureLogMessage(
+    failurePrefix: String
+): String {
+    return "Thread action failed: $failurePrefix"
+}
+
+internal data class ThreadActionRuntimeCallbacks<T>(
+    val onActionInProgressChanged: (Boolean) -> Unit,
+    val onSuccess: (T) -> Unit = {},
+    val onShowMessage: (String) -> Unit,
+    val onFailure: (suspend (Throwable) -> Unit)? = null,
+    val onDebugLog: (String) -> Unit,
+    val onInfoLog: (String) -> Unit,
+    val onErrorLog: (String, Throwable) -> Unit
+)
+
+internal data class ThreadActionLaunchResult(
+    val nextLastBusyNoticeAtMillis: Long,
+    val launchedJob: Job? = null
+)
+
+internal fun <T> CoroutineScope.launchManagedThreadAction(
+    actionInProgress: Boolean,
+    lastBusyActionNoticeAtMillis: Long,
+    nowMillis: Long,
+    busyNoticeIntervalMillis: Long,
+    successMessage: String,
+    failurePrefix: String,
+    analyticsContext: Map<String, String> = emptyMap(),
+    callbacks: ThreadActionRuntimeCallbacks<T>,
+    block: suspend () -> ThreadActionRunResult<T>
+): ThreadActionLaunchResult {
+    val launchState = resolveThreadActionLaunchState(
+        actionInProgress = actionInProgress,
+        lastBusyActionNoticeAtMillis = lastBusyActionNoticeAtMillis,
+        nowMillis = nowMillis,
+        busyNoticeIntervalMillis = busyNoticeIntervalMillis
+    )
+    if (!launchState.shouldLaunch) {
+        AnalyticsTracker.event(
+            "thread_action_busy",
+            analyticsContext + mapOf(
+                "action" to classifyThreadActionForAnalytics(successMessage, failurePrefix),
+                "action_label" to analyticsThreadActionLabel(
+                    classifyThreadActionForAnalytics(successMessage, failurePrefix)
+                )
+            )
+        )
+        launchState.busyMessage?.let(callbacks.onShowMessage)
+        return ThreadActionLaunchResult(
+            nextLastBusyNoticeAtMillis = launchState.nextLastBusyNoticeAtMillis
+        )
+    }
+    val analyticsAction = classifyThreadActionForAnalytics(successMessage, failurePrefix)
+    AnalyticsTracker.event(
+        "thread_action_started",
+        analyticsContext + mapOf(
+            "action" to analyticsAction,
+            "action_label" to analyticsThreadActionLabel(analyticsAction)
+        )
+    )
+    callbacks.onActionInProgressChanged(true)
+    val launchedJob = launch {
+        try {
+            callbacks.onDebugLog(
+                buildThreadActionStartLogMessage(
+                    successMessage = successMessage,
+                    failurePrefix = failurePrefix
+                )
+            )
+            val result = try {
+                PerformanceTracker.measureSuspend(
+                    traceName = "thread_action_$analyticsAction",
+                    attributes = mapOf(
+                        "feature" to "thread_action",
+                        "action" to analyticsAction
+                    )
+                ) {
+                    block()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                ThreadActionRunResult.Failure(error)
+            }
+            when (result) {
+                is ThreadActionRunResult.Success -> {
+                    AnalyticsTracker.event(
+                        "thread_action_result",
+                        analyticsContext + mapOf(
+                            "action" to analyticsAction,
+                            "action_label" to analyticsThreadActionLabel(analyticsAction),
+                            "result" to "success"
+                        )
+                    )
+                    callbacks.onInfoLog(buildThreadActionSuccessLogMessage(successMessage))
+                    callbacks.onSuccess(result.value)
+                    callbacks.onShowMessage(successMessage)
+                }
+                is ThreadActionRunResult.Failure -> {
+                    AnalyticsTracker.event(
+                        "thread_action_result",
+                        analyticsContext + mapOf(
+                            "action" to analyticsAction,
+                            "action_label" to analyticsThreadActionLabel(analyticsAction),
+                            "result" to "failure",
+                            "error_type" to (result.error::class.simpleName ?: "unknown")
+                        )
+                    )
+                    callbacks.onErrorLog(
+                        buildThreadActionFailureLogMessage(failurePrefix),
+                        result.error
+                    )
+                    callbacks.onFailure?.invoke(result.error) ?: callbacks.onShowMessage(
+                        buildThreadActionFailureMessage(
+                            failurePrefix = failurePrefix,
+                            error = result.error
+                        )
+                    )
+                }
+            }
+        } finally {
+            callbacks.onActionInProgressChanged(false)
+        }
+    }
+    return ThreadActionLaunchResult(
+        nextLastBusyNoticeAtMillis = launchState.nextLastBusyNoticeAtMillis,
+        launchedJob = launchedJob
+    )
+}
+
+private fun classifyThreadActionForAnalytics(successMessage: String, failurePrefix: String): String {
+    val source = "$successMessage $failurePrefix"
+    return when {
+        "返信" in source -> "reply"
+        "本人削除" in source -> "delete_by_user"
+        "DEL" in source || "del" in source.lowercase() -> "deletion_request"
+        "そうだね" in source -> "saidane"
+        "保存" in source -> "save"
+        "更新" in source -> "refresh"
+        else -> "other"
+    }
+}
+
+internal data class ThreadDeleteByUserActionConfig(
+    val boardUrl: String,
+    val threadId: String,
+    val postId: String,
+    val password: String,
+    val imageOnly: Boolean
+)
+
+internal fun buildThreadDeleteByUserActionConfig(
+    boardUrl: String,
+    threadId: String,
+    postId: String,
+    password: String,
+    imageOnly: Boolean
+): ThreadDeleteByUserActionConfig {
+    return ThreadDeleteByUserActionConfig(
+        boardUrl = boardUrl,
+        threadId = threadId,
+        postId = postId,
+        password = password,
+        imageOnly = imageOnly
+    )
+}
+
+internal data class ThreadDeleteByUserActionCallbacks(
+    val deleteByUser: suspend (ThreadDeleteByUserActionConfig) -> Unit
+)
+
+internal fun buildThreadDeleteByUserActionCallbacks(
+    repository: BoardRepository
+): ThreadDeleteByUserActionCallbacks {
+    return ThreadDeleteByUserActionCallbacks(
+        deleteByUser = { config ->
+            repository.deleteByUser(
+                board = config.boardUrl,
+                threadId = config.threadId,
+                postId = config.postId,
+                password = config.password,
+                imageOnly = config.imageOnly
+            )
+        }
+    )
+}
+
+internal suspend fun performThreadDeleteByUserAction(
+    config: ThreadDeleteByUserActionConfig,
+    callbacks: ThreadDeleteByUserActionCallbacks
+): ThreadActionRunResult<Unit> {
+    return performThreadAction {
+        requireWritableThreadBoard(config.boardUrl)
+        callbacks.deleteByUser(config)
+    }
+}
+
+internal data class ThreadReplyActionConfig(
+    val boardUrl: String,
+    val threadId: String,
+    val name: String,
+    val email: String,
+    val subject: String,
+    val comment: String,
+    val password: String,
+    val imageBytes: ByteArray?,
+    val imageFileName: String?,
+    val textOnly: Boolean
+)
+
+internal fun buildThreadReplyActionConfig(
+    boardUrl: String,
+    threadId: String,
+    draft: ThreadReplyDraft,
+    normalizedPassword: String
+): ThreadReplyActionConfig {
+    return ThreadReplyActionConfig(
+        boardUrl = boardUrl,
+        threadId = threadId,
+        name = draft.name,
+        email = draft.email,
+        subject = draft.subject,
+        comment = draft.comment,
+        password = normalizedPassword,
+        imageBytes = draft.imageData?.bytes,
+        imageFileName = draft.imageData?.fileName,
+        textOnly = draft.imageData == null
+    )
+}
+
+internal data class ThreadReplyActionCallbacks(
+    val replyToThread: suspend (ThreadReplyActionConfig) -> String?
+)
+
+internal fun buildThreadReplyActionCallbacks(
+    repository: BoardRepository
+): ThreadReplyActionCallbacks {
+    return ThreadReplyActionCallbacks(
+        replyToThread = { config ->
+            repository.replyToThread(
+                board = config.boardUrl,
+                threadId = config.threadId,
+                name = config.name,
+                email = config.email,
+                subject = config.subject,
+                comment = config.comment,
+                password = config.password,
+                imageFile = config.imageBytes,
+                imageFileName = config.imageFileName,
+                textOnly = config.textOnly
+            )
+        }
+    )
+}
+
+internal suspend fun performThreadReplyAction(
+    config: ThreadReplyActionConfig,
+    callbacks: ThreadReplyActionCallbacks
+): ThreadActionRunResult<String?> {
+    return performThreadAction {
+        requireWritableThreadBoard(config.boardUrl)
+        callbacks.replyToThread(config)
+    }
+}

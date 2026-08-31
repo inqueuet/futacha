@@ -1,0 +1,257 @@
+package com.valoser.futacha.wear.sync
+
+import android.content.Context
+import android.net.Uri
+import android.os.SystemClock
+import android.util.Log
+import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.DataClient
+import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.Wearable
+import com.valoser.futacha.shared.watch.WatchSnapshot
+import com.valoser.futacha.shared.watch.WatchReadAloudStatusUpdate
+import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_KEY
+import com.valoser.futacha.shared.watch.WATCH_SNAPSHOT_PATH
+import com.valoser.futacha.shared.watch.hasValidTransportShape
+import com.valoser.futacha.shared.watch.shouldAcceptWatchSnapshot
+import com.valoser.futacha.shared.watch.withReadAloudStatusUpdate
+import com.valoser.futacha.wear.live.ReadAloudLiveUpdateNotifier
+import com.valoser.futacha.wear.tile.FutachaTileService
+import androidx.wear.tiles.TileService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+object WatchSnapshotStore {
+    private const val PREFS_NAME = "futacha_watch_snapshot"
+    private const val SNAPSHOT_JSON_KEY = "snapshot_json"
+    private const val SNAPSHOT_PAYLOAD_MAX_BYTES = 128 * 1024
+    private const val READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES = 4 * 1024
+    private const val DATA_LAYER_LOAD_TIMEOUT_MILLIS = 3_000L
+
+    private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val json = Json { ignoreUnknownKeys = true }
+    private val snapshotState = MutableStateFlow<WatchSnapshot?>(null)
+    private val saveMutex = Mutex()
+    private val lastTileUpdateRequestElapsedMillis = AtomicLong(0L)
+
+    fun observe(): StateFlow<WatchSnapshot?> {
+        return snapshotState.asStateFlow()
+    }
+
+    suspend fun loadPersisted(context: Context) {
+        if (snapshotState.value != null) return
+        val loaded = load(context) ?: return
+        saveMutex.withLock {
+            // A fresher snapshot may have arrived via save() while load() was
+            // reading disk; never overwrite it with older persisted data.
+            val current = snapshotState.value
+            if (shouldAcceptWatchSnapshot(
+                    currentGeneratedAtMillis = current?.generatedAtMillis,
+                    incomingGeneratedAtMillis = loaded.generatedAtMillis,
+                    nowMillis = System.currentTimeMillis()
+                )
+            ) {
+                snapshotState.value = loaded
+            }
+        }
+    }
+
+    fun loadDataLayerSnapshotAsync(context: Context) {
+        val appContext = context.applicationContext
+        storeScope.launch {
+            loadLatestDataLayerSnapshot(appContext)?.let { snapshot ->
+                save(appContext, snapshot)
+            }
+        }
+    }
+
+    suspend fun getSnapshot(context: Context): WatchSnapshot? {
+        loadPersisted(context)
+        return snapshotState.value
+    }
+
+    fun saveEncodedAsync(
+        context: Context,
+        encoded: String,
+        onSaved: (() -> Unit)? = null
+    ) {
+        if (!isValidSnapshotPayload(encoded)) return
+        val appContext = context.applicationContext
+        storeScope.launch {
+            val snapshot = decodeSnapshot(encoded) ?: return@launch
+            if (save(appContext, snapshot)) {
+                onSaved?.invoke()
+            }
+        }
+    }
+
+    fun saveReadAloudStatusUpdateEncodedAsync(
+        context: Context,
+        encoded: String
+    ) {
+        if (!isValidReadAloudStatusPayload(encoded)) return
+        val appContext = context.applicationContext
+        storeScope.launch {
+            val update = decodeReadAloudStatusUpdate(encoded) ?: return@launch
+            applyReadAloudStatusUpdate(appContext, update)
+        }
+    }
+
+    suspend fun save(context: Context, snapshot: WatchSnapshot): Boolean {
+        saveMutex.withLock {
+            val currentSnapshot = snapshotState.value
+            if (!shouldAcceptWatchSnapshot(
+                    currentGeneratedAtMillis = currentSnapshot?.generatedAtMillis,
+                    incomingGeneratedAtMillis = snapshot.generatedAtMillis,
+                    nowMillis = System.currentTimeMillis()
+                )
+            ) {
+                return false
+            }
+            if (snapshot == currentSnapshot) {
+                return false
+            }
+            val encoded = withContext(Dispatchers.Default) {
+                json.encodeToString(WatchSnapshot.serializer(), snapshot)
+            }
+            val committed = withContext(Dispatchers.IO) {
+                context.applicationContext
+                    .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(SNAPSHOT_JSON_KEY, encoded)
+                    .commit()
+            }
+            if (!committed) {
+                return false
+            }
+            snapshotState.value = snapshot
+            ReadAloudLiveUpdateNotifier.update(context.applicationContext, snapshot)
+            requestTileUpdateIfAllowed(context.applicationContext)
+            return true
+        }
+    }
+
+    suspend fun applyReadAloudStatusUpdate(
+        context: Context,
+        update: WatchReadAloudStatusUpdate
+    ): Boolean {
+        val baseSnapshot = snapshotState.value ?: load(context) ?: return false
+        val updatedSnapshot = baseSnapshot.withReadAloudStatusUpdate(
+            update = update,
+            nowMillis = System.currentTimeMillis()
+        )
+        return save(context, updatedSnapshot)
+    }
+
+    suspend fun decodeSnapshot(encoded: String): WatchSnapshot? {
+        if (!isValidSnapshotPayload(encoded)) return null
+        return withContext(Dispatchers.Default) {
+            runCatching {
+                json.decodeFromString(WatchSnapshot.serializer(), encoded)
+            }.getOrNull()?.takeIf(WatchSnapshot::hasValidTransportShape)
+        }
+    }
+
+    suspend fun decodeReadAloudStatusUpdate(encoded: String): WatchReadAloudStatusUpdate? {
+        if (!isValidReadAloudStatusPayload(encoded)) return null
+        return withContext(Dispatchers.Default) {
+            runCatching {
+                json.decodeFromString(WatchReadAloudStatusUpdate.serializer(), encoded)
+            }.getOrNull()
+        }
+    }
+
+    private suspend fun load(context: Context): WatchSnapshot? {
+        val encoded = withContext(Dispatchers.IO) {
+            context.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(SNAPSHOT_JSON_KEY, null)
+        } ?: return null
+        if (!isValidSnapshotPayload(encoded)) return null
+        return decodeSnapshot(encoded)
+    }
+
+    private suspend fun loadLatestDataLayerSnapshot(context: Context): WatchSnapshot? {
+        val uri = Uri.Builder()
+            .scheme("wear")
+            .path(WATCH_SNAPSHOT_PATH)
+            .build()
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val buffer = Tasks.await(
+                    Wearable.getDataClient(context.applicationContext)
+                        .getDataItems(uri, DataClient.FILTER_LITERAL),
+                    DATA_LAYER_LOAD_TIMEOUT_MILLIS,
+                    TimeUnit.MILLISECONDS
+                )
+                try {
+                    var latestSnapshot: WatchSnapshot? = null
+                    buffer.forEach { item ->
+                        val rawDataSize = item.data?.size ?: 0
+                        if (rawDataSize > 0 && rawDataSize <= SNAPSHOT_PAYLOAD_MAX_BYTES) {
+                            val encoded = DataMapItem.fromDataItem(item)
+                                .dataMap
+                                .getString(WATCH_SNAPSHOT_KEY)
+                                ?.takeIf(::isValidSnapshotPayload)
+                            val snapshot = encoded?.let { decodeSnapshot(it) }
+                            if (
+                                snapshot != null &&
+                                shouldAcceptWatchSnapshot(
+                                    currentGeneratedAtMillis = latestSnapshot?.generatedAtMillis,
+                                    incomingGeneratedAtMillis = snapshot.generatedAtMillis,
+                                    nowMillis = System.currentTimeMillis()
+                                )
+                            ) {
+                                latestSnapshot = snapshot
+                            }
+                        }
+                    }
+                    latestSnapshot
+                } finally {
+                    buffer.release()
+                }
+            }.onFailure {
+                Log.w(TAG, "Failed to load snapshot from Data Layer", it)
+            }.getOrNull()
+        }
+    }
+
+    private fun isValidSnapshotPayload(encoded: String): Boolean {
+        return encoded.isNotBlank() && encoded.encodeToByteArray().size <= SNAPSHOT_PAYLOAD_MAX_BYTES
+    }
+
+    private fun isValidReadAloudStatusPayload(encoded: String): Boolean {
+        return encoded.isNotBlank() &&
+            encoded.encodeToByteArray().size <= READ_ALOUD_STATUS_PAYLOAD_MAX_BYTES
+    }
+
+    private fun requestTileUpdateIfAllowed(context: Context) {
+        val nowElapsedMillis = SystemClock.elapsedRealtime()
+        val previousElapsedMillis = lastTileUpdateRequestElapsedMillis.get()
+        if (
+            previousElapsedMillis > 0L &&
+            nowElapsedMillis - previousElapsedMillis in 0 until TILE_UPDATE_REQUEST_MIN_INTERVAL_MILLIS
+        ) {
+            return
+        }
+        if (!lastTileUpdateRequestElapsedMillis.compareAndSet(previousElapsedMillis, nowElapsedMillis)) {
+            return
+        }
+        TileService.getUpdater(context.applicationContext)
+            .requestUpdate(FutachaTileService::class.java)
+    }
+
+    private const val TAG = "WatchSnapshotStore"
+    private const val TILE_UPDATE_REQUEST_MIN_INTERVAL_MILLIS = 60_000L
+}

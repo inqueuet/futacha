@@ -1,0 +1,350 @@
+package com.valoser.futacha.shared.state
+
+import com.valoser.futacha.shared.model.AppIconVariant
+import com.valoser.futacha.shared.model.CatalogDisplayStyle
+import com.valoser.futacha.shared.model.DEFAULT_CATALOG_FETCH_ROWS
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.normalizeCatalogFetchRows
+import com.valoser.futacha.shared.model.ThemeMode
+import com.valoser.futacha.shared.model.ThemePalette
+import com.valoser.futacha.shared.model.ThreadBodyTextSize
+import com.valoser.futacha.shared.model.ThreadDisplayMode
+import com.valoser.futacha.shared.model.ThreadGalleryTapAction
+import com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode
+import com.valoser.futacha.shared.model.ThreadPostImageSize
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuConfig
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.model.defaultThreadSettingsMenuConfig
+import com.valoser.futacha.shared.model.normalizeCatalogNavEntries
+import com.valoser.futacha.shared.model.normalizeThreadMenuConfig
+import com.valoser.futacha.shared.model.normalizeThreadMenuEntries
+import com.valoser.futacha.shared.model.normalizeThreadSettingsMenuConfig
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+
+internal const val DEFAULT_CATALOG_GRID_COLUMNS_VALUE = 5
+internal const val MIN_CATALOG_GRID_COLUMNS_VALUE = 2
+internal const val MAX_CATALOG_GRID_COLUMNS_VALUE = 8
+internal const val SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE = 20
+internal const val SELF_POST_IDENTIFIER_DELIMITER = "::"
+internal const val APP_STATE_SETTINGS_JSON_MAX_CHARS = 2 * 1024 * 1024
+internal const val APP_STATE_STRING_LIST_MAX_ENTRIES = 10_000
+internal const val APP_STATE_STRING_ENTRY_MAX_CHARS = 10_000
+internal const val APP_STATE_STRING_LIST_MAP_MAX_ENTRIES = 1_000
+
+private val catalogModeMapJson = Json { ignoreUnknownKeys = true }
+private val catalogModeMapSerializer = MapSerializer(String.serializer(), String.serializer())
+
+internal fun decodeCatalogDisplayStyleValue(raw: String?): CatalogDisplayStyle {
+    return raw?.let { value ->
+        CatalogDisplayStyle.entries.firstOrNull { it.name == value }
+    } ?: CatalogDisplayStyle.Grid
+}
+
+internal fun decodeCatalogGridColumnsValue(raw: String?): Int {
+    val parsed = raw?.toIntOrNull() ?: DEFAULT_CATALOG_GRID_COLUMNS_VALUE
+    return parsed.coerceIn(MIN_CATALOG_GRID_COLUMNS_VALUE, MAX_CATALOG_GRID_COLUMNS_VALUE)
+}
+
+internal fun decodeCatalogFetchRowsValue(raw: String?): Int {
+    val parsed = raw?.toIntOrNull() ?: DEFAULT_CATALOG_FETCH_ROWS
+    return normalizeCatalogFetchRows(parsed)
+}
+
+internal fun decodeCatalogModeMapValue(raw: String?): Map<String, CatalogMode> {
+    if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyMap()
+    return runCatching {
+        val decoded = catalogModeMapJson.decodeFromString(catalogModeMapSerializer, raw)
+        decoded.mapNotNull { (boardId, modeName) ->
+            val mode = CatalogMode.entries.firstOrNull { it.name == modeName }
+            mode?.let { boardId to it }
+        }.toMap()
+    }.getOrDefault(emptyMap())
+}
+
+internal fun encodeCatalogModeMapValue(map: Map<String, CatalogMode>): Map<String, String> {
+    return map.mapValues { it.value.name }
+}
+
+internal fun decodeStringListValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<String>>
+): List<String> {
+    if (raw == null || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyList()
+    return runCatching {
+        normalizeStoredStringList(json.decodeFromString(serializer, raw))
+    }.getOrDefault(emptyList())
+}
+
+internal fun normalizeStoredStringList(values: List<String>): List<String> {
+    val seen = mutableSetOf<String>()
+    return buildList(minOf(values.size, APP_STATE_STRING_LIST_MAX_ENTRIES)) {
+        for (value in values) {
+            val normalized = value.trim().takeIf {
+                it.isNotBlank() && it.length <= APP_STATE_STRING_ENTRY_MAX_CHARS
+            } ?: continue
+            if (seen.add(normalized.lowercase())) add(normalized)
+            if (size >= APP_STATE_STRING_LIST_MAX_ENTRIES) break
+        }
+    }
+}
+
+internal fun decodeSelfPostIdentifierMapValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<Map<String, List<String>>>
+): Map<String, List<String>> {
+    if (raw == null || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyMap()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.getOrDefault(emptyMap())
+}
+
+internal fun decodeStringListMapValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<Map<String, List<String>>>
+): Map<String, List<String>> {
+    if (raw == null || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) return emptyMap()
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+            .mapNotNull { (key, values) ->
+                val normalizedKey = key.trim().takeIf {
+                    it.isNotBlank() && it.length <= APP_STATE_STRING_ENTRY_MAX_CHARS
+                } ?: return@mapNotNull null
+                normalizedKey to normalizeStoredStringList(values)
+            }
+            .take(APP_STATE_STRING_LIST_MAP_MAX_ENTRIES)
+            .toMap()
+    }.getOrDefault(emptyMap())
+}
+
+internal fun aggregateSelfPostIdentifiers(
+    map: Map<String, List<String>>,
+    maxEntries: Int = SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE
+): List<String> {
+    val seenKeys = mutableSetOf<String>()
+    val aggregated = mutableListOf<String>()
+    map.values.forEach { identifiers ->
+        identifiers.forEach { identifier ->
+            val trimmed = identifier.trim()
+            if (trimmed.isBlank()) return@forEach
+            val key = trimmed.lowercase()
+            if (key in seenKeys) return@forEach
+            aggregated.add(trimmed)
+            seenKeys.add(key)
+            if (aggregated.size >= maxEntries) {
+                return aggregated
+            }
+        }
+    }
+    return aggregated
+}
+
+internal fun buildSelfPostStorageKey(threadId: String, boardId: String?): String {
+    val cleanThreadId = threadId.trim()
+    val cleanBoardId = boardId?.trim().orEmpty()
+    return if (cleanBoardId.isBlank()) {
+        cleanThreadId
+    } else {
+        "$cleanBoardId$SELF_POST_IDENTIFIER_DELIMITER$cleanThreadId"
+    }
+}
+
+internal fun sanitizeManualSaveDirectoryValue(input: String?): String {
+    val trimmed = input?.trim().orEmpty()
+    if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
+    val withoutCurrentDirPrefix = if (trimmed.startsWith("./")) {
+        trimmed.removePrefix("./")
+    } else {
+        trimmed
+    }
+    if (withoutCurrentDirPrefix == MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
+    return withoutCurrentDirPrefix.ifBlank { DEFAULT_MANUAL_SAVE_ROOT }
+}
+
+internal fun decodeAttachmentPickerPreferenceValue(raw: String?): AttachmentPickerPreference {
+    return runCatching {
+        raw?.let { AttachmentPickerPreference.valueOf(it) }
+    }.getOrNull() ?: AttachmentPickerPreference.MEDIA
+}
+
+internal fun decodeSaveDirectorySelectionValue(raw: String?): SaveDirectorySelection {
+    return runCatching {
+        raw?.let { SaveDirectorySelection.valueOf(it) }
+    }.getOrNull() ?: SaveDirectorySelection.MANUAL_INPUT
+}
+
+internal fun decodeThreadGalleryTapActionValue(raw: String?): ThreadGalleryTapAction {
+    return runCatching {
+        raw?.let { ThreadGalleryTapAction.valueOf(it) }
+    }.getOrNull() ?: ThreadGalleryTapAction.OpenMedia
+}
+
+internal fun decodeThreadGalleryThumbnailModeValue(raw: String?): ThreadGalleryThumbnailMode {
+    return runCatching {
+        raw?.let { ThreadGalleryThumbnailMode.valueOf(it) }
+    }.getOrNull() ?: ThreadGalleryThumbnailMode.CropSquare
+}
+
+internal fun decodeThemeModeValue(raw: String?): ThemeMode {
+    return runCatching {
+        raw?.let { ThemeMode.valueOf(it) }
+    }.getOrNull() ?: ThemeMode.System
+}
+
+internal fun decodeThemePaletteValue(raw: String?): ThemePalette {
+    return runCatching {
+        raw?.let { ThemePalette.valueOf(it) }
+    }.getOrNull() ?: ThemePalette.FutabaClassic
+}
+
+internal fun decodeAppIconVariantValue(raw: String?): AppIconVariant {
+    val decoded = runCatching {
+        raw?.let { AppIconVariant.valueOf(it) }
+    }.getOrNull() ?: AppIconVariant.Current
+    return when (decoded) {
+        AppIconVariant.Current,
+        AppIconVariant.Classic -> decoded
+        AppIconVariant.Midnight -> AppIconVariant.Current
+    }
+}
+
+internal fun decodeThreadDisplayModeValue(raw: String?): ThreadDisplayMode {
+    return runCatching {
+        raw?.let { ThreadDisplayMode.valueOf(it) }
+    }.getOrNull() ?: ThreadDisplayMode.Flat
+}
+
+internal fun decodeThreadBodyTextSizeValue(raw: String?): ThreadBodyTextSize {
+    return runCatching {
+        raw?.let { ThreadBodyTextSize.valueOf(it) }
+    }.getOrNull() ?: ThreadBodyTextSize.Standard
+}
+
+internal fun decodeThreadPostImageSizeValue(raw: String?): ThreadPostImageSize {
+    return runCatching {
+        raw?.let { ThreadPostImageSize.valueOf(it) }
+    }.getOrNull() ?: ThreadPostImageSize.Small
+}
+
+internal fun decodeThreadMenuConfigValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<ThreadMenuItemConfig>>
+): List<ThreadMenuItemConfig> {
+    if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        return defaultThreadMenuConfig()
+    }
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeThreadMenuConfig)
+        .getOrDefault(defaultThreadMenuConfig())
+}
+
+internal fun decodeThreadSettingsMenuConfigValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<ThreadSettingsMenuItemConfig>>
+): List<ThreadSettingsMenuItemConfig> {
+    if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        return defaultThreadSettingsMenuConfig()
+    }
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeThreadSettingsMenuConfig)
+        .getOrDefault(defaultThreadSettingsMenuConfig())
+}
+
+internal fun decodeThreadMenuEntriesValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<ThreadMenuEntryConfig>>
+): List<ThreadMenuEntryConfig> {
+    if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        return defaultThreadMenuEntries()
+    }
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeThreadMenuEntries)
+        .getOrDefault(defaultThreadMenuEntries())
+}
+
+internal fun decodeCatalogNavEntriesValue(
+    raw: String?,
+    json: Json,
+    serializer: KSerializer<List<CatalogNavEntryConfig>>
+): List<CatalogNavEntryConfig> {
+    if (raw.isNullOrBlank() || raw.length > APP_STATE_SETTINGS_JSON_MAX_CHARS) {
+        return defaultCatalogNavEntries()
+    }
+    return runCatching {
+        json.decodeFromString(serializer, raw)
+    }.map(::normalizeCatalogNavEntries)
+        .getOrDefault(defaultCatalogNavEntries())
+}
+
+internal fun mergeSelfPostIdentifierMap(
+    currentMap: Map<String, List<String>>,
+    threadId: String,
+    identifier: String,
+    boardId: String? = null,
+    maxEntries: Int = SELF_POST_IDENTIFIER_MAX_ENTRIES_VALUE
+): Map<String, List<String>> {
+    val trimmed = identifier.trim().takeIf { it.isNotBlank() } ?: return currentMap
+    val scopedKey = buildSelfPostStorageKey(threadId, boardId)
+    val legacyKey = threadId.trim()
+    val existingForThread = buildList {
+        addAll(currentMap[scopedKey].orEmpty())
+        if (scopedKey != legacyKey) {
+            addAll(currentMap[legacyKey].orEmpty())
+        }
+    }
+    val normalized = existingForThread
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toMutableList()
+    if (normalized.none { it.equals(trimmed, ignoreCase = true) }) {
+        normalized.add(trimmed)
+    }
+    val updatedThreadList = normalized
+        .asSequence()
+        .distinctBy { it.lowercase() }
+        .take(maxEntries)
+        .toList()
+    val nextMap = currentMap.toMutableMap()
+    nextMap[scopedKey] = updatedThreadList
+    return nextMap.toMap()
+}
+
+internal fun removeSelfPostIdentifiersFromMap(
+    currentMap: Map<String, List<String>>,
+    threadId: String,
+    boardId: String? = null
+): Map<String, List<String>> {
+    val scopedKey = buildSelfPostStorageKey(threadId, boardId)
+    val mutable = currentMap.toMutableMap()
+    val removedScoped = mutable.remove(scopedKey) != null
+    if (boardId.isNullOrBlank()) {
+        mutable.remove(threadId.trim())
+        val scopedSuffix = "$SELF_POST_IDENTIFIER_DELIMITER${threadId.trim()}"
+        mutable.keys
+            .filter { it.endsWith(scopedSuffix) }
+            .forEach { key -> mutable.remove(key) }
+    } else if (!removedScoped) {
+        return currentMap
+    }
+    return mutable.toMap()
+}

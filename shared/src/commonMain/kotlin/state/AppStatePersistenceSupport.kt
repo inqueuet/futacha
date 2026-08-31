@@ -1,0 +1,334 @@
+package com.valoser.futacha.shared.state
+
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.ThreadHistoryEntry
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuItemConfig
+import com.valoser.futacha.shared.model.ThreadSettingsMenuItemConfig
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlin.time.TimeSource
+
+internal const val APP_STATE_BOARDS_JSON_MAX_CHARS = 4 * 1024 * 1024
+internal const val APP_STATE_HISTORY_JSON_MAX_CHARS = 32 * 1024 * 1024
+internal const val APP_STATE_MAX_BOARDS = 20_000
+internal const val APP_STATE_MAX_HISTORY_ENTRIES = 20_000
+
+internal suspend fun encodeAppStateBoards(
+    boards: List<BoardSummary>,
+    json: Json
+): String {
+    return withContext(AppDispatchers.parsing) {
+        json.encodeToString(ListSerializer(BoardSummary.serializer()), boards)
+    }
+}
+
+internal suspend fun encodeAppStateHistory(
+    history: List<ThreadHistoryEntry>,
+    json: Json
+): String {
+    return withContext(AppDispatchers.parsing) {
+        json.encodeToString(ListSerializer(ThreadHistoryEntry.serializer()), history)
+    }
+}
+
+internal suspend fun encodeAppStateHistoryMeasured(
+    history: List<ThreadHistoryEntry>,
+    json: Json
+): Pair<String, kotlin.time.Duration> {
+    val mark = TimeSource.Monotonic.markNow()
+    val encoded = encodeAppStateHistory(history, json)
+    return encoded to mark.elapsedNow()
+}
+
+internal fun decodeAppStateBoards(
+    raw: String,
+    json: Json,
+    tag: String
+): List<BoardSummary> = decodeAppStateBoardsResult(raw, json).getOrElse { error ->
+    Logger.e(tag, "Failed to decode boards from JSON", error)
+    emptyList()
+}
+
+internal fun decodeAppStateBoardsResult(
+    raw: String,
+    json: Json
+): Result<List<BoardSummary>> = runCatching {
+    require(raw.length <= APP_STATE_BOARDS_JSON_MAX_CHARS) { "Boards JSON is too large" }
+    json.decodeFromString(ListSerializer(BoardSummary.serializer()), raw).also { decoded ->
+        require(decoded.size <= APP_STATE_MAX_BOARDS) { "Boards JSON contains too many entries" }
+    }
+}
+
+internal fun decodeAppStateHistory(
+    raw: String,
+    json: Json,
+    tag: String
+): List<ThreadHistoryEntry> = runCatching {
+    require(raw.length <= APP_STATE_HISTORY_JSON_MAX_CHARS) { "History JSON is too large" }
+    val mark = TimeSource.Monotonic.markNow()
+    json.decodeFromString(ListSerializer(ThreadHistoryEntry.serializer()), raw).also { decoded ->
+        require(decoded.size <= APP_STATE_MAX_HISTORY_ENTRIES) {
+            "History JSON contains too many entries"
+        }
+        logAppStateHistoryDecodeMetrics(
+            tag = tag,
+            entryCount = decoded.size,
+            jsonByteSize = historyJsonByteSize(raw),
+            duration = mark.elapsedNow()
+        )
+    }
+}.getOrElse { error ->
+    Logger.e(tag, "Failed to decode history from JSON", error)
+    emptyList()
+}
+
+internal suspend fun <T> persistAppStateListPreference(
+    values: List<T>,
+    serializer: KSerializer<List<T>>,
+    json: Json,
+    update: suspend (String) -> Unit,
+    onFailure: (Throwable) -> Unit,
+    rethrowIfCancellation: (Throwable) -> Unit
+) {
+    try {
+        val encoded = withContext(AppDispatchers.parsing) {
+            json.encodeToString(serializer, values)
+        }
+        update(encoded)
+    } catch (error: Exception) {
+        rethrowIfCancellation(error)
+        onFailure(error)
+    }
+}
+
+internal suspend fun <T> persistAppStatePreference(
+    value: T,
+    update: suspend (T) -> Unit,
+    onFailure: (Throwable) -> Unit,
+    rethrowIfCancellation: (Throwable) -> Unit,
+    rethrowOnFailure: Boolean = false
+) {
+    try {
+        update(value)
+    } catch (error: Exception) {
+        rethrowIfCancellation(error)
+        onFailure(error)
+        if (rethrowOnFailure) {
+            throw error
+        }
+    }
+}
+
+internal suspend fun persistAppStateSelfPostIdentifierMap(
+    map: Map<String, List<String>>,
+    json: Json,
+    update: suspend (String) -> Unit
+) {
+    val encoded = withContext(AppDispatchers.parsing) {
+        json.encodeToString(
+            MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+            map
+        )
+    }
+    update(encoded)
+}
+
+internal suspend fun persistAppStateCatalogModeMap(
+    map: Map<String, CatalogMode>,
+    json: Json,
+    update: suspend (String) -> Unit
+) {
+    val encoded = withContext(AppDispatchers.parsing) {
+        json.encodeToString(
+            MapSerializer(String.serializer(), String.serializer()),
+            encodeCatalogModeMapValue(map)
+        )
+    }
+    update(encoded)
+}
+
+internal data class AppStateSeedPayload(
+    val defaultBoardsJson: String,
+    val defaultHistoryJson: String,
+    val defaultNgHeadersJson: String?,
+    val defaultNgWordsJson: String?,
+    val defaultCatalogNgWordsJson: String?,
+    val defaultWatchWordsJson: String?,
+    val defaultSelfPostIdentifiersJson: String?,
+    val defaultCatalogModeMapJson: String?,
+    val defaultAttachmentPickerPreference: String?,
+    val defaultSaveDirectorySelection: String?,
+    val defaultThreadGalleryTapAction: String? = null,
+    val defaultThreadGalleryThumbnailMode: String? = null,
+    val defaultThemeMode: String? = null,
+    val defaultThemePalette: String? = null,
+    val defaultAppIconVariant: String? = null,
+    val defaultThreadDisplayMode: String? = null,
+    val defaultThreadBodyTextSize: String? = null,
+    val defaultThreadPostImageSize: String? = null,
+    val defaultLastUsedDeleteKey: String?,
+    val defaultThreadMenuConfigJson: String?,
+    val defaultThreadSettingsMenuConfigJson: String?,
+    val defaultThreadMenuEntriesConfigJson: String?,
+    val defaultCatalogNavEntriesJson: String?
+)
+
+internal data class AppStateBoardsSeedBundle(
+    val boardsJson: String
+)
+
+internal data class AppStateHistorySeedBundle(
+    val historyJson: String
+)
+
+internal data class AppStatePreferencesSeedBundle(
+    val ngHeadersJson: String?,
+    val ngWordsJson: String?,
+    val catalogNgWordsJson: String?,
+    val watchWordsJson: String?,
+    val selfPostIdentifiersJson: String?,
+    val catalogModeMapJson: String?,
+    val attachmentPickerPreference: String?,
+    val saveDirectorySelection: String?,
+    val threadGalleryTapAction: String?,
+    val threadGalleryThumbnailMode: String?,
+    val themeMode: String?,
+    val themePalette: String?,
+    val appIconVariant: String?,
+    val threadDisplayMode: String?,
+    val threadBodyTextSize: String?,
+    val threadPostImageSize: String?,
+    val lastUsedDeleteKey: String?,
+    val threadMenuConfigJson: String?,
+    val threadSettingsMenuConfigJson: String?,
+    val threadMenuEntriesConfigJson: String?,
+    val catalogNavEntriesJson: String?
+)
+
+internal data class AppStateSeedBundles(
+    val boards: AppStateBoardsSeedBundle,
+    val history: AppStateHistorySeedBundle,
+    val preferences: AppStatePreferencesSeedBundle
+)
+
+internal data class AppStateSeedPayloadInputs(
+    val defaults: AppStateSeedDefaults,
+    val json: Json,
+    val normalizedThreadMenuConfig: List<ThreadMenuItemConfig>,
+    val normalizedThreadSettingsMenuConfig: List<ThreadSettingsMenuItemConfig>,
+    val normalizedThreadMenuEntries: List<ThreadMenuEntryConfig>,
+    val normalizedCatalogNavEntries: List<CatalogNavEntryConfig>
+)
+
+internal fun AppStateSeedPayload.toSeedBundles(): AppStateSeedBundles {
+    return AppStateSeedBundles(
+        boards = AppStateBoardsSeedBundle(
+            boardsJson = defaultBoardsJson
+        ),
+        history = AppStateHistorySeedBundle(
+            historyJson = defaultHistoryJson
+        ),
+        preferences = AppStatePreferencesSeedBundle(
+            ngHeadersJson = defaultNgHeadersJson,
+            ngWordsJson = defaultNgWordsJson,
+            catalogNgWordsJson = defaultCatalogNgWordsJson,
+            watchWordsJson = defaultWatchWordsJson,
+            selfPostIdentifiersJson = defaultSelfPostIdentifiersJson,
+            catalogModeMapJson = defaultCatalogModeMapJson,
+            attachmentPickerPreference = defaultAttachmentPickerPreference,
+            saveDirectorySelection = defaultSaveDirectorySelection,
+            threadGalleryTapAction = defaultThreadGalleryTapAction,
+            threadGalleryThumbnailMode = defaultThreadGalleryThumbnailMode,
+            themeMode = defaultThemeMode,
+            themePalette = defaultThemePalette,
+            appIconVariant = defaultAppIconVariant,
+            threadDisplayMode = defaultThreadDisplayMode,
+            threadBodyTextSize = defaultThreadBodyTextSize,
+            threadPostImageSize = defaultThreadPostImageSize,
+            lastUsedDeleteKey = defaultLastUsedDeleteKey,
+            threadMenuConfigJson = defaultThreadMenuConfigJson,
+            threadSettingsMenuConfigJson = defaultThreadSettingsMenuConfigJson,
+            threadMenuEntriesConfigJson = defaultThreadMenuEntriesConfigJson,
+            catalogNavEntriesJson = defaultCatalogNavEntriesJson
+        )
+    )
+}
+
+internal suspend fun buildAppStateSeedPayload(
+    inputs: AppStateSeedPayloadInputs
+): AppStateSeedPayload {
+    return withContext(AppDispatchers.parsing) {
+        AppStateSeedPayload(
+            defaultBoardsJson = inputs.json.encodeToString(
+                ListSerializer(BoardSummary.serializer()),
+                inputs.defaults.boards
+            ),
+            defaultHistoryJson = inputs.json.encodeToString(
+                ListSerializer(ThreadHistoryEntry.serializer()),
+                inputs.defaults.history
+            ),
+            defaultNgHeadersJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.ngHeaders
+            ),
+            defaultNgWordsJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.ngWords
+            ),
+            defaultCatalogNgWordsJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.catalogNgWords
+            ),
+            defaultWatchWordsJson = inputs.json.encodeToString(
+                ListSerializer(String.serializer()),
+                inputs.defaults.watchWords
+            ),
+            defaultSelfPostIdentifiersJson = inputs.json.encodeToString(
+                MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+                inputs.defaults.selfPostIdentifierMap
+            ),
+            defaultCatalogModeMapJson = inputs.json.encodeToString(
+                MapSerializer(String.serializer(), String.serializer()),
+                encodeCatalogModeMapValue(inputs.defaults.catalogModeMap)
+            ),
+            defaultAttachmentPickerPreference = AttachmentPickerPreference.MEDIA.name,
+            defaultSaveDirectorySelection = SaveDirectorySelection.MANUAL_INPUT.name,
+            defaultThreadGalleryTapAction = com.valoser.futacha.shared.model.ThreadGalleryTapAction.OpenMedia.name,
+            defaultThreadGalleryThumbnailMode = com.valoser.futacha.shared.model.ThreadGalleryThumbnailMode.CropSquare.name,
+            defaultThemeMode = com.valoser.futacha.shared.model.ThemeMode.System.name,
+            defaultThemePalette = com.valoser.futacha.shared.model.ThemePalette.FutabaClassic.name,
+            defaultAppIconVariant = com.valoser.futacha.shared.model.AppIconVariant.Current.name,
+            defaultThreadDisplayMode = com.valoser.futacha.shared.model.ThreadDisplayMode.Flat.name,
+            defaultThreadBodyTextSize = com.valoser.futacha.shared.model.ThreadBodyTextSize.Standard.name,
+            defaultThreadPostImageSize = com.valoser.futacha.shared.model.ThreadPostImageSize.Small.name,
+            defaultLastUsedDeleteKey = inputs.defaults.lastUsedDeleteKey.take(8),
+            defaultThreadMenuConfigJson = inputs.json.encodeToString(
+                ListSerializer(ThreadMenuItemConfig.serializer()),
+                inputs.normalizedThreadMenuConfig
+            ),
+            defaultThreadSettingsMenuConfigJson = inputs.json.encodeToString(
+                ListSerializer(ThreadSettingsMenuItemConfig.serializer()),
+                inputs.normalizedThreadSettingsMenuConfig
+            ),
+            defaultThreadMenuEntriesConfigJson = inputs.json.encodeToString(
+                ListSerializer(ThreadMenuEntryConfig.serializer()),
+                inputs.normalizedThreadMenuEntries
+            ),
+            defaultCatalogNavEntriesJson = inputs.json.encodeToString(
+                ListSerializer(CatalogNavEntryConfig.serializer()),
+                inputs.normalizedCatalogNavEntries
+            )
+        )
+    }
+}

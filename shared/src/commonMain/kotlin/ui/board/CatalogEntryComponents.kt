@@ -1,0 +1,291 @@
+package com.valoser.futacha.shared.ui.board
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.analyticsCountBucket
+import com.valoser.futacha.shared.analytics.analyticsPresentValue
+import com.valoser.futacha.shared.analytics.analyticsSessionContextId
+import com.valoser.futacha.shared.model.CatalogItem
+
+@Composable
+internal fun CatalogCard(
+    item: CatalogItem,
+    boardUrl: String?,
+    resolvedDisplayTitle: String?,
+    resolveHeadMetadata: Boolean,
+    matchedWatchWords: List<String>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isWatchWordMatch = matchedWatchWords.isNotEmpty()
+    val density = LocalDensity.current
+    val targetSizePx = with(density) { 50.dp.toPx().toInt() }
+    val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
+    val displayTitle = resolveCatalogDisplayTitle(
+        item = item,
+        boardUrl = boardUrl,
+        resolvedDisplayTitle = resolvedDisplayTitle,
+        resolveHeadMetadata = resolveHeadMetadata
+    )
+
+    ElevatedCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                ),
+                shape = MaterialTheme.shapes.small
+            ),
+        onClick = {
+            AnalyticsTracker.uiControl(
+                "catalog_card",
+                "カタログのグリッドカードを開く",
+                catalogItemAnalyticsParams(item, boardUrl, matchedWatchWords.size)
+            )
+            onClick()
+        },
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!hasPreviewImage) {
+                    Icon(
+                        imageVector = Icons.Outlined.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    CatalogPreviewImage(
+                        thumbnailUrl = item.thumbnailUrl,
+                        fullImageUrl = item.fullImageUrl,
+                        targetSizePx = targetSizePx,
+                        contentDescription = displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                CatalogReplyCountBadge(
+                    replyCount = item.replyCount,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                )
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = displayTitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isWatchWordMatch) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    fontWeight = if (isWatchWordMatch) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = MaterialTheme.typography.bodySmall.fontSize
+                )
+                if (matchedWatchWords.isNotEmpty()) {
+                    val extraCount = matchedWatchWords.size - 1
+                    Text(
+                        text = "監視: ${matchedWatchWords.first()}" +
+                            if (extraCount > 0) " +$extraCount" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun CatalogListItem(
+    item: CatalogItem,
+    boardUrl: String?,
+    resolvedDisplayTitle: String?,
+    resolveHeadMetadata: Boolean,
+    matchedWatchWords: List<String>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isWatchWordMatch = matchedWatchWords.isNotEmpty()
+    val density = LocalDensity.current
+    val targetSizePx = with(density) { 72.dp.toPx().toInt() }
+    val hasPreviewImage = !item.thumbnailUrl.isNullOrBlank() || !item.fullImageUrl.isNullOrBlank()
+    val displayTitle = resolveCatalogDisplayTitle(
+        item = item,
+        boardUrl = boardUrl,
+        resolvedDisplayTitle = resolvedDisplayTitle,
+        resolveHeadMetadata = resolveHeadMetadata
+    )
+
+    ElevatedCard(
+        modifier = modifier.fillMaxWidth(),
+        onClick = {
+            AnalyticsTracker.uiControl(
+                "catalog_card",
+                "カタログのリストカードを開く",
+                catalogItemAnalyticsParams(item, boardUrl, matchedWatchWords.size)
+            )
+            onClick()
+        },
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!hasPreviewImage) {
+                    Icon(
+                        imageVector = Icons.Outlined.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    CatalogPreviewImage(
+                        thumbnailUrl = item.thumbnailUrl,
+                        fullImageUrl = item.fullImageUrl,
+                        targetSizePx = targetSizePx,
+                        contentDescription = displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = displayTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (isWatchWordMatch) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    fontWeight = if (isWatchWordMatch) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (matchedWatchWords.isNotEmpty()) {
+                    Text(
+                        text = "監視: ${matchedWatchWords.joinToString("・")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "No.${item.id}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${item.replyCount}レス",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+private fun catalogItemAnalyticsParams(
+    item: CatalogItem,
+    boardUrl: String?,
+    watchWordMatchCount: Int
+): Map<String, String> = mapOf(
+    "board_context" to analyticsSessionContextId("board", boardUrl),
+    "thread_context" to analyticsSessionContextId("thread", boardUrl, item.id),
+    "reply_count_bucket" to analyticsCountBucket(item.replyCount),
+    "has_media" to analyticsPresentValue(item.fullImageUrl ?: item.thumbnailUrl),
+    "watch_word_match" to if (watchWordMatchCount > 0) "enabled" else "disabled",
+    "watch_word_match_count" to analyticsCountBucket(watchWordMatchCount)
+)
+
+private fun resolveCatalogDisplayTitle(
+    item: CatalogItem,
+    boardUrl: String?,
+    resolvedDisplayTitle: String?,
+    resolveHeadMetadata: Boolean
+): String {
+    val fallbackTitle = buildCatalogFallbackDisplayTitle(item)
+    return if (resolveHeadMetadata && !boardUrl.isNullOrBlank()) {
+        resolvedDisplayTitle ?: fallbackTitle
+    } else {
+        fallbackTitle
+    }
+}
+
+@Composable
+private fun CatalogReplyCountBadge(
+    replyCount: Int,
+    modifier: Modifier = Modifier
+) {
+    if (replyCount <= 0) return
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(4.dp),
+        color = Color.White,
+        tonalElevation = 2.dp
+    ) {
+        Text(
+            text = "$replyCount",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.Black,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+        )
+    }
+}

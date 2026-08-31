@@ -1,0 +1,799 @@
+package com.valoser.futacha.shared.state
+
+import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.util.Logger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
+
+private const val DATASTORE_NAME = "futacha_state"
+private const val MAX_DATASTORE_READ_RETRIES = 5L
+private val Context.dataStore by preferencesDataStore(
+    name = DATASTORE_NAME,
+    corruptionHandler = ReplaceFileCorruptionHandler { error ->
+        Logger.e(
+            "AndroidPlatformStateStorage",
+            "DataStore preferences were corrupted; replacing them with empty preferences",
+            error
+        )
+        emptyPreferences()
+    }
+)
+
+internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformStateStorage {
+    val context = (platformContext as? Context)?.applicationContext
+        ?: throw IllegalArgumentException("Android Context is required to create AppStateStore")
+    return AndroidPlatformStateStorage(context)
+}
+
+private class AndroidPlatformStateStorage(
+    private val context: Context
+) : PlatformStateStorage {
+    private val boardsKey = stringPreferencesKey("boards_json")
+    private val historyKey = stringPreferencesKey("history_json")
+    private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
+    private val backgroundRefreshKey = booleanPreferencesKey("background_refresh_enabled")
+    private val updateCheckKey = booleanPreferencesKey("update_check_enabled")
+    private val watchAlertKey = booleanPreferencesKey("watch_alert_enabled")
+    private val postingNoticeKey = booleanPreferencesKey("has_shown_posting_notice")
+    private val pastThreadSearchNoticeHiddenKey = booleanPreferencesKey("past_thread_search_notice_hidden")
+    private val lightweightModeKey = booleanPreferencesKey("lightweight_mode_enabled")
+    private val threadSummaryModeKey = booleanPreferencesKey("thread_summary_mode_enabled")
+    private val aiPostFilterKey = booleanPreferencesKey("ai_post_filter_enabled")
+    private val aiCommandKey = booleanPreferencesKey("ai_command_enabled")
+    private val telemetryCollectionKey = booleanPreferencesKey("telemetry_collection_enabled")
+    private val appLockPasswordHashKey = stringPreferencesKey("app_lock_password_hash")
+    private val displayStyleKey = stringPreferencesKey("catalog_display_style")
+    private val gridColumnsKey = stringPreferencesKey("catalog_grid_columns")
+    private val catalogFetchRowsKey = stringPreferencesKey("catalog_fetch_rows")
+    private val manualSaveDirectoryKey = stringPreferencesKey("manual_save_directory")
+    private val attachmentPickerPreferenceKey = stringPreferencesKey("attachment_picker_preference")
+    private val saveDirectorySelectionKey = stringPreferencesKey("save_directory_selection")
+    private val threadGalleryTapActionKey = stringPreferencesKey("thread_gallery_tap_action")
+    private val threadGalleryThumbnailModeKey = stringPreferencesKey("thread_gallery_thumbnail_mode")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
+    private val themePaletteKey = stringPreferencesKey("theme_palette")
+    private val appIconVariantKey = stringPreferencesKey("app_icon_variant")
+    private val threadDisplayModeKey = stringPreferencesKey("thread_display_mode")
+    private val threadBodyTextSizeKey = stringPreferencesKey("thread_body_text_size")
+    private val threadPostImageSizeKey = stringPreferencesKey("thread_post_image_size")
+    private val compactThreadHeaderEnabledKey = booleanPreferencesKey("compact_thread_header_enabled")
+    private val catalogModeMapKey = stringPreferencesKey("catalog_mode_map_json")
+    private val ngHeadersKey = stringPreferencesKey("ng_headers_json")
+    private val ngWordsKey = stringPreferencesKey("ng_words_json")
+    private val catalogNgWordsKey = stringPreferencesKey("catalog_ng_words_json")
+    private val watchWordsKey = stringPreferencesKey("watch_words_json")
+    private val boardWatchWordsKey = stringPreferencesKey("board_watch_words_json")
+    private val selfPostIdentifiersKey = stringPreferencesKey("self_post_identifiers_json")
+    private val threadMenuConfigKey = stringPreferencesKey("thread_menu_config_json")
+    private val threadMenuEntriesKey = stringPreferencesKey("thread_menu_entries_json")
+    private val catalogNavEntriesKey = stringPreferencesKey("catalog_nav_entries_json")
+    private val preferredFileManagerPackageKey = stringPreferencesKey("preferred_file_manager_package")
+    private val preferredFileManagerLabelKey = stringPreferencesKey("preferred_file_manager_label")
+    private val threadSettingsMenuConfigKey = stringPreferencesKey("thread_settings_menu_config_json")
+    private val lastUsedDeleteKeyPreferencesKey = stringPreferencesKey("last_used_delete_key")
+    private val lastReadablePreferences = AtomicReference<Preferences?>(null)
+    private val safeData: Flow<Preferences> =
+        context.dataStore.data
+            .onEach { prefs ->
+                lastReadablePreferences.set(prefs)
+            }
+            .retryWhen { cause, attempt ->
+                when (cause) {
+                    is CancellationException -> throw cause
+                    is IOException -> {
+                        val cached = lastReadablePreferences.get()
+                        if (attempt < MAX_DATASTORE_READ_RETRIES) {
+                            if (shouldEmitStorageReadFallback(cached != null)) {
+                                emit(cached!!)
+                            }
+                            val backoffMillis = (250L shl attempt.toInt().coerceAtMost(4)).coerceAtMost(4_000L)
+                            delay(backoffMillis)
+                            true
+                        } else {
+                            Logger.e(
+                                "AndroidPlatformStateStorage",
+                                "DataStore read failure exceeded retry budget",
+                                cause
+                            )
+                            false
+                        }
+                    }
+                    else -> false
+                }
+            }
+            .catch { e ->
+                when (e) {
+                    is CancellationException -> throw e
+                    is IOException -> {
+                        val cached = lastReadablePreferences.get()
+                        if (shouldEmitStorageReadFallback(cached != null)) {
+                            emit(cached!!)
+                        } else {
+                            throw StorageException("Failed to read DataStore preferences before any snapshot was available", e)
+                        }
+                    }
+                    else -> throw StorageException("Failed to read DataStore preferences", e)
+                }
+            }
+
+    override val boardsJson: Flow<String?> =
+        safeData.map { prefs -> prefs[boardsKey] }
+
+    override val historyJson: Flow<String?> =
+        safeData.map { prefs -> prefs[historyKey] }.distinctUntilChanged()
+
+    override val privacyFilterEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[privacyFilterKey] ?: false }
+
+    override val backgroundRefreshEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[backgroundRefreshKey] ?: false }
+
+    override val updateCheckEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[updateCheckKey] ?: true }
+
+    override val watchAlertEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[watchAlertKey] ?: false }
+
+    override val hasShownPostingNotice: Flow<Boolean> =
+        safeData.map { prefs -> prefs[postingNoticeKey] ?: false }
+
+    override val pastThreadSearchNoticeHidden: Flow<Boolean> =
+        safeData.map { prefs -> prefs[pastThreadSearchNoticeHiddenKey] ?: false }
+
+    override val lightweightModeEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[lightweightModeKey] ?: false }
+
+    override val threadSummaryModeEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[threadSummaryModeKey] ?: false }
+
+    override val aiPostFilterEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[aiPostFilterKey] ?: false }
+
+    override val aiCommandEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[aiCommandKey] ?: false }
+
+    override val telemetryCollectionEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[telemetryCollectionKey] ?: true }
+
+    override val appLockPasswordHash: Flow<String?> =
+        safeData.map { prefs -> prefs[appLockPasswordHashKey] }
+
+    override val manualSaveDirectory: Flow<String> =
+        safeData.map { prefs -> sanitizeManualSaveDirectoryValue(prefs[manualSaveDirectoryKey]) }
+
+    override val attachmentPickerPreference: Flow<String?> =
+        safeData.map { prefs -> prefs[attachmentPickerPreferenceKey] }
+
+    override val saveDirectorySelection: Flow<String?> =
+        safeData.map { prefs -> prefs[saveDirectorySelectionKey] }
+
+    override val threadGalleryTapAction: Flow<String?> =
+        safeData.map { prefs -> prefs[threadGalleryTapActionKey] }
+
+    override val threadGalleryThumbnailMode: Flow<String?> =
+        safeData.map { prefs -> prefs[threadGalleryThumbnailModeKey] }
+
+    override val themeMode: Flow<String?> =
+        safeData.map { prefs -> prefs[themeModeKey] }
+
+    override val themePalette: Flow<String?> =
+        safeData.map { prefs -> prefs[themePaletteKey] }
+
+    override val appIconVariant: Flow<String?> =
+        safeData.map { prefs -> prefs[appIconVariantKey] }
+
+    override val threadDisplayMode: Flow<String?> =
+        safeData.map { prefs -> prefs[threadDisplayModeKey] }
+
+    override val threadBodyTextSize: Flow<String?> =
+        safeData.map { prefs -> prefs[threadBodyTextSizeKey] }
+
+    override val threadPostImageSize: Flow<String?> =
+        safeData.map { prefs -> prefs[threadPostImageSizeKey] }
+
+    override val compactThreadHeaderEnabled: Flow<Boolean> =
+        safeData.map { prefs -> prefs[compactThreadHeaderEnabledKey] ?: false }
+
+    override val catalogModeMapJson: Flow<String?> =
+        safeData.map { prefs -> prefs[catalogModeMapKey] }
+
+    override val catalogDisplayStyle: Flow<String?> =
+        safeData.map { prefs -> prefs[displayStyleKey] }
+    override val catalogGridColumns: Flow<String?> =
+        safeData.map { prefs -> prefs[gridColumnsKey] }
+    override val catalogFetchRows: Flow<String?> =
+        safeData.map { prefs -> prefs[catalogFetchRowsKey] }
+
+    override val ngHeadersJson: Flow<String?> =
+        safeData.map { prefs -> prefs[ngHeadersKey] }
+
+    override val ngWordsJson: Flow<String?> =
+        safeData.map { prefs -> prefs[ngWordsKey] }
+
+    override val catalogNgWordsJson: Flow<String?> =
+        safeData.map { prefs -> prefs[catalogNgWordsKey] }
+
+    override val watchWordsJson: Flow<String?> =
+        safeData.map { prefs -> prefs[watchWordsKey] }
+
+    override val boardWatchWordsJson: Flow<String?> =
+        safeData.map { prefs -> prefs[boardWatchWordsKey] }
+
+    override val selfPostIdentifiersJson: Flow<String?> =
+        safeData.map { prefs -> prefs[selfPostIdentifiersKey] }
+
+    override val threadMenuConfigJson: Flow<String?> =
+        safeData.map { prefs -> prefs[threadMenuConfigKey] }
+
+    override val threadMenuEntriesConfigJson: Flow<String?> =
+        safeData.map { prefs -> prefs[threadMenuEntriesKey] }
+
+    override val catalogNavEntriesConfigJson: Flow<String?> =
+        safeData.map { prefs -> prefs[catalogNavEntriesKey] }
+
+    override val threadSettingsMenuConfigJson: Flow<String?> =
+        safeData.map { prefs -> prefs[threadSettingsMenuConfigKey] }
+
+    override val preferredFileManagerPackage: Flow<String> =
+        safeData.map { prefs -> prefs[preferredFileManagerPackageKey] ?: "" }
+
+    override val preferredFileManagerLabel: Flow<String> =
+        safeData.map { prefs -> prefs[preferredFileManagerLabelKey] ?: "" }
+
+    override val lastUsedDeleteKey: Flow<String?> =
+        safeData.map { prefs -> prefs[lastUsedDeleteKeyPreferencesKey] }
+
+    private suspend fun updateStringPreference(
+        key: Preferences.Key<String>,
+        value: String,
+        logLabel: String,
+        failureMessage: String
+    ) {
+        try {
+            context.dataStore.edit { prefs -> prefs[key] = value }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update $logLabel: ${e.message}")
+            throw StorageException(failureMessage, e)
+        }
+    }
+
+    private suspend fun updateBooleanPreference(
+        key: Preferences.Key<Boolean>,
+        value: Boolean,
+        logLabel: String,
+        failureMessage: String
+    ) {
+        try {
+            context.dataStore.edit { prefs -> prefs[key] = value }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update $logLabel: ${e.message}")
+            throw StorageException(failureMessage, e)
+        }
+    }
+
+    private suspend fun updateStringPreferencePair(
+        firstKey: Preferences.Key<String>,
+        firstValue: String,
+        secondKey: Preferences.Key<String>,
+        secondValue: String,
+        logLabel: String,
+        failureMessage: String
+    ) {
+        try {
+            context.dataStore.edit { prefs ->
+                prefs[firstKey] = firstValue
+                prefs[secondKey] = secondValue
+            }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to update $logLabel: ${e.message}")
+            throw StorageException(failureMessage, e)
+        }
+    }
+
+    private fun MutablePreferences.seedRequiredStringPreference(
+        key: Preferences.Key<String>,
+        value: String
+    ) {
+        if (!contains(key)) {
+            this[key] = value
+        }
+    }
+
+    private fun MutablePreferences.seedRequiredBooleanPreference(
+        key: Preferences.Key<Boolean>,
+        value: Boolean
+    ) {
+        if (!contains(key)) {
+            this[key] = value
+        }
+    }
+
+    private fun MutablePreferences.seedOptionalStringPreference(
+        key: Preferences.Key<String>,
+        value: String?
+    ) {
+        if (value != null && !contains(key)) {
+            this[key] = value
+        }
+    }
+
+    private fun MutablePreferences.seedFrom(seedBundles: AppStateSeedBundles) {
+        seedRequiredStringPreference(boardsKey, seedBundles.boards.boardsJson)
+        seedRequiredStringPreference(historyKey, seedBundles.history.historyJson)
+        seedRequiredStringPreference(manualSaveDirectoryKey, DEFAULT_MANUAL_SAVE_ROOT)
+        seedRequiredBooleanPreference(postingNoticeKey, false)
+        seedRequiredBooleanPreference(pastThreadSearchNoticeHiddenKey, false)
+        seedRequiredBooleanPreference(telemetryCollectionKey, true)
+        seedOptionalStringPreference(ngHeadersKey, seedBundles.preferences.ngHeadersJson)
+        seedOptionalStringPreference(ngWordsKey, seedBundles.preferences.ngWordsJson)
+        seedOptionalStringPreference(catalogNgWordsKey, seedBundles.preferences.catalogNgWordsJson)
+        seedOptionalStringPreference(watchWordsKey, seedBundles.preferences.watchWordsJson)
+        seedOptionalStringPreference(
+            selfPostIdentifiersKey,
+            seedBundles.preferences.selfPostIdentifiersJson
+        )
+        seedOptionalStringPreference(catalogModeMapKey, seedBundles.preferences.catalogModeMapJson)
+        seedOptionalStringPreference(
+            attachmentPickerPreferenceKey,
+            seedBundles.preferences.attachmentPickerPreference
+        )
+        seedOptionalStringPreference(
+            saveDirectorySelectionKey,
+            seedBundles.preferences.saveDirectorySelection
+        )
+        seedOptionalStringPreference(
+            threadGalleryTapActionKey,
+            seedBundles.preferences.threadGalleryTapAction
+        )
+        seedOptionalStringPreference(
+            threadGalleryThumbnailModeKey,
+            seedBundles.preferences.threadGalleryThumbnailMode
+        )
+        seedOptionalStringPreference(themeModeKey, seedBundles.preferences.themeMode)
+        seedOptionalStringPreference(themePaletteKey, seedBundles.preferences.themePalette)
+        seedOptionalStringPreference(appIconVariantKey, seedBundles.preferences.appIconVariant)
+        seedOptionalStringPreference(threadDisplayModeKey, seedBundles.preferences.threadDisplayMode)
+        seedOptionalStringPreference(threadBodyTextSizeKey, seedBundles.preferences.threadBodyTextSize)
+        seedOptionalStringPreference(threadPostImageSizeKey, seedBundles.preferences.threadPostImageSize)
+        seedOptionalStringPreference(
+            lastUsedDeleteKeyPreferencesKey,
+            seedBundles.preferences.lastUsedDeleteKey
+        )
+        seedOptionalStringPreference(
+            threadMenuConfigKey,
+            seedBundles.preferences.threadMenuConfigJson
+        )
+        seedOptionalStringPreference(
+            threadSettingsMenuConfigKey,
+            seedBundles.preferences.threadSettingsMenuConfigJson
+        )
+        seedOptionalStringPreference(
+            threadMenuEntriesKey,
+            seedBundles.preferences.threadMenuEntriesConfigJson
+        )
+        seedOptionalStringPreference(
+            catalogNavEntriesKey,
+            seedBundles.preferences.catalogNavEntriesJson
+        )
+    }
+
+    override suspend fun updateBoardsJson(value: String) {
+        updateStringPreference(boardsKey, value, "boards", "Failed to save boards data")
+    }
+
+    override suspend fun updateHistoryJson(value: String) {
+        updateStringPreference(historyKey, value, "history", "Failed to save history data")
+    }
+
+    override suspend fun updateBackgroundRefreshEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            backgroundRefreshKey,
+            enabled,
+            "background refresh",
+            "Failed to save background refresh state"
+        )
+    }
+
+    override suspend fun updateUpdateCheckEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            updateCheckKey,
+            enabled,
+            "update check",
+            "Failed to save update check state"
+        )
+    }
+
+    override suspend fun updateWatchAlertEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            watchAlertKey,
+            enabled,
+            "watch alert",
+            "Failed to save watch alert state"
+        )
+    }
+
+    override suspend fun updateHasShownPostingNotice(shown: Boolean) {
+        updateBooleanPreference(
+            postingNoticeKey,
+            shown,
+            "posting notice",
+            "Failed to save posting notice state"
+        )
+    }
+
+    override suspend fun updatePastThreadSearchNoticeHidden(hidden: Boolean) {
+        updateBooleanPreference(
+            pastThreadSearchNoticeHiddenKey,
+            hidden,
+            "past thread search notice",
+            "Failed to save past thread search notice state"
+        )
+    }
+
+    override suspend fun updateLightweightModeEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            lightweightModeKey,
+            enabled,
+            "lightweight mode",
+            "Failed to save lightweight mode state"
+        )
+    }
+
+    override suspend fun updateThreadSummaryModeEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            threadSummaryModeKey,
+            enabled,
+            "thread summary mode",
+            "Failed to save thread summary mode state"
+        )
+    }
+
+    override suspend fun updateAiPostFilterEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            aiPostFilterKey,
+            enabled,
+            "AI post filter",
+            "Failed to save AI post filter state"
+        )
+    }
+
+    override suspend fun updateAiCommandEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            aiCommandKey,
+            enabled,
+            "AI command",
+            "Failed to save AI command state"
+        )
+    }
+
+    override suspend fun updateTelemetryCollectionEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            telemetryCollectionKey,
+            enabled,
+            "telemetry collection",
+            "Failed to save telemetry collection state"
+        )
+    }
+
+    override suspend fun updateAppLockPasswordHash(value: String) {
+        updateStringPreference(
+            appLockPasswordHashKey,
+            value,
+            "app lock password",
+            "Failed to save app lock password"
+        )
+    }
+
+    override suspend fun updateManualSaveDirectory(directory: String) {
+        updateStringPreference(
+            manualSaveDirectoryKey,
+            directory,
+            "manual save directory",
+            "Failed to save manual save directory"
+        )
+    }
+
+    override suspend fun updateAttachmentPickerPreference(preference: String) {
+        updateStringPreference(
+            attachmentPickerPreferenceKey,
+            preference,
+            "attachment picker preference",
+            "Failed to save attachment picker preference"
+        )
+    }
+
+    override suspend fun updateSaveDirectorySelection(selection: String) {
+        updateStringPreference(
+            saveDirectorySelectionKey,
+            selection,
+            "save directory selection",
+            "Failed to save save directory selection"
+        )
+    }
+
+    override suspend fun updateThreadGalleryTapAction(action: String) {
+        updateStringPreference(
+            threadGalleryTapActionKey,
+            action,
+            "thread gallery tap action",
+            "Failed to save thread gallery tap action"
+        )
+    }
+
+    override suspend fun updateThreadGalleryThumbnailMode(mode: String) {
+        updateStringPreference(
+            threadGalleryThumbnailModeKey,
+            mode,
+            "thread gallery thumbnail mode",
+            "Failed to save thread gallery thumbnail mode"
+        )
+    }
+
+    override suspend fun updateThemeMode(mode: String) {
+        updateStringPreference(
+            themeModeKey,
+            mode,
+            "theme mode",
+            "Failed to save theme mode"
+        )
+    }
+
+    override suspend fun updateThemePalette(palette: String) {
+        updateStringPreference(
+            themePaletteKey,
+            palette,
+            "theme palette",
+            "Failed to save theme palette"
+        )
+    }
+
+    override suspend fun updateAppIconVariant(variant: String) {
+        updateStringPreference(
+            appIconVariantKey,
+            variant,
+            "app icon variant",
+            "Failed to save app icon variant"
+        )
+    }
+
+    override suspend fun updateThreadDisplayMode(mode: String) {
+        updateStringPreference(
+            threadDisplayModeKey,
+            mode,
+            "thread display mode",
+            "Failed to save thread display mode"
+        )
+    }
+
+    override suspend fun updateThreadBodyTextSize(size: String) {
+        updateStringPreference(
+            threadBodyTextSizeKey,
+            size,
+            "thread body text size",
+            "Failed to save thread body text size"
+        )
+    }
+
+    override suspend fun updateThreadPostImageSize(size: String) {
+        updateStringPreference(
+            threadPostImageSizeKey,
+            size,
+            "thread post image size",
+            "Failed to save thread post image size"
+        )
+    }
+
+    override suspend fun updateCompactThreadHeaderEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            compactThreadHeaderEnabledKey,
+            enabled,
+            "compact thread header state",
+            "Failed to save compact thread header state"
+        )
+    }
+
+    override suspend fun updateCatalogModeMapJson(value: String) {
+        updateStringPreference(
+            catalogModeMapKey,
+            value,
+            "catalog mode map",
+            "Failed to save catalog mode map"
+        )
+    }
+
+    override suspend fun updatePrivacyFilterEnabled(enabled: Boolean) {
+        updateBooleanPreference(
+            privacyFilterKey,
+            enabled,
+            "privacy filter",
+            "Failed to save privacy filter state"
+        )
+    }
+
+    override suspend fun updateCatalogDisplayStyle(style: String) {
+        updateStringPreference(
+            displayStyleKey,
+            style,
+            "catalog display style",
+            "Failed to save catalog display style"
+        )
+    }
+
+    override suspend fun updateCatalogGridColumns(columns: String) {
+        updateStringPreference(
+            gridColumnsKey,
+            columns,
+            "catalog grid columns",
+            "Failed to save catalog grid columns"
+        )
+    }
+
+    override suspend fun updateCatalogFetchRows(rows: String) {
+        updateStringPreference(
+            catalogFetchRowsKey,
+            rows,
+            "catalog fetch rows",
+            "Failed to save catalog fetch rows"
+        )
+    }
+
+    override suspend fun updateNgHeadersJson(value: String) {
+        updateStringPreference(ngHeadersKey, value, "NG headers", "Failed to save NG headers")
+    }
+
+    override suspend fun updateNgWordsJson(value: String) {
+        updateStringPreference(ngWordsKey, value, "NG words", "Failed to save NG words")
+    }
+
+    override suspend fun updateCatalogNgWordsJson(value: String) {
+        updateStringPreference(
+            catalogNgWordsKey,
+            value,
+            "catalog NG words",
+            "Failed to save catalog NG words"
+        )
+    }
+
+    override suspend fun updateWatchWordsJson(value: String) {
+        updateStringPreference(watchWordsKey, value, "watch words", "Failed to save watch words")
+    }
+
+    override suspend fun updateBoardWatchWordsJson(value: String) {
+        updateStringPreference(
+            boardWatchWordsKey,
+            value,
+            "board watch words",
+            "Failed to save board watch words"
+        )
+    }
+
+    override suspend fun updateSelfPostIdentifiersJson(value: String) {
+        updateStringPreference(
+            selfPostIdentifiersKey,
+            value,
+            "self post identifiers",
+            "Failed to save self post identifiers"
+        )
+    }
+
+    override suspend fun updateThreadMenuConfigJson(value: String) {
+        updateStringPreference(
+            threadMenuConfigKey,
+            value,
+            "thread menu config",
+            "Failed to save thread menu config"
+        )
+    }
+
+    override suspend fun updateThreadMenuEntriesConfigJson(value: String) {
+        updateStringPreference(
+            threadMenuEntriesKey,
+            value,
+            "thread menu entries",
+            "Failed to save thread menu entries"
+        )
+    }
+
+    override suspend fun updateCatalogNavEntriesConfigJson(value: String) {
+        updateStringPreference(
+            catalogNavEntriesKey,
+            value,
+            "catalog nav entries",
+            "Failed to save catalog nav entries"
+        )
+    }
+
+    override suspend fun updateThreadSettingsMenuConfigJson(value: String) {
+        updateStringPreference(
+            threadSettingsMenuConfigKey,
+            value,
+            "thread settings menu config",
+            "Failed to save thread settings menu config"
+        )
+    }
+
+    override suspend fun updatePreferredFileManagerPackage(packageName: String) {
+        updateStringPreference(
+            preferredFileManagerPackageKey,
+            packageName,
+            "preferred file manager package",
+            "Failed to save preferred file manager package"
+        )
+    }
+
+    override suspend fun updatePreferredFileManagerLabel(label: String) {
+        updateStringPreference(
+            preferredFileManagerLabelKey,
+            label,
+            "preferred file manager label",
+            "Failed to save preferred file manager label"
+        )
+    }
+
+    override suspend fun updatePreferredFileManager(packageName: String, label: String) {
+        updateStringPreferencePair(
+            preferredFileManagerPackageKey,
+            packageName,
+            preferredFileManagerLabelKey,
+            label,
+            "preferred file manager pair",
+            "Failed to save preferred file manager pair"
+        )
+    }
+
+    override suspend fun updateLastUsedDeleteKey(value: String) {
+        updateStringPreference(
+            lastUsedDeleteKeyPreferencesKey,
+            value,
+            "last used delete key",
+            "Failed to save last used delete key"
+        )
+    }
+
+    override suspend fun seedIfEmpty(seedBundles: AppStateSeedBundles) {
+        try {
+            context.dataStore.edit { prefs -> prefs.seedFrom(seedBundles) }
+        } catch (e: Exception) {
+            rethrowIfCancellation(e)
+            Logger.e("AndroidPlatformStateStorage", "Failed to seed data: ${e.message}")
+            // Re-throw as a more specific exception for caller to handle
+            throw StorageException("Failed to initialize default data", e)
+        }
+    }
+
+    private fun sanitizeManualSaveDirectoryValue(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isBlank()) return DEFAULT_MANUAL_SAVE_ROOT
+        if (trimmed == com.valoser.futacha.shared.service.MANUAL_SAVE_DIRECTORY) return DEFAULT_MANUAL_SAVE_ROOT
+        return trimmed
+    }
+
+    private fun rethrowIfCancellation(error: Throwable) {
+        if (error is CancellationException) throw error
+    }
+}
+
+/**
+ * Exception thrown when storage operations fail
+ */
+class StorageException(message: String, cause: Throwable? = null) : Exception(message, cause)

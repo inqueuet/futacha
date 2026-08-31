@@ -1,0 +1,59 @@
+### IDE ###
+*.iml
+.idea/
+.DS_Store
+*.xcuserstate
+**/xcuserdata/
+
+### Gradle / Kotlin ###
+.gradle/
+.kotlin/
+**/.gradle/
+**/.kotlin/
+.gradle-local/
+
+### Build outputs ###
+build/
+**/build/
+.externalNativeBuild/
+.cxx/
+captures/
+app-android/release/
+iosApp/Pods/
+iosApp/iosApp.xcworkspace/
+*.dSYM/
+
+### Android ###
+local.properties
+/local.properties
+
+### Local configuration / secrets ###
+.env
+.env.*
+!.env.example
+.local-config/
+secrets/
+credentials/
+*.key
+*.pfx
+*.der
+*service-account*.json
+iosApp/Configuration/Local.xcconfig
+
+### Misc ###
+*.keystore
+*.jks
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.pem
+*.p8
+AuthKey_*.p8
+/futacha
+
+### Claude ###
+.claude
+
+### GMS ###
+google-services.json
+GoogleService-Info.plist

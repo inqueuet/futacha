@@ -1,0 +1,353 @@
+package com.valoser.futacha.shared.parser
+
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.model.PageParseWarning
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.stripHtmlTagsLinear
+import com.valoser.futacha.shared.media.FUTABA_COMPAT_MEDIA_EXTENSIONS
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+
+/**
+ * Lightweight catalog parser that can run on any KMP target without Jsoup.
+ * It is purposely scoped to the markup captured under `/example/catalog.txt`.
+ *
+ * FIX: パフォーマンス最適化の実装詳細
+ *
+ * ## 実装済みの最適化：
+ * 1. ReDoS攻撃防止
+ *    - MAX_HTML_SIZE = 20MB制限
+ *    - maxIterations = 2000（無限ループ防止）
+ *    - キャンセルチェックを10イテレーション毎に実行
+ *
+ * 2. メモリ最適化
+ *    - 正規表現のプリコンパイル
+ *    - 部分文字列の最小化（indexOf使用）
+ *    - maxCatalogItems = 3000（旧APKのカタログ件数設定に合わせた上限）
+ *
+ * 3. アルゴリズム最適化
+ *    - indexOf優先（正規表現より高速）
+ *    - 早期リターン（テーブルが見つからない場合など）
+ *    - 効率的なループ処理
+ *
+ * 4. スレッド最適化
+ *    - AppDispatchers.parsingで専用スレッド実行
+ *    - サスペンド関数化でバックグラウンド実行保証
+ */
+internal object CatalogHtmlParserCore {
+    private const val DEFAULT_BASE_URL = "https://www.example.com"
+    private const val MAX_HTML_SIZE = 20 * 1024 * 1024
+    private const val MAX_CHUNK_SIZE = 100_000 // Process HTML in chunks to prevent ReDoS
+    private const val MAX_ANCHORS_PER_CATALOG_CELL = 128
+
+    private val anchorRegex = Regex(
+        pattern = "<a\\b[^>]{0,700}\\bhref=['\"]([^'\"]+)['\"][^>]{0,700}>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val imageRegex = Regex(
+        pattern = "<img\\b[^>]{0,700}\\bsrc=['\"]([^'\"]+)['\"][^>]{0,700}>",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val widthAttrRegex = Regex(
+        pattern = "width\\s*=\\s*['\"]?(\\d+)['\"]?",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val heightAttrRegex = Regex(
+        pattern = "height\\s*=\\s*['\"]?(\\d+)['\"]?",
+        options = setOf(RegexOption.IGNORE_CASE)
+    )
+    private val catalogTableRegex = Regex(
+        "<table\\b[^>]{0,700}\\bid\\s*=\\s*['\"]?cattable['\"]?",
+        RegexOption.IGNORE_CASE
+    )
+    private val threadIdRegex = Regex("(?:^|/)res/(\\d+)\\.html?", RegexOption.IGNORE_CASE)
+    private val trailingSRegex = Regex("(?i)s(\\.[a-zA-Z0-9]+)$")
+    private val supportedMediaExtensions = FUTABA_COMPAT_MEDIA_EXTENSIONS
+    private val knownTitles = mapOf(
+        "1364612020" to "チュートリアル",
+    )
+
+    // FIX: サスペンド関数に変更してバックグラウンドで実行
+    suspend fun parseCatalog(html: String, baseUrl: String? = null): List<CatalogItem> {
+        return parseCatalogPage(html, baseUrl).items
+    }
+
+    suspend fun parseCatalogPage(html: String, baseUrl: String? = null): CatalogPageContent = withContext(AppDispatchers.parsing) {
+        if (html.length > MAX_HTML_SIZE) {
+            throw IllegalArgumentException("HTML size exceeds maximum allowed size of $MAX_HTML_SIZE bytes")
+        }
+
+        try {
+            val resolvedBaseUrl = baseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
+            val normalized = normalizeLineBreaksIfNeeded(html)
+            var isTruncated = false
+            var truncationReason: String? = null
+            var skippedItemCount = 0
+            var oversizedBlockCount = 0
+
+            fun markTruncated(reason: String) {
+                isTruncated = true
+                if (truncationReason.isNullOrBlank()) {
+                    truncationReason = reason
+                }
+            }
+
+            // Find table start and end using indexOf for better performance
+            val tableStartTag = "<table"
+            var tableStartIndex = normalized.indexOf(tableStartTag, ignoreCase = true)
+            var foundTable = false
+            var tableSearchIterations = 0
+            val maxTableSearchIterations = 200
+            
+            // Look for table with id="cattable"
+            while (tableStartIndex != -1) {
+                tableSearchIterations += 1
+                if (tableSearchIterations % 10 == 0) {
+                    ensureActive()
+                }
+                if (tableSearchIterations > maxTableSearchIterations) {
+                    Logger.w(
+                        "CatalogHtmlParserCore",
+                        "Stopped catalog table search after $maxTableSearchIterations iterations"
+                    )
+                    markTruncated("Stopped catalog table search after $maxTableSearchIterations iterations")
+                    break
+                }
+                val tableTagEnd = normalized.indexOf(">", tableStartIndex)
+                if (tableTagEnd == -1) break
+                
+                val tableTag = normalized.substring(tableStartIndex, tableTagEnd + 1)
+                if (catalogTableRegex.containsMatchIn(tableTag)) {
+                    foundTable = true
+                    break
+                }
+                tableStartIndex = normalized.indexOf(tableStartTag, tableTagEnd, ignoreCase = true)
+            }
+            
+            if (!foundTable) {
+                return@withContext CatalogPageContent(
+                    items = emptyList(),
+                    parseWarning = PageParseWarning(
+                        isTruncated = isTruncated,
+                        reason = truncationReason,
+                        skippedItemCount = skippedItemCount,
+                        oversizedBlockCount = oversizedBlockCount
+                    )
+                )
+            }
+            
+            val tableEndIndex = normalized.indexOf("</table>", startIndex = tableStartIndex, ignoreCase = true)
+            if (tableEndIndex == -1) {
+                return@withContext CatalogPageContent(items = emptyList())
+            }
+            
+            // Process body without substringing the whole table to save memory
+            val items = mutableListOf<CatalogItem>()
+            var searchStart = normalized.indexOf(">", tableStartIndex) + 1
+            val maxCatalogItems = 3000 // Match the compatibility setting range safely
+            var loopIterations = 0
+            // A catalog cell normally consumes one iteration.  Leave headroom
+            // for malformed/non-thread cells before enforcing the 3000-item
+            // safety limit.
+            val maxIterations = 6_000
+
+            // Pre-compile regexes or search strings
+            val tdStart = "<td"
+            val tdEnd = "</td>"
+
+            while (searchStart < tableEndIndex && items.size < maxCatalogItems) {
+                loopIterations++
+
+                // FIX: キャンセルチェックの頻度を増やす（20→10イテレーション毎）
+                if (loopIterations % 10 == 0) {
+                    ensureActive()  // コルーチンがキャンセルされたら例外をスロー
+                }
+
+                if (loopIterations > maxIterations) {
+                    Logger.w(
+                        "CatalogHtmlParserCore",
+                        "Stopped catalog parsing after reaching maximum iteration limit ($maxIterations)"
+                    )
+                    markTruncated("Stopped catalog parsing after reaching maximum iteration limit ($maxIterations)")
+                    break
+                }
+
+                val cellStartIndex = normalized.indexOf(tdStart, searchStart, ignoreCase = true)
+                if (cellStartIndex == -1 || cellStartIndex >= tableEndIndex) break
+                
+                val cellContentStart = normalized.indexOf(">", cellStartIndex) + 1
+                if (cellContentStart == 0) break // ">" not found
+                
+                val cellEndIndex = normalized.indexOf(tdEnd, cellContentStart, ignoreCase = true)
+                if (cellEndIndex == -1) break
+
+                val cellSize = cellEndIndex - cellContentStart
+                if (cellSize > MAX_CHUNK_SIZE) {
+                    Logger.w(
+                        "CatalogHtmlParserCore",
+                        "Skipping oversized catalog cell ($cellSize bytes > $MAX_CHUNK_SIZE)"
+                    )
+                    skippedItemCount += 1
+                    oversizedBlockCount += 1
+                    markTruncated("Skipped oversized catalog cell ($cellSize bytes > $MAX_CHUNK_SIZE)")
+                    searchStart = cellEndIndex + tdEnd.length
+                    continue
+                }
+
+                // Extract cell content - keep it small
+                val cell = normalized.substring(cellContentStart, cellEndIndex)
+
+                // Parse cell content
+                val allHrefs = anchorRegex.findAll(cell)
+                    .mapNotNull { it.groupValues.getOrNull(1) }
+                    .take(MAX_ANCHORS_PER_CATALOG_CELL)
+                    .toList()
+                val threadHref = allHrefs.find { threadIdRegex.containsMatchIn(it) }
+                val threadId = threadHref?.let { threadIdRegex.find(it)?.groupValues?.getOrNull(1) }
+
+                if (threadId != null) {
+                    val fullImageUrlHref = allHrefs.find {
+                        it != threadHref && isSupportedMediaHref(it)
+                    }
+
+                    val imageMatch = imageRegex.find(cell)
+                    val rawThumbnail = imageMatch
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.let { resolveUrl(it, resolvedBaseUrl) }
+                    
+                    // Use /thumb/ instead of /cat/ for higher quality thumbnails.
+                    // Keep original extension to avoid breaking non-jpg media.
+                    val thumbnail = rawThumbnail?.let { raw ->
+                        raw.replace("/cat/", "/thumb/")
+                    }
+
+                    var fullImageUrl = fullImageUrlHref?.let { resolveUrl(it, resolvedBaseUrl) }
+                    
+                    // If full image is missing, try to guess from thumbnail
+                    if (fullImageUrl == null && thumbnail != null && thumbnail.contains("/thumb/")) {
+                        // Try to guess the source URL.
+                        // Standard pattern: /thumb/123s.gif -> /src/123.gif
+                        
+                        // First switch directory
+                        val srcBase = thumbnail.replace("/thumb/", "/src/")
+                        
+                        // Then strip the trailing 's' (or 'S') from the filename, preserving extension case
+                        // FIX: ループ内でのRegex作成を回避
+                        fullImageUrl = srcBase.replace(trailingSRegex, "$1")
+                    }
+
+                    val imageTag = imageMatch?.value
+                    val width = imageTag
+                        ?.let { widthAttrRegex.find(it) }
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                    val height = imageTag
+                        ?.let { heightAttrRegex.find(it) }
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+
+                    val titleText = extractBetween(cell, "<small", "</small>")?.let(::cleanText)
+                    val labelText = extractBetween(cell, "<font", "</font>")?.let(::cleanText)
+                    val replies = labelText?.toIntOrNull() ?: 0
+
+                    items.add(CatalogItem(
+                        id = threadId,
+                        threadUrl = resolveUrl(threadHref, resolvedBaseUrl),
+                        // <font> is the reply-count badge, not the subject.  A
+                        // number here used to leak into the catalog, tab and
+                        // history title (#32). Keep a stable non-subject
+                        // fallback so the head-title resolver can replace it.
+                        title = knownTitles[threadId] ?: titleText ?: "No.$threadId",
+                        thumbnailUrl = thumbnail,
+                        fullImageUrl = fullImageUrl,
+                        thumbnailWidth = width,
+                        thumbnailHeight = height,
+                        replyCount = replies
+                    ))
+                }
+
+                // Advance search position
+                searchStart = cellEndIndex + tdEnd.length
+            }
+
+            if (items.size >= maxCatalogItems) {
+                Logger.w("CatalogHtmlParserCore", "Reached maximum catalog items limit ($maxCatalogItems)")
+                markTruncated("Reached maximum catalog items limit ($maxCatalogItems)")
+            }
+
+            CatalogPageContent(
+                items = items,
+                parseWarning = PageParseWarning(
+                    isTruncated = isTruncated,
+                    reason = truncationReason,
+                    skippedItemCount = skippedItemCount,
+                    oversizedBlockCount = oversizedBlockCount
+                )
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // FIX: キャンセル例外は再スロー
+            throw e
+        } catch (e: Exception) {
+            Logger.e("CatalogHtmlParserCore", "Failed to parse catalog HTML: ${e.message}")
+            throw ParserException("Failed to parse catalog HTML", e)
+        }
+    }
+
+    private fun normalizeLineBreaksIfNeeded(html: String): String {
+        if (!html.contains('\r')) return html
+        return html.replace("\r\n", "\n").replace('\r', '\n')
+    }
+
+    private fun extractBetween(text: String, startTagPartial: String, endTag: String): String? {
+        val startIndex = text.indexOf(startTagPartial, ignoreCase = true)
+        if (startIndex == -1) return null
+        val contentStart = text.indexOf(">", startIndex) + 1
+        if (contentStart == 0) return null
+        if (contentStart > text.length) return null
+        val endIndex = text.indexOf(endTag, contentStart, ignoreCase = true)
+        if (endIndex == -1) return null
+        if (contentStart > endIndex) return null
+        if (endIndex > text.length) return null
+        return text.substring(contentStart, endIndex)
+    }
+
+    private fun isSupportedMediaHref(href: String): Boolean {
+        val extension = href
+            .substringBefore('#')
+            .substringBefore('?')
+            .substringAfterLast('.', "")
+            .lowercase()
+        return extension in supportedMediaExtensions
+    }
+
+    private fun resolveUrl(path: String, baseUrl: String): String = when {
+        path.startsWith("http://") || path.startsWith("https://") -> path
+        path.startsWith("//") -> "${extractScheme(baseUrl)}:$path"
+        path.startsWith("/") -> extractOrigin(baseUrl).trimEnd('/') + path
+        else -> baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+    }
+
+    private fun extractScheme(baseUrl: String): String {
+        val schemeIndex = baseUrl.indexOf("://")
+        if (schemeIndex <= 0) return "https"
+        return baseUrl.substring(0, schemeIndex).lowercase()
+    }
+
+    private fun extractOrigin(baseUrl: String): String {
+        val schemeIndex = baseUrl.indexOf("://")
+        if (schemeIndex == -1) return DEFAULT_BASE_URL
+        val hostStart = schemeIndex + 3
+        val hostEnd = baseUrl.indexOf('/', startIndex = hostStart).takeIf { it != -1 } ?: baseUrl.length
+        return baseUrl.substring(0, hostEnd)
+    }
+
+    private fun cleanText(raw: String): String {
+        val withoutTags = stripHtmlTagsLinear(raw)
+        return HtmlEntityDecoder.decode(withoutTags).trim()
+    }
+}

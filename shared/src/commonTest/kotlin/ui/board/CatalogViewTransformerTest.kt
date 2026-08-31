@@ -1,0 +1,284 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
+import kotlinx.coroutines.runBlocking
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+
+class CatalogViewTransformerTest {
+    @Test
+    fun buildVisibleCatalogItems_appliesWatchWordsThenNgThenQuery() {
+        val items = listOf(
+            catalogItem(id = "100", title = "猫 夏休み", replyCount = 30),
+            catalogItem(id = "200", title = "猫 NG対象", replyCount = 10),
+            catalogItem(id = "300", title = "犬 夏休み", replyCount = 50),
+            catalogItem(id = "400", title = "猫 文化祭", replyCount = 40)
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.WatchWords,
+            watchWords = listOf("猫", "夏休み"),
+            catalogNgWords = listOf("NG"),
+            catalogNgFilteringEnabled = true,
+            query = "夏休み"
+        )
+
+        assertEquals(listOf("100", "300"), result.map { it.id })
+    }
+
+    @Test
+    fun buildVisibleCatalogItems_keepsServerOrderForNormalModes() {
+        val items = listOf(
+            catalogItem(id = "300", title = "三番目", replyCount = 1),
+            catalogItem(id = "100", title = "一番目", replyCount = 99),
+            catalogItem(id = "200", title = "二番目", replyCount = 50)
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Catalog,
+            watchWords = emptyList(),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(listOf("300", "100", "200"), result.map { it.id })
+    }
+
+    @Test
+    fun buildVisibleCatalogItems_prioritizesWatchWordsInNormalModes() {
+        val items = listOf(
+            catalogItem(id = "100", title = "雑談", replyCount = 30),
+            catalogItem(id = "200", title = "猫スレ", replyCount = 10),
+            catalogItem(id = "300", title = "夏休み", replyCount = 50),
+            catalogItem(id = "400", title = "通常", replyCount = 40)
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Many,
+            watchWords = listOf("猫", "夏休み"),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(listOf("200", "300", "100", "400"), result.map { it.id })
+    }
+
+    @Test
+    fun buildVisibleCatalogItems_deduplicatesDuplicateThreadIdsBeforeRendering() {
+        val items = listOf(
+            catalogItem(id = "100", title = "先頭"),
+            catalogItem(id = "100", title = "重複"),
+            catalogItem(id = "200", title = "別スレ")
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Catalog,
+            watchWords = emptyList(),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(listOf("100", "200"), result.map { it.id })
+        assertEquals("先頭", result.first().title)
+    }
+
+    @Test
+    fun mergeWatchSourceCatalogItems_deduplicatesByThreadId() {
+        val merged = mergeWatchSourceCatalogItems(
+            listOf(
+                listOf(catalogItem(id = "100", title = "A"), catalogItem(id = "200", title = "B")),
+                listOf(catalogItem(id = "200", title = "B2"), catalogItem(id = "300", title = "C"))
+            )
+        )
+
+        assertEquals(listOf("100", "200", "300"), merged.map { it.id })
+    }
+
+    @Test
+    fun loadCatalogItemsForMode_usesServerFetchForNormalMode() = runBlocking {
+        val calls = mutableListOf<CatalogMode>()
+
+        val items = loadCatalogItemsForMode(
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            mode = CatalogMode.New
+        ) { _, mode ->
+            calls += mode
+            CatalogPageContent(items = listOf(catalogItem(id = "100", title = mode.label)))
+        }
+
+        assertEquals(listOf(CatalogMode.New), calls)
+        assertEquals(listOf("100"), items.items.map { it.id })
+    }
+
+    @Test
+    fun loadCatalogItemsForMode_addsWatchWordMatchesFromWatchSourceModesForNormalMode() = runBlocking {
+        val calls = mutableListOf<CatalogMode>()
+
+        val items = loadCatalogItemsForMode(
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            mode = CatalogMode.Many,
+            watchWords = listOf("猫")
+        ) { _, mode ->
+            calls += mode
+            when (mode) {
+                CatalogMode.Many -> CatalogPageContent(
+                    items = listOf(catalogItem(id = "100", title = "レス多い通常"))
+                )
+                CatalogMode.New -> CatalogPageContent(
+                    items = listOf(catalogItem(id = "200", title = "新着 猫スレ"))
+                )
+                CatalogMode.Old -> CatalogPageContent(
+                    items = listOf(catalogItem(id = "300", title = "古い通常"))
+                )
+                CatalogMode.Few -> CatalogPageContent(items = emptyList())
+                CatalogMode.Momentum -> CatalogPageContent(items = emptyList())
+                CatalogMode.Catalog,
+                CatalogMode.So -> CatalogPageContent(items = emptyList())
+                CatalogMode.WatchWords -> error("watch mode should not be fetched as a source")
+            }
+        }
+
+        assertEquals(CatalogMode.Many, calls.first())
+        assertEquals(setOf(CatalogMode.Many) + CatalogMode.watchSourceModes.toSet(), calls.toSet())
+        assertEquals(listOf("200", "100"), items.items.map { it.id })
+    }
+
+    @Test
+    fun loadCatalogItemsForMode_mergesSuccessfulWatchSourceCatalogs() = runBlocking {
+        val calls = mutableListOf<CatalogMode>()
+        val partials = mutableListOf<List<String>>()
+
+        val items = loadCatalogItemsForMode(
+            boardUrl = "https://may.2chan.net/b/futaba.php",
+            mode = CatalogMode.WatchWords,
+            onWatchWordsPartial = { page ->
+                partials += page.items.map { it.id }
+            }
+        ) { _, mode ->
+            calls += mode
+            when (mode) {
+                CatalogMode.New -> error("fetch failed")
+                CatalogMode.Old -> CatalogPageContent(
+                    items = listOf(catalogItem(id = "100", title = "A2"), catalogItem(id = "200", title = "B"))
+                )
+                CatalogMode.Catalog -> CatalogPageContent(items = listOf(catalogItem(id = "100", title = "A")))
+                else -> CatalogPageContent(items = emptyList())
+            }
+        }
+
+        assertEquals(CatalogMode.New, calls.first())
+        assertEquals(CatalogMode.watchSourceModes.toSet(), calls.toSet())
+        assertEquals(listOf("100", "200"), partials.first())
+        assertEquals(listOf("100", "200"), items.items.map { it.id })
+        assertEquals(items.items.map { it.id }, partials.last())
+    }
+
+    @Test
+    fun loadCatalogItemsForMode_throwsFirstErrorWhenAllWatchSourcesFail() = runBlocking {
+        val error = assertFailsWith<IllegalStateException> {
+            loadCatalogItemsForMode(
+                boardUrl = "https://may.2chan.net/b/futaba.php",
+                mode = CatalogMode.WatchWords
+            ) { _, _ ->
+                throw IllegalStateException("boom")
+            }
+        }
+
+        assertEquals("boom", error.message)
+    }
+
+    @Test
+    fun filterByQuery_matchesIdAndThreadUrl() {
+        val items = listOf(
+            catalogItem(id = "100", title = "title-a"),
+            catalogItem(id = "abc", title = "title-b", threadUrl = "https://may.2chan.net/b/res/xyz.htm")
+        )
+
+        assertEquals(listOf("100"), items.filterByQuery("100").map { it.id })
+        assertEquals(listOf("abc"), items.filterByQuery("xyz").map { it.id })
+    }
+
+    @Test
+    fun filterByQuery_matchesHiraganaAndKatakanaBothWays() {
+        val items = listOf(
+            catalogItem(id = "100", title = "ネコとゲーム"),
+            catalogItem(id = "200", title = "ねことげーむ")
+        )
+
+        assertEquals(listOf("100", "200"), items.filterByQuery("ねこ").map { it.id })
+        assertEquals(listOf("100", "200"), items.filterByQuery("ゲーム").map { it.id })
+    }
+
+    @Test
+    fun buildVisibleCatalogItems_matchesQueryAndNgCaseInsensitively() {
+        val items = listOf(
+            catalogItem(id = "ABC", title = "Safe Cat", threadUrl = "https://may.2chan.net/b/res/ABC.htm"),
+            catalogItem(id = "200", title = "Ng Target"),
+            catalogItem(id = "300", title = "safe dog")
+        )
+
+        val result = buildVisibleCatalogItems(
+            items = items,
+            mode = CatalogMode.Catalog,
+            watchWords = emptyList(),
+            catalogNgWords = listOf("ng"),
+            catalogNgFilteringEnabled = true,
+            query = "cat"
+        )
+
+        assertEquals(listOf("ABC"), result.map { it.id })
+    }
+
+    @Test
+    fun buildVisibleCatalogItems_returnsEmptyWatchModeWhenNoWatchWords() {
+        val result = buildVisibleCatalogItems(
+            items = listOf(catalogItem(id = "100", title = "猫")),
+            mode = CatalogMode.WatchWords,
+            watchWords = emptyList(),
+            catalogNgWords = emptyList(),
+            catalogNgFilteringEnabled = true,
+            query = ""
+        )
+
+        assertEquals(emptyList(), result)
+    }
+
+    @Test
+    fun filterByCatalogNgWords_returnsOriginalListWhenDisabled() {
+        val items = listOf(
+            catalogItem(id = "100", title = "NG target"),
+            catalogItem(id = "200", title = "safe")
+        )
+
+        assertEquals(
+            listOf("100", "200"),
+            items.filterByCatalogNgWords(catalogNgWords = listOf("NG"), enabled = false).map { it.id }
+        )
+    }
+
+    private fun catalogItem(
+        id: String,
+        title: String,
+        replyCount: Int = 0,
+        threadUrl: String = "https://may.2chan.net/b/res/$id.htm"
+    ): CatalogItem {
+        return CatalogItem(
+            id = id,
+            threadUrl = threadUrl,
+            title = title,
+            thumbnailUrl = null,
+            fullImageUrl = null,
+            replyCount = replyCount
+        )
+    }
+}

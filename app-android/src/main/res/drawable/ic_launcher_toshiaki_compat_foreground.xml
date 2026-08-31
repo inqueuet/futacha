@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exact adaptive foreground geometry from sample/1.apk.  Keeping the
+     vector group (rather than letting a density PNG be re-scaled as a
+     bitmap) prevents the sprout from changing size between launchers. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:height="108dp"
+    android:width="108dp"
+    android:viewportWidth="240"
+    android:viewportHeight="240">
+    <group android:scaleX="0.77" android:scaleY="0.77" android:translateX="27.6" android:translateY="27.6">
+        <path
+            android:fillColor="@drawable/ic_launcher_toshiaki_compat_gradient_left"
+            android:pathData="M86.33,101.85C101.5,113.35 101.12,114.2 126.85,127.91C114.76,132.04 117.57,131.86 117.23,131.83C94.13,130.11 66.4,125.93 51.73,106.28C48.46,101.91 45.94,96.48 40.29,92.34C39.93,92.07 39.9,91.78 40.22,91.46C64.74,92.77 73.38,96.66 86.33,101.85Z"
+            android:fillType="evenOdd" />
+        <path
+            android:fillColor="@drawable/ic_launcher_toshiaki_compat_gradient_right"
+            android:pathData="M115.55,114.51C146.85,103.98 154.5,100.86 172.77,92.4C173.86,93.12 188.3,89.8 202.12,88.79C203.31,96.77 198.35,106.37 191.95,110.96C174,123.85 146.87,126.7 124.1,127.91C117.47,122.43 118.29,119.63 115.55,114.51Z"
+            android:fillType="evenOdd" />
+        <path
+            android:fillColor="@drawable/ic_launcher_toshiaki_compat_gradient_shadow"
+            android:pathData="M119.05,151.86C121.39,154.78 123.5,152.48 125.14,164.35C124.22,174.18 121.39,183.05 112.27,188.25C104.12,192.89 104.58,181.78 106.5,177.22C113.17,161.37 117.11,156.34 119.05,151.86Z"
+            android:fillType="evenOdd" />
+        <path
+            android:fillColor="@color/ic_launcher_toshiaki_compat_sprout"
+            android:pathData="M120.9,108.39C133.6,91.98 150.5,77.11 171.27,71.9C180.36,69.62 201.05,71.05 202.87,83.29C204.06,91.27 198.35,99.37 191.95,103.96C174,116.85 149.62,119.7 126.85,120.91C126.47,120.93 126.29,121.13 126.3,121.51C126.64,133.53 126.25,145.48 125.14,157.35C124.22,167.18 121.39,176.05 112.27,181.25C104.12,185.89 104.58,174.78 106.5,170.22C113.17,154.37 117.11,142.59 114.8,125.36C114.76,125.04 114.57,124.86 114.23,124.83C91.13,123.11 66.4,118.93 51.73,99.28C48.46,94.91 45.94,89.48 40.29,85.34C39.93,85.07 39.9,84.78 40.22,84.46C54.24,70.77 76.88,67.91 93.83,76.85C105.93,83.23 115.25,95.46 120.41,108.32C120.5,108.53 120.77,108.57 120.9,108.39Z"
+            android:fillType="evenOdd" />
+    </group>
+</vector>

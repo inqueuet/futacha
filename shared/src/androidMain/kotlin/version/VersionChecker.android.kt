@@ -1,0 +1,91 @@
+package com.valoser.futacha.shared.version
+
+import android.content.Context
+import com.valoser.futacha.shared.util.Logger
+import io.ktor.client.HttpClient
+
+/**
+ * Android版VersionChecker実装
+ */
+class AndroidVersionChecker(
+    private val context: Context,
+    private val httpClient: HttpClient
+) : VersionChecker {
+    companion object {
+        private const val TAG = "AndroidVersionChecker"
+    }
+
+    override fun getCurrentVersion(): String {
+        return try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            packageInfo.versionName ?: "1.0"
+        } catch (e: Exception) {
+            Logger.w(TAG, "Failed to get version name: ${e.message}")
+            "1.0"
+        }
+    }
+
+    override suspend fun checkForUpdate(): UpdateInfo? {
+        val currentVersion = getCurrentVersion()
+
+        // GitHub Releases APIから最新バージョンを取得
+        val release = fetchLatestVersionFromGitHub(
+            httpClient = httpClient,
+            owner = "inqueuet",
+            repo = "futacha"
+        ) ?: return null
+
+        val latestVersion = release.tag_name.removePrefix("v")
+
+        // バージョン比較
+        if (!isNewerVersion(currentVersion, latestVersion)) {
+            return null
+        }
+
+        // 更新メッセージを生成
+        val message = buildUpdateMessage(currentVersion, latestVersion, release.name, release.body)
+
+        return UpdateInfo(
+            currentVersion = currentVersion,
+            latestVersion = latestVersion,
+            message = message
+        )
+    }
+
+}
+
+@Volatile
+private var versionCheckerAppContext: Context? = null
+
+/**
+ * Android では Context が必要なため、この関数は使用できません。
+ * 代わりに [createVersionChecker(Context, HttpClient)] を使用してください。
+ *
+ * 互換性のため、例外は投げず安全なフォールバックを返します。
+ */
+actual fun createVersionChecker(httpClient: HttpClient): VersionChecker {
+    val context = versionCheckerAppContext
+    if (context != null) {
+        return AndroidVersionChecker(context, httpClient)
+    }
+    Logger.w(
+        "AndroidVersionChecker",
+        "createVersionChecker(httpClient) was called without Context on Android. " +
+            "Falling back to a no-op checker."
+    )
+    return object : VersionChecker {
+        override fun getCurrentVersion(): String = "1.0"
+        override suspend fun checkForUpdate(): UpdateInfo? = null
+    }
+}
+
+/**
+ * Android用のVersionChecker作成関数
+ */
+fun createVersionChecker(context: Context, httpClient: HttpClient): VersionChecker {
+    return AndroidVersionChecker(context, httpClient)
+}
+
+fun initializeVersionCheckerContext(context: Context) {
+    versionCheckerAppContext = context.applicationContext
+}

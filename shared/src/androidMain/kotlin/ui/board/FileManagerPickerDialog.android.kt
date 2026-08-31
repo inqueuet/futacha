@@ -1,0 +1,187 @@
+package com.valoser.futacha.shared.ui.board
+
+/**
+ * ファイラーアプリ選択ダイアログ（Android実装）
+ * デバイスにインストールされているファイラーアプリの一覧を表示し、
+ * ユーザーが選択したファイラーを優先ファイラーとして設定できる
+ */
+
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
+import com.valoser.futacha.shared.util.FileManagerApp
+import com.valoser.futacha.shared.util.getAvailableFileManagers
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.time.Clock
+
+@Composable
+actual fun FileManagerPickerDialog(
+    onDismiss: () -> Unit,
+    onFileManagerSelected: (packageName: String, label: String) -> Unit
+) {
+    val context = LocalContext.current
+    val packageManager = context.packageManager
+    val fileManagers by produceState<List<FileManagerApp>?>(initialValue = null, key1 = packageManager) {
+        value = loadCachedFileManagers(packageManager)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ファイラーアプリを選択") },
+        text = {
+            val resolvedFileManagers = fileManagers
+            when {
+                resolvedFileManagers == null -> {
+                    Text("ファイラーアプリを読み込み中...")
+                }
+                resolvedFileManagers.isEmpty() -> {
+                    Text("利用可能なファイラーアプリが見つかりませんでした。")
+                }
+                else -> {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(resolvedFileManagers) { fileManager ->
+                            FileManagerItem(
+                                fileManager = fileManager,
+                                onClick = {
+                                    onFileManagerSelected(fileManager.packageName, fileManager.label)
+                                    onDismiss()
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
+        }
+    )
+}
+
+private suspend fun loadCachedFileManagers(
+    packageManager: android.content.pm.PackageManager
+): List<FileManagerApp> {
+    val nowMillis = Clock.System.now().toEpochMilliseconds()
+    synchronized(fileManagerCacheLock) {
+        fileManagerPickerCachedValueOrNull(fileManagerCache, nowMillis)?.let { return it }
+    }
+    val resolved = withContext(Dispatchers.Default) {
+        getAvailableFileManagers(packageManager)
+    }
+    synchronized(fileManagerCacheLock) {
+        fileManagerCache = FileManagerPickerCacheState(
+            value = resolved,
+            loadedAtMillis = Clock.System.now().toEpochMilliseconds()
+        )
+    }
+    return resolved
+}
+
+@Composable
+private fun FileManagerItem(
+    fileManager: FileManagerApp,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        val iconBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+            initialValue = null,
+            key1 = fileManager.packageName
+        ) {
+            value = loadCachedFileManagerIcon(
+                packageManager = context.packageManager,
+                packageName = fileManager.packageName
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            iconBitmap?.let { bitmap ->
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+            Column {
+                Text(
+                    text = fileManager.label,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = fileManager.packageName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private suspend fun loadCachedFileManagerIcon(
+    packageManager: android.content.pm.PackageManager,
+    packageName: String
+): ImageBitmap? {
+    synchronized(fileManagerIconCacheLock) {
+        fileManagerIconCache[packageName]?.let { return it }
+    }
+    val bitmap = withContext(Dispatchers.Default) {
+        runCatching {
+            packageManager
+                .getApplicationIcon(packageName)
+                .toBitmap(48, 48)
+                .asImageBitmap()
+        }.getOrNull()
+    } ?: return null
+    synchronized(fileManagerIconCacheLock) {
+        fileManagerIconCache[packageName] = bitmap
+        val keysToRemove = trimFileManagerIconCacheKeys(
+            keysInAccessOrder = fileManagerIconCache.keys.toList(),
+            maxEntries = FILE_MANAGER_ICON_CACHE_MAX_ENTRIES
+        )
+        keysToRemove.forEach(fileManagerIconCache::remove)
+    }
+    return bitmap
+}
+
+private val fileManagerCacheLock = Any()
+private var fileManagerCache: FileManagerPickerCacheState<List<FileManagerApp>>? = null
+private val fileManagerIconCacheLock = Any()
+private val fileManagerIconCache = LinkedHashMap<String, ImageBitmap>(16, 0.75f, true)

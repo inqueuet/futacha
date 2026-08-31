@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">2chan.net</domain>
+    </domain-config>
+    <!-- old.apk/1.apk expand bare sa/sp/su/ss/sq/sz uploader names to
+         these historical HTTP-only origins. Keep the exception limited to
+         the exact media hosts instead of restoring app-wide cleartext. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">www.nijibox2.com</domain>
+        <domain includeSubdomains="false">www.nijibox5.com</domain>
+        <domain includeSubdomains="false">www.nijibox6.com</domain>
+        <domain includeSubdomains="false">www.siokarabin.com</domain>
+    </domain-config>
+</network-security-config>

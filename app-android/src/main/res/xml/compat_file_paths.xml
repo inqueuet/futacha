@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path
+        name="private_saved_media"
+        path="futacha/" />
+    <cache-path
+        name="compat_post_preview"
+        path="compat_post_preview/" />
+    <external-files-path
+        name="external_documents_saved_media"
+        path="Documents/futacha/" />
+    <external-files-path
+        name="external_downloads_saved_media"
+        path="Download/futacha/" />
+</paths>

@@ -1,0 +1,1023 @@
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class)
+
+package com.valoser.futacha.shared.util
+
+import com.valoser.futacha.shared.model.SaveLocation
+import com.valoser.futacha.shared.model.MAX_SAVE_LOCATION_BOOKMARK_BASE64_CHARS
+import com.valoser.futacha.shared.service.AUTO_SAVE_DIRECTORY
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCObjectVar
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.BooleanVar
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import platform.Foundation.*
+import platform.posix.memcpy
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
+
+/**
+ * iOS版FileSystem実装
+ */
+@OptIn(ExperimentalForeignApi::class)
+class IosFileSystem : FileSystem {
+
+    private val fileManager = NSFileManager.defaultManager
+    private val privateAppDataDirectory: String by lazy { initializePrivateAppDataDirectory() }
+    private val cleanupMaxAgeMillis = 60 * 60 * 1000L
+    private val streamWriteChunkBytes = 64 * 1024
+    private val fileTreeDeleteMaxItems = 10_000
+    private val fileTreeDeleteMaxDurationMillis = 30_000L
+    private val tempCleanupMaxEntries = 10_000
+    private val tempCleanupMaxDurationMillis = 10_000L
+
+    private inline fun <T> runFsCatching(block: () -> T): Result<T> = com.valoser.futacha.shared.util.runFsCatching(block)
+
+    private fun validatePath(path: String, paramName: String = "path") {
+        if (paramName == "path") {
+            validateFileSystemPath(path, paramName)
+        } else {
+            validateFileSystemRelativePath(path, paramName)
+        }
+    }
+
+    private fun validateFileSize(size: Long, paramName: String = "file") = validateFileSystemSize(size, paramName)
+
+    private fun isNoSuchFileError(error: NSError?): Boolean {
+        // NSFileNoSuchFileError
+        return error?.code == 4L
+    }
+
+    private fun currentTimeMillis(): Long =
+        (NSDate().timeIntervalSince1970 * 1000.0).toLong()
+
+    private fun monotonicTimeMillis(): Long =
+        (NSProcessInfo.processInfo.systemUptime * 1000.0).toLong()
+
+    private fun readFileHandleChunk(fileHandle: NSFileHandle, length: Int): NSData {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val data = fileHandle.readDataUpToLength(length.toULong(), error = error.ptr)
+            return data ?: throw Exception(
+                "Failed to read file: ${error.value?.localizedDescription ?: "Unknown error"}"
+            )
+        }
+    }
+
+    private fun writeFileHandleChunk(fileHandle: NSFileHandle, data: NSData) {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileHandle.writeData(data, error = error.ptr)
+            if (!success) {
+                throw Exception("Failed to write file: ${error.value?.localizedDescription ?: "Unknown error"}")
+            }
+        }
+    }
+
+    private fun closeFileHandle(fileHandle: NSFileHandle) {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileHandle.closeAndReturnError(error.ptr)
+            if (!success) {
+                throw Exception("Failed to close file: ${error.value?.localizedDescription ?: "Unknown error"}")
+            }
+        }
+    }
+
+    private fun resolveSaveLocationPath(basePath: String, relativePath: String = ""): String {
+        val resolvedBase = resolveAbsolutePath(basePath)
+        return joinPathSegments(resolvedBase, relativePath)
+    }
+
+    private fun joinBaseAndRelativePath(basePath: String, relativePath: String): String =
+        joinPathSegments(basePath, relativePath)
+
+    private suspend fun <T> withBookmarkPath(
+        bookmarkData: String,
+        relativePath: String,
+        block: suspend (String) -> T
+    ): T {
+        val url = resolveBookmarkUrl(bookmarkData)
+        val startedAccess = url.startAccessingSecurityScopedResource()
+        try {
+            val basePath = resolveBookmarkPath(url)
+            return block(joinBaseAndRelativePath(basePath, relativePath))
+        } finally {
+            if (startedAccess) {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+    }
+
+    private suspend fun <T> withSaveLocationPath(
+        base: SaveLocation,
+        relativePath: String,
+        onTreeUri: () -> T,
+        block: suspend (String) -> T
+    ): T {
+        return when (base) {
+            is SaveLocation.Path -> block(resolveSaveLocationPath(base.path, relativePath))
+            is SaveLocation.Bookmark -> withBookmarkPath(base.bookmarkData, relativePath, block)
+            is SaveLocation.TreeUri -> {
+                val resolvedPath = resolveTreeUriPath(base.uri)
+                if (resolvedPath == null) {
+                    onTreeUri()
+                } else {
+                    block(joinBaseAndRelativePath(resolvedPath, relativePath))
+                }
+            }
+        }
+    }
+
+    private fun resolveTreeUriPath(uri: String): String? {
+        val trimmed = uri.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith("/")) {
+            return trimmed
+        }
+        val url = NSURL(string = trimmed)
+        if (url.scheme == "file") {
+            return url.path
+        }
+        if (trimmed.startsWith("content://")) {
+            val treeSegment = trimmed.substringAfter("/tree/", "")
+            if (treeSegment.isNotEmpty()) {
+                val decoded = NSString.create(string = treeSegment).stringByRemovingPercentEncoding ?: treeSegment
+                val normalized = decoded.substringAfter("primary:", decoded)
+                if (normalized.isNotBlank()) {
+                    return resolveSaveLocationPath(normalized)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun parentDirectory(path: String): String =
+        com.valoser.futacha.shared.util.parentDirectory(path)
+
+    override suspend fun createDirectory(path: String): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            val absolutePath = resolveAbsolutePath(path)
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    absolutePath,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success) {
+                    val nsError = error.value
+                    throw Exception("Failed to create directory: ${nsError?.localizedDescription ?: "Unknown error"}")
+                }
+            }
+            Unit
+        }
+    }
+
+    override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(path, "path")
+            validateFileSize(bytes.size.toLong(), "bytes")
+            coroutineContext.ensureActive()
+            val absolutePath = resolveAbsolutePath(path)
+            val parentDir = parentDirectory(absolutePath)
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val created = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!created && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
+
+                val data = if (bytes.isEmpty()) {
+                    NSData.data()
+                } else {
+                    bytes.usePinned { pinned ->
+                        NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+                    }
+                }
+                if (!data.writeToFile(absolutePath, options = NSDataWritingAtomic, error = error.ptr)) {
+                    throw Exception("Failed to atomically write file: ${error.value?.localizedDescription ?: "Unknown error"}")
+                }
+            }
+            coroutineContext.ensureActive()
+            Unit
+        }
+    }
+
+    override suspend fun writeString(path: String, content: String): Result<Unit> {
+        return writeBytes(path, content.encodeToByteArray())
+    }
+
+    override suspend fun readBytes(path: String): Result<ByteArray> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            coroutineContext.ensureActive()
+            val absolutePath = resolveAbsolutePath(path)
+            val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
+            val fileSize = (attributes?.get(NSFileSize) as? NSNumber)?.longValue
+                ?: throw Exception("File not found: $absolutePath")
+            validateFileSize(fileSize, "file") // Read size before loading the file into memory.
+            if (fileSize == 0L) {
+                return@runFsCatching ByteArray(0)
+            }
+            val lengthInt = fileSize.toInt()
+            val bytes = ByteArray(lengthInt)
+            val fileHandle = NSFileHandle.fileHandleForReadingAtPath(absolutePath)
+                ?: throw Exception("Failed to open file for reading: $absolutePath")
+            var offset = 0
+            try {
+                while (offset < lengthInt) {
+                    coroutineContext.ensureActive()
+                    val requested = minOf(streamWriteChunkBytes, lengthInt - offset)
+                    val data = readFileHandleChunk(fileHandle, requested)
+                    val readLength = data.length.toInt()
+                    if (readLength <= 0) break
+                    bytes.usePinned { pinned ->
+                        memcpy(pinned.addressOf(offset), data.bytes, data.length)
+                    }
+                    offset += readLength
+                }
+            } finally {
+                closeFileHandle(fileHandle)
+            }
+            coroutineContext.ensureActive()
+            if (offset == bytes.size) bytes else bytes.copyOf(offset)
+        }
+    }
+
+    override suspend fun readString(path: String): Result<String> {
+        // Delegate to the chunked reader so a file that grows after stat() can
+        // never trigger an unbounded Foundation allocation.
+        return readBytes(path).mapCatching { bytes ->
+            bytes.decodeToString()
+        }
+    }
+
+    override suspend fun delete(path: String): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            val absolutePath = resolveAbsolutePath(path)
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.removeItemAtPath(absolutePath, error = error.ptr)
+                if (!success) {
+                    val nsError = error.value
+                    if (isNoSuchFileError(nsError)) {
+                        return@runFsCatching Unit
+                    }
+                    throw Exception("Failed to delete file: ${nsError?.localizedDescription ?: "Unknown error"}")
+                }
+            }
+            Unit
+        }
+    }
+
+    override suspend fun deleteRecursively(path: String): Result<Unit> = withContext(AppDispatchers.io) {
+        try {
+            validatePath(path, "path") // FIX: 入力検証
+            val absolutePath = resolveAbsolutePath(path)
+            if (!deleteFileRecursivelyBounded(absolutePath) && fileManager.fileExistsAtPath(absolutePath)) {
+                throw IllegalStateException("Failed to delete recursively: $absolutePath")
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun deleteFileRecursivelyBounded(root: String): Boolean {
+        val deadlineMillis = monotonicTimeMillis() + fileTreeDeleteMaxDurationMillis
+        val stack = mutableListOf(root to false)
+        var count = 0
+        while (stack.isNotEmpty()) {
+            coroutineContext.ensureActive()
+            if (monotonicTimeMillis() > deadlineMillis) {
+                throw IllegalStateException("Timed out while deleting file tree item: $root")
+            }
+            count += 1
+            if (count > fileTreeDeleteMaxItems) {
+                throw IllegalStateException("Too many files while deleting file tree item: $root")
+            }
+            val (currentPath, visitedChildren) = stack.removeAt(stack.lastIndex)
+            if (isSymbolicLink(currentPath)) {
+                if (!deleteFileSystemItem(currentPath) && isFileSystemEntryPresent(currentPath)) {
+                    return false
+                }
+                continue
+            }
+            val (exists, isDirectory) = fileExistsAndIsDirectory(currentPath)
+            if (!exists) continue
+            if (isDirectory && !visitedChildren) {
+                stack.add(currentPath to true)
+                val children = fileManager.contentsOfDirectoryAtPath(currentPath, error = null)
+                    ?.filterIsInstance<String>()
+                    .orEmpty()
+                children.forEach { child ->
+                    stack.add(joinPathSegments(currentPath, child) to false)
+                }
+                continue
+            }
+            if (!deleteFileSystemItem(currentPath) && fileManager.fileExistsAtPath(currentPath)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun isSymbolicLink(path: String): Boolean =
+        fileManager.attributesOfItemAtPath(path, error = null)?.get(NSFileType) == NSFileTypeSymbolicLink
+
+    private fun isFileSystemEntryPresent(path: String): Boolean =
+        fileManager.attributesOfItemAtPath(path, error = null) != null
+
+    private fun fileExistsAndIsDirectory(path: String): Pair<Boolean, Boolean> {
+        memScoped {
+            val isDirectory = alloc<BooleanVar>()
+            val exists = fileManager.fileExistsAtPath(path, isDirectory = isDirectory.ptr)
+            return exists to isDirectory.value
+        }
+    }
+
+    private fun deleteFileSystemItem(path: String): Boolean {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileManager.removeItemAtPath(path, error = error.ptr)
+            if (!success) {
+                val nsError = error.value
+                if (isNoSuchFileError(nsError)) {
+                    return true
+                }
+                return false
+            }
+            return true
+        }
+    }
+
+    override suspend fun exists(path: String): Boolean = withContext(AppDispatchers.io) {
+        val absolutePath = resolveAbsolutePath(path)
+        fileManager.fileExistsAtPath(absolutePath)
+    }
+
+    override suspend fun getFileSize(path: String): Long = withContext(AppDispatchers.io) {
+        val absolutePath = resolveAbsolutePath(path)
+        val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
+        (attributes?.get(NSFileSize) as? NSNumber)?.longValue ?: 0L
+    }
+
+    override suspend fun listFiles(directory: String): List<String> = withContext(AppDispatchers.io) {
+        val absolutePath = resolveAbsolutePath(directory)
+        val contents = fileManager.contentsOfDirectoryAtPath(absolutePath, error = null)
+        contents?.filterIsInstance<String>() ?: emptyList()
+    }
+
+    suspend fun cleanupTempFiles(): Result<Int> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            val nowMillis = (NSDate().timeIntervalSince1970 * 1000.0).toLong()
+            val searchDirectories = buildList {
+                NSTemporaryDirectory().takeIf { it.isNotBlank() }?.let(::add)
+                val caches = NSSearchPathForDirectoriesInDomains(
+                    NSCachesDirectory,
+                    NSUserDomainMask,
+                    true
+                ).firstOrNull() as? String
+                caches?.takeIf { it.isNotBlank() }?.let(::add)
+            }.distinct()
+
+            var deletedCount = 0
+            val cleanupBudget = IosTempCleanupBudget(
+                deadlineMonotonicMillis = monotonicTimeMillis() + tempCleanupMaxDurationMillis,
+                maxEntries = tempCleanupMaxEntries
+            )
+            searchDirectories.forEach { directory ->
+                if (cleanupBudget.isExhausted()) return@forEach
+                deletedCount += cleanupTempFilesRecursive(
+                    directory = directory,
+                    nowMillis = nowMillis,
+                    maxAgeMillis = cleanupMaxAgeMillis,
+                    currentDepth = 0,
+                    maxDepth = 3,
+                    budget = cleanupBudget
+                )
+            }
+            deletedCount
+        }
+    }
+
+    override fun getAppDataDirectory(): String {
+        val paths = NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,
+            NSUserDomainMask,
+            true
+        )
+        return (paths.firstOrNull() as? String) ?: ""
+    }
+
+    override fun resolveAbsolutePath(relativePath: String): String {
+        return resolveIosAbsolutePath(
+            relativePath = relativePath,
+            appDataDirectory = getAppDataDirectory(),
+            privateAppDataDirectory = getPrivateAppDataDirectory()
+        )
+    }
+
+    /**
+     * ライブラリ配下のアプリ専用ディレクトリを取得 (Filesアプリには表示されない)
+     */
+    private fun getPrivateAppDataDirectory(): String {
+        return privateAppDataDirectory
+    }
+
+    private fun initializePrivateAppDataDirectory(): String {
+        val paths = NSSearchPathForDirectoriesInDomains(
+            NSApplicationSupportDirectory,
+            NSUserDomainMask,
+            true
+        )
+        val libraryPath = (NSSearchPathForDirectoriesInDomains(
+            NSLibraryDirectory,
+            NSUserDomainMask,
+            true
+        ).firstOrNull() as? String)
+        val basePath = (paths.firstOrNull() as? String)
+            ?: libraryPath
+            ?: throw IllegalStateException("Private iOS app storage is unavailable")
+        val appDir = "$basePath/futacha"
+
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = fileManager.createDirectoryAtPath(
+                appDir,
+                withIntermediateDirectories = true,
+                attributes = null,
+                error = error.ptr
+            )
+
+            if (!success && error.value != null) {
+                // Never fail open into Documents: cookies, automatic saves and
+                // compatibility state must remain outside Files.app sharing.
+                val fallback = libraryPath?.let { "$it/futacha" }
+                    ?: throw IllegalStateException(
+                        "Failed to create private iOS app storage: ${error.value?.localizedDescription}"
+                    )
+                error.value = null
+                val fallbackCreated = fileManager.createDirectoryAtPath(
+                    fallback,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!fallbackCreated && error.value != null) {
+                    throw IllegalStateException(
+                        "Failed to create private iOS fallback storage: ${error.value?.localizedDescription}"
+                    )
+                }
+                excludeDirectoryFromBackup(fallback)
+                return fallback
+            }
+        }
+
+        excludeDirectoryFromBackup(appDir)
+        return appDir
+    }
+
+    private fun excludeDirectoryFromBackup(path: String) {
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val success = NSURL.fileURLWithPath(path).setResourceValue(
+                value = true,
+                forKey = NSURLIsExcludedFromBackupKey,
+                error = error.ptr
+            )
+            if (!success) {
+                Logger.w(
+                    "IosFileSystem",
+                    "Failed to exclude private app storage from backup: ${error.value?.localizedDescription.orEmpty()}"
+                )
+            }
+        }
+    }
+
+    override suspend fun appendBytes(path: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(path, "path") // FIX: 入力検証
+            validateFileSize(bytes.size.toLong(), "bytes") // FIX: サイズ検証
+            val absolutePath = resolveAbsolutePath(path)
+            val parentDir = parentDirectory(absolutePath)
+
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
+            }
+
+            val existingSize = if (fileManager.fileExistsAtPath(absolutePath)) {
+                val attributes = fileManager.attributesOfItemAtPath(absolutePath, error = null)
+                (attributes?.get(NSFileSize) as? NSNumber)?.longValue ?: 0L
+            } else {
+                0L
+            }
+            require(existingSize <= Long.MAX_VALUE - bytes.size.toLong()) { "file size overflow" }
+            validateFileSize(existingSize + bytes.size.toLong(), "file")
+
+            if (!fileManager.fileExistsAtPath(absolutePath)) {
+                val created = fileManager.createFileAtPath(absolutePath, contents = null, attributes = null)
+                if (!created) {
+                    throw Exception("Failed to create file for append: $absolutePath")
+                }
+            }
+
+            val fileHandle = NSFileHandle.fileHandleForWritingAtPath(absolutePath)
+                ?: throw Exception("Failed to open file for append: $absolutePath")
+
+            try {
+                fileHandle.seekToEndOfFile()
+                var written = 0
+                bytes.usePinned { pinned ->
+                    while (written < bytes.size) {
+                        coroutineContext.ensureActive()
+                        val chunkLength = minOf(streamWriteChunkBytes, bytes.size - written)
+                        val chunk = NSData.create(
+                            bytes = pinned.addressOf(written),
+                            length = chunkLength.toULong()
+                        )
+                        writeFileHandleChunk(fileHandle, chunk)
+                        written += chunkLength
+                        coroutineContext.ensureActive()
+                    }
+                }
+            } finally {
+                closeFileHandle(fileHandle)
+            }
+            Unit
+        }
+    }
+
+    override suspend fun writeByteStream(
+        path: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(AppDispatchers.io) {
+        try {
+            validatePath(path, "path")
+            val absolutePath = resolveAbsolutePath(path)
+            val parentDir = parentDirectory(absolutePath)
+
+            memScoped {
+                val error = alloc<ObjCObjectVar<NSError?>>()
+                val success = fileManager.createDirectoryAtPath(
+                    parentDir,
+                    withIntermediateDirectories = true,
+                    attributes = null,
+                    error = error.ptr
+                )
+                if (!success && error.value != null) {
+                    throw Exception("Failed to create parent directory: ${error.value?.localizedDescription}")
+                }
+            }
+
+            val created = fileManager.createFileAtPath(absolutePath, contents = null, attributes = null)
+            if (!created && !fileManager.fileExistsAtPath(absolutePath)) {
+                throw Exception("Failed to create file for stream write: $absolutePath")
+            }
+
+            val fileHandle = NSFileHandle.fileHandleForWritingAtPath(absolutePath)
+                ?: throw Exception("Failed to open file for stream write: $absolutePath")
+
+            try {
+                fileHandle.truncateFileAtOffset(0u)
+                var totalWritten = 0L
+                val sink = object : FileWriteSink {
+                    override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        coroutineContext.ensureActive()
+                        require(offset >= 0 && length >= 0 && offset <= bytes.size - length) {
+                            "Invalid write range: offset=$offset length=$length size=${bytes.size}"
+                        }
+                        val nextTotal = totalWritten + length
+                        validateFileSystemStreamSize(nextTotal, "file")
+                        if (length <= 0) return
+                        var written = 0
+                        bytes.usePinned { pinned ->
+                            while (written < length) {
+                                coroutineContext.ensureActive()
+                                val chunkLength = minOf(streamWriteChunkBytes, length - written)
+                                val chunk = NSData.create(
+                                    bytes = pinned.addressOf(offset + written),
+                                    length = chunkLength.toULong()
+                                )
+                                writeFileHandleChunk(fileHandle, chunk)
+                                written += chunkLength
+                                totalWritten += chunkLength
+                                coroutineContext.ensureActive()
+                            }
+                        }
+                    }
+                }
+                block(sink)
+            } finally {
+                closeFileHandle(fileHandle)
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    // ========================================
+    // SaveLocation-based implementations
+    // ========================================
+
+    override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> = withContext(AppDispatchers.io) {
+        // FIX: 入力検証 - 空文字列の場合はベースディレクトリなので検証不要
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            createDirectory(fullPath)
+        }
+    }
+
+    override suspend fun writeBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
+        // FIX: 入力検証
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            writeBytes(fullPath, bytes)
+        }
+    }
+
+    override suspend fun appendBytes(base: SaveLocation, relativePath: String, bytes: ByteArray): Result<Unit> = withContext(AppDispatchers.io) {
+        // FIX: 入力検証
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+            validateFileSize(bytes.size.toLong(), "bytes")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            appendBytes(fullPath, bytes)
+        }
+    }
+
+    override suspend fun writeByteStream(
+        base: SaveLocation,
+        relativePath: String,
+        block: suspend (FileWriteSink) -> Unit
+    ): Result<Unit> = withContext(AppDispatchers.io) {
+        runFsCatching {
+            validatePath(relativePath, "relativePath")
+        }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            writeByteStream(fullPath, block)
+        }
+    }
+
+    override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
+        // FIX: 入力検証はwriteBytesで実行される
+        return writeBytes(base, relativePath, content.encodeToByteArray())
+    }
+
+    override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> = withContext(AppDispatchers.io) {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            readBytes(fullPath)
+        }
+    }
+
+    override suspend fun readString(base: SaveLocation, relativePath: String): Result<String> = withContext(AppDispatchers.io) {
+        // FIX: 入力検証
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            readString(fullPath)
+        }
+    }
+
+    override suspend fun exists(base: SaveLocation, relativePath: String): Boolean = withContext(AppDispatchers.io) {
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext false
+            }
+        }
+        try {
+            withSaveLocationPath(
+                base = base,
+                relativePath = relativePath,
+                onTreeUri = { false }
+            ) { fullPath ->
+                exists(fullPath)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
+            Logger.e("IosFileSystem", "Error checking existence for $tag, path: $relativePath", e)
+            false
+        }
+    }
+
+    override suspend fun getFileSize(base: SaveLocation, relativePath: String): Long = withContext(AppDispatchers.io) {
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext 0L
+            }
+        }
+        try {
+            withSaveLocationPath(
+                base = base,
+                relativePath = relativePath,
+                onTreeUri = { 0L }
+            ) { fullPath ->
+                getFileSize(fullPath)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
+            Logger.e("IosFileSystem", "Error reading file size for $tag, path: $relativePath", e)
+            0L
+        }
+    }
+
+    override suspend fun listFiles(base: SaveLocation, directory: String): List<String> = withContext(AppDispatchers.io) {
+        if (directory.isNotEmpty()) {
+            runFsCatching { validatePath(directory, "directory") }.getOrElse {
+                return@withContext emptyList()
+            }
+        }
+        try {
+            withSaveLocationPath(
+                base = base,
+                relativePath = directory,
+                onTreeUri = { emptyList() }
+            ) { fullPath ->
+                val contents = fileManager.contentsOfDirectoryAtPath(fullPath, error = null)
+                contents?.filterIsInstance<String>() ?: emptyList()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val tag = if (base is SaveLocation.Bookmark) "Bookmark" else "SaveLocation"
+            Logger.e("IosFileSystem", "Error listing files for $tag, path: $directory", e)
+            emptyList()
+        }
+    }
+
+    override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> = withContext(AppDispatchers.io) {
+        // FIX: 入力検証 - 空文字列の場合はベースを削除するので検証不要
+        if (relativePath.isNotEmpty()) {
+            runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+                return@withContext Result.failure(it)
+            }
+        }
+        if (base is SaveLocation.Bookmark && relativePath.isEmpty()) {
+            Logger.w(
+                "IosFileSystem",
+                "Refusing to delete bookmark base directory directly"
+            )
+            return@withContext Result.success(Unit)
+        }
+        withSaveLocationPath(
+            base = base,
+            relativePath = relativePath,
+            onTreeUri = {
+                Result.failure(unsupportedTreeUriOnIos())
+            }
+        ) { fullPath ->
+            deleteRecursively(fullPath)
+        }
+    }
+
+    // ========================================
+    // Helper methods for secure bookmark
+    // ========================================
+
+    private class BookmarkResolutionException(message: String, cause: Throwable? = null) :
+        IllegalStateException(message, cause)
+
+    private fun resolveBookmarkPath(url: NSURL): String {
+        url.path?.let { return it }
+        val absolute = url.absoluteString?.trim().orEmpty()
+        if (absolute.startsWith("file://")) {
+            return absolute.removePrefix("file://")
+        }
+        throw IllegalStateException("Resolved bookmark URL has no filesystem path")
+    }
+
+    private fun resolveBookmarkUrl(bookmarkData: String): NSURL {
+        val data = runCatching { bookmarkData.decodeBase64ToNSData() }.getOrElse { decodeError ->
+            throw BookmarkResolutionException(
+                "Invalid bookmark data. Please re-select the save directory.",
+                decodeError
+            )
+        }
+        memScoped {
+            val error = alloc<ObjCObjectVar<NSError?>>()
+            val isStale = alloc<BooleanVar>()
+            val url = NSURL.URLByResolvingBookmarkData(
+                data,
+                options = NSURLBookmarkResolutionWithSecurityScope,
+                relativeToURL = null,
+                bookmarkDataIsStale = isStale.ptr,
+                error = error.ptr
+            )
+            if (url == null) {
+                throw BookmarkResolutionException(
+                    "Failed to resolve bookmark: ${error.value?.localizedDescription ?: "Unknown error"}. Please re-select the directory."
+                )
+            }
+            if (isStale.value) {
+                Logger.w("IosFileSystem", "Bookmark data is stale. The bookmark may not work after app restart. Consider re-selecting the directory.")
+                // Note: Stale bookmarks can still work in current session, but may fail after restart.
+                // To refresh, user should re-select via directory picker.
+            }
+            return url
+        }
+    }
+
+    private fun unsupportedTreeUriOnIos(): UnsupportedOperationException {
+        return UnsupportedOperationException(
+            "TreeUri SaveLocation is Android SAF-specific and intentionally unsupported on iOS. " +
+                "Use Path or Bookmark instead."
+        )
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private fun String.decodeBase64ToNSData(): NSData {
+        require(length <= MAX_SAVE_LOCATION_BOOKMARK_BASE64_CHARS) {
+            "Bookmark data is too large"
+        }
+        val normalized = trim()
+            .replace("\n", "")
+            .replace("\r", "")
+
+        fun decode(candidate: String): ByteArray? {
+            return runCatching { Base64.decode(candidate) }.getOrNull()
+        }
+
+        val standard = normalized
+            .replace('-', '+')
+            .replace('_', '/')
+        val padded = standard + "=".repeat((4 - standard.length % 4) % 4)
+
+        require(normalized.isNotEmpty() && normalized.length <= MAX_SAVE_LOCATION_BOOKMARK_BASE64_CHARS) {
+            "Invalid base64 bookmark data"
+        }
+        val bytes = decode(normalized)
+            ?: decode(standard)
+            ?: decode(padded)
+            ?: throw IllegalArgumentException("Invalid base64 bookmark data")
+        require(bytes.isNotEmpty()) { "Invalid base64 bookmark data" }
+        return bytes.usePinned { pinned ->
+            NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+        }
+    }
+
+    private fun cleanupTempFilesRecursive(
+        directory: String,
+        nowMillis: Long,
+        maxAgeMillis: Long,
+        currentDepth: Int,
+        maxDepth: Int,
+        budget: IosTempCleanupBudget
+    ): Int {
+        if (budget.isExhausted()) return 0
+        val entries = fileManager.contentsOfDirectoryAtPath(directory, error = null)
+            ?.filterIsInstance<String>()
+            ?: return 0
+        var deletedCount = 0
+        entries.forEach { name ->
+            if (!budget.tryConsumeEntry()) return@forEach
+            val path = "$directory/$name"
+            runCatching {
+                val attributes = fileManager.attributesOfItemAtPath(path, error = null) ?: return@runCatching
+                val fileType = attributes[NSFileType] as? String
+                if (fileType == NSFileTypeDirectory) {
+                    if (currentDepth < maxDepth) {
+                        deletedCount += cleanupTempFilesRecursive(
+                            directory = path,
+                            nowMillis = nowMillis,
+                            maxAgeMillis = maxAgeMillis,
+                            currentDepth = currentDepth + 1,
+                            maxDepth = maxDepth,
+                            budget = budget
+                        )
+                    }
+                    return@runCatching
+                }
+                val isManagedTemp = name.startsWith("tmp_") && name.endsWith(".tmp")
+                val isCompatibilityPreview = name.startsWith("compat-preview-")
+                if (!isManagedTemp && !isCompatibilityPreview) {
+                    return@runCatching
+                }
+                // Preview files cannot be active during startup cleanup. They
+                // may remain after a process kill which bypassed view teardown.
+                if (isCompatibilityPreview) {
+                    if (fileManager.removeItemAtPath(path, error = null)) deletedCount++
+                    return@runCatching
+                }
+                val modifiedAt = attributes[NSFileModificationDate] as? NSDate ?: return@runCatching
+                val ageMillis = nowMillis - (modifiedAt.timeIntervalSince1970 * 1000.0).toLong()
+                if (ageMillis < maxAgeMillis) {
+                    return@runCatching
+                }
+                if (fileManager.removeItemAtPath(path, error = null)) {
+                    deletedCount++
+                }
+            }.onFailure { error ->
+                Logger.w("IosFileSystem", "Failed to process temp cleanup entry: $path - ${error.message}")
+            }
+        }
+        return deletedCount
+    }
+
+    private inner class IosTempCleanupBudget(
+        private val deadlineMonotonicMillis: Long,
+        private val maxEntries: Int
+    ) {
+        private var examinedEntries = 0
+
+        fun isExhausted(): Boolean =
+            examinedEntries >= maxEntries || monotonicTimeMillis() >= deadlineMonotonicMillis
+
+        fun tryConsumeEntry(): Boolean {
+            if (isExhausted()) return false
+            examinedEntries += 1
+            return true
+        }
+    }
+}
+
+actual fun createFileSystem(platformContext: Any?): FileSystem {
+    return IosFileSystem()
+}

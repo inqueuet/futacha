@@ -1,0 +1,726 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.model.AppIconVariant
+import com.valoser.futacha.shared.model.CatalogNavEntryId
+import com.valoser.futacha.shared.model.CatalogNavEntryConfig
+import com.valoser.futacha.shared.model.CatalogNavEntryPlacement
+import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
+import com.valoser.futacha.shared.model.ThreadMenuEntryId
+import com.valoser.futacha.shared.model.ThreadMenuEntryPlacement
+import com.valoser.futacha.shared.model.defaultCatalogNavEntries
+import com.valoser.futacha.shared.model.defaultThreadMenuEntries
+import com.valoser.futacha.shared.repository.SavedThreadRepository
+import com.valoser.futacha.shared.service.DEFAULT_MANUAL_SAVE_ROOT
+import com.valoser.futacha.shared.state.decodeAppIconVariantValue
+import com.valoser.futacha.shared.util.AttachmentPickerPreference
+import com.valoser.futacha.shared.util.SaveDirectorySelection
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import androidx.compose.material3.SnackbarHostState
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class GlobalSettingsSupportTest {
+    @Test
+    fun appIconVariant_defaultLabelAndScreenDefaultStayInSync() {
+        assertEquals("デフォルト", AppIconVariant.Current.label)
+        assertEquals(AppIconVariant.Current, ScreenPreferencesState(appVersion = "1.0.0").appIconVariant)
+    }
+
+    @Test
+    fun appIconVariantDescriptions_matchCurrentCopy() {
+        assertEquals(
+            "デフォルトとクラシックの 2 種類のアイコンを画像で見比べて選べます。",
+            resolveAppIconSectionDescription()
+        )
+        assertEquals(
+            "標準のアプリアイコンを使います。",
+            resolveAppIconVariantDescription(AppIconVariant.Current)
+        )
+        assertEquals(
+            "クラシック寄りの配色アイコンに切り替えます。",
+            resolveAppIconVariantDescription(AppIconVariant.Classic)
+        )
+        assertEquals(
+            "暗めのミッドナイト配色アイコンに切り替えます。",
+            resolveAppIconVariantDescription(AppIconVariant.Midnight)
+        )
+    }
+
+    @Test
+    fun decodeAppIconVariantValue_mapsRemovedMidnightToCurrent() {
+        assertEquals(AppIconVariant.Current, decodeAppIconVariantValue("Midnight"))
+        assertEquals(AppIconVariant.Classic, decodeAppIconVariantValue("Classic"))
+        assertEquals(AppIconVariant.Current, decodeAppIconVariantValue("Current"))
+    }
+
+    @Test
+    fun resolvePreferredFileManagerSummaryState_formatsConfiguredAndDefaultStates() {
+        assertEquals(
+            PreferredFileManagerSummaryState(
+                currentSettingText = "未設定(システムのデフォルト)",
+                isConfigured = false
+            ),
+            resolvePreferredFileManagerSummaryState(null)
+        )
+        assertEquals(
+            PreferredFileManagerSummaryState(
+                currentSettingText = "現在の設定: Solid Explorer",
+                isConfigured = true
+            ),
+            resolvePreferredFileManagerSummaryState(" Solid Explorer ")
+        )
+    }
+
+    @Test
+    fun resolveSaveDirectoryPickerState_reflectsPlatformAndLauncherAvailability() {
+        assertEquals(
+            SaveDirectoryPickerState(
+                descriptionText = "AndroidではSAFで選ぶ方法を推奨します。手入力も利用できます。",
+                warningText = "※ SAF のフォルダー選択 (OPEN_DOCUMENT_TREE) に非対応のファイラーでは選択できません。その場合は標準ファイラーを使うか手入力を選んでください。",
+                isPickerButtonEnabled = true,
+                showManualInputFallbackButton = false
+            ),
+            resolveSaveDirectoryPickerState(
+                isAndroidPlatform = true,
+                hasPickerLauncher = true
+            )
+        )
+        assertEquals(
+            SaveDirectoryPickerState(
+                descriptionText = "選択したフォルダを保存先に使います。取得できない場合は手入力に切り替えてください。",
+                warningText = "※ 保存先アプリによってはフォルダ指定に制限があります。その場合は Files か手入力を利用してください。",
+                isPickerButtonEnabled = false,
+                showManualInputFallbackButton = true
+            ),
+            resolveSaveDirectoryPickerState(
+                isAndroidPlatform = false,
+                hasPickerLauncher = false
+            )
+        )
+    }
+
+    @Test
+    fun cookieSettingsEntryVisibility_reflectsCookieManagerAvailability() {
+        assertTrue(shouldShowCookieSettingsEntry(hasCookieManager = true))
+        assertFalse(shouldShowCookieSettingsEntry(hasCookieManager = false))
+    }
+
+    @Test
+    fun resolveGlobalSettingsEntrySelection_routesCookieManagerAndExternalLinks() {
+        assertEquals(
+            GlobalSettingsEntrySelectionState(
+                shouldOpenCookieManager = true,
+                externalUrl = null,
+                shouldCloseScreen = true
+            ),
+            resolveGlobalSettingsEntrySelection(GlobalSettingsAction.Cookies)
+        )
+        assertEquals(
+            GlobalSettingsEntrySelectionState(
+                shouldOpenCookieManager = false,
+                externalUrl = "https://github.com/inqueuet/futacha",
+                shouldCloseScreen = true
+            ),
+            resolveGlobalSettingsEntrySelection(GlobalSettingsAction.Developer)
+        )
+    }
+
+    @Test
+    fun resolveGlobalSettingsStorageSummaryState_marksWarningAtThreshold() {
+        val normal = resolveGlobalSettingsStorageSummaryState(
+            historyCount = 99,
+            autoSavedCount = 2,
+            autoSavedSize = 1_572_864L,
+            historyJsonByteSize = 65_536L
+        )
+        assertEquals("履歴: 99件", normal.historyText)
+        assertEquals("自動保存: 2件 / 1.5 MB", normal.autoSavedText)
+        assertNull(normal.historyDiagnosticsText)
+        assertFalse(normal.isHistoryWarning)
+        assertFalse(normal.isHistoryDiagnosticsWarning)
+        assertNull(normal.warningText)
+
+        val warning = resolveGlobalSettingsStorageSummaryState(
+            historyCount = 100,
+            autoSavedCount = null,
+            autoSavedSize = null,
+            historyJsonByteSize = null
+        )
+        assertTrue(warning.isHistoryWarning)
+        assertFalse(warning.isHistoryDiagnosticsWarning)
+        assertEquals("履歴: 100件", warning.historyText)
+        assertEquals("自動保存: 0件 / 不明", warning.autoSavedText)
+        assertNull(warning.historyDiagnosticsText)
+        assertTrue(warning.warningText?.contains("履歴データが大きい場合") == true)
+    }
+
+    @Test
+    fun resolveGlobalSettingsStorageSummaryState_showsDiagnosticsOnlyWhenRequested() {
+        val hidden = resolveGlobalSettingsStorageSummaryState(
+            historyCount = 2,
+            autoSavedCount = 0,
+            autoSavedSize = 0L,
+            historyJsonByteSize = 512_000L,
+            showHistoryDiagnostics = false
+        )
+
+        assertNull(hidden.historyDiagnosticsText)
+        assertFalse(hidden.isHistoryDiagnosticsWarning)
+
+        val warning = resolveGlobalSettingsStorageSummaryState(
+            historyCount = 2,
+            autoSavedCount = 0,
+            autoSavedSize = 0L,
+            historyJsonByteSize = 512_000L,
+            showHistoryDiagnostics = true
+        )
+
+        assertFalse(warning.isHistoryWarning)
+        assertTrue(warning.isHistoryDiagnosticsWarning)
+        assertEquals("履歴診断: 2件 / JSON約500.0 KB / 警告 100件以上", warning.historyDiagnosticsText)
+        assertTrue(warning.warningText?.contains("履歴データが大きい場合") == true)
+    }
+
+    @Test
+    fun buildGlobalSettingsCacheCleanupMessage_returnsTargetSpecificMessages() {
+        assertEquals(
+            "画像キャッシュを削除しました",
+            buildGlobalSettingsCacheCleanupMessage(
+                target = GlobalSettingsCacheCleanupTarget.IMAGE_CACHE,
+                result = Result.success(Unit)
+            )
+        )
+        assertEquals(
+            "一時キャッシュを削除しました",
+            buildGlobalSettingsCacheCleanupMessage(
+                target = GlobalSettingsCacheCleanupTarget.TEMPORARY_CACHE,
+                result = Result.success(Unit)
+            )
+        )
+        assertEquals(
+            "削除に失敗しました: permission denied",
+            buildGlobalSettingsCacheCleanupMessage(
+                target = GlobalSettingsCacheCleanupTarget.IMAGE_CACHE,
+                result = Result.failure(IllegalStateException("permission denied"))
+            )
+        )
+    }
+
+    @Test
+    fun moveCatalogMenuEntry_reordersOnlyBarEntries() {
+        val moved = moveCatalogMenuEntry(
+            entries = defaultCatalogNavEntries(),
+            id = CatalogNavEntryId.RefreshCatalog,
+            delta = -1
+        )
+        val state = resolveCatalogMenuConfigState(moved)
+        assertEquals(
+            listOf(
+                CatalogNavEntryId.CreateThread,
+                CatalogNavEntryId.RefreshCatalog,
+                CatalogNavEntryId.ScrollToTop
+            ),
+            state.barEntries.take(3).map { it.id }
+        )
+        assertTrue(state.hiddenEntries.isEmpty())
+    }
+
+    @Test
+    fun setCatalogMenuEntryPlacement_keepsAtLeastOneBarEntry() {
+        val hiddenAll = defaultCatalogNavEntries().map {
+            it.copy(placement = CatalogNavEntryPlacement.HIDDEN)
+        }
+        val state = resolveCatalogMenuConfigState(hiddenAll)
+        assertEquals(CatalogNavEntryId.Settings, state.barEntries.single().id)
+    }
+
+    @Test
+    fun moveThreadMenuEntryWithinPlacement_reordersWithinBar() {
+        val moved = moveThreadMenuEntryWithinPlacement(
+            entries = defaultThreadMenuEntries(),
+            id = ThreadMenuEntryId.Save,
+            delta = -1,
+            placement = ThreadMenuEntryPlacement.BAR
+        )
+        val state = resolveThreadMenuConfigState(moved)
+        assertEquals(
+            listOf(
+                ThreadMenuEntryId.Refresh,
+                ThreadMenuEntryId.Save,
+                ThreadMenuEntryId.Gallery
+            ),
+            state.barEntries.drop(3).take(3).map { it.id }
+        )
+    }
+
+    @Test
+    fun moveThreadMenuEntryWithinPlacement_ignoresEntriesOutsidePlacement() {
+        val original = defaultThreadMenuEntries()
+        val moved = moveThreadMenuEntryWithinPlacement(
+            entries = original,
+            id = ThreadMenuEntryId.NgManagement,
+            delta = -1,
+            placement = ThreadMenuEntryPlacement.BAR
+        )
+
+        assertEquals(resolveThreadMenuConfigState(original), resolveThreadMenuConfigState(moved))
+    }
+
+    @Test
+    fun setThreadMenuEntryPlacement_keepsSettingsInBarWhenSheetExists() {
+        val hiddenSettings = setThreadMenuEntryPlacement(
+            entries = defaultThreadMenuEntries(),
+            id = ThreadMenuEntryId.Settings,
+            placement = ThreadMenuEntryPlacement.HIDDEN
+        )
+        val state = resolveThreadMenuConfigState(hiddenSettings)
+        assertTrue(state.sheetEntries.isNotEmpty())
+        assertTrue(state.barEntries.any { it.id == ThreadMenuEntryId.Settings })
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_catalogMenuCallbacks_updateEntries() {
+        var localEntries: List<CatalogNavEntryConfig> = defaultCatalogNavEntries()
+        var persistedEntries = emptyList<CatalogNavEntryConfig>()
+        val callbacks = buildGlobalSettingsCatalogMenuCallbacks(
+            inputs = GlobalSettingsCatalogMenuInputs(
+                currentEntries = { localEntries },
+                setLocalEntries = { localEntries = it },
+                onCatalogNavEntriesChanged = { persistedEntries = it }
+            )
+        )
+
+        callbacks.moveEntry(CatalogNavEntryId.RefreshCatalog, -1)
+        assertEquals(localEntries, persistedEntries)
+        assertEquals(
+            listOf(
+                CatalogNavEntryId.CreateThread,
+                CatalogNavEntryId.RefreshCatalog,
+                CatalogNavEntryId.ScrollToTop
+            ),
+            resolveCatalogMenuConfigState(localEntries).barEntries.take(3).map { it.id }
+        )
+
+        callbacks.setPlacement(CatalogNavEntryId.PastThreadSearch, CatalogNavEntryPlacement.HIDDEN)
+        assertTrue(resolveCatalogMenuConfigState(localEntries).hiddenEntries.any { it.id == CatalogNavEntryId.PastThreadSearch })
+
+        callbacks.resetEntries()
+        assertEquals(resolveCatalogMenuConfigState(defaultCatalogNavEntries()).allEntries, localEntries)
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_threadMenuCallbacks_updateEntries() {
+        var localEntries: List<ThreadMenuEntryConfig> = defaultThreadMenuEntries()
+        var persistedEntries = emptyList<ThreadMenuEntryConfig>()
+        val callbacks = buildGlobalSettingsThreadMenuCallbacks(
+            inputs = GlobalSettingsThreadMenuInputs(
+                currentEntries = { localEntries },
+                setLocalEntries = { localEntries = it },
+                onThreadMenuEntriesChanged = { persistedEntries = it }
+            )
+        )
+
+        callbacks.moveWithinPlacement(ThreadMenuEntryId.Save, -1, ThreadMenuEntryPlacement.BAR)
+        assertEquals(localEntries, persistedEntries)
+        assertEquals(
+            listOf(
+                ThreadMenuEntryId.Refresh,
+                ThreadMenuEntryId.Save,
+                ThreadMenuEntryId.Gallery
+            ),
+            resolveThreadMenuConfigState(localEntries).barEntries.drop(3).take(3).map { it.id }
+        )
+
+        callbacks.setPlacement(ThreadMenuEntryId.Settings, ThreadMenuEntryPlacement.SHEET)
+        assertTrue(resolveThreadMenuConfigState(localEntries).barEntries.any { it.id == ThreadMenuEntryId.Settings })
+
+        callbacks.resetEntries()
+        assertEquals(resolveThreadMenuConfigState(defaultThreadMenuEntries()).allEntries, localEntries)
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_linkCallbacks_routeCookieAndExternalActions() {
+        var openedCookieManager = false
+        var openedUrl: String? = null
+        var dismissed = false
+        val callbacks = buildGlobalSettingsLinkCallbacks(
+            inputs = GlobalSettingsLinkInputs(
+                onOpenCookieManager = { openedCookieManager = true },
+                urlLauncher = { openedUrl = it },
+                onBack = { dismissed = true }
+            )
+        )
+
+        callbacks.onEntrySelected(GlobalSettingsAction.Cookies)
+        assertTrue(openedCookieManager)
+        assertNull(openedUrl)
+        assertTrue(dismissed)
+
+        openedCookieManager = false
+        openedUrl = null
+        dismissed = false
+        callbacks.onEntrySelected(GlobalSettingsAction.Developer)
+        assertFalse(openedCookieManager)
+        assertEquals("https://github.com/inqueuet/futacha", openedUrl)
+        assertTrue(dismissed)
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_cacheCallbacks_runActionsAndReportMessages() = runBlocking {
+        val messages = mutableListOf<String>()
+        var imageCleared = false
+        var tempCleared = false
+        var refreshed = false
+        val callbacks = buildGlobalSettingsCacheCallbacks(
+            inputs = GlobalSettingsCacheInputs(
+                coroutineScope = this,
+                showSnackbar = { messages += it },
+                clearImageCache = { imageCleared = true },
+                clearTemporaryCache = { tempCleared = true },
+                refreshAutoSavedStats = { refreshed = true }
+            )
+        )
+
+        callbacks.clearImageCache()
+        yield()
+        callbacks.clearTemporaryCache()
+        yield()
+        callbacks.refreshStorageStats()
+        yield()
+
+        assertTrue(imageCleared)
+        assertTrue(tempCleared)
+        assertTrue(refreshed)
+        assertEquals(
+            listOf("画像キャッシュを削除しました", "一時キャッシュを削除しました"),
+            messages
+        )
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_cacheCallbacks_ignoreSecondCleanupWhileRunning() = runBlocking {
+        val messages = mutableListOf<String>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var imageClearCount = 0
+        var temporaryClearCount = 0
+        val callbacks = buildGlobalSettingsCacheCallbacks(
+            inputs = GlobalSettingsCacheInputs(
+                coroutineScope = this,
+                showSnackbar = { messages += it },
+                clearImageCache = {
+                    imageClearCount += 1
+                    releaseCleanup.await()
+                },
+                clearTemporaryCache = {
+                    temporaryClearCount += 1
+                },
+                refreshAutoSavedStats = {}
+            )
+        )
+
+        callbacks.clearImageCache()
+        yield()
+        assertTrue(callbacks.isCleanupInProgress())
+
+        callbacks.clearTemporaryCache()
+        yield()
+        assertEquals(1, imageClearCount)
+        assertEquals(0, temporaryClearCount)
+
+        releaseCleanup.complete(Unit)
+        yield()
+        assertFalse(callbacks.isCleanupInProgress())
+        assertEquals(listOf("画像キャッシュを削除しました"), messages)
+    }
+
+    @Test
+    fun globalSettingsBindingsSupport_saveCallbacks_updatePickerAndManualPath() {
+        var manualSaveInput = "/tmp/raw"
+        var isFileManagerPickerVisible = false
+        var changedDirectory: String? = null
+        var changedSelection: SaveDirectorySelection? = null
+        var selectedFileManager: Pair<String, String>? = null
+        val callbacks = buildGlobalSettingsSaveCallbacks(
+            inputs = GlobalSettingsSaveInputs(
+                currentManualSaveInput = { manualSaveInput },
+                setManualSaveInput = { manualSaveInput = it },
+                setIsFileManagerPickerVisible = { isFileManagerPickerVisible = it },
+                onManualSaveDirectoryChanged = { changedDirectory = it },
+                onSaveDirectorySelectionChanged = { changedSelection = it },
+                onFileManagerSelected = { packageName, label ->
+                    selectedFileManager = packageName to label
+                }
+            )
+        )
+
+        callbacks.onOpenFileManagerPicker()
+        assertTrue(isFileManagerPickerVisible)
+
+        callbacks.onDismissFileManagerPicker()
+        assertFalse(isFileManagerPickerVisible)
+
+        callbacks.onFileManagerSelected("pkg", "Files")
+        assertFalse(isFileManagerPickerVisible)
+        assertEquals("pkg" to "Files", selectedFileManager)
+
+        callbacks.onManualSaveInputChanged("./saved_threads")
+        assertEquals("./saved_threads", manualSaveInput)
+
+        callbacks.onUpdateManualSaveDirectory()
+        assertEquals("./saved_threads", manualSaveInput)
+        assertEquals("./saved_threads", changedDirectory)
+
+        manualSaveInput = "/custom"
+        callbacks.onResetManualSaveDirectory()
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, manualSaveInput)
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, changedDirectory)
+
+        callbacks.onFallbackToManualInput()
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, manualSaveInput)
+        assertEquals(DEFAULT_MANUAL_SAVE_ROOT, changedDirectory)
+        assertEquals(SaveDirectorySelection.MANUAL_INPUT, changedSelection)
+    }
+
+    @Test
+    fun globalSettingsDerivedSupport_buildsExpectedDerivedState() {
+        val state = GlobalSettingsDerivedState(
+            behaviorText = resolveGlobalSettingsBehaviorText(isAndroidPlatform = true),
+            saveText = resolveGlobalSettingsSaveText(isAndroidPlatform = true),
+            resolvedManualPath = resolveFallbackManualSavePathValue("Documents"),
+            saveDestinationModeLabel = buildSaveDestinationModeLabelValue(
+                SaveDirectorySelection.MANUAL_INPUT,
+                isAndroidPlatform = true
+            ),
+            saveDestinationHint = buildSaveDestinationHintValue(
+                SaveDirectorySelection.MANUAL_INPUT,
+                isAndroidPlatform = true
+            ),
+            defaultAndroidSaveWarningText = null,
+            settingsEntries = buildList {
+                if (shouldShowCookieSettingsEntry(true)) add(cookieSettingsEntry)
+                addAll(globalSettingsEntries)
+            },
+            preferredFileManagerState = resolvePreferredFileManagerSummaryState("Files"),
+            saveDirectoryPickerState = resolveSaveDirectoryPickerState(
+                isAndroidPlatform = true,
+                hasPickerLauncher = true
+            ),
+            storageSummaryState = resolveGlobalSettingsStorageSummaryState(
+                historyCount = 3,
+                autoSavedCount = 1,
+                autoSavedSize = 1024L
+            )
+        )
+
+        assertEquals("Documents/futacha/saved_threads", state.resolvedManualPath)
+        assertEquals("手入力の保存先", state.saveDestinationModeLabel)
+        assertEquals("保存とファイラー", state.saveText.sectionTitle)
+        assertTrue(state.settingsEntries.any { it.action == GlobalSettingsAction.Cookies })
+        assertTrue(state.preferredFileManagerState.isConfigured)
+        assertTrue(state.saveDirectoryPickerState.isPickerButtonEnabled)
+        assertEquals("履歴: 3件", state.storageSummaryState.historyText)
+    }
+
+    @Test
+    fun globalSettingsRuntimeSupport_resolvesAutoSavedStatsUpdate() {
+        assertEquals(
+            GlobalSettingsAutoSavedStatsUpdate(
+                autoSavedCount = null,
+                autoSavedSize = null,
+                shouldApply = true
+            ),
+            resolveGlobalSettingsAutoSavedStatsUpdate(
+                hasRepository = false,
+                stats = null
+            )
+        )
+        assertEquals(
+            GlobalSettingsAutoSavedStatsUpdate(
+                autoSavedCount = 2,
+                autoSavedSize = 4096L,
+                shouldApply = true
+            ),
+            resolveGlobalSettingsAutoSavedStatsUpdate(
+                hasRepository = true,
+                stats = SavedThreadRepository.SavedThreadStats(
+                    threadCount = 2,
+                    totalSize = 4096L
+                )
+            )
+        )
+        assertEquals(
+            GlobalSettingsAutoSavedStatsUpdate(
+                autoSavedCount = null,
+                autoSavedSize = null,
+                shouldApply = false
+            ),
+            resolveGlobalSettingsAutoSavedStatsUpdate(
+                hasRepository = true,
+                stats = null
+            )
+        )
+    }
+
+    @Test
+    fun globalSettingsScaffoldBindings_keepSectionContractsExplicit() {
+        val preferencesState = ScreenPreferencesState(
+            appVersion = "1.2.3",
+            isBackgroundRefreshEnabled = true,
+            isLightweightModeEnabled = true,
+            manualSaveDirectory = "Documents",
+            resolvedManualSaveDirectory = "/storage/emulated/0/Documents/futacha/saved_threads",
+            attachmentPickerPreference = AttachmentPickerPreference.MEDIA,
+            saveDirectorySelection = SaveDirectorySelection.PICKER,
+            preferredFileManagerLabel = "Files",
+            threadMenuEntries = defaultThreadMenuEntries(),
+            catalogNavEntries = defaultCatalogNavEntries()
+        )
+        val preferencesCallbacks = ScreenPreferencesCallbacks(
+            onBackgroundRefreshChanged = {},
+            onLightweightModeChanged = {},
+            onManualSaveDirectoryChanged = {},
+            onSaveDirectorySelectionChanged = {},
+            onOpenSaveDirectoryPicker = {},
+            onClearPreferredFileManager = {}
+        )
+        val derivedState = GlobalSettingsDerivedState(
+            behaviorText = resolveGlobalSettingsBehaviorText(isAndroidPlatform = true),
+            saveText = resolveGlobalSettingsSaveText(isAndroidPlatform = true),
+            resolvedManualPath = "/storage/emulated/0/Documents/futacha/saved_threads",
+            saveDestinationModeLabel = "ファイラーで選んだ保存先",
+            saveDestinationHint = "現在の保存先です。",
+            defaultAndroidSaveWarningText = null,
+            settingsEntries = listOf(cookieSettingsEntry),
+            preferredFileManagerState = PreferredFileManagerSummaryState(
+                currentSettingText = "現在の設定: Files",
+                isConfigured = true
+            ),
+            saveDirectoryPickerState = resolveSaveDirectoryPickerState(
+                isAndroidPlatform = true,
+                hasPickerLauncher = true
+            ),
+            storageSummaryState = resolveGlobalSettingsStorageSummaryState(
+                historyCount = 4,
+                autoSavedCount = 2,
+                autoSavedSize = 4096L
+            )
+        )
+        val saveCallbacks = buildGlobalSettingsSaveCallbacks(
+            inputs = GlobalSettingsSaveInputs(
+                currentManualSaveInput = { "Download" },
+                setManualSaveInput = {},
+                setIsFileManagerPickerVisible = {},
+                onManualSaveDirectoryChanged = {},
+                onSaveDirectorySelectionChanged = {},
+                onFileManagerSelected = null
+            )
+        )
+        val catalogMenuCallbacks = buildGlobalSettingsCatalogMenuCallbacks(
+            inputs = GlobalSettingsCatalogMenuInputs(
+                currentEntries = { defaultCatalogNavEntries() },
+                setLocalEntries = {},
+                onCatalogNavEntriesChanged = {}
+            )
+        )
+        val threadMenuCallbacks = buildGlobalSettingsThreadMenuCallbacks(
+            inputs = GlobalSettingsThreadMenuInputs(
+                currentEntries = { defaultThreadMenuEntries() },
+                setLocalEntries = {},
+                onThreadMenuEntriesChanged = {}
+            )
+        )
+        val linkCallbacks = buildGlobalSettingsLinkCallbacks(
+            inputs = GlobalSettingsLinkInputs(
+                onOpenCookieManager = {},
+                urlLauncher = {},
+                onBack = {}
+            )
+        )
+        val cacheCallbacks = buildGlobalSettingsCacheCallbacks(
+            inputs = GlobalSettingsCacheInputs(
+                coroutineScope = CoroutineScope(Dispatchers.Unconfined),
+                showSnackbar = {},
+                clearImageCache = {},
+                clearTemporaryCache = {},
+                refreshAutoSavedStats = {}
+            )
+        )
+        val snackbarHostState = SnackbarHostState()
+        val bindings = GlobalSettingsScaffoldBindings(
+            appVersion = preferencesState.appVersion,
+            isAndroidPlatform = true,
+            behavior = GlobalSettingsBehaviorSectionBindings(
+                text = derivedState.behaviorText,
+                isBackgroundRefreshEnabled = preferencesState.isBackgroundRefreshEnabled,
+                onBackgroundRefreshChanged = preferencesCallbacks.onBackgroundRefreshChanged,
+                isLightweightModeEnabled = preferencesState.isLightweightModeEnabled,
+                onLightweightModeChanged = preferencesCallbacks.onLightweightModeChanged
+            ),
+            catalogMenu = GlobalSettingsCatalogMenuSectionBindings(
+                localCatalogNavEntries = preferencesState.catalogNavEntries,
+                catalogMenuCallbacks = catalogMenuCallbacks
+            ),
+            threadMenu = GlobalSettingsThreadMenuSectionBindings(
+                localThreadMenuEntries = preferencesState.threadMenuEntries,
+                threadMenuCallbacks = threadMenuCallbacks
+            ),
+            save = GlobalSettingsSaveSectionBindings(
+                state = GlobalSettingsSaveSectionState(
+                    text = derivedState.saveText,
+                    preferredFileManagerState = derivedState.preferredFileManagerState,
+                    availableSaveDirectorySelections = listOf(
+                        SaveDirectorySelection.MANUAL_INPUT,
+                        SaveDirectorySelection.PICKER
+                    ),
+                    effectiveSaveDirectorySelection = preferencesState.saveDirectorySelection,
+                    saveDestinationModeLabel = derivedState.saveDestinationModeLabel,
+                    resolvedManualPath = derivedState.resolvedManualPath,
+                    saveDestinationHint = derivedState.saveDestinationHint,
+                    defaultSaveWarningText = derivedState.defaultAndroidSaveWarningText,
+                    manualSaveInput = "Download",
+                    saveDirectoryPickerState = derivedState.saveDirectoryPickerState
+                ),
+                callbacks = GlobalSettingsSaveSectionCallbacks(
+                    onOpenFileManagerPicker = saveCallbacks.onOpenFileManagerPicker,
+                    onClearPreferredFileManager = preferencesCallbacks.onClearPreferredFileManager,
+                    onSaveDirectorySelectionChanged = preferencesCallbacks.onSaveDirectorySelectionChanged,
+                    onManualSaveInputChanged = saveCallbacks.onManualSaveInputChanged,
+                    onResetManualSaveDirectory = saveCallbacks.onResetManualSaveDirectory,
+                    onUpdateManualSaveDirectory = saveCallbacks.onUpdateManualSaveDirectory,
+                    onOpenSaveDirectoryPicker = preferencesCallbacks.onOpenSaveDirectoryPicker,
+                    onFallbackToManualInput = saveCallbacks.onFallbackToManualInput
+                )
+            ),
+            cacheCallbacks = cacheCallbacks,
+            storage = GlobalSettingsStorageSectionBindings(
+                storageSummaryState = derivedState.storageSummaryState,
+                onRefreshStorageStats = cacheCallbacks.refreshStorageStats
+            ),
+            links = GlobalSettingsLinksSectionBindings(
+                settingsEntries = derivedState.settingsEntries,
+                linkCallbacks = linkCallbacks
+            ),
+            snackbarHostState = snackbarHostState,
+            onBack = {}
+        )
+
+        assertEquals("1.2.3", bindings.appVersion)
+        assertTrue(bindings.behavior.isBackgroundRefreshEnabled)
+        assertTrue(bindings.behavior.isLightweightModeEnabled)
+        assertEquals(preferencesState.catalogNavEntries, bindings.catalogMenu.localCatalogNavEntries)
+        assertEquals(preferencesState.threadMenuEntries, bindings.threadMenu.localThreadMenuEntries)
+        assertEquals("現在の設定: Files", bindings.save.state.preferredFileManagerState.currentSettingText)
+        assertEquals("Download", bindings.save.state.manualSaveInput)
+        assertEquals(SaveDirectorySelection.PICKER, bindings.save.state.effectiveSaveDirectorySelection)
+        assertEquals("履歴: 4件", bindings.storage.storageSummaryState.historyText)
+        assertEquals(listOf(cookieSettingsEntry), bindings.links.settingsEntries)
+        assertTrue(bindings.snackbarHostState === snackbarHostState)
+    }
+}

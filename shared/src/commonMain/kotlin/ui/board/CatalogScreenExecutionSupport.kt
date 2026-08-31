@@ -1,0 +1,570 @@
+package com.valoser.futacha.shared.ui.board
+
+import com.valoser.futacha.shared.analytics.AnalyticsTracker
+import com.valoser.futacha.shared.analytics.PerformanceTracker
+import com.valoser.futacha.shared.analytics.analyticsBoardKind
+import com.valoser.futacha.shared.analytics.analyticsCountBucket
+import com.valoser.futacha.shared.analytics.analyticsPresentValue
+import com.valoser.futacha.shared.analytics.analyticsSessionContextId
+import com.valoser.futacha.shared.analytics.analyticsTextHasUrl
+import com.valoser.futacha.shared.analytics.analyticsTextLengthBucket
+import com.valoser.futacha.shared.analytics.analyticsTextLineCountBucket
+import com.valoser.futacha.shared.model.BoardSummary
+import com.valoser.futacha.shared.model.CatalogItem
+import com.valoser.futacha.shared.model.CatalogMode
+import com.valoser.futacha.shared.model.CatalogPageContent
+import com.valoser.futacha.shared.network.ArchiveSearchScope
+import com.valoser.futacha.shared.network.buildDirectArchiveSearchItems
+import com.valoser.futacha.shared.network.searchInqueuetArchiveThreads
+import com.valoser.futacha.shared.repo.BoardRepository
+import com.valoser.futacha.shared.service.HistoryRefresher
+import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.confirmPostingNotice
+import com.valoser.futacha.shared.util.ImageData
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
+import kotlin.coroutines.coroutineContext
+
+internal typealias CatalogPartialUpdate = suspend (CatalogPageContent) -> Unit
+
+internal typealias CatalogLoadItems = suspend (
+    BoardSummary,
+    CatalogMode,
+    CatalogPartialUpdate
+) -> CatalogPageContent
+
+internal fun buildCatalogHistoryRefreshSuccessMessage(): String = "履歴を更新しました"
+
+internal fun buildCatalogHistoryRefreshBusyMessage(): String = "履歴更新はすでに実行中です"
+
+internal fun buildCatalogHistoryRefreshFailureMessage(error: Throwable): String {
+    return "履歴の更新に失敗しました: ${error.message ?: "不明なエラー"}"
+}
+
+internal fun buildCatalogRefreshSuccessMessage(): String = "カタログを更新しました"
+
+internal fun buildCatalogPastThreadSearchClientUnavailableMessage(): String {
+    return "ネットワーククライアントが利用できません"
+}
+
+internal data class CatalogPersistenceBindings(
+    val persistCatalogNgWords: (List<String>) -> Unit,
+    val persistGlobalWatchWords: (List<String>) -> Unit,
+    val persistBoardWatchWords: (List<String>) -> Unit,
+    val clearBoardWatchWordsOverride: () -> Unit
+)
+
+internal fun buildCatalogPersistenceBindings(
+    coroutineScope: CoroutineScope,
+    stateStore: AppStateStore?,
+    currentBoardWatchWordKey: () -> String? = { null },
+    onFallbackCatalogNgWordsChanged: (List<String>) -> Unit,
+    onFallbackWatchWordsChanged: (List<String>) -> Unit
+): CatalogPersistenceBindings {
+    return CatalogPersistenceBindings(
+        persistCatalogNgWords = { updated ->
+            if (stateStore != null) {
+                coroutineScope.launch {
+                    stateStore.setCatalogNgWords(updated)
+                }
+            } else {
+                onFallbackCatalogNgWordsChanged(updated)
+            }
+        },
+        persistGlobalWatchWords = { updated ->
+            if (stateStore != null) {
+                coroutineScope.launch {
+                    stateStore.setWatchWords(updated)
+                }
+            } else {
+                onFallbackWatchWordsChanged(updated)
+            }
+        },
+        persistBoardWatchWords = { updated ->
+            if (stateStore != null) {
+                coroutineScope.launch {
+                    val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
+                    if (boardKey.isNotEmpty()) {
+                        stateStore.setBoardWatchWords(boardKey, updated)
+                    } else {
+                        stateStore.setWatchWords(updated)
+                    }
+                }
+            } else {
+                onFallbackWatchWordsChanged(updated)
+            }
+        },
+        clearBoardWatchWordsOverride = {
+            if (stateStore != null) {
+                coroutineScope.launch {
+                    val boardKey = currentBoardWatchWordKey()?.trim().orEmpty()
+                    if (boardKey.isNotEmpty()) {
+                        stateStore.clearBoardWatchWordsOverride(boardKey)
+                    }
+                }
+            }
+        }
+    )
+}
+
+internal data class CatalogExecutionBindings(
+    val handleHistoryRefresh: () -> Unit,
+    val performRefresh: () -> Unit,
+    val runPastThreadSearch: (String, ArchiveSearchScope?) -> Boolean
+)
+
+internal data class CatalogInitialLoadBindings(
+    val loadInitialCatalog: () -> Unit
+)
+
+internal data class CatalogCreateThreadBindings(
+    val resetCreateThreadDraft: () -> Unit,
+    val submitCreateThread: () -> Unit
+)
+
+internal fun buildCatalogInitialLoadBindings(
+    coroutineScope: CoroutineScope,
+    currentBoard: () -> BoardSummary?,
+    currentCatalogMode: () -> CatalogMode,
+    currentCatalogLoadGeneration: () -> Long,
+    setCatalogLoadGeneration: (Long) -> Unit,
+    currentCatalogLoadJob: () -> Job?,
+    setCatalogLoadJob: (Job?) -> Unit,
+    setIsRefreshing: (Boolean) -> Unit,
+    setCatalogUiState: (CatalogUiState) -> Unit,
+    setLastCatalogItems: (List<CatalogItem>) -> Unit,
+    loadCatalogItems: CatalogLoadItems
+): CatalogInitialLoadBindings {
+    return CatalogInitialLoadBindings(
+        loadInitialCatalog = load@{
+            val board = currentBoard()
+            if (board == null) {
+                setCatalogLoadGeneration(nextCatalogRequestGeneration(currentCatalogLoadGeneration()))
+                currentCatalogLoadJob()?.cancel()
+                setCatalogLoadJob(null)
+                setIsRefreshing(false)
+                setCatalogUiState(CatalogUiState.Error("板が選択されていません"))
+                return@load
+            }
+            val requestGeneration = nextCatalogRequestGeneration(currentCatalogLoadGeneration())
+            setCatalogLoadGeneration(requestGeneration)
+            currentCatalogLoadJob()?.cancel()
+            setIsRefreshing(false)
+            setCatalogUiState(CatalogUiState.Loading)
+            setCatalogLoadJob(
+                coroutineScope.launch {
+                    val runningJob = coroutineContext[Job]
+                    var hasAppliedCatalog = false
+                    suspend fun applyCatalog(catalog: CatalogPageContent) {
+                        if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
+                            return
+                        }
+                        hasAppliedCatalog = true
+                        setCatalogUiState(CatalogUiState.Success(catalog))
+                        setLastCatalogItems(catalog.items)
+                    }
+                    try {
+                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
+                            PerformanceTracker.measureSuspend(
+                                traceName = "catalog_initial_load",
+                                attributes = mapOf(
+                                    "feature" to "catalog",
+                                    "board_kind" to analyticsBoardKind(board.url),
+                                    "mode" to currentCatalogMode().name.lowercase()
+                                )
+                            ) {
+                                loadCatalogItems(board, currentCatalogMode(), ::applyCatalog)
+                            }
+                        }
+                        applyCatalog(catalog)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (
+                            !hasAppliedCatalog &&
+                            shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)
+                        ) {
+                            setCatalogUiState(CatalogUiState.Error(buildCatalogLoadErrorMessage(e)))
+                        }
+                    } finally {
+                        if (runningJob != null && currentCatalogLoadJob() == runningJob) {
+                            setCatalogLoadJob(null)
+                        }
+                    }
+                }
+            )
+        }
+    )
+}
+
+internal fun buildCatalogCreateThreadBindings(
+    coroutineScope: CoroutineScope,
+    activeRepository: BoardRepository,
+    currentBoard: () -> BoardSummary?,
+    stateStore: AppStateStore?,
+    currentDraft: () -> CreateThreadDraft,
+    currentImage: () -> ImageData?,
+    currentIsSubmitting: () -> Boolean,
+    setIsSubmitting: (Boolean) -> Unit,
+    setCreateThreadDraft: (CreateThreadDraft) -> Unit,
+    setCreateThreadImage: (ImageData?) -> Unit,
+    setShowCreateThreadDialog: (Boolean) -> Unit,
+    updateLastUsedDeleteKey: (String) -> Unit,
+    showSnackbar: suspend (String) -> Unit,
+    showCreateThreadFailure: suspend (Throwable) -> Unit = { error ->
+        showSnackbar(buildCreateThreadFailureMessage(error))
+    },
+    performRefresh: () -> Unit
+): CatalogCreateThreadBindings {
+    val resetDraft: () -> Unit = {
+        setCreateThreadDraft(emptyCreateThreadDraft())
+        setCreateThreadImage(null)
+    }
+    return CatalogCreateThreadBindings(
+        resetCreateThreadDraft = resetDraft,
+        submitCreateThread = submit@{
+            if (currentIsSubmitting()) {
+                coroutineScope.launch {
+                    showSnackbar("スレ立て処理中です…")
+                }
+                return@submit
+            }
+            val board = currentBoard()
+            if (board == null) {
+                setShowCreateThreadDialog(false)
+                coroutineScope.launch {
+                    showSnackbar(buildCreateThreadBoardMissingMessage())
+                }
+                return@submit
+            }
+            val draft = currentDraft()
+            val trimmedPassword = normalizeCreateThreadPasswordForSubmit(draft.password)
+            if (trimmedPassword.isNotBlank()) {
+                updateLastUsedDeleteKey(trimmedPassword)
+            }
+            val imageData = currentImage()
+            AnalyticsTracker.event(
+                "thread_create_submitted",
+                mapOf(
+                    "board_kind" to analyticsBoardKind(board.url),
+                    "board_context" to analyticsSessionContextId("board", board.id, board.url),
+                    "has_image" to analyticsPresentValue(imageData),
+                    "has_subject" to analyticsPresentValue(draft.title.takeIf { it.isNotBlank() }),
+                    "has_comment" to analyticsPresentValue(draft.comment.takeIf { it.isNotBlank() }),
+                    "subject_length_bucket" to analyticsTextLengthBucket(draft.title),
+                    "comment_length_bucket" to analyticsTextLengthBucket(draft.comment),
+                    "comment_line_count" to analyticsTextLineCountBucket(draft.comment),
+                    "comment_has_url" to analyticsTextHasUrl(draft.comment)
+                )
+            )
+            setIsSubmitting(true)
+            coroutineScope.launch {
+                try {
+                    val needsPostingNotice = stateStore?.hasShownPostingNotice?.first() == false
+                    if (needsPostingNotice) {
+                        val accepted = confirmPostingNotice()
+                        if (!accepted) {
+                            return@launch
+                        }
+                        stateStore.setHasShownPostingNotice(true)
+                    }
+                    setShowCreateThreadDialog(false)
+                    val threadId = PerformanceTracker.measureSuspend(
+                        traceName = "thread_create",
+                        attributes = mapOf(
+                            "feature" to "posting",
+                            "board_kind" to analyticsBoardKind(board.url),
+                            "has_image" to analyticsPresentValue(imageData)
+                        )
+                    ) {
+                        activeRepository.createThread(
+                            board = board.url,
+                            name = draft.name,
+                            email = draft.email,
+                            subject = draft.title,
+                            comment = draft.comment,
+                            password = trimmedPassword,
+                            imageFile = imageData?.bytes,
+                            imageFileName = imageData?.fileName,
+                            textOnly = imageData == null
+                        )
+                    }
+                    showSnackbar(buildCreateThreadSuccessMessage(threadId))
+                    AnalyticsTracker.event(
+                        "thread_create_result",
+                        mapOf(
+                            "result" to "success",
+                            "board_kind" to analyticsBoardKind(board.url)
+                        )
+                    )
+                    resetDraft()
+                    performRefresh()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AnalyticsTracker.event(
+                        "thread_create_result",
+                        mapOf(
+                            "result" to "failure",
+                            "board_kind" to analyticsBoardKind(board.url),
+                            "error_type" to (e::class.simpleName ?: "unknown")
+                        )
+                    )
+                    showCreateThreadFailure(e)
+                } finally {
+                    setIsSubmitting(false)
+                }
+            }
+        }
+    )
+}
+
+internal fun buildCatalogExecutionBindings(
+    coroutineScope: CoroutineScope,
+    currentIsHistoryRefreshing: () -> Boolean,
+    setIsHistoryRefreshing: (Boolean) -> Unit,
+    onHistoryRefresh: suspend () -> Unit,
+    showSnackbar: suspend (String) -> Unit,
+    currentBoard: () -> BoardSummary?,
+    currentCatalogMode: () -> CatalogMode,
+    currentIsRefreshing: () -> Boolean,
+    currentCatalogLoadGeneration: () -> Long,
+    setCatalogLoadGeneration: (Long) -> Unit,
+    setIsRefreshing: (Boolean) -> Unit,
+    currentCatalogLoadJob: () -> Job?,
+    setCatalogLoadJob: (Job?) -> Unit,
+    setCatalogUiState: (CatalogUiState) -> Unit,
+    setLastCatalogItems: (List<CatalogItem>) -> Unit,
+    loadCatalogItems: CatalogLoadItems,
+    currentPastSearchRuntimeState: () -> CatalogPastSearchRuntimeState,
+    setPastSearchRuntimeState: (CatalogPastSearchRuntimeState) -> Unit,
+    httpClient: HttpClient?,
+    archiveSearchJson: Json
+): CatalogExecutionBindings {
+    return CatalogExecutionBindings(
+        handleHistoryRefresh = handleHistoryRefresh@{
+            if (currentIsHistoryRefreshing()) return@handleHistoryRefresh
+            AnalyticsTracker.event("history_refresh_started", mapOf("source" to "catalog"))
+            setIsHistoryRefreshing(true)
+            coroutineScope.launch {
+                try {
+                    PerformanceTracker.measureSuspend(
+                        traceName = "history_refresh_catalog",
+                        attributes = mapOf("feature" to "history", "source" to "catalog")
+                    ) {
+                        onHistoryRefresh()
+                    }
+                    AnalyticsTracker.event("history_refresh_result", mapOf("source" to "catalog", "result" to "success"))
+                    showSnackbar(buildCatalogHistoryRefreshSuccessMessage())
+                } catch (e: HistoryRefresher.RefreshAlreadyRunningException) {
+                    AnalyticsTracker.event("history_refresh_result", mapOf("source" to "catalog", "result" to "busy"))
+                    showSnackbar(buildCatalogHistoryRefreshBusyMessage())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AnalyticsTracker.event(
+                        "history_refresh_result",
+                        mapOf(
+                            "source" to "catalog",
+                            "result" to "failure",
+                            "error_type" to (e::class.simpleName ?: "unknown")
+                        )
+                    )
+                    showSnackbar(buildCatalogHistoryRefreshFailureMessage(e))
+                } finally {
+                    setIsHistoryRefreshing(false)
+                }
+            }
+        },
+        performRefresh = refresh@{
+            val board = currentBoard() ?: return@refresh
+            when (resolveCatalogRefreshAvailability(currentIsRefreshing())) {
+                CatalogRefreshAvailability.Busy -> return@refresh
+                CatalogRefreshAvailability.Ready -> Unit
+            }
+            AnalyticsTracker.event(
+                "catalog_refresh_started",
+                mapOf(
+                    "board_kind" to analyticsBoardKind(board.url),
+                    "mode" to currentCatalogMode().name.lowercase()
+                )
+            )
+            val requestGeneration = nextCatalogRequestGeneration(currentCatalogLoadGeneration())
+            setCatalogLoadGeneration(requestGeneration)
+            setIsRefreshing(true)
+            currentCatalogLoadJob()?.cancel()
+            setCatalogLoadJob(
+                coroutineScope.launch {
+                    val runningJob = coroutineContext[Job]
+                    var hasAppliedCatalog = false
+                    suspend fun applyCatalog(catalog: CatalogPageContent) {
+                        if (!shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)) {
+                            return
+                        }
+                        hasAppliedCatalog = true
+                        setCatalogUiState(CatalogUiState.Success(catalog))
+                        setLastCatalogItems(catalog.items)
+                    }
+                    try {
+                        clearCatalogWatchSourceCache(board.url)
+                        val catalog = withTimeout(CATALOG_LOAD_TIMEOUT_MS) {
+                            PerformanceTracker.measureSuspend(
+                                traceName = "catalog_manual_refresh",
+                                attributes = mapOf(
+                                    "feature" to "catalog",
+                                    "board_kind" to analyticsBoardKind(board.url),
+                                    "mode" to currentCatalogMode().name.lowercase()
+                                )
+                            ) {
+                                loadCatalogItems(board, currentCatalogMode(), ::applyCatalog)
+                            }
+                        }
+                        applyCatalog(catalog)
+                        AnalyticsTracker.event(
+                            "catalog_refresh_result",
+                            mapOf(
+                                "result" to "success",
+                                "board_kind" to analyticsBoardKind(board.url),
+                                "mode" to currentCatalogMode().name.lowercase(),
+                                "item_count_bucket" to analyticsCountBucket(catalog.items.size)
+                            )
+                        )
+                        showSnackbar(buildCatalogRefreshSuccessMessage())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        if (
+                            !hasAppliedCatalog &&
+                            shouldApplyCatalogRequestResult(isActive, currentCatalogLoadGeneration(), requestGeneration)
+                        ) {
+                            AnalyticsTracker.event(
+                                "catalog_refresh_result",
+                                mapOf(
+                                    "result" to "failure",
+                                    "board_kind" to analyticsBoardKind(board.url),
+                                    "mode" to currentCatalogMode().name.lowercase()
+                                )
+                            )
+                            showSnackbar(buildCatalogRefreshFailureMessage())
+                        }
+                    } finally {
+                        if (
+                            shouldFinalizeCatalogRefresh(
+                                isSameRunningJob = runningJob != null && currentCatalogLoadJob() == runningJob,
+                                currentGeneration = currentCatalogLoadGeneration(),
+                                requestGeneration = requestGeneration
+                            )
+                        ) {
+                            setIsRefreshing(false)
+                            setCatalogLoadJob(null)
+                        }
+                    }
+                }
+            )
+        },
+        runPastThreadSearch = runPastThreadSearch@{ query, scope ->
+            val normalizedQuery = normalizePastThreadSearchQuery(query)
+            AnalyticsTracker.event(
+                "past_thread_search_started",
+                mapOf(
+                    "query_state" to if (normalizedQuery.isBlank()) "blank" else "present",
+                    "scope" to scope.analyticsScopeKind()
+                )
+            )
+            val currentRuntime = currentPastSearchRuntimeState()
+            val requestGeneration = nextCatalogRequestGeneration(currentRuntime.generation)
+            currentRuntime.job?.cancel()
+            setPastSearchRuntimeState(
+                currentRuntime.copy(
+                    state = ArchiveSearchState.Loading,
+                    generation = requestGeneration,
+                    job = null
+                )
+            )
+            setPastSearchRuntimeState(
+                coroutineScope.launch {
+                    val runningJob = coroutineContext[Job]
+                    try {
+                        val items = PerformanceTracker.measureSuspend(
+                            traceName = "past_thread_search",
+                            attributes = mapOf(
+                                "feature" to "archive_search",
+                                "scope" to scope.analyticsScopeKind(),
+                                "query_state" to if (normalizedQuery.isBlank()) "blank" else "present"
+                            )
+                        ) {
+                            val directItems = buildDirectArchiveSearchItems(normalizedQuery, scope)
+                            when {
+                                normalizedQuery.isBlank() -> emptyList()
+                                httpClient != null -> searchInqueuetArchiveThreads(
+                                    httpClient = httpClient,
+                                    archiveSearchJson = archiveSearchJson,
+                                    query = normalizedQuery,
+                                    scope = scope
+                                )
+                                directItems.isNotEmpty() -> directItems
+                                else -> throw IllegalStateException(
+                                    buildCatalogPastThreadSearchClientUnavailableMessage()
+                                )
+                            }
+                        }
+                        if (!shouldApplyCatalogRequestResult(isActive, currentPastSearchRuntimeState().generation, requestGeneration)) {
+                            return@launch
+                        }
+                        setPastSearchRuntimeState(
+                            currentPastSearchRuntimeState().copy(state = ArchiveSearchState.Success(items))
+                        )
+                        AnalyticsTracker.event(
+                            "past_thread_search_result",
+                            mapOf(
+                                "result" to "success",
+                                "scope" to scope.analyticsScopeKind(),
+                                "item_count_bucket" to analyticsCountBucket(items.size)
+                            )
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (error: Throwable) {
+                        AnalyticsTracker.event(
+                            "past_thread_search_result",
+                            mapOf(
+                                "result" to "failure",
+                                "scope" to scope.analyticsScopeKind(),
+                                "error_type" to (error::class.simpleName ?: "unknown")
+                            )
+                        )
+                        if (shouldApplyCatalogRequestResult(isActive, currentPastSearchRuntimeState().generation, requestGeneration)) {
+                            setPastSearchRuntimeState(
+                                currentPastSearchRuntimeState().copy(
+                                    state = ArchiveSearchState.Error(buildPastThreadSearchErrorMessage(error))
+                                )
+                            )
+                        }
+                    } finally {
+                        if (runningJob != null && currentPastSearchRuntimeState().job == runningJob) {
+                            setPastSearchRuntimeState(
+                                currentPastSearchRuntimeState().copy(job = null)
+                            )
+                        }
+                    }
+                }.let { job ->
+                    currentPastSearchRuntimeState().copy(job = job)
+                }
+            )
+            true
+        }
+    )
+}
+
+private fun ArchiveSearchScope?.analyticsScopeKind(): String {
+    return if (this == null) "default" else "scoped"
+}

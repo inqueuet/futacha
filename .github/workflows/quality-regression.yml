@@ -1,0 +1,108 @@
+name: Quality regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "23 17 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic:
+    name: Shared and Android deterministic checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Validate contracts, run unit tests, and build the debug APK
+        run: ./gradlew qualityGate --no-daemon
+      - name: Upload failure reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deterministic-reports
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+
+  android-instrumented:
+    name: Android UI API ${{ matrix.api-level }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [26, 29, 32, 33, 37]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Run all Android device tests
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: ./gradlew :app-android:connectedDebugAndroidTest --no-daemon
+      - name: Upload Android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ui-api-${{ matrix.api-level }}
+          path: |
+            app-android/build/reports/androidTests/**
+            app-android/build/outputs/androidTest-results/**
+
+  ios:
+    name: iOS UI ${{ matrix.device }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ["iPhone SE (3rd generation)", "iPhone 16 Pro"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Run Kotlin Native tests and link the simulator framework
+        run: ./gradlew :shared:iosSimulatorArm64Test :shared:linkDebugFrameworkIosSimulatorArm64 --no-daemon
+      - name: Install iOS dependencies
+        # The Gradle task creates Compose's CocoaPods resource directory
+        # before invoking pod install. A direct pod install on a clean checkout
+        # silently omits that missing directory and produces a crashing app.
+        run: ./gradlew :shared:podInstall --no-daemon
+      - name: Run both-profile iOS UI tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -workspace iosApp/iosApp.xcworkspace \
+            -scheme iosApp \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=${{ matrix.device }},OS=latest' \
+            -resultBundlePath 'build/ios-${{ strategy.job-index }}.xcresult' \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Upload iOS result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-quality-results-${{ strategy.job-index }}
+          path: build/ios-${{ strategy.job-index }}.xcresult

@@ -1,0 +1,34 @@
+platform :ios, '15.0'
+use_modular_headers!
+
+target 'iosApp' do
+  pod 'shared', :path => '../shared'
+  pod 'FirebaseAnalytics'
+  pod 'FirebasePerformance'
+  pod 'FirebaseCrashlytics'
+end
+
+post_install do |installer|
+  firebase_core_extension_dummy = installer.sandbox.root + 'FirebaseCoreExtension/FirebaseCore/Extension/dummy.m'
+  if File.exist?(firebase_core_extension_dummy)
+    dummy_source = File.read(firebase_core_extension_dummy)
+    unless dummy_source.include?('FutachaFirebaseCoreExtensionDummySymbol')
+      File.chmod(0644, firebase_core_extension_dummy)
+      File.open(firebase_core_extension_dummy, 'a') do |file|
+        file.puts
+        file.puts 'void FutachaFirebaseCoreExtensionDummySymbol(void) {}'
+      end
+    end
+  end
+
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
+      current_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+      if current_target.nil? || Gem::Version.new(current_target) < Gem::Version.new('12.0')
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '12.0'
+      end
+    end
+
+  end
+end
