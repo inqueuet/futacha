@@ -71,7 +71,7 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 158
+        versionCode = 159
         versionName = "9.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
