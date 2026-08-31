@@ -2,8 +2,13 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -20,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 
@@ -66,14 +72,63 @@ internal fun CompatChangeLogScreen(
         },
         containerColor = LocalCompatibilityPalette.current.background
     ) { padding ->
-        CompatReferenceChangeLogView(
-            html = FUTACHA_CHANGE_LOG_HTML,
+        CompatChangeLogContent(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .testTag("compat-change-log-content"),
-            onLinkClicked = {}
+                .testTag("compat-change-log-content")
         )
+    }
+}
+
+@Composable
+internal fun CompatChangeLogContent(modifier: Modifier = Modifier) {
+    val palette = LocalCompatibilityPalette.current
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = 16.dp,
+            top = 12.dp,
+            end = 16.dp,
+            bottom = 28.dp
+        ),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        items(FUTACHA_CHANGE_LOG_ENTRIES, key = FutachaChangeLogEntry::version) { entry ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("compat-change-log-version-${entry.version}"),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = entry.version,
+                    color = palette.chrome,
+                    fontSize = 24.sp,
+                    lineHeight = 30.sp
+                )
+                entry.changes.forEachIndexed { index, change ->
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "•",
+                            color = palette.text,
+                            fontSize = 17.sp,
+                            lineHeight = 26.sp,
+                            modifier = Modifier.width(20.dp)
+                        )
+                        Text(
+                            text = change,
+                            color = palette.text,
+                            fontSize = 17.sp,
+                            lineHeight = 26.sp,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("compat-change-log-body-${entry.version}-$index")
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

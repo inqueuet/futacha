@@ -31,6 +31,13 @@ internal val FUTACHA_CHANGE_LOG_HTML: String = """
         </style>
     </head>
     <body>
+    <h2>9.9</h2>
+    <ul>
+        <li>としあき（仮）モードの更新履歴を、Android／iOSとも読みやすい文字サイズと行間で表示するよう修正しました。</li>
+        <li>としあき（仮）モードの画像一覧で、PNG/APNGの判定結果を再利用し、画面を開き直すたびに同じ画像へ確認通信が発生する問題を修正しました。</li>
+        <li>書き込み制限時の1時間待ち案内を維持しつつ、待機後にCookieの削除と再発行が繰り返される問題を修正し、サーバーからの理由も表示するようにしました。</li>
+        <li>ソースコードをGitHub（https://github.com/inqueuet/futacha）で再公開しました。</li>
+    </ul>
     <h2>9.8</h2>
     <ul>
         <li>ふたちゃモードの板一覧一括追加を、取得先の入力なしで利用できるようにし、取得できる全板を正しく登録するよう修正しました。</li>
@@ -503,6 +510,37 @@ internal val FUTACHA_CHANGE_LOG_HTML: String = """
     </body>
     </html>
 """.trimIndent()
+
+internal data class FutachaChangeLogEntry(
+    val version: String,
+    val changes: List<String>
+)
+
+private val futachaChangeLogSectionRegex = Regex(
+    pattern = """(?s)<h2>([^<]+)</h2>\s*<ul>(.*?)</ul>"""
+)
+private val futachaChangeLogItemRegex = Regex(
+    pattern = """(?s)<li>(.*?)</li>"""
+)
+
+/**
+ * The release-note source is also used by publication tooling as HTML, but the
+ * in-app history is rendered with Compose so Android WebView scale/density
+ * settings cannot shrink the text to physical-pixel size (#70).
+ */
+internal fun parseFutachaChangeLogEntries(html: String): List<FutachaChangeLogEntry> =
+    futachaChangeLogSectionRegex.findAll(html).map { section ->
+        FutachaChangeLogEntry(
+            version = section.groupValues[1].trim(),
+            changes = futachaChangeLogItemRegex.findAll(section.groupValues[2])
+                .map { item -> item.groupValues[1].trim() }
+                .toList()
+        )
+    }.filter { it.version.isNotEmpty() && it.changes.isNotEmpty() }
+        .toList()
+
+internal val FUTACHA_CHANGE_LOG_ENTRIES: List<FutachaChangeLogEntry> =
+    parseFutachaChangeLogEntries(FUTACHA_CHANGE_LOG_HTML)
 
 internal data class FutachaLicenseAsset(val id: String, val text: String)
 

@@ -33,6 +33,13 @@ import coil3.request.ErrorResult
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
 import coil3.size.Size
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteReadChannel
 import com.valoser.futacha.compat.AndroidCompatibilityStore
 import com.valoser.futacha.shared.compat.CompatBoard
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
@@ -51,6 +58,7 @@ import com.valoser.futacha.shared.ui.compat.CompatibilityApp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -66,6 +74,7 @@ class CompatViewerGestureInstrumentedTest {
     private val databaseName = "compat_viewer_gesture_${System.currentTimeMillis()}.db"
     private lateinit var store: AndroidCompatibilityStore
     private var testImageLoader: ImageLoader? = null
+    private var testHttpClient: HttpClient? = null
     private val boardUrl = "https://may.2chan.net/b/"
     private val threadUrl = "https://may.2chan.net/b/res/1234567890.htm"
 
@@ -110,6 +119,7 @@ class CompatViewerGestureInstrumentedTest {
 
     @After
     fun closeStore() {
+        testHttpClient?.close()
         testImageLoader?.shutdown()
         if (::store.isInitialized) runBlocking { store.closeForTest() }
         context.deleteDatabase(databaseName)
@@ -314,6 +324,99 @@ class CompatViewerGestureInstrumentedTest {
         }
         check(derivedThumbnailRequests.get() == 0) {
             "Apu-small image probed a derived thumbnail before its cached source"
+        }
+    }
+
+    @Test
+    fun galleryReopenDoesNotRepeatStaticPngApngProbe() {
+        val sourceUrl = "https://dec.2chan.net/up2/src/fu7189334.png"
+        runBlocking {
+            val tabKey = compatTabKey(canonicalizeThreadUrl(threadUrl)!!.canonicalUrl)
+            store.saveThreadSnapshot(
+                CompatThreadSnapshot(
+                    tabKey = tabKey,
+                    revision = 2L,
+                    fetchedAtEpochMillis = 2L,
+                    posts = listOf(post(0, "1", sourceUrl))
+                )
+            )
+        }
+        val apngProbeRequests = AtomicInteger(0)
+        val unexpectedSecondProbe = CompletableDeferred<Unit>()
+        val staticPngPrefix = byteArrayOf(
+            0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+            0, 0, 0, 0,
+            'I'.code.toByte(), 'D'.code.toByte(), 'A'.code.toByte(), 'T'.code.toByte(),
+            0, 0, 0, 0
+        )
+        testHttpClient = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    if (request.url.toString() == sourceUrl) {
+                        val count = apngProbeRequests.incrementAndGet()
+                        if (count > 1) unexpectedSecondProbe.complete(Unit)
+                        check(request.headers[HttpHeaders.Range] == "bytes=0-1048575") {
+                            "APNG marker request was not bounded: ${request.headers[HttpHeaders.Range]}"
+                        }
+                        respond(
+                            content = ByteReadChannel(staticPngPrefix),
+                            status = HttpStatusCode.PartialContent,
+                            headers = headersOf(HttpHeaders.ContentType, "image/png")
+                        )
+                    } else {
+                        respond("", HttpStatusCode.NotFound)
+                    }
+                }
+            }
+        }
+        val interceptor = object : Interceptor {
+            override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
+                if (chain.request.data.toString() != sourceUrl) return chain.proceed()
+                return SuccessResult(
+                    image = bitmap(android.graphics.Color.CYAN, 96, 48).asImage(),
+                    request = chain.request,
+                    dataSource = DataSource.MEMORY
+                )
+            }
+        }
+        testImageLoader = ImageLoader.Builder(context).components { add(interceptor) }.build()
+        rule.setContent {
+            MaterialTheme {
+                CompatibilityApp(
+                    store = store,
+                    repository = null,
+                    httpClient = testHttpClient,
+                    imageLoader = testImageLoader,
+                    initialThreadDeepLink = threadUrl,
+                    onExitApplication = {}
+                )
+            }
+        }
+
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithContentDescription("画像一覧")
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .isNotEmpty()
+        }
+        rule.onNodeWithContentDescription("画像一覧").performClick()
+        rule.waitUntil(5_000) { apngProbeRequests.get() == 1 }
+        rule.onNodeWithTag("compat-gallery-item-1").assertIsDisplayed()
+
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("画像一覧")
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .isNotEmpty()
+        }
+        rule.onNodeWithContentDescription("画像一覧").performClick()
+        rule.onNodeWithTag("compat-gallery-item-1").assertIsDisplayed()
+        rule.waitForIdle()
+
+        val repeated = runBlocking {
+            withTimeoutOrNull(750) { unexpectedSecondProbe.await() }
+        }
+        check(repeated == null && apngProbeRequests.get() == 1) {
+            "Static PNG APNG probe repeated after gallery reopen: ${apngProbeRequests.get()} requests"
         }
     }
 

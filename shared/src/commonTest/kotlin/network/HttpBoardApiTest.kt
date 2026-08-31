@@ -453,6 +453,11 @@ class HttpBoardApiTest {
             val form = decodeFormBody(capturedRequest)
             assertEquals("https://may.2chan.net/b/futaba.php?mode=catset", capturedRequest.url.toString())
             assertEquals("https://may.2chan.net/b/futaba.php?mode=catset", capturedRequest.headers[HttpHeaders.Referrer])
+            assertEquals(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+                capturedRequest.headers[HttpHeaders.UserAgent]
+            )
             assertEquals("catset", form["mode"])
             assertEquals("5", form["cx"])
             assertEquals("60", form["cy"])

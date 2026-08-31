@@ -856,7 +856,7 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
-    fun defaultBoardRepositoryExecutionSupport_replacesIpRestrictionWithEstimatedWaitFromPosttime() = runBlocking {
+    fun defaultBoardRepositoryExecutionSupport_preservesIpRestrictionAndAppendsEstimatedWaitFromPosttime() = runBlocking {
         val boardUrl = "https://may.2chan.net/b/"
         val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
         val cookieRepository = CookieRepository(storage)
@@ -873,9 +873,10 @@ class DefaultBoardRepositoryTest {
         )
 
         assertTrue(enriched is NetworkException)
-        assertTrue(enriched.message!!.startsWith("あと約58分20秒投稿できません"))
-        assertFalse(enriched.message!!.contains("あなたのIPからは投稿できません"))
-        assertFalse(enriched.message!!.contains("posttime"))
+        assertTrue(enriched.message!!.contains("あなたのIPからは投稿できません"))
+        assertTrue(enriched.message!!.contains("あと約58分20秒投稿できない可能性があります"))
+        assertTrue(enriched.message!!.contains("1時間基準の推定です"))
+        assertTrue(enriched.message!!.contains("保存済み情報は削除せず"))
     }
 
     @Test
@@ -900,7 +901,7 @@ class DefaultBoardRepositoryTest {
     }
 
     @Test
-    fun defaultBoardRepositoryExecutionSupport_suggestsCookieDeletionWhenPosttimeIsTooOld() = runBlocking {
+    fun defaultBoardRepositoryExecutionSupport_preservesServerErrorAfterEstimatedWaitWithoutCookieDeletionGuidance() = runBlocking {
         val boardUrl = "https://may.2chan.net/b/"
         val storage = PersistentCookieStorage(InMemoryFileSystem(), STORAGE_PATH)
         val cookieRepository = CookieRepository(storage)
@@ -921,10 +922,11 @@ class DefaultBoardRepositoryTest {
         )
 
         assertTrue(enriched is NetworkException)
-        assertEquals(
-            "投稿用 Cookie が古い可能性があります。Cookie 画面で posttime と ptmt を削除してから、もう一度投稿してください",
-            enriched.message
-        )
+        assertTrue(enriched.message!!.contains("あなたのIPからは投稿できません"))
+        assertTrue(enriched.message!!.contains("1時間の推定待機時間を過ぎました"))
+        assertTrue(enriched.message!!.contains("保存済み情報は削除せず"))
+        assertFalse(enriched.message!!.contains("Cookie が古い"))
+        assertFalse(enriched.message!!.contains("posttime と ptmt を削除"))
     }
 
     @Test

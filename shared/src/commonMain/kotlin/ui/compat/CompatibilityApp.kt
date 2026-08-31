@@ -795,6 +795,7 @@ private fun CompatibilityAppContent(
     onExitApplication: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val apngMarkerCache = remember(scope) { CompatApngMarkerCache(scope) }
     val updateCheckEnabled by produceState(initialValue = true, stateStore) {
         stateStore?.isUpdateCheckEnabled?.collect { value = it }
     }
@@ -3222,6 +3223,7 @@ private fun CompatibilityAppContent(
                         preferences = preferences,
                         ngRules = ngRules,
                         httpClient = httpClient,
+                        apngMarkerCache = apngMarkerCache,
                         fileSystem = fileSystem,
                         cookieRepository = cookieRepository,
                         onOpenViewer = { index, postNo ->

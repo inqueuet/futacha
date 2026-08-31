@@ -1493,13 +1493,17 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        let changeLog = app.webViews.firstMatch
-        XCTAssertTrue(changeLog.waitForExistence(timeout: 10))
-        XCTAssertTrue(changeLog.staticTexts["9.4"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["9.9"].waitForExistence(timeout: 10))
+        let readableChange = app.staticTexts[
+            "としあき（仮）モードの更新履歴を、Android／iOSとも読みやすい文字サイズと行間で表示するよう修正しました。"
+        ]
         XCTAssertTrue(
-            changeLog.staticTexts[
-                "ライセンス表示を、アプリで実際に使用している内容に合わせて修正します。"
-            ].waitForExistence(timeout: 10)
+            readableChange.waitForExistence(timeout: 10)
+        )
+        XCTAssertGreaterThanOrEqual(
+            readableChange.frame.height,
+            20,
+            "The change-log body regressed to an unreadably small rendered font."
         )
         let changeLogScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         changeLogScreenshot.name = "toshiaki-change-log-readable"

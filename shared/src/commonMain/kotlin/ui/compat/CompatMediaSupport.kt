@@ -22,6 +22,11 @@ import io.ktor.client.request.request
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
@@ -723,6 +728,82 @@ private const val COMPAT_EXIF_HEADER_LIMIT_BYTES = 1_048_576
 private const val COMPAT_MEDIA_INFO_TIMEOUT_MILLIS = 8_000L
 private const val COMPAT_APNG_SCAN_LIMIT_BYTES = 1_048_576
 private val compatApngScanSemaphore = Semaphore(2)
+
+/**
+ * App-scope cache for the APNG badge lookup performed by the compatibility
+ * gallery. Both positive and negative results are retained: a static PNG must
+ * not trigger another Range request every time the gallery is reopened (#73).
+ */
+internal class CompatApngMarkerCache(
+    private val scope: CoroutineScope,
+    private val maxEntries: Int = 1_024
+) {
+    private val mutex = Mutex()
+    private val values = LinkedHashMap<String, Boolean>()
+    private val inFlight = mutableMapOf<String, Deferred<Result<Boolean>>>()
+
+    init {
+        require(maxEntries > 0) { "maxEntries must be positive" }
+    }
+
+    suspend fun get(url: String): Boolean? = mutex.withLock {
+        takeCached(normalizeKey(url))
+    }
+
+    suspend fun getOrLoad(
+        url: String,
+        loader: suspend () -> Result<Boolean>
+    ): Result<Boolean> {
+        val key = normalizeKey(url)
+        var created = false
+        val request = mutex.withLock {
+            takeCached(key)?.let { return Result.success(it) }
+            inFlight[key] ?: scope.async(start = CoroutineStart.LAZY) {
+                try {
+                    loader().also { result ->
+                        mutex.withLock {
+                            if (result.isSuccess) putCached(key, result.getOrThrow())
+                        }
+                    }
+                } finally {
+                    // Cancellation must not leave a completed/cancelled request in
+                    // the de-duplication map and permanently poison this URL.
+                    withContext(NonCancellable) {
+                        mutex.withLock { inFlight.remove(key) }
+                    }
+                }
+            }.also {
+                inFlight[key] = it
+                created = true
+            }
+        }
+        if (created) request.start()
+        return request.await()
+    }
+
+    suspend fun invalidate(url: String) {
+        mutex.withLock { values.remove(normalizeKey(url)) }
+    }
+
+    internal suspend fun cachedEntryCount(): Int = mutex.withLock { values.size }
+
+    private fun takeCached(key: String): Boolean? {
+        val value = values.remove(key) ?: return null
+        values[key] = value
+        return value
+    }
+
+    private fun putCached(key: String, value: Boolean) {
+        values.remove(key)
+        values[key] = value
+        while (values.size > maxEntries) {
+            values.remove(values.keys.first())
+        }
+    }
+
+    private fun normalizeKey(url: String): String =
+        normalizeCompatApuSmallMediaUrl(url.trim()).substringBefore('#')
+}
 
 /**
  * Detect the APNG animation-control chunk without decoding the image. The scan stops at

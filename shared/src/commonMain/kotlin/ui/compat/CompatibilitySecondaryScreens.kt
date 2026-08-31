@@ -3888,6 +3888,7 @@ internal fun CompatGalleryScreen(
     preferences: Map<String, String>,
     ngRules: List<CompatNgRule>,
     httpClient: HttpClient?,
+    apngMarkerCache: CompatApngMarkerCache,
     fileSystem: FileSystem?,
     cookieRepository: CookieRepository? = null,
     onOpenViewer: (Int, String?) -> Unit,
@@ -4457,10 +4458,14 @@ internal fun CompatGalleryScreen(
                             ?.substringBefore('?')
                             ?.substringBefore('#')
                             ?.endsWith(".png", ignoreCase = true) == true
-                        LaunchedEffect(mediaIdentity, originalMediaUrl, httpClient) {
+                        LaunchedEffect(mediaIdentity, originalMediaUrl, httpClient, apngMarkerCache) {
                             if (isPng && mediaIdentity !in apngMarkers) {
                                 apngMarkers[mediaIdentity] = httpClient
-                                    ?.let { fetchCompatApngMarker(it, originalMediaUrl).getOrDefault(false) }
+                                    ?.let { client ->
+                                        apngMarkerCache.getOrLoad(originalMediaUrl) {
+                                            fetchCompatApngMarker(client, originalMediaUrl)
+                                        }.getOrDefault(false)
+                                    }
                                     ?: false
                             }
                         }

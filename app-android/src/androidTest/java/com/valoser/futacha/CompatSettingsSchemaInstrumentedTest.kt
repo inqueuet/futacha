@@ -343,6 +343,14 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-9.9-0")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }
+        assertTrue(
+            "change-log body must use readable density-aware Compose text",
+            firstChangeBounds.height >= minimumReadableLineHeight
+        )
         rule.onNodeWithContentDescription("ストア").assertIsDisplayed()
         rule.onNodeWithContentDescription("ヘルプ").performClick()
         rule.onNodeWithText("ヘルプ").assertIsDisplayed()
