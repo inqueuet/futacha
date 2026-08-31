@@ -59,7 +59,7 @@ OS 固有機能を除き、画面、状態管理、通信、HTML 解析、保存
 ├── iosApp/        SwiftUI ホスト、Xcode プロジェクト、watchOS ホスト
 ├── shared/        共通 UI、状態、通信、解析、保存、プラットフォーム実装
 ├── quality/       機能・挙動・リリース確認用の回帰契約
-└── .github/       CI ワークフロー
+└── tools/         開発者環境の構築・検査スクリプト
 ```
 
 `shared/src/` の主な領域は次のとおりです。
@@ -185,7 +185,7 @@ Firebase の設定ファイルがなくてもビルドと起動は可能です�
 ./gradlew validateQualityContracts
 ```
 
-CI では JDK 17 を使い、共通テスト、Android の複数 API レベルでの UI テスト、iOS Simulator の Native / UI テストを実行します。
+GitHub Actions は使用しません。JDK 17 の開発者環境で `qualityGate` を実行し、リリース前は `docs/device-regression-runbook.md` と `quality/release-device-matrix.tsv` に従って Android / iOS の端末テストを完了させます。
 
 ## データとネットワークについて
 
