@@ -64,4 +64,29 @@ class CompatDeletedPostPresentationTest {
             compatThreadNoticeForDisplay("このスレは管理者により削除されました")
         )
     }
+
+    @Test
+    fun visibleDeletedPostKeepsOriginalBodyColourAndLimitsRedToTheNotice() {
+        val notice = COMPAT_ADMIN_DELETED_POST_NOTICE
+        val originalBody = "元の本文"
+        val visibleDeleted = post("3", isDeleted = true).copy(
+            messageHtml = "$notice\n$originalBody"
+        )
+
+        assertFalse(compatPostBodyUsesAlertColor(visibleDeleted))
+        assertEquals(
+            listOf(CompatDeletedNoticeRange(0, notice.length)),
+            compatDeletedNoticeRanges(visibleDeleted, visibleDeleted.messageHtml)
+        )
+        assertTrue(
+            compatDeletedNoticeRanges(visibleDeleted, visibleDeleted.messageHtml)
+                .all { range -> range.endExclusive <= visibleDeleted.messageHtml.indexOf(originalBody) }
+        )
+
+        val hiddenDeleted = presentCompatPostsForDeletedVisibility(
+            listOf(visibleDeleted),
+            showDeletedContent = false
+        ).single()
+        assertTrue(compatPostBodyUsesAlertColor(hiddenDeleted))
+    }
 }

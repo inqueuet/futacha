@@ -95,8 +95,18 @@ private let ugcEulaDefaultsKey = "review.ugc_eula_accepted_version"
 
 struct ComposeView: UIViewControllerRepresentable {
     final class Coordinator {
+        private static let issue78ArchiveFixture: Bool = {
+#if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-futacha.issue78.archive_fixture")
+#else
+            false
+#endif
+        }()
+
         lazy var controller: UIViewController = FutachaComposeHostViewController(
-            content: MainViewControllerKt.MainViewController()
+            content: MainViewControllerKt.MainViewController(
+                issue78ArchiveFixture: Self.issue78ArchiveFixture
+            )
         )
     }
 

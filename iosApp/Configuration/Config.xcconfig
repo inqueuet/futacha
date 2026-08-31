@@ -5,8 +5,8 @@ WATCH_PROVISIONING_PROFILE_SPECIFIER=
 PRODUCT_NAME=futacha
 PRODUCT_BUNDLE_IDENTIFIER=com.valoser.futacha
 
-CURRENT_PROJECT_VERSION=161
-MARKETING_VERSION=9.9
+CURRENT_PROJECT_VERSION=162
+MARKETING_VERSION=10.0
 
 // Optional developer/release settings. This file is intentionally ignored.
 #include? "Local.xcconfig"

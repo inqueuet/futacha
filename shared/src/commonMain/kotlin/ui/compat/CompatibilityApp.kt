@@ -11716,8 +11716,7 @@ private fun CompatPostRow(
                     sourceWidth = post.thumbnailWidth
                         ?: intrinsicSize.width.toInt().takeIf { it > 0 },
                     sourceHeight = post.thumbnailHeight
-                        ?: intrinsicSize.height.toInt().takeIf { it > 0 },
-                    keepStableFrame = isUpsMedia
+                        ?: intrinsicSize.height.toInt().takeIf { it > 0 }
                 )
             }
             val hasOriginalFallback =
@@ -11836,13 +11835,23 @@ private fun CompatInlineApuSmallPreviews(
                     .build(),
                 imageLoader = imageLoader
             )
+            val painterState by painter.state.collectAsState()
+            val intrinsicSize = painter.intrinsicSize
+            val bounds = remember(thumbnailSize, painterState) {
+                compatThreadThumbnailBounds(
+                    maxSize = thumbnailSize,
+                    sourceWidth = intrinsicSize.width.toInt().takeIf { it > 0 },
+                    sourceHeight = intrinsicSize.height.toInt().takeIf { it > 0 }
+                )
+            }
             Image(
                 painter = painter,
                 contentDescription = "あぷ小画像を開く",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .padding(start = 10.dp, end = 10.dp, bottom = 5.dp)
-                    .size(thumbnailSize.dp)
+                    .width(bounds.first.dp)
+                    .height(bounds.second.dp)
                     .compatPrivacyImageEffect(privacyAlpha)
                     .combinedClickable(
                         onClick = { onUrlClick(sourceUrl) },
@@ -12436,16 +12445,27 @@ private fun CompatMessageText(
     val inlineLinks = remember(post.messageHtml) { compatInlineLinks(post.messageHtml) }
     val palette = LocalCompatibilityPalette.current
     val searchTextHighlight = palette.searchTextHighlight
+    val deletedNoticeRanges = remember(post, message) {
+        compatDeletedNoticeRanges(post, message)
+    }
     val annotated = remember(
         message,
         inlineLinks,
         searchRanges,
+        deletedNoticeRanges,
         searchTextHighlight,
         palette.bodyLink,
         palette.bodyQuote
     ) {
         buildAnnotatedString {
             append(message)
+            deletedNoticeRanges.forEach { range ->
+                addStyle(
+                    SpanStyle(color = Color.Red),
+                    range.start.coerceIn(0, length),
+                    range.endExclusive.coerceIn(0, length)
+                )
+            }
             message.lineSequence().fold(0) { offset, line ->
                 val trimmed = line.trimStart()
                 if (trimmed.startsWith(">") || trimmed.startsWith("＞")) {
@@ -12512,10 +12532,10 @@ private fun CompatMessageText(
             // font selected in compatibility settings with the platform font
             // for every thread body.
             fontFamily = MaterialTheme.typography.bodyMedium.fontFamily,
-            color = when {
-                post.isContentRedacted -> Color.Red
-                post.isDeleted -> Color.Red
-                else -> LocalCompatibilityPalette.current.text
+            color = if (compatPostBodyUsesAlertColor(post)) {
+                Color.Red
+            } else {
+                LocalCompatibilityPalette.current.text
             }
         ),
         onTextLayout = { textLayoutResult = it },

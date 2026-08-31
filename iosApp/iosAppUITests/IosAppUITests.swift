@@ -1493,9 +1493,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["9.9"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.0"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "としあき（仮）モードの更新履歴を、Android／iOSとも読みやすい文字サイズと行間で表示するよう修正しました。"
+            "新規取得だけでなく、修正前から端末に残る過去ログキャッシュでもファイル名末尾の「[見る]」を除去するよう修正しました。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)
@@ -2568,6 +2568,49 @@ final class IosAppUITests: XCTestCase {
             app.staticTexts["チュートリアル＠ふたちゃ"].waitForExistence(timeout: 15),
             "Accepting the EULA did not start the content browser."
         )
+    }
+
+    func testIssue78PersistedArchiveLabelsAreAbsentFromBodyAndQuoteOnDevice() {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-experience.profile_generation", "1178",
+            "-futacha.issue78.archive_fixture"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let visibleElements = app.descendants(matching: .any)
+        let bodyLabels = visibleElements.matching(
+            NSPredicate(format: "label CONTAINS %@", "りんみ")
+        )
+        let labelsLoaded = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in bodyLabels.count >= 1 },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [labelsLoaded], timeout: 20),
+            .completed,
+            "The Issue #78 body and quoted uploader labels did not render."
+        )
+        XCTAssertTrue(visibleElements.matching(
+            NSPredicate(format: "label CONTAINS %@", "りんみ")
+        ).firstMatch.exists)
+        XCTAssertTrue(visibleElements.matching(
+            NSPredicate(format: "label CONTAINS %@", "失恋はほむらもだろ…")
+        ).firstMatch.exists)
+        XCTAssertEqual(
+            visibleElements.matching(
+                NSPredicate(format: "label CONTAINS %@", "[見る]")
+            ).count,
+            0,
+            "Issue #78 regressed: a persisted archive label still contains [見る]."
+        )
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "issue78-ios-device"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     /// Opt-in device smoke test for the cold, real-network thread path.

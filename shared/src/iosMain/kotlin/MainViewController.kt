@@ -63,6 +63,12 @@ import com.valoser.futacha.shared.compat.modernBoardsToCompatibility
 import com.valoser.futacha.shared.compat.mergeCompatibilityHistory
 import com.valoser.futacha.shared.compat.compatibilityHistorySharedMetadata
 import com.valoser.futacha.shared.compat.CompatForegroundNetworkPolicy
+import com.valoser.futacha.shared.compat.CompatBoard
+import com.valoser.futacha.shared.compat.CompatPostSnapshot
+import com.valoser.futacha.shared.compat.CompatTab
+import com.valoser.futacha.shared.compat.CompatThreadSnapshot
+import com.valoser.futacha.shared.compat.compatBoardKey
+import com.valoser.futacha.shared.compat.compatTabKey
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_EXISTENCE_TIME_PREFERENCE
 import com.valoser.futacha.shared.compat.COMPAT_BACKGROUND_UPDATE_TIME_PREFERENCE
 import com.valoser.futacha.shared.compat.compatForegroundLastCheckStoredValue
@@ -604,7 +610,59 @@ private class IosHttpClientLease : RememberObserver {
     override fun onAbandoned() = release()
 }
 
-fun MainViewController(): UIViewController {
+private const val IOS_ISSUE_78_THREAD_URL =
+    "https://img.2chan.net/b/res/1463510009.htm"
+
+private suspend fun seedIosIssue78ArchiveFixture(store: IosCompatibilityStore) {
+    val boardUrl = "https://img.2chan.net/b/"
+    val boardKey = compatBoardKey(boardUrl)
+    val tabKey = compatTabKey(IOS_ISSUE_78_THREAD_URL)
+    val sourceUrl = "https://dec.2chan.net/up2/src/fu7190971.png"
+    val revision = kotlin.time.Clock.System.now().toEpochMilliseconds()
+    store.upsertBoard(
+        CompatBoard(boardKey, "二次元裏", boardUrl, boardUrl, sortOrder = 0)
+    )
+    store.openTab(
+        CompatTab(
+            key = tabKey,
+            canonicalUrl = IOS_ISSUE_78_THREAD_URL,
+            originalUrl = IOS_ISSUE_78_THREAD_URL,
+            boardKey = boardKey,
+            boardName = "二次元裏",
+            threadNo = "1463510009",
+            title = "生成残量回復...15%！",
+            replyCount = 1,
+            insertedAtEpochMillis = revision,
+            contentUpdatedAtEpochMillis = revision,
+            snapshotRevision = revision
+        )
+    )
+    store.saveThreadSnapshot(
+        CompatThreadSnapshot(
+            tabKey = tabKey,
+            revision = revision,
+            fetchedAtEpochMillis = revision,
+            posts = listOf(
+                CompatPostSnapshot(
+                    position = 0,
+                    postNo = "1463510009",
+                    timestamp = "26/08/30(日)12:09:25",
+                    messageHtml =
+                        "<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>りんみ"
+                ),
+                CompatPostSnapshot(
+                    position = 1,
+                    postNo = "1463510029",
+                    timestamp = "26/08/30(日)12:09:30",
+                    messageHtml =
+                        "&gt;<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>失恋はほむらもだろ…"
+                )
+            )
+        )
+    )
+}
+
+fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
     return ComposeUIViewController {
         val stateStore = remember { IosAppGraph.stateStore }
         val fileSystem = remember { IosAppGraph.fileSystem }
@@ -674,6 +732,9 @@ fun MainViewController(): UIViewController {
                     )
                 )
                 compatibilityStore.initialize()
+                if (issue78ArchiveFixture) {
+                    seedIosIssue78ArchiveFixture(compatibilityStore)
+                }
                 // ChangeLogActivity in the reference APK stores this value in
                 // NSUserDefaults. Migrate it once into the namespaced KMP
                 // compatibility store; the argument domain also lets iOS UI
@@ -703,6 +764,9 @@ fun MainViewController(): UIViewController {
             }.onSuccess {
                 initializationComplete = true
                 initializationError = null
+                if (issue78ArchiveFixture) {
+                    platformThreadDeepLink = IOS_ISSUE_78_THREAD_URL
+                }
             }.onFailure { error ->
                 Logger.e("MainViewController", "Failed to initialize iOS compatibility profile", error)
                 initializationError = error.message ?: "互換モードの初期化に失敗しました"

@@ -17,6 +17,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.captureToImage
@@ -160,6 +161,83 @@ class CompatSettingsSchemaInstrumentedTest {
             store.savePreference("compat.commonUsedVersion", "1.0")
         }
         imageLoader = ImageLoader.Builder(context).build()
+    }
+
+    @Test
+    fun issue78PersistedArchiveLabelsAreAbsentFromBodyAndQuoteOnDevice() {
+        val boardUrl = "https://img.2chan.net/b/"
+        val boardKey = compatBoardKey(boardUrl)
+        val threadUrl = "${boardUrl}res/1463510009.htm"
+        val tabKey = compatTabKey(threadUrl)
+        val sourceUrl = "https://dec.2chan.net/up2/src/fu7190971.png"
+        runBlocking {
+            store.upsertBoard(CompatBoard(boardKey, "二次元裏", boardUrl, boardUrl, 0))
+            store.openTab(
+                CompatTab(
+                    key = tabKey,
+                    canonicalUrl = threadUrl,
+                    originalUrl = threadUrl,
+                    boardKey = boardKey,
+                    boardName = "二次元裏",
+                    threadNo = "1463510009",
+                    title = "生成残量回復...15%！",
+                    replyCount = 1,
+                    insertedAtEpochMillis = 1L,
+                    contentUpdatedAtEpochMillis = 1L,
+                    snapshotRevision = 1L
+                )
+            )
+            store.saveThreadSnapshot(
+                CompatThreadSnapshot(
+                    tabKey = tabKey,
+                    revision = 1L,
+                    fetchedAtEpochMillis = 1L,
+                    posts = listOf(
+                        CompatPostSnapshot(
+                            position = 0,
+                            postNo = "1463510009",
+                            timestamp = "26/08/30(日)12:09:25",
+                            messageHtml =
+                                "<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>りんみ"
+                        ),
+                        CompatPostSnapshot(
+                            position = 1,
+                            postNo = "1463510029",
+                            timestamp = "26/08/30(日)12:09:30",
+                            messageHtml =
+                                "&gt;<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>失恋はほむらもだろ…"
+                        )
+                    )
+                )
+            )
+        }
+
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme {
+                    CompatibilityApp(
+                        store = store,
+                        repository = null,
+                        initialThreadDeepLink = threadUrl,
+                        onExitApplication = {}
+                    )
+                }
+            }
+        }
+
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithTag("compat-thread-post-1463510029", useUnmergedTree = true)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .isNotEmpty()
+        }
+        rule.onNodeWithText("りんみ", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("失恋はほむらもだろ…", substring = true).assertIsDisplayed()
+        rule.onAllNodesWithText("[見る]", substring = true).assertCountEquals(0)
+
+        val screenshot = rule.onRoot().captureToImage().asAndroidBitmap()
+        context.openFileOutput("issue78-android-device.png", Context.MODE_PRIVATE).use { output ->
+            assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output))
+        }
     }
 
     @Test
@@ -343,7 +421,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-9.9-0")
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.0-0")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }

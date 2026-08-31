@@ -295,9 +295,43 @@ class CompatMediaSupportTest {
         assertEquals(250 to 125, compatThreadThumbnailBounds(250, 1600, 800))
         assertEquals(125 to 250, compatThreadThumbnailBounds(250, 800, 1600))
         assertEquals(250 to 250, compatThreadThumbnailBounds(250, null, null))
+    }
+
+    @Test
+    fun apuSmallThumbnailBoundsUseDecodedLandscapeAspectRatio() {
+        assertEquals(250 to 140, compatThreadThumbnailBounds(250, 1920, 1080))
+        assertEquals(140 to 250, compatThreadThumbnailBounds(250, 1080, 1920))
+    }
+
+    @Test
+    fun persistedArchiveApuLabelsAreNormalizedBeforePresentation() {
+        val sourceUrl = "https://dec.2chan.net/up2/src/fu7190971.png"
+        val body = normalizeCompatPostMedia(
+            CompatPostSnapshot(
+                position = 191,
+                postNo = "1463510009",
+                timestamp = "26/08/30(日)12:09:25",
+                messageHtml =
+                    "<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>りんみ"
+            )
+        )
+        val quote = normalizeCompatPostMedia(
+            CompatPostSnapshot(
+                position = 192,
+                postNo = "1463510029",
+                timestamp = "26/08/30(日)12:09:30",
+                messageHtml =
+                    "&gt;<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>失恋はほむらもだろ…"
+            )
+        )
+
         assertEquals(
-            250 to 250,
-            compatThreadThumbnailBounds(250, 1600, 800, keepStableFrame = true)
+            "<a href=\"$sourceUrl\">fu7190971.png</a><br>りんみ",
+            body.messageHtml
+        )
+        assertEquals(
+            "&gt;<a href=\"$sourceUrl\">fu7190971.png</a><br>失恋はほむらもだろ…",
+            quote.messageHtml
         )
     }
 

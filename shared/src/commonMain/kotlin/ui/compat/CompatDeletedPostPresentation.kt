@@ -5,6 +5,11 @@ import com.valoser.futacha.shared.compat.CompatPostSnapshot
 internal const val COMPAT_ISOLATED_POST_NOTICE = "削除依頼によって隔離されました"
 internal const val COMPAT_ADMIN_DELETED_POST_NOTICE = "スレッドを立てた人によって削除されました"
 
+internal data class CompatDeletedNoticeRange(
+    val start: Int,
+    val endExclusive: Int
+)
+
 private val compatDeletedResponseCountNoticeRegex = Regex(
     """削除された記事が\s*\d+\s*件あります"""
 )
@@ -44,4 +49,33 @@ internal fun presentCompatPostsForDeletedVisibility(
             isContentRedacted = true
         )
     }
+}
+
+/**
+ * A redacted row consists only of the synthetic deletion notice and therefore
+ * keeps the reference client's alert colour. When deleted content is visible,
+ * however, the original body must use the normal theme text colour; only the
+ * server-provided deletion notice remains red.
+ */
+internal fun compatPostBodyUsesAlertColor(post: CompatPostSnapshot): Boolean =
+    post.isContentRedacted
+
+internal fun compatDeletedNoticeRanges(
+    post: CompatPostSnapshot,
+    plainMessage: String
+): List<CompatDeletedNoticeRange> {
+    if (post.isContentRedacted || (!post.isDeleted && !post.isIsolated)) return emptyList()
+    return listOf(COMPAT_ISOLATED_POST_NOTICE, COMPAT_ADMIN_DELETED_POST_NOTICE)
+        .flatMap { notice ->
+            buildList {
+                var fromIndex = 0
+                while (fromIndex < plainMessage.length) {
+                    val start = plainMessage.indexOf(notice, startIndex = fromIndex)
+                    if (start < 0) break
+                    add(CompatDeletedNoticeRange(start, start + notice.length))
+                    fromIndex = start + notice.length
+                }
+            }
+        }
+        .sortedBy(CompatDeletedNoticeRange::start)
 }

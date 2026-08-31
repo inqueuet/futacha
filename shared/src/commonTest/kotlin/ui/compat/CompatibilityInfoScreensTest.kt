@@ -12,7 +12,7 @@ class CompatibilityInfoScreensTest {
 
         assertEquals(
             listOf(
-                "9.9", "9.8", "9.7", "9.6", "9.5", "9.4", "9.3", "9.1", "9.0", "8.9", "8.8", "8.6", "8.5", "8.4", "8.2", "8.0",
+                "10.0", "9.9", "9.8", "9.7", "9.6", "9.5", "9.4", "9.3", "9.1", "9.0", "8.9", "8.8", "8.6", "8.5", "8.4", "8.2", "8.0",
                 "7.8", "7.7", "7.5", "7.2", "7.1", "6.7", "6.6", "6.3", "6.2", "6.1", "6.0",
                 "5.9", "5.8", "5.6", "5.4", "5.3", "5.1", "5.0", "4.9", "4.7", "4.6", "4.4",
                 "4.2", "4.1", "4.0", "3.9", "3.8", "3.7", "3.6", "3.4", "3.3", "3.2", "3.0",
@@ -40,6 +40,9 @@ class CompatibilityInfoScreensTest {
         assertTrue("待機後にCookieの削除と再発行が繰り返される問題" in FUTACHA_CHANGE_LOG_HTML)
         assertTrue("サーバーからの理由も表示" in FUTACHA_CHANGE_LOG_HTML)
         assertTrue("GitHub（https://github.com/inqueuet/futacha）で再公開" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("修正前から端末に残る過去ログキャッシュ" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("削除・隔離通知だけを赤く" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("横長のあぷ小サムネイルを正しい縦横比" in FUTACHA_CHANGE_LOG_HTML)
         assertFalse(Regex("""20[0-9]{2}-[0-9]{2}-[0-9]{2}""").containsMatchIn(FUTACHA_CHANGE_LOG_HTML))
         assertFalse("build " in FUTACHA_CHANGE_LOG_HTML)
         assertFalse("開発中" in FUTACHA_CHANGE_LOG_HTML)
@@ -47,7 +50,7 @@ class CompatibilityInfoScreensTest {
         assertFalse("build.gradle上に存在しない版数" in FUTACHA_CHANGE_LOG_HTML)
         assertTrue(FUTACHA_CHANGE_LOG_ENTRIES.all { it.changes.isNotEmpty() })
         assertTrue(
-            FUTACHA_CHANGE_LOG_ENTRIES.first().changes.first().startsWith("としあき（仮）モードの更新履歴")
+            FUTACHA_CHANGE_LOG_ENTRIES.first().changes.first().startsWith("新規取得だけでなく")
         )
     }
 

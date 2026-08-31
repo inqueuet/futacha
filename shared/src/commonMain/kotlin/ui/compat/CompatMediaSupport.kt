@@ -42,15 +42,9 @@ import com.valoser.futacha.shared.ui.image.futabaExtensionFallbackPolicy
 internal fun compatThreadThumbnailBounds(
     maxSize: Int,
     sourceWidth: Int?,
-    sourceHeight: Int?,
-    keepStableFrame: Boolean = false
+    sourceHeight: Int?
 ): Pair<Int, Int> {
     val edge = maxSize.coerceAtLeast(1)
-    // あぷ小 has no dimensions in the thread HTML.  Resizing its container
-    // after Coil decodes the source makes the following text jump sideways.
-    // Keep the reference client's configured square slot and fit the bitmap
-    // inside it instead.
-    if (keepStableFrame) return edge to edge
     val width = sourceWidth?.takeIf { it > 0 } ?: return edge to edge
     val height = sourceHeight?.takeIf { it > 0 } ?: return edge to edge
     return if (width >= height) {
@@ -211,12 +205,23 @@ internal fun compatVisibleInlineApuSmallMediaUrls(
     .orEmpty()
 
 internal fun normalizeCompatPostMedia(post: CompatPostSnapshot): CompatPostSnapshot {
+    // #78: snapshots written by builds before the archive-label fix can
+    // survive an upgrade. Normalise the persisted body as it enters every
+    // thread/gallery presentation path, not only immediately after a fresh
+    // archive response has been fetched.
+    val normalizedMessageHtml = normalizeCompatArchiveApuViewLabelHtml(post.messageHtml)
     val normalizedImageUrl = post.imageUrl?.let(::normalizeCompatApuSmallMediaUrl)
     val normalizedThumbnailUrl = post.thumbnailUrl?.let(::normalizeCompatApuSmallMediaUrl)
     val normalizedPost = if (
-        normalizedImageUrl != post.imageUrl || normalizedThumbnailUrl != post.thumbnailUrl
+        normalizedMessageHtml != post.messageHtml ||
+        normalizedImageUrl != post.imageUrl ||
+        normalizedThumbnailUrl != post.thumbnailUrl
     ) {
-        post.copy(imageUrl = normalizedImageUrl, thumbnailUrl = normalizedThumbnailUrl)
+        post.copy(
+            messageHtml = normalizedMessageHtml,
+            imageUrl = normalizedImageUrl,
+            thumbnailUrl = normalizedThumbnailUrl
+        )
     } else post
     if (normalizedPost.imageUrl != null) {
         val apuFileName = compatApuSmallMediaFileName(normalizedPost.imageUrl)

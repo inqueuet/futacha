@@ -33,6 +33,11 @@ private val compatArchiveApuViewSuffixRegex = Regex(
     """(?i)((?:fu|f)\d+\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))\s*\[見る](?=\s*(?:</a\s*>)|$)"""
 )
 
+internal fun normalizeCompatArchiveApuViewLabelHtml(messageHtml: String): String =
+    compatArchiveApuViewSuffixRegex.replace(messageHtml) { match ->
+        match.groupValues[1]
+    }
+
 /**
  * Some archive HTML adds a viewer-only `[見る]` suffix to an あぷ／あぷ小
  * filename. The reference app presents only the filename. Restrict the trim
@@ -42,9 +47,7 @@ private val compatArchiveApuViewSuffixRegex = Regex(
 internal fun normalizeCompatArchiveApuViewLabels(page: ThreadPage): ThreadPage = page.copy(
     posts = page.posts.map { post ->
         post.copy(
-            messageHtml = compatArchiveApuViewSuffixRegex.replace(post.messageHtml) { match ->
-                match.groupValues[1]
-            }
+            messageHtml = normalizeCompatArchiveApuViewLabelHtml(post.messageHtml)
         )
     }
 )
