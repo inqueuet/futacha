@@ -51,6 +51,17 @@ class CompatibilityCoreTest {
     }
 
     @Test
+    fun compatPlainTextRemovesFtbucketPreviewControlButKeepsOrdinaryText() {
+        val html =
+            "<a href=\"other/fu7199371.png\">fu7199371.png</a>" +
+                "<span onclick=\"previewImg('id','other/fu7199371.png')\">[見る]</span><br>" +
+                "本文[見る]"
+
+        assertEquals("fu7199371.png\n本文[見る]", html.toCompatPlainText())
+        assertEquals("fu7199371.png\n返信", "fu7199371.png[見る]<br>返信".toCompatPlainText())
+    }
+
+    @Test
     fun searchNormalizationFoldsReferenceCaseWidthAndHalfWidthKana() {
         assertEquals("abc ガッツポーズ", normalizeCompatSearchText("ＡｂＣ　ｶﾞｯﾂﾎﾟｰｽﾞ"))
         assertEquals("パピプペポ", normalizeCompatSearchText("ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ"))

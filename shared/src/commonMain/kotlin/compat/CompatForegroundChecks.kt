@@ -126,7 +126,8 @@ fun CompatThreadSnapshot.toThreadPage(threadId: String): ThreadPage = ThreadPage
     deletedNotice = deletedNotice,
     isTruncated = isTruncated,
     truncationReason = truncationReason,
-    posts = posts.map { cached ->
+    posts = posts.map { rawCached ->
+        val cached = normalizeCompatPostMedia(rawCached)
         Post(
             id = cached.postNo,
             order = cached.position,

@@ -30,6 +30,53 @@ internal val FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN: String =
         .sortedByDescending { it.length }
         .joinToString("|") { Regex.escape(it) }
 
+private const val FUTABA_ARCHIVE_APU_VIEW_OPEN_BRACKET_PATTERN =
+    "(?:\\[|［|&#0*91;|&#x0*5b;|&lbrack;)"
+private const val FUTABA_ARCHIVE_APU_VIEW_CLOSE_BRACKET_PATTERN =
+    "(?:\\]|］|&#0*93;|&#x0*5d;|&rbrack;)"
+private val futabaArchiveApuViewSpanRegex = Regex(
+    pattern =
+        "(?is)(<a\\b[^>]{0,1000}>\\s*((?:fu|f)\\d+\\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))" +
+            "\\s*</a\\s*>)\\s*<span\\b[^>]{0,1000}>\\s*" +
+            "$FUTABA_ARCHIVE_APU_VIEW_OPEN_BRACKET_PATTERN\\s*見る\\s*" +
+            "$FUTABA_ARCHIVE_APU_VIEW_CLOSE_BRACKET_PATTERN\\s*</span\\s*>",
+)
+private val futabaArchiveApuViewAdjacentRegex = Regex(
+    pattern =
+        "(?i)((?:fu|f)\\d+\\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))" +
+            "(\\s*</a\\s*>)?\\s*" +
+            "$FUTABA_ARCHIVE_APU_VIEW_OPEN_BRACKET_PATTERN\\s*見る\\s*" +
+            "$FUTABA_ARCHIVE_APU_VIEW_CLOSE_BRACKET_PATTERN" +
+            "(?=\\s*(?:</a\\s*>|<br\\b[^>]*>|</?(?:font|span|blockquote|div|p|td)\\b[^>]*>|$))",
+)
+private val futabaArchiveApuViewPlainTextRegex = Regex(
+    pattern =
+        "(?i)((?:fu|f)\\d+\\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))\\s*" +
+            "$FUTABA_ARCHIVE_APU_VIEW_OPEN_BRACKET_PATTERN\\s*見る\\s*" +
+            "$FUTABA_ARCHIVE_APU_VIEW_CLOSE_BRACKET_PATTERN(?=\\s*(?:\\r?\\n|$))",
+)
+
+/**
+ * Removes FTBucket's generated preview control from an あぷ／あぷ小 filename.
+ *
+ * Current captures use `<a>fu123.png</a><span ...>[見る]</span>`, while older
+ * snapshots can contain the label inside the anchor or as bare text. Keep
+ * ordinary prose and unrelated links intact by requiring both an uploader
+ * filename and an HTML line/block boundary.
+ */
+fun normalizeFutabaArchiveApuViewLabelHtml(messageHtml: String): String {
+    val withoutPreviewSpan = futabaArchiveApuViewSpanRegex.replace(messageHtml) { match ->
+        match.groupValues[1]
+    }
+    return futabaArchiveApuViewAdjacentRegex.replace(withoutPreviewSpan) { match ->
+        match.groupValues[1] + match.groupValues[2]
+    }
+}
+
+/** Presentation fallback for legacy snapshots whose HTML tags were already removed. */
+internal fun normalizeFutabaArchiveApuViewLabelText(text: String): String =
+    futabaArchiveApuViewPlainTextRegex.replace(text) { match -> match.groupValues[1] }
+
 internal enum class FutabaMediaKind {
     IMAGE,
     VIDEO,

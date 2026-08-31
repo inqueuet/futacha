@@ -207,4 +207,28 @@ class CompatibilityDataSharingTest {
         assertEquals(480, page.posts.single().thumbnailHeight)
         assertEquals(listOf("122"), page.posts.single().quoteReferences.single().targetPostIds)
     }
+
+    @Test
+    fun legacySharedSnapshotDropsFtbucketPreviewControlInModernPage() {
+        val snapshot = CompatThreadSnapshot(
+            tabKey = compatTabKey("https://img.2chan.net/b/res/123.htm"),
+            revision = 1L,
+            fetchedAtEpochMillis = 1L,
+            posts = listOf(
+                CompatPostSnapshot(
+                    position = 0,
+                    postNo = "123",
+                    timestamp = "",
+                    messageHtml =
+                        "<a href=\"other/fu7199371.png\">fu7199371.png</a>" +
+                            "<span onclick=\"previewImg('id','other/fu7199371.png')\">[見る]</span><br>本文"
+                )
+            )
+        )
+
+        assertEquals(
+            "<a href=\"other/fu7199371.png\">fu7199371.png</a><br>本文",
+            snapshot.toThreadPage("123").posts.single().messageHtml
+        )
+    }
 }

@@ -772,7 +772,7 @@ class ThreadHtmlParserCoreTest {
             <html><body>
             <div class="thre" data-res="1415555300">
               <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.1415555300</span>
-              <blockquote><a href="/cache/fu7190971.png">fu7190971.png[見る]</a><br>本文</blockquote>
+              <blockquote><a href="/cache/fu7190971.png">fu7190971.png</a><span onclick="previewImg('body','/cache/fu7190971.png')">[見る]</span><br>本文</blockquote>
             </div>
             </body></html>
         """.trimIndent()
@@ -786,6 +786,10 @@ class ThreadHtmlParserCoreTest {
 
         assertEquals("https://dec.2chan.net/up2/src/fu7190971.png", page.posts.single().imageUrl)
         assertEquals(null, page.posts.single().thumbnailUrl)
+        assertEquals(
+            "<a href=\"/cache/fu7190971.png\">fu7190971.png</a><br>本文",
+            page.posts.single().messageHtml
+        )
     }
 
     @Test
@@ -794,7 +798,7 @@ class ThreadHtmlParserCoreTest {
             <html><body>
             <div class="thre" data-res="1415555301">
               <span class="cnw">25/01/01(月)00:00:00 ID:OP</span><span class="cno">No.1415555301</span>
-              <blockquote><font color="#789922">&gt;<a href="/cache/fu7190971.png">fu7190971.png[見る]</a></font><br>返信</blockquote>
+              <blockquote><font color="#789922">&gt;<a href="/cache/fu7190971.png">fu7190971.png</a><span onclick="previewImg('quote','/cache/fu7190971.png')">[見る]</span></font><br>返信</blockquote>
             </div>
             </body></html>
         """.trimIndent()
@@ -808,6 +812,10 @@ class ThreadHtmlParserCoreTest {
 
         assertEquals(null, page.posts.single().imageUrl)
         assertEquals(null, page.posts.single().thumbnailUrl)
+        assertEquals(
+            "<font color=\"#789922\">&gt;<a href=\"/cache/fu7190971.png\">fu7190971.png</a></font><br>返信",
+            page.posts.single().messageHtml
+        )
     }
 }
 

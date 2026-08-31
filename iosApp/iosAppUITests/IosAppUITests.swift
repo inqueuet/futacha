@@ -1493,9 +1493,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.0"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.1"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "新規取得だけでなく、修正前から端末に残る過去ログキャッシュでもファイル名末尾の「[見る]」を除去するよう修正しました。"
+            "過去ログ本文・引用のあぷ／あぷ小ファイル名に付く「[見る]」が、過去ログ側のHTML形式によっては残る問題を修正しました。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)
@@ -2611,6 +2611,26 @@ final class IosAppUITests: XCTestCase {
         screenshot.name = "issue78-ios-device"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+    }
+
+    func testIssue78SavedHtmlViewerRemovesFtbucketPreviewControl() {
+        let app = makeApplication()
+        app.launchArguments.append("-futacha.issue78.saved_html_fixture")
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["保存済みスレ"].waitForExistence(timeout: 20))
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "label CONTAINS %@", "保存本文")
+            ).firstMatch.waitForExistence(timeout: 10)
+        )
+        XCTAssertEqual(
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "label CONTAINS %@", "[見る]")
+            ).count,
+            0,
+            "Issue #78 regressed in the saved HTML viewer."
+        )
     }
 
     /// Opt-in device smoke test for the cold, real-network thread path.

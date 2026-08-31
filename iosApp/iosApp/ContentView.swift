@@ -34,12 +34,44 @@ final class SavedHtmlDocumentStore: ObservableObject {
     }
 }
 
+#if DEBUG
+private enum SavedHtmlUITestFixture {
+    private static var didOpen = false
+
+    static func openIfRequested() {
+        guard !didOpen,
+              ProcessInfo.processInfo.arguments.contains("-futacha.issue78.saved_html_fixture") else {
+            return
+        }
+        didOpen = true
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("issue78-saved-thread.htm")
+        let html = """
+        <html><head><meta charset="UTF-8"></head><body>
+        <a target=_blank href="other/fu7199371.png">fu7199371.png</a><span
+          id="preview" onclick="previewImg('preview','other/fu7199371.png')">[見る]</span><br>保存本文
+        </body></html>
+        """
+        guard (try? html.write(to: url, atomically: true, encoding: .utf8)) != nil else { return }
+        _ = SavedHtmlDocumentStore.shared.openIfSupported(url)
+    }
+}
+#endif
+
 private struct SavedHtmlWebView: UIViewRepresentable {
     let url: URL
 
     private func sanitizedHTML() -> String? {
         guard var html = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let rules: [(String, String)] = [
+            (
+                #"(?is)(<a\b[^>]{0,1000}>\s*(?:fu|f)\d+\.(?:gif|jpe?g|jpe|png|webp|bmp|apng|avif|webm|mp4|m4v|mov|mkv|avi|ts|flv)\s*</a\s*>)\s*<span\b[^>]{0,1000}>\s*(?:\[|［|&#0*91;|&#x0*5b;|&lbrack;)\s*見る\s*(?:\]|］|&#0*93;|&#x0*5d;|&rbrack;)\s*</span\s*>"#,
+                "$1"
+            ),
+            (
+                #"(?i)((?:fu|f)\d+\.(?:gif|jpe?g|jpe|png|webp|bmp|apng|avif|webm|mp4|m4v|mov|mkv|avi|ts|flv))(\s*</a\s*>)?\s*(?:\[|［|&#0*91;|&#x0*5b;|&lbrack;)\s*見る\s*(?:\]|］|&#0*93;|&#x0*5d;|&rbrack;)(?=\s*(?:</a\s*>|<br\b[^>]*>|</?(?:font|span|blockquote|div|p|td)\b[^>]*>|$))"#,
+                "$1$2"
+            ),
             (#"(?is)<script\b[^>]*>.*?</script\s*>"#, ""),
             (#"(?is)<(?:iframe|object|embed)\b[^>]*>.*?</(?:iframe|object|embed)\s*>"#, ""),
             (#"(?i)\b(src|href)\s*=\s*(['\"])\s*(?:https?:)?//.*?\2"#, "$1=$2#$2"),
@@ -223,6 +255,11 @@ struct ContentView: View {
         }
         .sheet(item: $savedHtmlStore.document, onDismiss: savedHtmlStore.close) { document in
             SavedHtmlDocumentView(document: document)
+        }
+        .onAppear {
+#if DEBUG
+            SavedHtmlUITestFixture.openIfRequested()
+#endif
         }
     }
 

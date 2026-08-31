@@ -312,7 +312,8 @@ class CompatMediaSupportTest {
                 postNo = "1463510009",
                 timestamp = "26/08/30(日)12:09:25",
                 messageHtml =
-                    "<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>りんみ"
+                    "<a href=\"$sourceUrl\">fu7190971.png</a>" +
+                        "<span onclick=\"previewImg('body','$sourceUrl')\">[見る]</span><br>りんみ"
             )
         )
         val quote = normalizeCompatPostMedia(
@@ -321,7 +322,8 @@ class CompatMediaSupportTest {
                 postNo = "1463510029",
                 timestamp = "26/08/30(日)12:09:30",
                 messageHtml =
-                    "&gt;<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>失恋はほむらもだろ…"
+                    "&gt;<a href=\"$sourceUrl\">fu7190971.png</a>" +
+                        "<span onclick=\"previewImg('quote','$sourceUrl')\">[見る]</span><br>失恋はほむらもだろ…"
             )
         )
 
@@ -881,7 +883,7 @@ class CompatMediaSupportTest {
                 position = 0,
                 postNo = "812",
                 timestamp = "",
-                messageHtml = "<a href=\"$archiveUrl\">fu7190971.png[見る]</a>",
+                messageHtml = "<a href=\"$archiveUrl\">fu7190971.png</a><span>[見る]</span>",
                 imageUrl = archiveUrl,
                 thumbnailUrl = archiveUrl
             )
@@ -904,7 +906,7 @@ class CompatMediaSupportTest {
                 position = 0,
                 postNo = "813",
                 timestamp = "",
-                messageHtml = "&gt;<a href=\"$archiveUrl\">fu7190971.png[見る]</a>",
+                messageHtml = "&gt;<a href=\"$archiveUrl\">fu7190971.png</a><span>[見る]</span>",
                 imageUrl = archiveUrl,
                 thumbnailUrl = archiveUrl
             )

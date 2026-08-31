@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.model.SaveStatus
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
 import io.ktor.http.ContentType
 import kotlin.text.RegexOption
 
@@ -99,7 +100,7 @@ internal fun rewriteSavedOriginalHtml(
     urlToPathMap: Map<String, String>,
     stripExternalResources: Boolean
 ): String {
-    var updated = html
+    var updated = normalizeFutabaArchiveApuViewLabelHtml(html)
     if (stripExternalResources) {
         updated = stripSavedExternalScriptsAndIframes(updated)
         updated = insertSavedHtmlContentSecurityPolicy(updated)

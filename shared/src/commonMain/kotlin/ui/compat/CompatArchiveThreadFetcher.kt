@@ -2,7 +2,7 @@ package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.ThreadPage
-import com.valoser.futacha.shared.media.FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
 import com.valoser.futacha.shared.network.buildInqueuetArchiveThreadUrlFromUrl
 import com.valoser.futacha.shared.network.readBoundedHttpResponseBytes
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
@@ -29,14 +29,8 @@ private val ftbucketContentLinkRegex = Regex(
 private val ftbucketMetaRedirectRegex = Regex(
     """(?i)(?:url|URL)\s*=\s*([^\s;\"']+)"""
 )
-private val compatArchiveApuViewSuffixRegex = Regex(
-    """(?i)((?:fu|f)\d+\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))\s*\[見る](?=\s*(?:</a\s*>)|$)"""
-)
-
 internal fun normalizeCompatArchiveApuViewLabelHtml(messageHtml: String): String =
-    compatArchiveApuViewSuffixRegex.replace(messageHtml) { match ->
-        match.groupValues[1]
-    }
+    normalizeFutabaArchiveApuViewLabelHtml(messageHtml)
 
 /**
  * Some archive HTML adds a viewer-only `[見る]` suffix to an あぷ／あぷ小

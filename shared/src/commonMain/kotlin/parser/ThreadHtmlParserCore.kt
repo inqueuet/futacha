@@ -7,6 +7,7 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN
 import com.valoser.futacha.shared.media.mediaFileExtension
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
 import com.valoser.futacha.shared.util.replaceHtmlBreakTags
 import com.valoser.futacha.shared.util.stripHtmlTagsLinear
 import kotlinx.coroutines.CancellationException
@@ -394,6 +395,7 @@ internal object ThreadHtmlParserCore {
         val timestamp = timestampRaw.orEmpty()
         val messageHtml = extractBetween(block, blockquoteRegex, blockquoteEndRegex, timeoutMillis = 100L)
             ?.let(::cleanMessageHtml)
+            ?.let(::normalizeFutabaArchiveApuViewLabelHtml)
             .orEmpty()
         // An archive can wrap visible media links inside the post body.  They
         // remain tappable inline links, but are not Futaba's structured

@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.compat
 
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelText
 import com.valoser.futacha.shared.parser.HtmlEntityDecoder
 
 private val compatNumericQuote = Regex(
@@ -22,9 +24,10 @@ private val compatMediaUrlFileName = Regex(
 
 /** Converts the small HTML subset retained by the compatibility snapshot into tappable text. */
 fun String.toCompatPlainText(): String = HtmlEntityDecoder.decode(
-    replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+    normalizeFutabaArchiveApuViewLabelHtml(this)
+        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
         .replace(Regex("<[^>]+>"), "")
-)
+).let(::normalizeFutabaArchiveApuViewLabelText)
 
 fun String.normalizeCompatQuoteText(): String = trim().replace(Regex("\\s+"), " ")
 

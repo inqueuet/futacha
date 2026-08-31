@@ -198,14 +198,16 @@ class CompatSettingsSchemaInstrumentedTest {
                             postNo = "1463510009",
                             timestamp = "26/08/30(日)12:09:25",
                             messageHtml =
-                                "<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>りんみ"
+                                "<a href=\"$sourceUrl\">fu7190971.png</a>" +
+                                    "<span onclick=\"previewImg('body','$sourceUrl')\">[見る]</span><br>りんみ"
                         ),
                         CompatPostSnapshot(
                             position = 1,
                             postNo = "1463510029",
                             timestamp = "26/08/30(日)12:09:30",
                             messageHtml =
-                                "&gt;<a href=\"$sourceUrl\">fu7190971.png[見る]</a><br>失恋はほむらもだろ…"
+                                "&gt;<a href=\"$sourceUrl\">fu7190971.png</a>" +
+                                    "<span onclick=\"previewImg('quote','$sourceUrl')\">[見る]</span><br>失恋はほむらもだろ…"
                         )
                     )
                 )
@@ -421,7 +423,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.0-0")
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.1-0")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }

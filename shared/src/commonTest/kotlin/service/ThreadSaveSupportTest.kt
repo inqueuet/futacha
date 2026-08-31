@@ -588,6 +588,30 @@ class ThreadSaveSupportTest {
     }
 
     @Test
+    fun rewriteSavedOriginalHtml_removesFtbucketPreviewControlsOnly() {
+        val rewritten = rewriteSavedOriginalHtml(
+            html = """
+                <html><head><meta charset="UTF-8"></head><body>
+                  <blockquote><a target=_blank href="other/fu7199371.png">fu7199371.png</a><span
+                    id="preview" style="cursor:pointer;"
+                    onclick="previewImg('preview','other/fu7199371.png')">[見る]</span><br>本文[見る]</blockquote>
+                  <blockquote>&gt;<a href="other/fu7199371.png">fu7199371.png</a><span>[見る]</span><br>引用</blockquote>
+                  <a href="https://example.com/page">通常リンク[見る]</a>
+                </body></html>
+            """.trimIndent(),
+            boardPath = "b",
+            urlToPathMap = emptyMap(),
+            stripExternalResources = true
+        )
+
+        assertTrue(rewritten.contains("<a target=_blank href=\"other/fu7199371.png\">fu7199371.png</a><br>本文[見る]"))
+        assertTrue(rewritten.contains("&gt;<a href=\"other/fu7199371.png\">fu7199371.png</a><br>引用"))
+        assertTrue(rewritten.contains("<a href=\"https://example.com/page\">通常リンク[見る]</a>"))
+        assertFalse(rewritten.contains("<span>[見る]</span>"))
+        assertFalse(rewritten.contains("id=\"preview\""))
+    }
+
+    @Test
     fun rewriteSavedOriginalHtml_addsUtf8ToContentTypeMetaWithoutCharset() {
         val rewritten = rewriteSavedOriginalHtml(
             html = """

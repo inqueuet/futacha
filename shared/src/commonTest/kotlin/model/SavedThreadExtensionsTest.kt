@@ -117,6 +117,25 @@ class SavedThreadExtensionsTest {
         assertEquals("Parse timeout exceeded (5001ms > 5000ms)", page.truncationReason)
     }
 
+    @Test
+    fun toThreadPage_removesFtbucketPreviewControlFromLegacySavedBody() = runBlocking {
+        val metadata = savedMetadata(
+            storageId = null,
+            imagePath = null,
+            thumbnailPath = null,
+            messageHtml =
+                "<a href=\"other/fu7199371.png\">fu7199371.png</a>" +
+                    "<span onclick=\"previewImg('id','other/fu7199371.png')\">[見る]</span><br>本文"
+        )
+
+        val page = metadata.toThreadPage(fileSystem = InMemoryFileSystem())
+
+        assertEquals(
+            "<a href=\"other/fu7199371.png\">fu7199371.png</a><br>本文",
+            page.posts.single().messageHtml
+        )
+    }
+
     private fun savedMetadata(
         storageId: String?,
         imagePath: String?,
@@ -124,7 +143,8 @@ class SavedThreadExtensionsTest {
         originalImageUrl: String? = null,
         originalThumbnailUrl: String? = null,
         isTruncated: Boolean = false,
-        truncationReason: String? = null
+        truncationReason: String? = null,
+        messageHtml: String = "body"
     ): SavedThreadMetadata {
         return SavedThreadMetadata(
             threadId = "123",
@@ -142,7 +162,7 @@ class SavedThreadExtensionsTest {
                     author = "author",
                     subject = "subject",
                     timestamp = "24/01/01(月)00:00:00",
-                    messageHtml = "body",
+                    messageHtml = messageHtml,
                     originalImageUrl = originalImageUrl,
                     localImagePath = imagePath,
                     originalVideoUrl = null,

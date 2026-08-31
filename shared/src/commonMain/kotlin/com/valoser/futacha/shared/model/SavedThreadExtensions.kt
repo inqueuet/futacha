@@ -5,6 +5,7 @@ import com.valoser.futacha.shared.service.buildThreadStorageId
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.resolveBookmarkPathForDisplay
 import com.valoser.futacha.shared.parser.ThreadHtmlParserCore
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
 
 fun SavedThreadMetadata.toThreadPage(
     fileSystem: FileSystem,
@@ -67,7 +68,7 @@ fun SavedThreadMetadata.toThreadPage(
             subject = savedPost.subject,
             timestamp = savedPost.timestamp,
             posterId = null,
-            messageHtml = savedPost.messageHtml,
+            messageHtml = normalizeFutabaArchiveApuViewLabelHtml(savedPost.messageHtml),
             imageUrl = resolvedImagePath
                 ?: resolvedVideoPath
                 ?: savedPost.originalImageUrl

@@ -93,12 +93,15 @@ class CompatArchiveThreadFetcherTest {
                 post(
                     "123",
                     0,
-                    "<a href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png[見る]</a><br>本文[見る]"
+                    "<a target=_blank href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png</a>" +
+                        "<span id=\"preview-1\" style=\"cursor:pointer;\" " +
+                        "onClick=\"previewImg('preview-1','fu7190971.png')\">[見る]</span><br>本文[見る]"
                 ),
                 post(
                     "124",
                     1,
-                    "&gt;<a href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png[見る]</a>"
+                    "&gt;<a target=_blank href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png</a>" +
+                        "<span id=\"preview-2\" style=\"cursor:pointer;\">[見る]</span>"
                 ),
                 post(
                     "125",
@@ -111,14 +114,32 @@ class CompatArchiveThreadFetcherTest {
         val normalized = normalizeCompatArchiveApuViewLabels(page)
 
         assertEquals(
-            "<a href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png</a><br>本文[見る]",
+            "<a target=_blank href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png</a><br>本文[見る]",
             normalized.posts[0].messageHtml
         )
         assertEquals(
-            "&gt;<a href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png</a>",
+            "&gt;<a target=_blank href=\"https://archive.example/cache/fu7190971.png\">fu7190971.png</a>",
             normalized.posts[1].messageHtml
         )
         assertEquals(page.posts[2].messageHtml, normalized.posts[2].messageHtml)
+    }
+
+    @Test
+    fun archiveApuViewSuffixLegacyAndEncodedVariantsAreRemovedAtLineBoundary() {
+        val variants = listOf(
+            "<a href=\"/cache/fu1.png\">fu1.png[見る]</a><br>本文" to
+                "<a href=\"/cache/fu1.png\">fu1.png</a><br>本文",
+            "<a href=\"/cache/fu2.png\">fu2.png</a>[見る]<br>本文" to
+                "<a href=\"/cache/fu2.png\">fu2.png</a><br>本文",
+            "f3.webp&#91;見る&#93;<br>本文" to "f3.webp<br>本文",
+            "fu4.webm［見る］" to "fu4.webm"
+        )
+
+        variants.forEach { (raw, expected) ->
+            assertEquals(expected, normalizeCompatArchiveApuViewLabelHtml(raw))
+        }
+        assertEquals("本文fu4.webm[見る]続き", normalizeCompatArchiveApuViewLabelHtml("本文fu4.webm[見る]続き"))
+        assertEquals("通常リンク[見る]", normalizeCompatArchiveApuViewLabelHtml("通常リンク[見る]"))
     }
 
     @Test
@@ -159,7 +180,9 @@ class CompatArchiveThreadFetcherTest {
                 <span class="cnw">26/08/08 00:00:00 ID:ABC</span>
                 <span class="cno">No.123</span>
                 <a href="img/photo.jpg"><img src="thumb/photo.jpg"></a>
-                <blockquote>OP000000</blockquote>
+                <blockquote><a target=_blank href="other/fu7199371.png">fu7199371.png</a><span
+                  id="preview" style="cursor:pointer;" onclick="previewImg('preview','other/fu7199371.png')"
+                >VIEW0000</span><br>OP000000</blockquote>
               </span>
               <table border=0><tr><td>
                 <span class="cnw">26/08/08 00:01:00 ID:DEF</span>
@@ -180,6 +203,7 @@ class CompatArchiveThreadFetcherTest {
         }
         replaceAsciiToken("OP000000", intArrayOf(149, 219, 145, 182, 150, 123, 149, 182).map { it.toByte() }.toByteArray())
         replaceAsciiToken("RP000000", intArrayOf(149, 226, 138, 174, 131, 140, 131, 88).map { it.toByte() }.toByteArray())
+        replaceAsciiToken("VIEW0000", intArrayOf(91, 140, 169, 130, 233, 93).map { it.toByte() }.toByteArray())
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler { request ->
@@ -210,7 +234,13 @@ class CompatArchiveThreadFetcherTest {
                 "https://dev2.ftbucket.info/scdev2/scrapshot.php?rooturl=x"
             )
             assertEquals(listOf("123", "124"), page.posts.map { it.id })
-            assertEquals(listOf("保存本文", "補完レス"), page.posts.map { it.messageHtml })
+            assertEquals(
+                listOf(
+                    "<a target=_blank href=\"other/fu7199371.png\">fu7199371.png</a><br>保存本文",
+                    "補完レス"
+                ),
+                page.posts.map { it.messageHtml }
+            )
             assertEquals(
                 "https://dev2.ftbucket.info/scdev2/cont/may_test/img/photo.jpg",
                 page.posts.first().imageUrl

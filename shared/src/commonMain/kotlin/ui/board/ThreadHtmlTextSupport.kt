@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
+import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelText
 import com.valoser.futacha.shared.parser.HtmlEntityDecoder
 import com.valoser.futacha.shared.util.replaceHtmlBreakTags
 import com.valoser.futacha.shared.util.stripHtmlTagsLinear
@@ -11,9 +13,9 @@ private const val THREAD_POST_TEXT_CACHE_MAX_ENTRIES = 2048
 private const val THREAD_POST_TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024
 
 internal fun messageHtmlToLines(html: String): List<String> {
-    val normalized = replaceHtmlBreakTags(html)
+    val normalized = replaceHtmlBreakTags(normalizeFutabaArchiveApuViewLabelHtml(html))
     val withoutTags = stripHtmlTagsLinear(normalized)
-    val decoded = HtmlEntityDecoder.decode(withoutTags)
+    val decoded = normalizeFutabaArchiveApuViewLabelText(HtmlEntityDecoder.decode(withoutTags))
     return decoded.lines()
 }
 
