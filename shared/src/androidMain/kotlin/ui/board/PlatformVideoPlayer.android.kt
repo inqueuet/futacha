@@ -24,6 +24,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 
@@ -62,6 +63,11 @@ actual fun PlatformVideoPlayer(
                 }
             }
         val createdPlayer = ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(
+                    AndroidVideoPlaybackCache.createDataSourceFactory(context)
+                )
+            )
             // Media3 defaults to an asymmetric 5-second rewind and 15-second
             // fast-forward.  The reference viewer's gesture is ±10 seconds;
             // make the visible controller buttons obey that same contract.

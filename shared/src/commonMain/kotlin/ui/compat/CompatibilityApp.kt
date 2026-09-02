@@ -224,8 +224,9 @@ import com.valoser.futacha.shared.compat.CompatCatalogItemState
 import com.valoser.futacha.shared.compat.CompatCatalogDroppedClass
 import com.valoser.futacha.shared.compat.CompatDroppedCatalogItem
 import com.valoser.futacha.shared.compat.appendCompatDroppedCatalogItems
+import com.valoser.futacha.shared.compat.calculateCompatCatalogProjection
+import com.valoser.futacha.shared.compat.CompatCatalogProjectionRequest
 import com.valoser.futacha.shared.compat.diffCompatCatalogGenerations
-import com.valoser.futacha.shared.compat.projectCompatCatalogItems
 import com.valoser.futacha.shared.compat.truncateCompatCatalogSourceTitle
 import com.valoser.futacha.shared.compat.CompatCatalogSort
 import com.valoser.futacha.shared.compat.CanonicalThreadUrl
@@ -430,8 +431,11 @@ import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.VideoThumbnailRequestPriority
+import com.valoser.futacha.shared.ui.image.videoThumbnailRequestPriority
 import com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader
 import com.valoser.futacha.shared.ui.board.buildManualThreadSaveStorageOptions
+import com.valoser.futacha.shared.ui.board.buildCatalogItemLazyKeys
 import com.valoser.futacha.shared.ui.util.platformSystemGestureExclusion
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.util.isLegacyCompatImeBackBehavior
@@ -2908,6 +2912,20 @@ private fun CompatibilityAppContent(
                                 )
                             )
                         },
+                        onOpenSingleViewer = { mediaUrl, postNo, sourcePosition ->
+                            dispatch(
+                                CompatibilityEvent.OpenHost(
+                                    CompatHost.Viewer(
+                                        tabKey = tab.key,
+                                        index = 0,
+                                        caller = CompatViewerCaller.THREAD,
+                                        postNo = postNo,
+                                        directMediaUrl = mediaUrl,
+                                        directSourcePosition = sourcePosition
+                                    )
+                                )
+                            )
+                        },
                         onOpenInlineUrl = { rawUrl ->
                             when (
                                 val route = com.valoser.futacha.shared.compat.resolveCompatInlineUrlRoute(
@@ -3262,6 +3280,8 @@ private fun CompatibilityAppContent(
                         tab = viewerTab,
                         initialIndex = host.index,
                         initialPostNo = host.postNo,
+                        directMediaUrl = host.directMediaUrl,
+                        directSourcePosition = host.directSourcePosition,
                         store = store,
                         toolbarRefreshToken = toolbarRefreshToken,
                         preferences = preferences,
@@ -4232,59 +4252,42 @@ private fun CompatCatalogScreen(
             catalogImagePhashes = cached + computed
         }
     }
-    val visibleItems = remember(
+    val catalogProjectionRequest = remember(
         items,
         resolvedCatalogTitles,
         searchQuery,
         preference,
         priorityThreshold,
-        ngRules,
         catalogNgEnabled,
         watchWords,
         catalogImagePhashRules,
         catalogImagePhashes,
         catalogImageNgPhashThreshold,
-        catalogRules,
-        catalogExtractRules,
+        catalogRuleIndex,
         catalogSourceTitleLength
     ) {
-        val itemsWithResolvedTitles = items.map { item ->
-            val resolvedTitle = resolvedCatalogTitles[item.id]
-                ?.takeIf(String::isNotBlank)
-                ?: item.title
-            item.copy(
-                title = truncateCompatCatalogSourceTitle(
-                    resolvedTitle,
-                    catalogSourceTitleLength
-                )
-            )
-        }
-        val hiddenPhashItems = itemsWithResolvedTitles.filter { item ->
-            val phash = catalogImagePhashes[item.id]
-            phash != null && catalogImagePhashRules.any {
-                CompatImagePhash.isSimilar(phash, it.normalizedValue, catalogImageNgPhashThreshold)
-            }
-        }.mapTo(mutableSetOf(), CatalogItem::id)
-        val ngFiltered = if (!catalogNgEnabled) itemsWithResolvedTitles else itemsWithResolvedTitles.filterNot { item ->
-            catalogRuleIndex.hides(item) ||
-                item.id in hiddenPhashItems
-        }
-        val normalizedQuery = normalizeCatalogSearchText(searchQuery)
-        val filtered = if (normalizedQuery.isBlank()) ngFiltered else ngFiltered.filter {
-            normalizeCatalogSearchText(it.title.orEmpty()).contains(normalizedQuery) ||
-                it.id.contains(searchQuery, ignoreCase = true)
-        }
-        val extractOrWatch = { item: CatalogItem ->
-            watchWords.any { word -> item.title.orEmpty().contains(word, ignoreCase = true) } ||
-                catalogRuleIndex.extracts(item)
-        }
-        projectCompatCatalogItems(
-            items = filtered,
-            replyPriorityEnabled = preference.replyPriorityEnabled,
-            replyThreshold = priorityThreshold,
-            showNonPriority = preference.showNonPriority,
-            isExtracted = extractOrWatch
+        CompatCatalogProjectionRequest(
+            items = items,
+            resolvedTitles = resolvedCatalogTitles,
+            searchQuery = searchQuery,
+            preference = preference,
+            priorityThreshold = priorityThreshold,
+            catalogNgEnabled = catalogNgEnabled,
+            watchWords = watchWords,
+            catalogImagePhashRules = catalogImagePhashRules,
+            catalogImagePhashes = catalogImagePhashes,
+            catalogImageNgPhashThreshold = catalogImageNgPhashThreshold,
+            catalogRuleIndex = catalogRuleIndex,
+            catalogSourceTitleLength = catalogSourceTitleLength
         )
+    }
+    val visibleItems by key(board.key) {
+        produceState(
+            initialValue = emptyList<CatalogItem>(),
+            key1 = catalogProjectionRequest
+        ) {
+            value = calculateCompatCatalogProjection(catalogProjectionRequest)
+        }
     }
 
     // Some boards (notably img.2chan.net) expose only the reply-count badge
@@ -5009,6 +5012,14 @@ private fun CompatCatalogScreen(
     ) { padding ->
         BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
             val catalogColumns = if (maxWidth > maxHeight) landscapeColumns else portraitColumns
+            val catalogDensity = LocalDensity.current.density
+            val gridThumbnailSize = (
+                maxWidth - 5.7.dp - 7.dp - (5.dp * (catalogColumns - 1))
+            ).div(catalogColumns).coerceAtLeast(1.dp)
+            val gridThumbnailRequestSizePx = compatThumbnailRequestSizePx(
+                displaySizeDp = gridThumbnailSize.value,
+                density = catalogDensity
+            )
             val listLineCount = preferences.compatPreferenceValue(
                 "catalog", "catalogListViewLineNum", "長辺の列数"
             )?.filter(Char::isDigit)?.toIntOrNull()?.coerceIn(2, 30) ?: 7
@@ -5016,6 +5027,10 @@ private fun CompatCatalogScreen(
             // edge. A fixed 60dp row made this setting appear ineffective.
             val listRowHeight = (maxHeight / (listLineCount + 4)).coerceIn(40.dp, 180.dp)
             val listThumbnailSize = (listRowHeight - 4.dp).coerceAtLeast(36.dp)
+            val listThumbnailRequestSizePx = compatThumbnailRequestSizePx(
+                displaySizeDp = listThumbnailSize.value,
+                density = catalogDensity
+            )
             // A malformed/partially merged catalog can contain the same thread
             // more than once.  CatalogItem.id is the semantic identity used by
             // the reference UI, so remove duplicates before handing the list to
@@ -5023,6 +5038,9 @@ private fun CompatCatalogScreen(
             // through produces the same fatal LazyLayout exception as duplicate
             // tabs (#29/#30).
             val displayedItems = displayedCatalogItems
+            val displayedItemKeys = remember(board.key, displayedItems) {
+                buildCatalogItemLazyKeys(board.key, displayedItems)
+            }
             val volumeKeyOwner = remember(board.key) { Any() }
             DisposableEffect(catalogVolumeKeyAction, catalogLayout, board.key) {
                 CompatVolumeKeyBus.register(volumeKeyOwner) { key ->
@@ -5082,11 +5100,12 @@ private fun CompatCatalogScreen(
                     ) {
                         gridItemsIndexed(
                             displayedItems,
-                            key = { index, item -> "${item.id.ifBlank { item.threadUrl }}:$index" }
+                            key = { index, _ -> displayedItemKeys[index] }
                         ) { _, item ->
                             CompatCatalogGridItem(
                                 item = item,
                                 imageRetryGeneration = catalogRefreshGeneration,
+                                thumbnailRequestSizePx = gridThumbnailRequestSizePx,
                                 lowQuality = catalogLowQuality,
                                 replyIndicator = replyIndicator(item),
                                 isOld = catalogItemStates[item.id]?.isOld == true,
@@ -5123,11 +5142,12 @@ private fun CompatCatalogScreen(
                     ) {
                         itemsIndexed(
                             displayedItems,
-                            key = { index, item -> "${item.id.ifBlank { item.threadUrl }}:$index" }
+                            key = { index, _ -> displayedItemKeys[index] }
                         ) { _, item ->
                             CompatCatalogListItem(
                                 item = item,
                                 imageRetryGeneration = catalogRefreshGeneration,
+                                thumbnailRequestSizePx = listThumbnailRequestSizePx,
                                 lowQuality = catalogLowQuality,
                                 replyIndicator = replyIndicator(item),
                                 isOld = catalogItemStates[item.id]?.isOld == true,
@@ -6004,6 +6024,7 @@ private fun CompatThreadScreen(
     onOpenPostWithText: (String, Boolean) -> Unit,
     onOpenGallery: () -> Unit,
     onOpenViewer: (Int, String?) -> Unit,
+    onOpenSingleViewer: (String, String, Int) -> Unit,
     onOpenInlineUrl: (String) -> Boolean,
     canUndoClose: Boolean,
     onUndoClose: () -> Unit,
@@ -6058,7 +6079,7 @@ private fun CompatThreadScreen(
     )?.toIntOrNull()?.coerceIn(150, 1200) ?: threadThumbnailSize
     val threadUpsThumbMethod = preferences.compatPreferenceValue(
         "thread", "threadUpsThumbMethod", "あぷ小のサムネイルの読み込み", "あぷ小の読み込み"
-    ) ?: "利用しない"
+    ) ?: COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
     val showDeletedPosts = preferences.compatPreferenceValue("thread", "threadAdminDeleteShow", "削除されたレスを表示") == "ON"
     val threadNgEnabled = preferences.compatPreferenceValue("thread", "threadNg", "NG機能") != "OFF"
     val threadPrivacyEnabled = preferences.compatPrivacyEnabled()
@@ -7294,6 +7315,24 @@ private fun CompatThreadScreen(
             val candidate = viewerMediaPosts[index]
             launchThreadViewer(index, compatMediaIdentity(candidate))
             return true
+        }
+        if (!compatApuSmallGalleryEnabled(threadUpsThumbMethod)) {
+            val directMediaUrl = compatApuSmallMediaFileName(url)
+                ?.let(::compatApuSmallSourceUrl)
+            if (directMediaUrl != null) {
+                scope.launch {
+                    persistScrollAnchor(
+                        ScrollAnchor(
+                            postNo = visiblePosts.getOrNull(listState.firstVisibleItemIndex)?.postNo,
+                            offsetPx = listState.firstVisibleItemScrollOffset,
+                            fallbackIndex = listState.firstVisibleItemIndex,
+                            snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
+                        )
+                    )
+                    onOpenSingleViewer(directMediaUrl, fallbackPost.postNo, fallbackPost.position)
+                }
+                return true
+            }
         }
         // A stale popup can outlive the current snapshot.  Preserve the
         // ordinary post-media route as a safe fallback before opening a URL.
@@ -9431,6 +9470,7 @@ private fun CompatCatalogSortDialog(
 private fun CompatCatalogGridItem(
     item: CatalogItem,
     imageRetryGeneration: Int,
+    thumbnailRequestSizePx: Int,
     lowQuality: Boolean,
     replyIndicator: CompatCatalogReplyIndicator?,
     isOld: Boolean,
@@ -9464,10 +9504,17 @@ private fun CompatCatalogGridItem(
     val imageUrl = imageCandidates.getOrNull(imageCandidateIndex)
     val imagePainter = key(imageRetryGeneration) {
         rememberAsyncImagePainter(
-            model = remember(platformContext, imageUrl, imageRetryGeneration) {
+            model = remember(
+                platformContext,
+                imageUrl,
+                imageRetryGeneration,
+                thumbnailRequestSizePx
+            ) {
                 ImageRequest.Builder(platformContext)
                     .data(imageUrl)
                     .compatImageFallbackPolicy()
+                    .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
+                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
                     .crossfade(false)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
@@ -9616,6 +9663,7 @@ private fun CompatCatalogGridItem(
 private fun CompatCatalogListItem(
     item: CatalogItem,
     imageRetryGeneration: Int,
+    thumbnailRequestSizePx: Int,
     lowQuality: Boolean,
     replyIndicator: CompatCatalogReplyIndicator?,
     isOld: Boolean,
@@ -9646,10 +9694,17 @@ private fun CompatCatalogListItem(
     val imageUrl = imageCandidates.getOrNull(imageCandidateIndex)
     val imagePainter = key(imageRetryGeneration) {
         rememberAsyncImagePainter(
-            model = remember(platformContext, imageUrl, imageRetryGeneration) {
+            model = remember(
+                platformContext,
+                imageUrl,
+                imageRetryGeneration,
+                thumbnailRequestSizePx
+            ) {
                 ImageRequest.Builder(platformContext)
                     .data(imageUrl)
                     .compatImageFallbackPolicy()
+                    .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
+                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
                     .crossfade(false)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
@@ -11575,6 +11630,11 @@ private fun CompatPostRow(
         val originalMediaUrl = resolveCompatViewerMediaUrl(post)
         val isUpsMedia = isCompatApuSmallMediaUrl(post.imageUrl ?: post.thumbnailUrl ?: "")
         val usesDirectApuSource = isUpsMedia && requestedPreviewUrl == originalMediaUrl
+        val effectiveThumbnailSize = if (isUpsMedia) upsThumbnailSize else thumbnailSize
+        val thumbnailRequestSizePx = compatThumbnailRequestSizePx(
+            displaySizeDp = effectiveThumbnailSize.toFloat(),
+            density = LocalDensity.current.density
+        )
         var useOriginalAfterPreviewFailure by remember(post.postNo, requestedPreviewUrl) {
             mutableStateOf(false)
         }
@@ -11596,11 +11656,13 @@ private fun CompatPostRow(
                 platformContext,
                 previewUrl,
                 completedPreviewRetries,
-                thumbnailReloadToken
+                thumbnailReloadToken,
+                thumbnailRequestSizePx
             ) {
                 ImageRequest.Builder(platformContext)
                     .data(previewUrl)
                     .compatImageFallbackPolicy()
+                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
                     // Changing the memory key makes Coil create a fresh
                     // request after a transient failure while retaining a
                     // successful disk entry. Manual reload remains the only
@@ -11704,7 +11766,6 @@ private fun CompatPostRow(
                 }
             }
             val intrinsicSize = painter.intrinsicSize
-            val effectiveThumbnailSize = if (isUpsMedia) upsThumbnailSize else thumbnailSize
             val bounds = remember(
                 effectiveThumbnailSize,
                 post.thumbnailWidth,
@@ -11821,6 +11882,11 @@ private fun CompatInlineApuSmallPreviews(
 ) {
     if (urls.isEmpty()) return
     val imageLoader = LocalFutachaImageLoader.current
+    val platformContext = LocalPlatformContext.current
+    val thumbnailRequestSizePx = compatThumbnailRequestSizePx(
+        displaySizeDp = thumbnailSize.toFloat(),
+        density = LocalDensity.current.density
+    )
     Column(modifier = Modifier.fillMaxWidth()) {
         urls.forEach { sourceUrl ->
             val previewUrl = if (classifyFutabaMedia(sourceUrl) == FutabaMediaKind.VIDEO) {
@@ -11829,9 +11895,10 @@ private fun CompatInlineApuSmallPreviews(
                 sourceUrl
             }
             val painter = rememberAsyncImagePainter(
-                model = ImageRequest.Builder(LocalPlatformContext.current)
+                model = ImageRequest.Builder(platformContext)
                     .data(previewUrl)
                     .compatImageFallbackPolicy()
+                    .size(thumbnailRequestSizePx, thumbnailRequestSizePx)
                     .build(),
                 imageLoader = imageLoader
             )

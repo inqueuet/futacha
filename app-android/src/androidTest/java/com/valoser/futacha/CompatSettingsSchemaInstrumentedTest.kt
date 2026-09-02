@@ -2072,9 +2072,10 @@ class CompatSettingsSchemaInstrumentedTest {
         val listRow = rule.onNodeWithTag("compat-setting-threadHeaderSoudaneDisplay")
             .performScrollTo()
             .fetchSemanticsNode().boundsInRoot
-        assertTrue(abs(uploaderPolicy.height - with(rule.density) { 54.dp.toPx() }) <= 1f)
+        assertTrue(abs(uploaderPolicy.height - with(rule.density) { 73.dp.toPx() }) <= 1f)
         assertTrue(abs(checkboxRow.height - with(rule.density) { 54.dp.toPx() }) <= 1f)
         assertTrue(abs(listRow.height - with(rule.density) { 73.dp.toPx() }) <= 1f)
+        rule.onNodeWithText("表示する").assertIsDisplayed()
         rule.onAllNodesWithText("表示しない").assertCountEquals(0)
 
         rule.onNodeWithTag("compat-setting-threadHeaderSoudaneDisplay").performClick()

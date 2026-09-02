@@ -22,7 +22,9 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.ui.image.FutabaExtensionFallbackPolicy
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.VideoThumbnailRequestPriority
 import com.valoser.futacha.shared.ui.image.futabaExtensionFallbackPolicy
+import com.valoser.futacha.shared.ui.image.videoThumbnailRequestPriority
 
 @Composable
 internal fun CatalogPreviewImage(
@@ -52,6 +54,7 @@ internal fun CatalogPreviewImage(
             .size(targetSizePx, targetSizePx)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
+            .videoThumbnailRequestPriority(VideoThumbnailRequestPriority.PREFETCH)
             .futabaExtensionFallbackPolicy(
                 FutabaExtensionFallbackPolicy(
                     maxAttempts = 5,

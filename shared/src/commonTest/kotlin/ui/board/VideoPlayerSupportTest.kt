@@ -54,6 +54,30 @@ class VideoPlayerSupportTest {
     }
 
     @Test
+    fun iosPlaybackBackendRoutesAppleContainersToAvPlayerAndKeepsWebmInWebView() {
+        assertEquals(
+            IosVideoPlaybackBackend.AV_PLAYER,
+            resolveIosVideoPlaybackBackend("https://example.com/movie.MP4?token=1")
+        )
+        assertEquals(
+            IosVideoPlaybackBackend.AV_PLAYER,
+            resolveIosVideoPlaybackBackend("file:///saved/clip.mov")
+        )
+        assertEquals(
+            IosVideoPlaybackBackend.AV_PLAYER,
+            resolveIosVideoPlaybackBackend("https://example.com/clip.m4v")
+        )
+        assertEquals(
+            IosVideoPlaybackBackend.WEB_VIEW,
+            resolveIosVideoPlaybackBackend("https://example.com/movie.webm")
+        )
+        assertEquals(
+            IosVideoPlaybackBackend.WEB_VIEW,
+            resolveIosVideoPlaybackBackend("https://example.com/video")
+        )
+    }
+
+    @Test
     fun buildEmbeddedVideoHtml_sanitizes_html_breakout_chars() {
         val html = buildEmbeddedVideoHtml("https://example.com/v\"ideo<1>.mp4?x=1&y=2")
         assertTrue("%22" in html)

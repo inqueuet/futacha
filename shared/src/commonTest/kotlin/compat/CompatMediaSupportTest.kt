@@ -298,6 +298,13 @@ class CompatMediaSupportTest {
     }
 
     @Test
+    fun thumbnailDecodeBoundMatchesRenderedPhysicalPixelsWithoutRoundingDown() {
+        assertEquals(250, compatThumbnailRequestSizePx(displaySizeDp = 100f, density = 2.5f))
+        assertEquals(227, compatThumbnailRequestSizePx(displaySizeDp = 86.4f, density = 2.625f))
+        assertEquals(1, compatThumbnailRequestSizePx(displaySizeDp = 0f, density = 3f))
+    }
+
+    @Test
     fun apuSmallThumbnailBoundsUseDecodedLandscapeAspectRatio() {
         assertEquals(250 to 140, compatThreadThumbnailBounds(250, 1920, 1080))
         assertEquals(140 to 250, compatThreadThumbnailBounds(250, 1080, 1920))
@@ -334,6 +341,13 @@ class CompatMediaSupportTest {
         assertEquals(
             "&gt;<a href=\"$sourceUrl\">fu7190971.png</a><br>失恋はほむらもだろ…",
             quote.messageHtml
+        )
+        assertEquals(
+            listOf("1463510009"),
+            compatViewerMediaPosts(
+                posts = listOf(body, quote),
+                upsThumbnailMethod = "表示する"
+            ).map { it.postNo }
         )
     }
 
@@ -473,7 +487,7 @@ class CompatMediaSupportTest {
             thumbnailUrl = null
         )
 
-        assertEquals(post.imageUrl, resolveCompatPostPreviewUrl(post))
+        assertEquals(post.imageUrl, resolveCompatPostPreviewUrl(post, upsThumbnailMethod = "表示する"))
         assertEquals(post.imageUrl, resolveCompatViewerMediaUrl(post))
     }
 
@@ -614,7 +628,7 @@ class CompatMediaSupportTest {
 
         val media = compatViewerMediaPosts(
             listOf(post),
-            upsThumbnailMethod = "利用しない"
+            upsThumbnailMethod = "表示する"
         )
 
         assertEquals(2, media.size)
@@ -802,16 +816,12 @@ class CompatMediaSupportTest {
             wifiConnected = true
         )
 
-        // Thumbnail loading is disabled for あぷ小, but the original upload
-        // must remain in the viewer sequence so a tapped fu… link still opens
-        // in-app rather than falling through to the browser.
-        assertEquals(listOf("2", "4"), visible.map { it.postNo })
+        assertEquals(listOf("2"), visible.map { it.postNo })
         assertEquals(0, visible.indexOfFirst { it.postNo == "2" })
-        assertEquals(1, visible.indexOfFirst { it.postNo == "4" })
     }
 
     @Test
-    fun bareApuSmallSourceIsViewerReachableWhenThumbnailLoadingIsDisabled() {
+    fun bareApuSmallSourceIsExcludedFromGalleryWhenThumbnailLoadingIsDisabled() {
         val source = "https://dec.2chan.net/up2/src/fu7100605.jpg"
         val post = normalizeCompatPostMedia(
             CompatPostSnapshot(
@@ -824,15 +834,42 @@ class CompatMediaSupportTest {
         )
 
         assertFalse(compatPostHasVisibleMedia(post, "利用しない", wifiConnected = true))
-        assertEquals(
-            listOf(source),
+        assertTrue(
             compatViewerMediaPosts(
                 listOf(post),
                 upsThumbnailMethod = "利用しない",
                 wifiConnected = true
-            ).mapNotNull(::resolveCompatViewerMediaUrl)
+            ).isEmpty()
         )
         assertTrue(compatViewerPostMatchesMediaUrl(post, "$source?from=body#tap"))
+    }
+
+    @Test
+    fun uploaderGalleryPolicyMatchesReferenceSettings() {
+        val post = normalizeCompatPostMedia(
+            CompatPostSnapshot(
+                position = 0,
+                postNo = "810b",
+                timestamp = "",
+                messageHtml = "fu7100605.jpg"
+            )
+        )
+
+        listOf("none", "利用しない", "表示しない").forEach { method ->
+            assertFalse(compatApuSmallThumbEnabled(method, wifiConnected = true))
+            assertTrue(compatViewerMediaPosts(listOf(post), upsThumbnailMethod = method).isEmpty())
+        }
+        listOf(null, "", "load", "preload", "wifi", "表示する", "表示する(先読み)").forEach { method ->
+            assertTrue(compatApuSmallThumbEnabled(method, wifiConnected = true))
+            assertEquals(
+                listOf("810b"),
+                compatViewerMediaPosts(
+                    listOf(post),
+                    upsThumbnailMethod = method,
+                    wifiConnected = false
+                ).map { it.postNo }
+            )
+        }
     }
 
     @Test

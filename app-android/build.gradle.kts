@@ -38,9 +38,17 @@ val syncSharedComposeResourcesForAndroid by tasks.registering(Sync::class) {
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.androidx.baselineprofile)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services) apply false
     alias(libs.plugins.firebase.crashlytics) apply false
+}
+
+baselineProfile {
+    mergeIntoMain = true
+    // Keep local debug builds fast while ensuring every shipping APK refreshes
+    // the profile from the checked critical journeys before it is packaged.
+    automaticGenerationDuringBuild = true
 }
 
 val hasGoogleServicesConfig = file("google-services.json").exists() ||
@@ -71,10 +79,11 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 163
-        versionName = "10.1"
+        versionCode = 164
+        versionName = "10.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
     }
 
     signingConfigs {
@@ -116,6 +125,14 @@ android {
     }
 }
 
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        if (variant.name == "nonMinifiedRelease" || variant.name == "benchmarkRelease") {
+            variant.manifestPlaceholders.put("benchmarkFixtureEnabled", "true")
+        }
+    }
+}
+
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(syncSharedComposeResourcesForAndroid)
 }
@@ -126,6 +143,47 @@ tasks.matching {
     it.name.contains("lint", ignoreCase = true)
 }.configureEach {
     dependsOn(syncSharedComposeResourcesForAndroid)
+}
+
+// Android Studio redirects every APK-producing project to one directory. Preserve
+// the target APK before the instrumentation APK replaces the shared metadata,
+// then point only the target listing back to that preserved copy.
+val injectedApkLocation = providers.gradleProperty("android.injected.apk.location")
+if (injectedApkLocation.isPresent) {
+    val injectedNonMinifiedReleaseDirectory = injectedApkLocation.map {
+        rootProject.file(it).resolve("nonMinifiedRelease")
+    }
+    val preservedTargetApkDirectory =
+        layout.buildDirectory.dir("intermediates/baseline_profile_target_apk/nonMinifiedRelease")
+    val packageNonMinifiedRelease = tasks.matching { it.name == "packageNonMinifiedRelease" }
+    packageNonMinifiedRelease.configureEach {
+        outputs.upToDateWhen { false }
+    }
+    val preserveNonMinifiedReleaseTargetApk by tasks.registering {
+        dependsOn(packageNonMinifiedRelease)
+        outputs.dir(preservedTargetApkDirectory)
+        outputs.upToDateWhen { false }
+        doLast {
+            sync {
+                from(injectedNonMinifiedReleaseDirectory)
+                into(preservedTargetApkDirectory)
+            }
+        }
+    }
+    tasks.matching { it.name == "createNonMinifiedReleaseApkListingFileRedirect" }.configureEach {
+        dependsOn(
+            preserveNonMinifiedReleaseTargetApk,
+            ":baselineprofile:packageNonMinifiedRelease",
+        )
+        inputs.file(preservedTargetApkDirectory.map { it.file("output-metadata.json") })
+        outputs.upToDateWhen { false }
+        doLast {
+            outputs.files.singleFile.writeText(
+                "#- File Locator -\n" +
+                    "listingFile=${preservedTargetApkDirectory.get().file("output-metadata.json").asFile.absolutePath}\n"
+            )
+        }
+    }
 }
 
 kotlin {
@@ -157,6 +215,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.play.services.wearable)
+    implementation(libs.androidx.profileinstaller)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
     implementation(libs.firebase.crashlytics)
@@ -167,8 +226,10 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.media3.exoplayer)
     androidTestImplementation(libs.coil3.compose)
     androidTestImplementation(libs.ktor.client.mock)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+    baselineProfile(project(":baselineprofile"))
 }

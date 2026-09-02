@@ -79,6 +79,18 @@ internal fun resolveVideoPreviewChromeState(
 internal fun extractVideoUrlExtension(videoUrl: String): String =
     parseMediaUrlInfo(videoUrl)?.extension.orEmpty()
 
+internal enum class IosVideoPlaybackBackend {
+    AV_PLAYER,
+    WEB_VIEW
+}
+
+/** AVPlayer handles Apple-native containers; WebM keeps the established WKWebView path. */
+internal fun resolveIosVideoPlaybackBackend(videoUrl: String): IosVideoPlaybackBackend =
+    when (extractVideoUrlExtension(videoUrl)) {
+        "mp4", "m4v", "mov" -> IosVideoPlaybackBackend.AV_PLAYER
+        else -> IosVideoPlaybackBackend.WEB_VIEW
+    }
+
 internal fun formatVideoPlaybackError(error: VideoPlaybackError?): String? {
     if (error == null) return null
     val code = error.code.orEmpty().trim().take(80)

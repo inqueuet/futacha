@@ -37,6 +37,26 @@ import kotlinx.coroutines.sync.withPermit
 import coil3.request.ImageRequest
 import com.valoser.futacha.shared.ui.image.FutabaExtensionFallbackPolicy
 import com.valoser.futacha.shared.ui.image.futabaExtensionFallbackPolicy
+import kotlin.math.ceil
+
+internal const val COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD = "表示する"
+
+/**
+ * Converts the existing Compose display edge to a Coil decode bound.
+ *
+ * Rounding up avoids requesting an image even one physical pixel smaller than
+ * the rendered thumbnail. This changes decode work only; layout and gestures
+ * continue to use their existing dp bounds.
+ */
+internal fun compatThumbnailRequestSizePx(
+    displaySizeDp: Float,
+    density: Float
+): Int {
+    if (!displaySizeDp.isFinite() || !density.isFinite()) return 1
+    return ceil(displaySizeDp.coerceAtLeast(0f) * density.coerceAtLeast(0f))
+        .toInt()
+        .coerceAtLeast(1)
+}
 
 /** Match the legacy adapter's max-edge/aspect-ratio thumbnail sizing. */
 internal fun compatThreadThumbnailBounds(
@@ -96,7 +116,7 @@ internal fun compatApuSmallMediaFileName(url: String?): String? {
     return fileName.takeIf(compatApuSmallFileRegex::matches)?.lowercase()
 }
 
-private fun compatApuSmallSourceUrl(fileName: String): String {
+internal fun compatApuSmallSourceUrl(fileName: String): String {
     val directory = if (fileName.startsWith("fu", ignoreCase = true)) "up2" else "up"
     return "https://dec.2chan.net/$directory/src/$fileName"
 }
@@ -450,6 +470,19 @@ internal fun compatApuSmallThumbEnabled(method: String?, wifiConnected: Boolean)
     }
 }
 
+/**
+ * Whether uploader media belongs in the gallery/viewer sequence.
+ *
+ * The reference app treats Wi-Fi as a preload policy: the placeholder and
+ * gallery entry still exist on a metered connection. Only an explicitly
+ * disabled setting removes uploader media from the gallery entirely.
+ */
+internal fun compatApuSmallGalleryEnabled(method: String?): Boolean =
+    when (method?.trim()?.lowercase()) {
+        "none", "利用しない", "表示しない" -> false
+        else -> true
+    }
+
 internal fun compatPostHasVisibleMedia(
     post: CompatPostSnapshot,
     upsThumbnailMethod: String? = null,
@@ -461,14 +494,6 @@ internal fun compatPostHasVisibleMedia(
         compatApuSmallThumbEnabled(upsThumbnailMethod, wifiConnected)
 }
 
-/**
- * Whether a post belongs in the image/video sequence of the viewer.
- *
- * The あぷ小 preference controls network thumbnail loading in the thread
- * row, not whether the original upload can be opened.  Keeping those two
- * decisions separate prevents a bare `fu....jpg` link from falling through
- * to the external browser when thumbnail loading is disabled.
- */
 internal fun compatPostHasViewerMedia(post: CompatPostSnapshot): Boolean =
     post.mediaKey != null || post.imageUrl != null || post.thumbnailUrl != null
 
@@ -484,9 +509,11 @@ internal fun compatViewerMediaPosts(
     hiddenImages: Set<String> = emptySet(),
     hiddenPostNos: Set<String> = emptySet(),
     upsThumbnailMethod: String? = null,
-    wifiConnected: Boolean = false
+    @Suppress("UNUSED_PARAMETER") wifiConnected: Boolean = false
 ): List<CompatPostSnapshot> = compatMediaPostsWithInlineApu(posts).filter { post ->
     compatPostHasViewerMedia(post) &&
+        ((post.imageUrl ?: post.thumbnailUrl)?.let(::isCompatApuSmallMediaUrl) != true ||
+            compatApuSmallGalleryEnabled(upsThumbnailMethod)) &&
         post.postNo !in hiddenPostNos &&
         post.imageUrl !in hiddenImages &&
         post.thumbnailUrl !in hiddenImages

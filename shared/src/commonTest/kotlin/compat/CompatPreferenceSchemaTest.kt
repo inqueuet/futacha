@@ -318,9 +318,8 @@ class CompatPreferenceSchemaTest {
         )
         assertTrue(groups.flattenEntries().none { it.preferenceKey == "threadImageNgPhashThreshold" })
         assertEquals(
-            "",
-            groups.flattenEntries().single { it.preferenceKey == "threadUpsThumbMethod" }.summary,
-            "1.apk shows no summary before its initially-unset uploader policy is selected"
+            "表示する",
+            groups.flattenEntries().single { it.preferenceKey == "threadUpsThumbMethod" }.summary
         )
 
         assertEquals("simple|right", compatPreferenceStoredValue("threadHeaderSoudaneDisplay", "シンプル(右寄せ)"))

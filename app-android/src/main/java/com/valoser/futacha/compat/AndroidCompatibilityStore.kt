@@ -238,6 +238,24 @@ class AndroidCompatibilityStore(
         }
     }
 
+    /**
+     * Installs the checked-in tutorial board for the profileable benchmark variants.
+     *
+     * The public import path intentionally accepts only official Futaba hosts. The
+     * tutorial fixture uses example.com so a performance test cannot accidentally
+     * send posting or refresh traffic to the live service. The only caller is the
+     * manifest-disabled [com.valoser.futacha.BenchmarkFixtureReceiver].
+     */
+    internal suspend fun upsertBenchmarkTutorialBoard(board: CompatBoard) = mutate(
+        refresh = setOf(CompatObservableState.BOARDS)
+    ) { db ->
+        require(
+            board.originalUrl == "https://www.example.com/t/futaba.php" &&
+                board.canonicalUrl == "https://img.2chan.net/b/"
+        ) { "Only the checked-in benchmark tutorial board may bypass URL validation" }
+        db.upsertBoard(board)
+    }
+
     override suspend fun reorderBoards(orderedKeys: List<String>) = mutate(
         refresh = setOf(CompatObservableState.BOARDS)
     ) { db ->

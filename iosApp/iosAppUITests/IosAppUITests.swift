@@ -54,10 +54,10 @@ final class IosAppUITests: XCTestCase {
         // EULA test below covers the blocked first-launch route itself.
         app.launchArguments += [
             "-review.ugc_eula_accepted_version", "2026-08-22",
-            // sample/1.apk's commonUsedVersion is migrated into the KMP
-            // compatibility store. Keep unrelated UI tests on the already-read
-            // version; Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "8.5"
+            // Keep unrelated UI tests on the current already-read version so
+            // the automatic change log does not replace their intended start
+            // screen. Android and common tests exercise the mismatch path.
+            "-commonUsedVersion", "10.2"
         ]
         return app
     }

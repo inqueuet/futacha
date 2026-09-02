@@ -39,6 +39,12 @@ internal fun CatalogGrid(
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val lazyItemKeys = remember(board?.id, board?.url, items) {
+        buildCatalogItemLazyKeys(
+            boardIdentity = board?.id?.ifBlank { board.url } ?: "unknown-board",
+            items = items
+        )
+    }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
         gridState = gridState,
         isRefreshing = isRefreshing,
@@ -76,7 +82,7 @@ internal fun CatalogGrid(
                 )
             }
         }
-        gridItemsIndexed(items = items, key = { index, item -> "${item.id.ifBlank { item.threadUrl }}:$index" }) { _, catalogItem ->
+        gridItemsIndexed(items = items, key = { index, _ -> lazyItemKeys[index] }) { _, catalogItem ->
             CatalogCard(
                 item = catalogItem,
                 boardUrl = board?.url,
@@ -116,6 +122,12 @@ internal fun CatalogList(
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val lazyItemKeys = remember(board?.id, board?.url, items) {
+        buildCatalogItemLazyKeys(
+            boardIdentity = board?.id?.ifBlank { board.url } ?: "unknown-board",
+            items = items
+        )
+    }
     val edgeSwipeRefreshBinding = rememberEdgeSwipeRefreshBinding(
         listState = listState,
         isRefreshing = isRefreshing,
@@ -147,7 +159,7 @@ internal fun CatalogList(
                 )
             }
         }
-        itemsIndexed(items = items, key = { index, item -> "${item.id.ifBlank { item.threadUrl }}:$index" }) { _, catalogItem ->
+        itemsIndexed(items = items, key = { index, _ -> lazyItemKeys[index] }) { _, catalogItem ->
             CatalogListItem(
                 item = catalogItem,
                 boardUrl = board?.url,

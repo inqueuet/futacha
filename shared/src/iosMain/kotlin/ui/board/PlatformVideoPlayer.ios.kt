@@ -1,8 +1,10 @@
 @file:Suppress("DEPRECATION")
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class)
 
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -10,10 +12,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.interop.UIKitView
+import kotlinx.cinterop.ObjCAction
 import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.useContents
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import platform.AVFoundation.*
+import platform.AVKit.AVPlayerViewController
 import platform.CoreGraphics.CGRectMake
+import platform.CoreMedia.CMTimeGetSeconds
+import platform.CoreMedia.CMTimeMakeWithSeconds
 import platform.Foundation.NSError
+import platform.Foundation.NSNotificationCenter
+import platform.Foundation.NSSelectorFromString
+import platform.Foundation.NSURL
+import platform.UIKit.UIApplicationDidEnterBackgroundNotification
+import platform.UIKit.UITapGestureRecognizer
+import platform.UIKit.UIView
 import platform.WebKit.WKNavigation
 import platform.WebKit.WKNavigationDelegateProtocol
 import platform.WebKit.WKScriptMessage
@@ -48,18 +64,189 @@ actual fun PlatformVideoPlayer(
     val currentControlsCallback by rememberUpdatedState(onControlsVisibilityChanged)
     val currentMediaInfoCallback by rememberUpdatedState(onMediaInfoKnown)
     val currentErrorCallback by rememberUpdatedState(onPlaybackError)
-    WebVideoPlayer(
-        videoUrl = videoUrl,
+    when (resolveIosVideoPlaybackBackend(videoUrl)) {
+        IosVideoPlaybackBackend.AV_PLAYER -> NativeAvVideoPlayer(
+            videoUrl = videoUrl,
+            modifier = modifier,
+            onStateChanged = { currentCallback(it) },
+            onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
+            areControlsVisible = areControlsVisible,
+            onControlsVisibilityChanged = { currentControlsCallback(it) },
+            onMediaInfoKnown = { currentMediaInfoCallback(it) },
+            onPlaybackError = { currentErrorCallback(it) },
+            volume = volume,
+            isMuted = isMuted
+        )
+        IosVideoPlaybackBackend.WEB_VIEW -> WebVideoPlayer(
+            videoUrl = videoUrl,
+            modifier = modifier,
+            onStateChanged = { currentCallback(it) },
+            onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
+            areControlsVisible = areControlsVisible,
+            onControlsVisibilityChanged = { currentControlsCallback(it) },
+            onMediaInfoKnown = { currentMediaInfoCallback(it) },
+            onPlaybackError = { currentErrorCallback(it) },
+            volume = volume,
+            isMuted = isMuted
+        )
+    }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+@Composable
+private fun NativeAvVideoPlayer(
+    videoUrl: String,
+    modifier: Modifier,
+    onStateChanged: (VideoPlayerState) -> Unit,
+    onVideoSizeKnown: (width: Int, height: Int) -> Unit,
+    areControlsVisible: Boolean,
+    onControlsVisibilityChanged: (Boolean) -> Unit,
+    onMediaInfoKnown: (VideoMediaInfo) -> Unit,
+    onPlaybackError: (VideoPlaybackError) -> Unit,
+    volume: Float,
+    isMuted: Boolean
+) {
+    val url = remember(videoUrl) { NSURL.URLWithString(videoUrl) }
+    if (url == null) {
+        LaunchedEffect(videoUrl) {
+            onPlaybackError(VideoPlaybackError(code = "invalid_url", message = "Invalid video URL"))
+            onStateChanged(VideoPlayerState.Error)
+        }
+        UIKitView(factory = { UIView() }, modifier = modifier)
+        return
+    }
+
+    val player = remember(videoUrl) { AVPlayer.playerWithURL(url) }
+    val controller = remember {
+        AVPlayerViewController(nibName = null, bundle = null).apply {
+            allowsPictureInPicturePlayback = false
+        }
+    }
+    val gestureHandler = remember { NativeAvDoubleTapHandler() }
+    val doubleTapGesture = remember {
+        UITapGestureRecognizer(
+            target = gestureHandler,
+            action = NSSelectorFromString("handleDoubleTap:")
+        ).apply {
+            numberOfTapsRequired = 2uL
+            cancelsTouchesInView = false
+        }
+    }
+    SideEffect {
+        gestureHandler.player = player
+        player.volume = normalizeVideoPlayerVolume(volume, isMuted)
+        controller.showsPlaybackControls = areControlsVisible
+    }
+    DisposableEffect(player, controller) {
+        controller.player = player
+        player.pause()
+        val notificationCenter = NSNotificationCenter.defaultCenter
+        val backgroundObserver = notificationCenter.addObserverForName(
+            name = UIApplicationDidEnterBackgroundNotification,
+            `object` = null,
+            queue = null
+        ) {
+            player.pause()
+        }
+        onDispose {
+            notificationCenter.removeObserver(backgroundObserver)
+            player.pause()
+            if (controller.player === player) controller.player = null
+        }
+    }
+    LaunchedEffect(videoUrl, player) {
+        onStateChanged(VideoPlayerState.Buffering)
+        var lastState: VideoPlayerState? = VideoPlayerState.Buffering
+        var reportedMediaInfo: VideoMediaInfo? = null
+        while (isActive) {
+            val item = player.currentItem
+            if (item?.status == AVPlayerItemStatusFailed) {
+                val error = item.error
+                onPlaybackError(
+                    VideoPlaybackError(
+                        code = "AVPlayerItem failed",
+                        message = error?.localizedDescription
+                    )
+                )
+                if (lastState != VideoPlayerState.Error) {
+                    onStateChanged(VideoPlayerState.Error)
+                }
+                break
+            }
+            val nextState = when {
+                item?.status != AVPlayerItemStatusReadyToPlay -> VideoPlayerState.Buffering
+                player.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate ->
+                    VideoPlayerState.Buffering
+                player.timeControlStatus == AVPlayerTimeControlStatusPlaying -> VideoPlayerState.Ready
+                else -> VideoPlayerState.Idle
+            }
+            if (nextState != lastState) {
+                lastState = nextState
+                onStateChanged(nextState)
+                onControlsVisibilityChanged(nextState != VideoPlayerState.Ready)
+            }
+            if (item?.status == AVPlayerItemStatusReadyToPlay) {
+                val size = item.presentationSize.useContents {
+                    width.toInt() to height.toInt()
+                }
+                if (size.first > 0 && size.second > 0) {
+                    onVideoSizeKnown(size.first, size.second)
+                }
+                val durationSeconds = CMTimeGetSeconds(item.duration)
+                val info = VideoMediaInfo(
+                    width = size.first.takeIf { it > 0 },
+                    height = size.second.takeIf { it > 0 },
+                    durationMillis = durationSeconds
+                        .takeIf { it.isFinite() && it >= 0.0 }
+                        ?.times(1_000.0)?.toLong()
+                )
+                if (info != reportedMediaInfo) {
+                    reportedMediaInfo = info
+                    onMediaInfoKnown(info)
+                }
+            }
+            delay(200)
+        }
+    }
+    UIKitView(
+        factory = {
+            val view = requireNotNull(controller.view)
+            view.addGestureRecognizer(doubleTapGesture)
+            view
+        },
         modifier = modifier,
-        onStateChanged = { currentCallback(it) },
-        onVideoSizeKnown = { width, height -> currentSizeCallback(width, height) },
-        areControlsVisible = areControlsVisible,
-        onControlsVisibilityChanged = { currentControlsCallback(it) },
-        onMediaInfoKnown = { currentMediaInfoCallback(it) },
-        onPlaybackError = { currentErrorCallback(it) },
-        volume = volume,
-        isMuted = isMuted
+        onRelease = { view ->
+            view.removeGestureRecognizer(doubleTapGesture)
+            controller.player = null
+        },
+        update = {
+            controller.player = player
+            controller.showsPlaybackControls = areControlsVisible
+        }
     )
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private class NativeAvDoubleTapHandler : NSObject() {
+    var player: AVPlayer? = null
+
+    @ObjCAction
+    fun handleDoubleTap(recognizer: UITapGestureRecognizer) {
+        val activePlayer = player ?: return
+        val view = recognizer.view ?: return
+        val tappedRight = recognizer.locationInView(view).useContents { x >= view.bounds.useContents { size.width / 2.0 } }
+        val currentSeconds = CMTimeGetSeconds(activePlayer.currentTime())
+        val durationSeconds = activePlayer.currentItem?.duration?.let(::CMTimeGetSeconds) ?: -1.0
+        if (!currentSeconds.isFinite() || currentSeconds < 0.0) return
+        val nextMillis = resolveReferenceVideoDoubleTapPosition(
+            currentPositionMillis = (currentSeconds * 1_000.0).toLong(),
+            durationMillis = durationSeconds
+                .takeIf { it.isFinite() && it >= 0.0 }
+                ?.times(1_000.0)?.toLong() ?: -1L,
+            tappedRightHalf = tappedRight
+        )
+        activePlayer.seekToTime(CMTimeMakeWithSeconds(nextMillis / 1_000.0, 600))
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class)

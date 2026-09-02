@@ -432,9 +432,22 @@ internal fun ThreadAutoSaveLaunchEffect(
     ) {
         when (autoSaveEffectState.availability) {
             ThreadAutoSaveAvailability.Ready -> {
-                val page = autoSaveEffectState.page ?: latestPageForAutoSave.value
-                page?.let { targetPage ->
-                    currentOnStartAutoSave.value(targetPage)
+                awaitThreadAutoSaveStartupWindow(lastAutoSaveTimestampMillis)
+                val page = latestPageForAutoSave.value ?: autoSaveEffectState.page
+                if (
+                    isThreadAutoSaveReadyNow(
+                        page = page,
+                        threadId = threadId,
+                        isShowingOfflineCopy = isShowingOfflineCopy,
+                        httpClient = httpClient,
+                        fileSystem = fileSystem,
+                        lastAutoSaveTimestampMillis = latestLastAutoSaveTimestampMillis.value,
+                        nowMillis = Clock.System.now().toEpochMilliseconds()
+                    )
+                ) {
+                    page?.let { targetPage ->
+                        currentOnStartAutoSave.value(targetPage)
+                    }
                 }
             }
             ThreadAutoSaveAvailability.Throttled -> {

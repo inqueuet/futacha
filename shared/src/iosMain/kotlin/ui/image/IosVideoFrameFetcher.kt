@@ -3,6 +3,7 @@
 package com.valoser.futacha.shared.ui.image
 
 import coil3.ImageLoader
+import coil3.Uri
 import coil3.decode.DataSource
 import coil3.decode.ImageSource
 import coil3.decode.ImageSource as createImageSource
@@ -49,9 +50,7 @@ import platform.posix.memcpy
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -78,13 +77,13 @@ internal class IosVideoFrameFetcher(
         )
     }
 
-    class Factory : Fetcher.Factory<String> {
+    class Factory : Fetcher.Factory<Uri> {
         override fun create(
-            data: String,
+            data: Uri,
             options: Options,
             imageLoader: ImageLoader
         ): Fetcher? {
-            val url = data.toVideoThumbnailUrlOrNull() ?: return null
+            val url = data.toString().toVideoThumbnailUrlOrNull() ?: return null
             val extension = url.pathExtension?.lowercase().orEmpty()
             if (extension !in IOS_VIDEO_THUMBNAIL_EXTENSIONS) return null
             val dataSource = if (url.isFileURL()) DataSource.DISK else DataSource.NETWORK
@@ -94,7 +93,7 @@ internal class IosVideoFrameFetcher(
 }
 
 private val IOS_VIDEO_THUMBNAIL_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm")
-private val webKitThumbnailSemaphore = Semaphore(permits = 1)
+private val webKitThumbnailPriorityGate = VideoThumbnailPriorityGate()
 private val webKitThumbnailCacheMutex = Mutex()
 private val webKitThumbnailCache = LinkedHashMap<String, NSData>()
 private var webKitThumbnailCacheBytes = 0L
@@ -187,7 +186,7 @@ private suspend fun createCachedWebKitThumbnail(
         rememberWebKitThumbnail(cacheKey, data)
         return data
     }
-    return webKitThumbnailSemaphore.withPermit {
+    return webKitThumbnailPriorityGate.withPermit(options.videoThumbnailRequestPriority()) {
         readCachedWebKitThumbnail(cacheKey)?.let { return@withPermit it }
         readDiskCachedWebKitThumbnail(cacheKey)?.let { data ->
             rememberWebKitThumbnail(cacheKey, data)

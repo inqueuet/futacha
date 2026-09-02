@@ -334,16 +334,22 @@
 		};
 		9135B878D9EB55DD1D4C52A9 /* Configuration */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = Configuration;
 			sourceTree = "<group>";
 		};
 		C0D3E001C0D3E001C0D3E001 /* iosAppUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = iosAppUITests;
 			sourceTree = "<group>";
 		};
 		F7A1C002F7A1C002F7A1C002 /* watchApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = watchApp;
 			sourceTree = "<group>";
 		};
@@ -2869,13 +2875,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-resources-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -2890,13 +2892,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-iosApp/Pods-iosApp-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -3021,10 +3019,10 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 163;
+				CURRENT_PROJECT_VERSION = 164;
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "$(TEAM_ID)";
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 8SQY3SQ2M3;
 				ENABLE_PREVIEWS = YES;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3040,10 +3038,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 10.1;
+				MARKETING_VERSION = 10.2;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = futacha;
 				SKIP_INSTALL = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -3061,10 +3059,10 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 163;
+				CURRENT_PROJECT_VERSION = 164;
 				DEVELOPMENT_ASSET_PATHS = "\"iosApp/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "$(TEAM_ID)";
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 8SQY3SQ2M3;
 				ENABLE_PREVIEWS = YES;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -3080,10 +3078,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 10.1;
+				MARKETING_VERSION = 10.2;
 				ONLY_ACTIVE_ARCH = NO;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(IOS_PROVISIONING_PROFILE_SPECIFIER)";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = futacha;
 				SKIP_INSTALL = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -3188,9 +3186,9 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 162;
+				CURRENT_PROJECT_VERSION = 164;
 				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
+				"DEVELOPMENT_TEAM[sdk=watchos*]" = 8SQY3SQ2M3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Configuration/watchApp-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = futacha;
@@ -3201,11 +3199,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 10.0;
+				MARKETING_VERSION = 10.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.valoser.futacha.watch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=watchos*]" = "$(WATCH_PROVISIONING_PROFILE_SPECIFIER)";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=watchos*]" = FutabaWatch;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";
@@ -3225,9 +3223,9 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 162;
+				CURRENT_PROJECT_VERSION = 164;
 				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=watchos*]" = "$(TEAM_ID)";
+				"DEVELOPMENT_TEAM[sdk=watchos*]" = 8SQY3SQ2M3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Configuration/watchApp-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = futacha;
@@ -3238,11 +3236,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 10.0;
+				MARKETING_VERSION = 10.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.valoser.futacha.watch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=watchos*]" = "$(WATCH_PROVISIONING_PROFILE_SPECIFIER)";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=watchos*]" = FutabaWatch;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "watchos watchsimulator";

@@ -2710,10 +2710,11 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("フォントサイズ", "14sp", preferenceKey = "threadFontSize"),
         CompatSettingEntry("サムネイルサイズ", "250dp", preferenceKey = "threadThumbSize"),
         CompatSettingEntry("あぷ小のサムネイルサイズ", "250dp", preferenceKey = "threadUpsThumbSize"),
-        // 1.apk leaves this ListPreference unset on a fresh install.  Its
-        // title is visible but no summary/radio choice appears until the user
-        // selects a loading policy.
-        CompatSettingEntry("あぷ小のサムネイルの読み込み", "", preferenceKey = "threadUpsThumbMethod"),
+        CompatSettingEntry(
+            "あぷ小のサムネイルの読み込み",
+            COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD,
+            preferenceKey = "threadUpsThumbMethod"
+        ),
         CompatSettingEntry("そうだねが多いレス", "3件", preferenceKey = "threadExtractSoudaneNum"),
         CompatSettingEntry("返信が多いレス", "3件", preferenceKey = "threadExtractQuoteNum")
     )
@@ -3944,7 +3945,7 @@ internal fun CompatGalleryScreen(
     )
     val upsThumbnailMethod = preferences.compatPreferenceValue(
         "thread", "threadUpsThumbMethod", "あぷ小のサムネイルの読み込み", "あぷ小の読み込み"
-    ) ?: "利用しない"
+    ) ?: COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
     val showDeletedContent = preferences.compatPreferenceValue(
         "thread", "threadAdminDeleteShow", "削除されたレスを表示"
     ) == "ON"
@@ -4758,6 +4759,8 @@ internal fun CompatViewerScreen(
     tab: CompatTab,
     initialIndex: Int,
     initialPostNo: String? = null,
+    directMediaUrl: String? = null,
+    directSourcePosition: Int? = null,
     store: CompatibilityStore,
     toolbarRefreshToken: Long = 0L,
     preferences: Map<String, String>,
@@ -4779,7 +4782,7 @@ internal fun CompatViewerScreen(
     val share = rememberCompatShareLauncher()
     val clipboard = LocalClipboardManager.current
     val imageLoader = LocalFutachaImageLoader.current
-    var posts by remember(tabKey) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
+    var posts by remember(tabKey, directMediaUrl) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
     var snapshotRevision by remember(tabKey) { mutableStateOf(tab.snapshotRevision) }
     var chromeVisible by remember { mutableStateOf(true) }
     var quickMenu by remember { mutableStateOf(false) }
@@ -4827,7 +4830,7 @@ internal fun CompatViewerScreen(
     ) != "OFF"
     val upsThumbnailMethod = preferences.compatPreferenceValue(
         "thread", "threadUpsThumbMethod", "あぷ小のサムネイルの読み込み", "あぷ小の読み込み"
-    ) ?: "利用しない"
+    ) ?: COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
     val showDeletedContent = preferences.compatPreferenceValue(
         "thread", "threadAdminDeleteShow", "削除されたレスを表示"
     ) == "ON"
@@ -4866,7 +4869,9 @@ internal fun CompatViewerScreen(
         imageNgPhashThreshold,
         imageNgPhashRules,
         httpClient,
-        showDeletedContent
+        showDeletedContent,
+        directMediaUrl,
+        directSourcePosition
     ) {
         val hiddenImages = ngRules.asSequence()
             .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
@@ -4882,6 +4887,22 @@ internal fun CompatViewerScreen(
             .let { posts ->
                 presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
             }
+        if (directMediaUrl != null) {
+            val sourcePost = rawPosts.firstOrNull { it.postNo == initialPostNo }
+            posts = listOf(
+                CompatPostSnapshot(
+                    position = directSourcePosition ?: sourcePost?.position ?: 0,
+                    postNo = initialPostNo ?: sourcePost?.postNo ?: tab.threadNo,
+                    timestamp = sourcePost?.timestamp.orEmpty(),
+                    messageHtml = sourcePost?.messageHtml.orEmpty(),
+                    imageUrl = directMediaUrl,
+                    thumbnailUrl = compatApuSmallThumbnailUrl(directMediaUrl)
+                        .takeIf { isCompatVideoMediaUrl(directMediaUrl) },
+                    mediaKey = "direct::$directMediaUrl"
+                )
+            )
+            return@LaunchedEffect
+        }
         val hiddenPostNos = compatImagePhashHiddenPostNos(
             httpClient = httpClient,
             posts = rawPosts,
@@ -5188,25 +5209,26 @@ internal fun CompatViewerScreen(
                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
             }
         }
-        putAll(mapOf(
-        "download" to { saveCurrent(shareAfterSave = false) },
-        "search" to { searchCurrent() },
-        "back" to {
+        put("download") { saveCurrent(shareAfterSave = false) }
+        put("search") { searchCurrent() }
+        put("back") {
             when (val target = compatViewerNavigationTarget("back", posts, pagerState.currentPage, snapshotRevision)) {
                 is CompatViewerNavigationTarget.SourcePost -> onShowSourcePost(target.anchor)
                 else -> Unit
             }
-        },
-        "gallery" to {
-            when (val target = compatViewerNavigationTarget("gallery", posts, pagerState.currentPage, snapshotRevision)) {
-                is CompatViewerNavigationTarget.Gallery -> onOpenGallery(target.index, target.mediaIdentity)
-                else -> Unit
+        }
+        if (directMediaUrl == null) {
+            put("gallery") {
+                when (val target = compatViewerNavigationTarget("gallery", posts, pagerState.currentPage, snapshotRevision)) {
+                    is CompatViewerNavigationTarget.Gallery -> onOpenGallery(target.index, target.mediaIdentity)
+                    else -> Unit
+                }
             }
-        },
-        "share" to { saveCurrent(shareAfterSave = true) },
-        "info" to { showCurrentInfo() },
-        "screen" to { chromeVisible = !chromeVisible },
-        "privacy" to {
+        }
+        put("share") { saveCurrent(shareAfterSave = true) }
+        put("info") { showCurrentInfo() }
+        put("screen") { chromeVisible = !chromeVisible }
+        put("privacy") {
             val enabled = threadPrivacyEnabled
             scope.launch {
                 store.savePreference(
@@ -5214,8 +5236,8 @@ internal fun CompatViewerScreen(
                     if (enabled) "OFF" else "ON"
                 )
             }
-        },
-        "reload" to {
+        }
+        put("reload") {
             posts.getOrNull(pagerState.currentPage)
                 ?.let(::resolveCompatViewerMediaUrl)
                 ?.let { mediaUrl ->
@@ -5224,7 +5246,6 @@ internal fun CompatViewerScreen(
                     message = "再読み込みしました"
                 }
         }
-        ))
     }
     val currentViewerMediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
     val viewerTopOverflowLabels = remember { compatViewerTopOverflowLabels() }

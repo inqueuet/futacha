@@ -22,7 +22,11 @@ sealed interface CompatHost {
         val caller: CompatViewerCaller,
         val chromeVisible: Boolean = true,
         /** Stable identity of the post that opened the viewer. Indexes can move after a refresh/NG filter. */
-        val postNo: String? = null
+        val postNo: String? = null,
+        /** Media opened directly from a filename while uploader gallery display is disabled. */
+        val directMediaUrl: String? = null,
+        /** Original thread position used by the viewer's source-post action. */
+        val directSourcePosition: Int? = null
     ) : CompatHost
     data class ToolbarEditor(
         val surface: CompatToolbarSurface,

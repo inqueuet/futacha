@@ -38,6 +38,7 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.util.initializeAndroidPersistentLogging
 import com.valoser.futacha.shared.ui.compat.initializeCompatPostPlatformContext
+import com.valoser.futacha.shared.ui.board.AndroidVideoPlaybackCache
 import com.valoser.futacha.shared.version.initializeVersionCheckerContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -168,6 +169,11 @@ class FutachaApplication : Application() {
                     "Telemetry initialization skipped: ${error::class.simpleName.orEmpty()}"
                 )
             }
+        }
+        // SimpleCache scans and exclusively locks its index. Warm that process-wide
+        // owner off-main so opening the first video keeps the existing interaction feel.
+        applicationScope.launch {
+            AndroidVideoPlaybackCache.initialize(applicationContext)
         }
         fileSystemValue = createFileSystem(applicationContext)
         appStateStoreValue = createAppStateStore(applicationContext, fileSystem)

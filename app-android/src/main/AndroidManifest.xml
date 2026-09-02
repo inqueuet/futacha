@@ -67,6 +67,15 @@
             android:name="firebase_performance_collection_enabled"
             android:value="false" />
 
+        <receiver
+            android:name=".BenchmarkFixtureReceiver"
+            android:enabled="${benchmarkFixtureEnabled}"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.valoser.futacha.action.SEED_BENCHMARK_FIXTURE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Firebase is optional telemetry.  The generated FirebaseInitProvider
              otherwise initializes Analytics/Crashlytics before Application.onCreate
              on the main thread, which delays the first Compose frame.  The Android

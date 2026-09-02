@@ -19,6 +19,7 @@ build/
 .cxx/
 captures/
 app-android/release/
+app-android/nonMinifiedRelease/
 iosApp/Pods/
 iosApp/iosApp.xcworkspace/
 *.dSYM/

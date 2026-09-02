@@ -2,8 +2,12 @@ package com.valoser.futacha.shared.ui.image
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import coil3.ComponentRegistry
 import coil3.Extras
@@ -29,6 +33,8 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.hasEpochIntervalElapsed
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -58,6 +64,60 @@ internal const val IMAGE_CONNECT_TIMEOUT_MILLIS = 15_000L
 internal const val IMAGE_SOCKET_TIMEOUT_MILLIS = 15_000L
 internal const val IMAGE_DISK_CACHE_DIR = "futacha_image_cache"
 internal const val CATALOG_IMAGE_DISK_CACHE_DIR = "futacha_catalog_image_cache"
+private const val IMAGE_DISK_CACHE_LOG_TAG = "FutachaImageLoader"
+
+internal enum class ImageDiskCacheFailureStage {
+    DIRECTORY_RESOLUTION,
+    CACHE_CREATION
+}
+
+internal enum class ImageDiskCacheKind {
+    GENERAL,
+    CATALOG,
+    CUSTOM
+}
+
+internal data class ImageDiskCacheFailureDiagnostic(
+    val stage: ImageDiskCacheFailureStage,
+    val location: CompatibilityCacheLocation,
+    val cacheKind: ImageDiskCacheKind
+)
+
+internal fun imageDiskCacheKind(directoryName: String): ImageDiskCacheKind = when (directoryName) {
+    IMAGE_DISK_CACHE_DIR -> ImageDiskCacheKind.GENERAL
+    CATALOG_IMAGE_DISK_CACHE_DIR -> ImageDiskCacheKind.CATALOG
+    else -> ImageDiskCacheKind.CUSTOM
+}
+
+internal fun imageDiskCacheFailureMessage(
+    diagnostic: ImageDiskCacheFailureDiagnostic
+): String = "Image disk cache unavailable; " +
+    "stage=${diagnostic.stage.name.lowercase()}, " +
+    "location=${diagnostic.location.name.lowercase()}, " +
+    "cache=${diagnostic.cacheKind.name.lowercase()}"
+
+internal fun <T> attemptImageDiskCacheInitialization(
+    stage: ImageDiskCacheFailureStage,
+    location: CompatibilityCacheLocation,
+    directoryName: String,
+    reportFailure: (ImageDiskCacheFailureDiagnostic) -> Unit,
+    block: () -> T
+): T? = try {
+    block()
+} catch (_: Throwable) {
+    reportFailure(
+        ImageDiskCacheFailureDiagnostic(
+            stage = stage,
+            location = location,
+            cacheKind = imageDiskCacheKind(directoryName)
+        )
+    )
+    null
+}
+
+private fun reportImageDiskCacheFailure(diagnostic: ImageDiskCacheFailureDiagnostic) {
+    Logger.w(IMAGE_DISK_CACHE_LOG_TAG, imageDiskCacheFailureMessage(diagnostic))
+}
 
 @OptIn(ExperimentalCoilApi::class)
 internal fun createFutachaConcurrentRequestStrategy() = DeDupeConcurrentRequestStrategy()
@@ -83,6 +143,75 @@ data class ImageCacheConfig(
     val parallelism: Int
 )
 
+internal data class ImageLoaderConfigurationIdentity(
+    val cacheConfig: ImageCacheConfig,
+    val cacheLocation: CompatibilityCacheLocation,
+    val diskCacheDirectoryName: String
+)
+
+/**
+ * Keeps the public loader identity stable while a disk-ready delegate replaces
+ * the cold-start memory-only delegate. Mutations happen from Compose's main
+ * lifecycle; request threads only read [activeDelegate].
+ */
+internal class StableImageLoaderDelegateState<T : Any>(
+    initialDelegate: T,
+    private val shutdownDelegate: (T) -> Unit
+) {
+    @kotlin.concurrent.Volatile
+    private var activeDelegate: T = initialDelegate
+    private val retiredDelegates = mutableListOf<T>()
+    private var isShutdown = false
+
+    fun current(): T = activeDelegate
+
+    fun promote(nextDelegate: T) {
+        if (isShutdown) {
+            shutdownDelegate(nextDelegate)
+            return
+        }
+        val previousDelegate = activeDelegate
+        if (previousDelegate === nextDelegate) return
+        retiredDelegates += previousDelegate
+        activeDelegate = nextDelegate
+    }
+
+    fun shutdown() {
+        if (isShutdown) return
+        isShutdown = true
+        retiredDelegates.forEach(shutdownDelegate)
+        retiredDelegates.clear()
+        shutdownDelegate(activeDelegate)
+    }
+}
+
+internal class StableImageLoader(initialDelegate: ImageLoader) : ImageLoader {
+    private val delegates = StableImageLoaderDelegateState(
+        initialDelegate = initialDelegate,
+        shutdownDelegate = ImageLoader::shutdown
+    )
+
+    override val defaults: ImageRequest.Defaults
+        get() = delegates.current().defaults
+    override val components: ComponentRegistry
+        get() = delegates.current().components
+    override val memoryCache: MemoryCache?
+        get() = delegates.current().memoryCache
+    override val diskCache: DiskCache?
+        get() = delegates.current().diskCache
+
+    override fun enqueue(request: ImageRequest) = delegates.current().enqueue(request)
+
+    override suspend fun execute(request: ImageRequest): ImageResult =
+        delegates.current().execute(request)
+
+    override fun newBuilder(): ImageLoader.Builder = delegates.current().newBuilder()
+
+    override fun shutdown() = delegates.shutdown()
+
+    fun promote(nextDelegate: ImageLoader) = delegates.promote(nextDelegate)
+}
+
 data class FutabaExtensionFallbackPolicy(
     val maxAttempts: Int = 5,
     val allowVideoFallback: Boolean = true,
@@ -93,6 +222,16 @@ data class FutabaExtensionFallbackPolicy(
 )
 
 private val FutabaExtensionFallbackPolicyKey = Extras.Key(FutabaExtensionFallbackPolicy())
+private val VideoThumbnailRequestPriorityKey = Extras.Key(VideoThumbnailRequestPriority.VISIBLE)
+
+internal fun ImageRequest.Builder.videoThumbnailRequestPriority(
+    priority: VideoThumbnailRequestPriority
+): ImageRequest.Builder = apply {
+    extras[VideoThumbnailRequestPriorityKey] = priority
+}
+
+internal fun coil3.request.Options.videoThumbnailRequestPriority(): VideoThumbnailRequestPriority =
+    getExtra(VideoThumbnailRequestPriorityKey)
 
 private val apuSmallRequestRegex = Regex(
     "^https?://dec\\.2chan\\.net/(?:up2?|up)/+(?:thumb|src)/+[^?#]+(?:[?#].*)?$",
@@ -176,69 +315,169 @@ fun rememberFutachaImageLoader(
     val decoderDispatcher: CoroutineDispatcher = remember(cacheConfig.parallelism) {
         AppDispatchers.imageDecode(cacheConfig.parallelism)
     }
-    val memoryCache = remember(cacheConfig) {
+    val configurationIdentity = remember(cacheConfig, cacheLocation, diskCacheDirectoryName) {
+        ImageLoaderConfigurationIdentity(
+            cacheConfig = cacheConfig,
+            cacheLocation = cacheLocation,
+            diskCacheDirectoryName = diskCacheDirectoryName
+        )
+    }
+    // Give each loader generation ownership of its MemoryCache. If the platform
+    // context or injected HTTP client changes, disposing the old loader must not
+    // clear a cache that the replacement loader is already using.
+    val memoryCache = remember(platformContext, imageHttpClient, configurationIdentity) {
         MemoryCache.Builder()
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
             .build()
     }
-    // Resolving Context.cacheDir/getExternalFilesDirs and opening Coil's DiskCache can
-    // touch the filesystem.  Do not perform either operation from composition: on a
-    // cold Android process cacheDir initialization has been observed to block the main
-    // thread for hundreds of milliseconds.  The loader starts with memory caching and
-    // is rebuilt once the disk cache is ready, so the first screen remains responsive.
-    val diskCacheState = produceState<DiskCache?>(
-        initialValue = null,
-        key1 = platformContext,
-        key2 = cacheConfig,
-        key3 = "$cacheLocation:$diskCacheDirectoryName"
+    val normalMemoryPolicy = remember(cacheConfig, performanceProfile.totalRamMb) {
+        resolveImageMemoryPressurePolicy(
+            baseParallelism = cacheConfig.parallelism,
+            baseMemoryCacheBytes = cacheConfig.memoryCacheBytes,
+            memoryClassMb = performanceProfile.totalRamMb,
+            level = ImageMemoryPressureLevel.NORMAL
+        )
+    }
+    val pressureGate = remember(configurationIdentity, performanceProfile.totalRamMb) {
+        AdaptiveImageRequestGate(normalMemoryPolicy)
+    }
+    val pressureScope = rememberCoroutineScope()
+    var pressureSignal by remember(configurationIdentity) {
+        mutableStateOf(ImageMemoryPressureSignal())
+    }
+    DisposableEffect(platformContext, configurationIdentity) {
+        val monitor = createImageMemoryPressureMonitor(platformContext) { pressure ->
+            pressureScope.launch {
+                pressureSignal = pressureSignal.withPressure(pressure)
+            }
+        }
+        onDispose { monitor.close() }
+    }
+    LaunchedEffect(
+        pressureSignal,
+        pressureGate,
+        memoryCache,
+        normalMemoryPolicy,
+        performanceProfile.totalRamMb
     ) {
-        value = withContext(AppDispatchers.io) {
-            val created = createImageDiskCache(
-                platformContext,
-                cacheConfig.diskCacheBytes,
-                cacheLocation,
-                diskCacheDirectoryName
-            )
-            // DiskCache construction is blocking and can finish after this
-            // producer was cancelled by a profile/cache-location switch.
-            // Close that orphan before withContext propagates cancellation.
-            if (!currentCoroutineContext().isActive) {
-                created?.shutdown()
-                null
-            } else {
-                created
+        val activeSignal = pressureSignal
+        val policy = resolveImageMemoryPressurePolicy(
+            baseParallelism = cacheConfig.parallelism,
+            baseMemoryCacheBytes = cacheConfig.memoryCacheBytes,
+            memoryClassMb = performanceProfile.totalRamMb,
+            level = activeSignal.level
+        )
+        pressureGate.updatePolicy(policy)
+        withContext(AppDispatchers.imageDecode(1)) {
+            memoryCache.maxSize = policy.memoryCacheBytes
+            memoryCache.trimToSize(policy.memoryCacheBytes)
+        }
+        if (activeSignal.level != ImageMemoryPressureLevel.NORMAL) {
+            delay(imageMemoryPressureRecoveryDelayMillis(activeSignal.level))
+            if (pressureSignal.generation == activeSignal.generation) {
+                pressureSignal = ImageMemoryPressureSignal(
+                    level = ImageMemoryPressureLevel.NORMAL,
+                    generation = activeSignal.generation
+                )
             }
         }
     }
-    val diskCache = diskCacheState.value
-    return remember(platformContext, fetcherDispatcher, decoderDispatcher, memoryCache, diskCache, imageHttpClient) {
-        ImageLoader.Builder(platformContext)
-            .components {
-                add(FutabaExtensionFallbackInterceptor())
-                // A manually registered factory takes precedence over Coil's service-loaded
-                // default. Reusing the app client also applies Android's main-thread-safe
-                // response cleanup to image requests cancelled by Compose.
-                imageHttpClient?.let {
-                    add(
-                        KtorNetworkFetcherFactory(
-                            httpClient = it,
-                            concurrentRequestStrategy = createFutachaConcurrentRequestStrategy()
-                        )
-                    )
-                }
-                addPlatformImageComponents()
-            }
-            .fetcherCoroutineContext(fetcherDispatcher)
-            .decoderCoroutineContext(decoderDispatcher)
-            .memoryCache { memoryCache }
-            .apply {
-                diskCache?.let { cache ->
-                    diskCache { cache }
-                }
-            }
-            .build()
+    val stableImageLoader = remember(
+        platformContext,
+        fetcherDispatcher,
+        decoderDispatcher,
+        memoryCache,
+        pressureGate,
+        imageHttpClient,
+        configurationIdentity
+    ) {
+        StableImageLoader(
+            buildFutachaImageLoader(
+                platformContext = platformContext,
+                fetcherDispatcher = fetcherDispatcher,
+                decoderDispatcher = decoderDispatcher,
+                memoryCache = memoryCache,
+                diskCache = null,
+                pressureGate = pressureGate,
+                imageHttpClient = imageHttpClient
+            )
+        )
     }
+    // Resolving Context.cacheDir/getExternalFilesDirs and opening Coil's DiskCache can
+    // touch the filesystem.  Do not perform either operation from composition: on a
+    // cold Android process cacheDir initialization has been observed to block the main
+    // thread for hundreds of milliseconds. The loader starts with memory caching,
+    // then promotes its internal delegate when disk caching is ready. Its public
+    // identity never changes during cold start, so existing image requests continue.
+    LaunchedEffect(platformContext, stableImageLoader, configurationIdentity) {
+        var createdDiskCache: DiskCache? = null
+        var handedOffToLoader = false
+        try {
+            withContext(AppDispatchers.io) {
+                createdDiskCache = createImageDiskCache(
+                    platformContext,
+                    cacheConfig.diskCacheBytes,
+                    cacheLocation,
+                    diskCacheDirectoryName
+                )
+            }
+            if (!currentCoroutineContext().isActive) return@LaunchedEffect
+            createdDiskCache?.let { readyDiskCache ->
+                stableImageLoader.promote(
+                    buildFutachaImageLoader(
+                        platformContext = platformContext,
+                        fetcherDispatcher = fetcherDispatcher,
+                        decoderDispatcher = decoderDispatcher,
+                        memoryCache = memoryCache,
+                        diskCache = readyDiskCache,
+                        pressureGate = pressureGate,
+                        imageHttpClient = imageHttpClient
+                    )
+                )
+                handedOffToLoader = true
+            }
+        } finally {
+            if (!handedOffToLoader) {
+                createdDiskCache?.shutdown()
+            }
+        }
+    }
+    return stableImageLoader
 }
+
+@OptIn(ExperimentalCoilApi::class)
+private fun buildFutachaImageLoader(
+    platformContext: coil3.PlatformContext,
+    fetcherDispatcher: CoroutineDispatcher,
+    decoderDispatcher: CoroutineDispatcher,
+    memoryCache: MemoryCache,
+    diskCache: DiskCache?,
+    pressureGate: AdaptiveImageRequestGate,
+    imageHttpClient: HttpClient?
+): ImageLoader = ImageLoader.Builder(platformContext)
+    .components {
+        add(ImageMemoryPressureInterceptor(pressureGate))
+        add(FutabaExtensionFallbackInterceptor())
+        // A manually registered factory takes precedence over Coil's service-loaded
+        // default. Reusing the app client also applies Android's main-thread-safe
+        // response cleanup to image requests cancelled by Compose.
+        imageHttpClient?.let {
+            add(
+                KtorNetworkFetcherFactory(
+                    httpClient = it,
+                    concurrentRequestStrategy = createFutachaConcurrentRequestStrategy()
+                )
+            )
+        }
+        addPlatformImageComponents()
+    }
+    .fetcherCoroutineContext(fetcherDispatcher)
+    .decoderCoroutineContext(decoderDispatcher)
+    .memoryCache { memoryCache }
+    // Passing null explicitly prevents Coil's default singleton DiskCache from
+    // touching the filesystem before Futacha's dedicated cache is ready.
+    .diskCache(diskCache)
+    .build()
 
 /**
  * Interceptor that attempts to find the correct file extension for Futaba images.
@@ -505,9 +744,14 @@ fun resolveImageCacheDirectory(
     platformContext: Any?,
     location: CompatibilityCacheLocation = CompatibilityCacheLocation.INTERNAL,
     directoryName: String = IMAGE_DISK_CACHE_DIR
-): Path? = runCatching {
+): Path? = attemptImageDiskCacheInitialization(
+    stage = ImageDiskCacheFailureStage.DIRECTORY_RESOLUTION,
+    location = location,
+    directoryName = directoryName,
+    reportFailure = ::reportImageDiskCacheFailure
+) {
     ensureCacheDirectory(platformContext, location, directoryName)
-}.getOrNull()
+}
 
 private fun createImageDiskCache(
     platformContext: Any?,
@@ -516,12 +760,17 @@ private fun createImageDiskCache(
     directoryName: String
 ): DiskCache? {
     val directory = resolveImageCacheDirectory(platformContext, location, directoryName) ?: return null
-    return runCatching {
+    return attemptImageDiskCacheInitialization(
+        stage = ImageDiskCacheFailureStage.CACHE_CREATION,
+        location = location,
+        directoryName = directoryName,
+        reportFailure = ::reportImageDiskCacheFailure
+    ) {
         DiskCache.Builder()
             .directory(directory)
             .maxSizeBytes(maxBytes)
             .build()
-    }.getOrNull()
+    }
 }
 
 private fun ensureCacheDirectory(
