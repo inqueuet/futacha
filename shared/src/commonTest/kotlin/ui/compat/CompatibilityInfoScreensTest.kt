@@ -12,7 +12,7 @@ class CompatibilityInfoScreensTest {
 
         assertEquals(
             listOf(
-                "10.1", "10.0", "9.9", "9.8", "9.7", "9.6", "9.5", "9.4", "9.3", "9.1", "9.0", "8.9", "8.8", "8.6", "8.5", "8.4", "8.2", "8.0",
+                "10.3", "10.2", "10.1", "10.0", "9.9", "9.8", "9.7", "9.6", "9.5", "9.4", "9.3", "9.1", "9.0", "8.9", "8.8", "8.6", "8.5", "8.4", "8.2", "8.0",
                 "7.8", "7.7", "7.5", "7.2", "7.1", "6.7", "6.6", "6.3", "6.2", "6.1", "6.0",
                 "5.9", "5.8", "5.6", "5.4", "5.3", "5.1", "5.0", "4.9", "4.7", "4.6", "4.4",
                 "4.2", "4.1", "4.0", "3.9", "3.8", "3.7", "3.6", "3.4", "3.3", "3.2", "3.0",
@@ -45,6 +45,20 @@ class CompatibilityInfoScreensTest {
         assertTrue("横長のあぷ小サムネイルを正しい縦横比" in FUTACHA_CHANGE_LOG_HTML)
         assertTrue("過去ログ側のHTML形式によっては残る問題" in FUTACHA_CHANGE_LOG_HTML)
         assertTrue("オフラインコピー、保存済みHTMLのどの表示方法でも" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("あぷ／あぷ小のサムネイルを初期状態から表示" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("見た目や縦横比を維持したまま" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("カタログ検索・並び替え・NG・監視ワード処理" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("画面表示を優先してから自動保存を開始" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("画像キャッシュを起動中に入れ替えない" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("端末のメモリ状況に応じて画像処理の同時実行数を調整" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("起動・カタログ・スレの主要操作を対象とした最適化" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("同じMP4／WebMを開き直した時の再通信" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("対応するMP4をAVPlayerで再生" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("Google Playのアプリ内アップデートを追加" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("ダウンロード済みの更新を再起動して適用" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("App Storeの公開版と公開日を確認" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("緊急更新は表示します" in FUTACHA_CHANGE_LOG_HTML)
+        assertTrue("ふたちゃモードととしあき（仮）モードの両方" in FUTACHA_CHANGE_LOG_HTML)
         assertFalse(Regex("""20[0-9]{2}-[0-9]{2}-[0-9]{2}""").containsMatchIn(FUTACHA_CHANGE_LOG_HTML))
         assertFalse("build " in FUTACHA_CHANGE_LOG_HTML)
         assertFalse("開発中" in FUTACHA_CHANGE_LOG_HTML)
@@ -52,7 +66,7 @@ class CompatibilityInfoScreensTest {
         assertFalse("build.gradle上に存在しない版数" in FUTACHA_CHANGE_LOG_HTML)
         assertTrue(FUTACHA_CHANGE_LOG_ENTRIES.all { it.changes.isNotEmpty() })
         assertTrue(
-            FUTACHA_CHANGE_LOG_ENTRIES.first().changes.first().startsWith("過去ログ本文・引用")
+            FUTACHA_CHANGE_LOG_ENTRIES.first().changes.first().startsWith("Android版にGoogle Play")
         )
     }
 

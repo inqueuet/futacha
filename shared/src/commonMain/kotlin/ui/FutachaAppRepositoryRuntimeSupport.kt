@@ -10,6 +10,7 @@ import com.valoser.futacha.shared.state.AppStateStore
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.version.UpdateInfo
+import com.valoser.futacha.shared.version.UpdatePromptStyle
 import com.valoser.futacha.shared.version.VersionChecker
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
@@ -125,8 +126,8 @@ internal suspend fun fetchFutachaUpdateInfoIfEnabled(
     versionChecker: VersionChecker?,
     onFailure: (Throwable) -> Unit = {}
 ): UpdateInfo? {
-    if (!enabled) return null
-    return fetchFutachaUpdateInfo(versionChecker, onFailure)
+    val updateInfo = fetchFutachaUpdateInfo(versionChecker, onFailure)
+    return updateInfo?.takeIf { enabled || it.promptStyle == UpdatePromptStyle.IMMEDIATE }
 }
 
 internal fun closeOwnedFutachaRepository(

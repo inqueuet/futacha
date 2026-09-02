@@ -1030,7 +1030,7 @@ internal fun CompatSettingsScreen(
                             isUpdateCheckToggle -> if (isUpdateCheckEnabled) {
                                 "ON・起動時に最新リリースを確認"
                             } else {
-                                "OFF・起動時の通信と通知を停止"
+                                "OFF・通常通知を停止（緊急更新は表示）"
                             }
                             isBoolean -> compatBooleanPreferenceSummary(entry.preferenceKey)
                             isThreadCacheClear && threadCacheClearInProgress -> "削除中…"

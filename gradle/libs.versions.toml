@@ -31,6 +31,7 @@ wearCompose = "1.6.2"
 wearRemoteInteractions = "1.2.0"
 playServicesWearable = "20.0.1"
 playBilling = "9.1.0"
+playAppUpdate = "2.1.0"
 wearTiles = "1.6.2"
 wearProtolayout = "1.4.2"
 guava = "33.7.1-android"
@@ -95,6 +96,8 @@ androidx-wear-compose-ui-tooling = { group = "androidx.wear.compose", name = "co
 androidx-wear-remote-interactions = { group = "androidx.wear", name = "wear-remote-interactions", version.ref = "wearRemoteInteractions" }
 play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
 google-play-billing = { group = "com.android.billingclient", name = "billing", version.ref = "playBilling" }
+google-play-app-update = { group = "com.google.android.play", name = "app-update", version.ref = "playAppUpdate" }
+google-play-app-update-ktx = { group = "com.google.android.play", name = "app-update-ktx", version.ref = "playAppUpdate" }
 guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
 penfeizhou-animation-apng = { group = "com.github.penfeizhou.android.animation", name = "apng", version.ref = "penfeizhouAnimation" }
 penfeizhou-animation-awebp = { group = "com.github.penfeizhou.android.animation", name = "awebp", version.ref = "penfeizhouAnimation" }

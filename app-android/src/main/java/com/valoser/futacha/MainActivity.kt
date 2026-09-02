@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkManager
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -59,7 +60,10 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     private var pendingDeepLinks by mutableStateOf(PendingPlatformDeepLinks())
     private var pendingThreadBoardRegistrationApproved by mutableStateOf(false)
+    private var isFlexibleUpdateDownloaded by mutableStateOf(false)
+    private var didFlexibleUpdateCompletionFail by mutableStateOf(false)
     private var compatBackAnimationCallback: OnBackAnimationCallback? = null
+    private lateinit var inAppUpdateController: AndroidInAppUpdateController
 
     // ComponentActivity exposes this override through an androidx.core restricted
     // API marker even though overriding it is the supported Activity hook for
@@ -82,6 +86,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as? FutachaApplication
+        inAppUpdateController = AndroidInAppUpdateController(
+            activity = this,
+            onFlexibleUpdateDownloaded = {
+                didFlexibleUpdateCompletionFail = false
+                isFlexibleUpdateDownloaded = true
+            },
+            onFlexibleUpdateCompletionFailed = {
+                didFlexibleUpdateCompletionFail = true
+                isFlexibleUpdateDownloaded = true
+            }
+        )
+        inAppUpdateController.register()
+        lifecycleScope.launch {
+            val updateCheckEnabled = app?.appStateStore?.isUpdateCheckEnabled?.first() ?: true
+            inAppUpdateController.checkForNewUpdate(
+                allowOptionalUpdate = updateCheckEnabled
+            )
+        }
         val restoredDeepLinks = if (savedInstanceState?.getBoolean(KEY_HAS_PENDING_DEEP_LINK_SNAPSHOT) == true) {
             PendingPlatformDeepLinks(
                 ai = savedInstanceState.getString(KEY_PENDING_AI_DEEP_LINK).boundedPlatformDeepLinkOrNull(),
@@ -510,6 +532,41 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            if (isFlexibleUpdateDownloaded) {
+                AlertDialog(
+                    onDismissRequest = {
+                        isFlexibleUpdateDownloaded = false
+                        didFlexibleUpdateCompletionFail = false
+                    },
+                    title = { Text("アップデートの準備ができました") },
+                    text = {
+                        Text(
+                            if (didFlexibleUpdateCompletionFail) {
+                                "アップデートを適用できませんでした。もう一度お試しください。"
+                            } else {
+                                "新しいバージョンをダウンロードしました。再起動して更新します。"
+                            }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                isFlexibleUpdateDownloaded = false
+                                didFlexibleUpdateCompletionFail = false
+                                inAppUpdateController.completeFlexibleUpdate()
+                            }
+                        ) { Text(if (didFlexibleUpdateCompletionFail) "再試行" else "再起動して更新") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                isFlexibleUpdateDownloaded = false
+                                didFlexibleUpdateCompletionFail = false
+                            }
+                        ) { Text("後で") }
+                    }
+                )
+            }
         }
         // Register after Compose has installed its normal BackHandler so the
         // overlay callback remains the highest-priority predictive-back hook.
@@ -520,7 +577,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::inAppUpdateController.isInitialized) {
+            inAppUpdateController.resumeUpdateIfNeeded()
+        }
+    }
+
     override fun onDestroy() {
+        if (::inAppUpdateController.isInitialized) {
+            inAppUpdateController.unregister()
+        }
         compatBackAnimationCallback?.let { callback ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 onBackInvokedDispatcher.unregisterOnBackInvokedCallback(callback)

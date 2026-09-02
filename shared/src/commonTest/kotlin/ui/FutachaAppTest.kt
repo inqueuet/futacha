@@ -36,6 +36,7 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.SaveDirectorySelection
 import com.valoser.futacha.shared.version.UpdateInfo
+import com.valoser.futacha.shared.version.UpdatePromptStyle
 import com.valoser.futacha.shared.version.VersionChecker
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -485,16 +486,31 @@ class FutachaAppTest {
             latestVersion = "1.1.0",
             message = "update"
         )
+        val emergencyUpdateInfo = updateInfo.copy(promptStyle = UpdatePromptStyle.IMMEDIATE)
         var failure: Throwable? = null
 
         assertNull(
             fetchFutachaUpdateInfoIfEnabled(
                 enabled = false,
-                versionChecker = TestVersionChecker(failure = IllegalStateException("must not run")),
+                versionChecker = TestVersionChecker(updateInfo = updateInfo),
                 onFailure = { failure = it }
             )
         )
         assertNull(failure)
+        assertEquals(
+            emergencyUpdateInfo,
+            fetchFutachaUpdateInfoIfEnabled(
+                enabled = false,
+                versionChecker = TestVersionChecker(updateInfo = emergencyUpdateInfo)
+            )
+        )
+        assertEquals(
+            updateInfo,
+            fetchFutachaUpdateInfoIfEnabled(
+                enabled = true,
+                versionChecker = TestVersionChecker(updateInfo = updateInfo)
+            )
+        )
         assertNull(fetchFutachaUpdateInfo(null))
         assertEquals(
             updateInfo,

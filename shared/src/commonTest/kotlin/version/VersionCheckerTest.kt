@@ -1,10 +1,29 @@
 package com.valoser.futacha.shared.version
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VersionCheckerTest {
+    @Test
+    fun iosUpdatePrompt_isFlexibleUntilDaySevenAndImmediateAfterward() {
+        assertEquals(UpdatePromptStyle.FLEXIBLE, selectIosUpdatePromptStyle(0))
+        assertEquals(UpdatePromptStyle.FLEXIBLE, selectIosUpdatePromptStyle(1))
+        assertEquals(UpdatePromptStyle.FLEXIBLE, selectIosUpdatePromptStyle(6))
+        assertEquals(UpdatePromptStyle.IMMEDIATE, selectIosUpdatePromptStyle(7))
+        assertEquals(UpdatePromptStyle.IMMEDIATE, selectIosUpdatePromptStyle(30))
+    }
+
+    @Test
+    fun updateStaleness_usesCompletedDaysAndClampsFutureDates() {
+        val day = 86_400_000L
+        assertEquals(0, calculateUpdateStalenessDays(10 * day, 9 * day))
+        assertEquals(0, calculateUpdateStalenessDays(10 * day, 10 * day + day - 1))
+        assertEquals(1, calculateUpdateStalenessDays(10 * day, 11 * day))
+        assertEquals(7, calculateUpdateStalenessDays(10 * day, 17 * day))
+    }
+
     @Test
     fun buildUpdateMessage_onlyShowsVersionAvailability() {
         val message = buildUpdateMessage(

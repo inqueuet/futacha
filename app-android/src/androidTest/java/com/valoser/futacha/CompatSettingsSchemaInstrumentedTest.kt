@@ -423,7 +423,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.1-0")
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.3-0")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }
@@ -665,7 +665,7 @@ class CompatSettingsSchemaInstrumentedTest {
             rule.waitUntil(5_000) {
                 runBlocking { !sharedStore.isUpdateCheckEnabled.first() }
             }
-            rule.onNodeWithText("OFF・起動時の通信と通知を停止").assertIsDisplayed()
+            rule.onNodeWithText("OFF・通常通知を停止（緊急更新は表示）").assertIsDisplayed()
         } finally {
             runBlocking { sharedStore.setUpdateCheckEnabled(original) }
         }

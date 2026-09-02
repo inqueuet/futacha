@@ -43,8 +43,36 @@ interface VersionChecker {
 data class UpdateInfo(
     val currentVersion: String,
     val latestVersion: String,
-    val message: String
+    val message: String,
+    val updateUrl: String? = null,
+    val stalenessDays: Int? = null,
+    val promptStyle: UpdatePromptStyle = UpdatePromptStyle.FLEXIBLE
 )
+
+@Serializable
+enum class UpdatePromptStyle {
+    FLEXIBLE,
+    IMMEDIATE
+}
+
+const val IOS_IMMEDIATE_UPDATE_STALENESS_DAYS = 7
+
+fun selectIosUpdatePromptStyle(stalenessDays: Int): UpdatePromptStyle =
+    if (stalenessDays >= IOS_IMMEDIATE_UPDATE_STALENESS_DAYS) {
+        UpdatePromptStyle.IMMEDIATE
+    } else {
+        UpdatePromptStyle.FLEXIBLE
+    }
+
+fun calculateUpdateStalenessDays(
+    releaseEpochMillis: Long,
+    nowEpochMillis: Long
+): Int {
+    if (nowEpochMillis <= releaseEpochMillis) return 0
+    return ((nowEpochMillis - releaseEpochMillis) / 86_400_000L)
+        .coerceAtMost(Int.MAX_VALUE.toLong())
+        .toInt()
+}
 
 /**
  * GitHub Releases APIのレスポンス
@@ -180,7 +208,7 @@ suspend fun fetchLatestVersionFromGitHub(
     return try {
         val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
         val response = httpClient.get(url)
-        val body = readGitHubReleaseResponseBody(response)
+        val body = readBoundedVersionResponseBody(response)
         withContext(AppDispatchers.parsing) {
             json.decodeFromString<GitHubRelease>(body)
         }
@@ -192,10 +220,13 @@ suspend fun fetchLatestVersionFromGitHub(
     }
 }
 
-private suspend fun readGitHubReleaseResponseBody(response: HttpResponse): String {
+internal suspend fun readBoundedVersionResponseBody(
+    response: HttpResponse,
+    maxResponseBytes: Int = MAX_GITHUB_RELEASE_RESPONSE_BYTES
+): String {
     val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-    if (contentLength != null && contentLength > MAX_GITHUB_RELEASE_RESPONSE_BYTES) {
-        throw IllegalStateException("GitHub release response is too large")
+    if (contentLength != null && contentLength > maxResponseBytes) {
+        throw IllegalStateException("Version response is too large")
     }
 
     val bytes = withContext(AppDispatchers.io) {
@@ -227,18 +258,18 @@ private suspend fun readGitHubReleaseResponseBody(response: HttpResponse): Strin
                     }
 
                     zeroReadCount = 0
-                    if (read > MAX_GITHUB_RELEASE_RESPONSE_BYTES - totalBytes) {
-                        throw IllegalStateException("GitHub release response is too large")
+                    if (read > maxResponseBytes - totalBytes) {
+                        throw IllegalStateException("Version response is too large")
                     }
                     val requiredSize = totalBytes + read
                     if (requiredSize > output.size) {
                         var nextSize = output.size
                         while (nextSize < requiredSize) {
-                            nextSize = (nextSize * 2).coerceAtMost(MAX_GITHUB_RELEASE_RESPONSE_BYTES)
+                            nextSize = (nextSize * 2).coerceAtMost(maxResponseBytes)
                             if (nextSize == output.size) break
                         }
                         if (nextSize < requiredSize) {
-                            throw IllegalStateException("GitHub release response buffer expansion failed")
+                            throw IllegalStateException("Version response buffer expansion failed")
                         }
                         output = output.copyOf(nextSize)
                     }

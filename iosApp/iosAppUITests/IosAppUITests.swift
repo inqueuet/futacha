@@ -57,9 +57,36 @@ final class IosAppUITests: XCTestCase {
             // Keep unrelated UI tests on the current already-read version so
             // the automatic change log does not replace their intended start
             // screen. Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "10.2"
+            "-commonUsedVersion", "10.3"
         ]
         return app
+    }
+
+    private func makeUpdatePromptApplication(
+        style: String,
+        generation: String,
+        updateCheckEnabled: Bool = true,
+        profile: String = "futacha"
+    ) -> XCUIApplication {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", profile,
+            "-experience.profile_generation", generation,
+            "-update_check_enabled", updateCheckEnabled ? "true" : "false"
+        ]
+        app.launchEnvironment["FUTACHA_UI_TEST_UPDATE_PROMPT"] = style
+        return app
+    }
+
+    private func waitForDisappearance(
+        of element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func rotateToLandscape(_ app: XCUIApplication) throws {
@@ -153,6 +180,85 @@ final class IosAppUITests: XCTestCase {
             ).firstMatch.waitForExistence(timeout: 10),
             "The Futacha attachment gallery did not open."
         )
+    }
+
+    func testIosFlexibleUpdatePromptCanBeDeferred() {
+        let app = makeUpdatePromptApplication(style: "flexible", generation: "1201")
+        app.launch()
+
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let title = app.staticTexts["アップデートのお知らせ"]
+        XCTAssertTrue(title.waitForExistence(timeout: 20), "The Flexible update prompt was not shown.")
+        XCTAssertTrue(app.buttons["App Storeで更新"].exists)
+
+        let deferButton = app.buttons["後で"]
+        XCTAssertTrue(deferButton.exists, "The Flexible prompt must expose the defer action.")
+        deferButton.tap()
+
+        XCTAssertTrue(
+            waitForDisappearance(of: title, timeout: 5),
+            "Tapping 後で did not dismiss the Flexible update prompt."
+        )
+        XCTAssertEqual(app.state, .runningForeground, "Deferring the update left the application.")
+    }
+
+    func testIosImmediateUpdatePromptCannotBeDismissed() {
+        let app = makeUpdatePromptApplication(style: "immediate", generation: "1202")
+        app.launch()
+
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let title = app.staticTexts["アップデートのお知らせ"]
+        XCTAssertTrue(title.waitForExistence(timeout: 20), "The Immediate update prompt was not shown.")
+        XCTAssertFalse(app.buttons["後で"].exists, "The Immediate prompt must not expose a defer action.")
+
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.12)).tap()
+        XCTAssertTrue(
+            title.waitForExistence(timeout: 2),
+            "Tapping outside unexpectedly dismissed the Immediate update prompt."
+        )
+        XCTAssertTrue(app.buttons["App Storeで更新"].exists)
+    }
+
+    func testIosImmediateUpdatePromptOverridesDisabledSetting() {
+        for (index, profile) in ["futacha", "toshiaki_compat"].enumerated() {
+            let app = makeUpdatePromptApplication(
+                style: "immediate",
+                generation: "\(1204 + index)",
+                updateCheckEnabled: false,
+                profile: profile
+            )
+            app.launch()
+
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+            let title = app.staticTexts["アップデートのお知らせ"]
+            XCTAssertTrue(
+                title.waitForExistence(timeout: 20),
+                "The emergency iOS update prompt was suppressed in profile \(profile)."
+            )
+            XCTAssertFalse(app.buttons["後で"].exists)
+            XCTAssertTrue(app.buttons["App Storeで更新"].exists)
+            app.terminate()
+        }
+    }
+
+    func testIosUpdateActionOpensAppStoreOnPhysicalDevice() throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("CoreSimulator does not provide the production App Store handoff.")
+#else
+        let app = makeUpdatePromptApplication(style: "immediate", generation: "1203")
+        app.launch()
+
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let updateButton = app.buttons["App Storeで更新"]
+        XCTAssertTrue(updateButton.waitForExistence(timeout: 20))
+        updateButton.tap()
+
+        let appStore = XCUIApplication(bundleIdentifier: "com.apple.AppStore")
+        XCTAssertTrue(
+            appStore.wait(for: .runningForeground, timeout: 20),
+            "The App Store was not opened from the update action."
+        )
+#endif
     }
 
     func testFutachaBulkBoardAddHidesDiscoveryAddress() {
@@ -1493,9 +1599,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.1"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.3"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "過去ログ本文・引用のあぷ／あぷ小ファイル名に付く「[見る]」が、過去ログ側のHTML形式によっては残る問題を修正しました。"
+            "Android版にGoogle Playのアプリ内アップデートを追加しました。更新が認識された当日から6日目まではアプリを使い続けながら更新でき、7日目以降またはGoogle Playの重要度が4以上の場合は更新を優先して案内します。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)

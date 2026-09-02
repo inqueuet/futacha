@@ -610,7 +610,7 @@ internal fun GlobalSettingsBackgroundSection(
             headlineContent = { Text("アップデート確認") },
             supportingContent = {
                 Text(
-                    text = "ONにすると起動時に最新リリースを確認し、新しいバージョンがある場合だけ通知します。",
+                    text = "OFFでは通常の更新案内を停止します。公開から7日以上、またはAndroidでGoogle Playの重要度4以上の緊急更新はOFFでも表示します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

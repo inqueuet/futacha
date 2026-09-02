@@ -11,23 +11,34 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.version.UpdateInfo
+import com.valoser.futacha.shared.version.UpdatePromptStyle
+import com.valoser.futacha.shared.util.rememberUrlLauncher
 
 @Composable
 fun UpdateNotificationDialog(
     updateInfo: UpdateInfo,
     onDismiss: () -> Unit
 ) {
+    val openUrl = rememberUrlLauncher()
+    val updateUrl = updateInfo.updateUrl?.takeIf { it.isNotBlank() }
+    val isImmediate = updateUrl != null && updateInfo.promptStyle == UpdatePromptStyle.IMMEDIATE
     AlertDialog(
         onDismissRequest = {
-            AnalyticsTracker.uiControl("update_notification", "更新通知を閉じる")
-            onDismiss()
+            if (!isImmediate) {
+                AnalyticsTracker.uiControl("update_notification", "更新通知を閉じる")
+                onDismiss()
+            }
         },
         title = {
             Text("アップデートのお知らせ")
         },
         text = {
             Text(
-                text = updateInfo.message,
+                text = if (isImmediate) {
+                    "${updateInfo.message}\n\nこのバージョンは更新が必要です。App Storeで最新版へ更新してください。"
+                } else {
+                    updateInfo.message
+                },
                 modifier = Modifier
                     .heightIn(max = 360.dp)
                     .verticalScroll(rememberScrollState())
@@ -36,10 +47,27 @@ fun UpdateNotificationDialog(
         confirmButton = {
             TextButton(onClick = {
                 AnalyticsTracker.uiControl("update_notification", "更新通知を確認")
-                onDismiss()
+                if (updateUrl != null) {
+                    openUrl(updateUrl)
+                    if (!isImmediate) onDismiss()
+                } else {
+                    onDismiss()
+                }
             }) {
-                Text("OK")
+                Text(if (updateUrl != null) "App Storeで更新" else "OK")
             }
+        },
+        dismissButton = if (updateUrl != null && !isImmediate) {
+            {
+                TextButton(onClick = {
+                    AnalyticsTracker.uiControl("update_notification", "更新通知を後回し")
+                    onDismiss()
+                }) {
+                    Text("後で")
+                }
+            }
+        } else {
+            null
         }
     )
 }
