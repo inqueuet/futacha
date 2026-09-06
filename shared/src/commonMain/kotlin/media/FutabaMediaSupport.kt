@@ -34,6 +34,16 @@ private const val FUTABA_ARCHIVE_APU_VIEW_OPEN_BRACKET_PATTERN =
     "(?:\\[|［|&#0*91;|&#x0*5b;|&lbrack;)"
 private const val FUTABA_ARCHIVE_APU_VIEW_CLOSE_BRACKET_PATTERN =
     "(?:\\]|］|&#0*93;|&#x0*5d;|&rbrack;)"
+private val futabaLinkLabelTextRegex = Regex(
+    "(?i)$FUTABA_ARCHIVE_APU_VIEW_OPEN_BRACKET_PATTERN\\s*link\\s*" +
+        FUTABA_ARCHIVE_APU_VIEW_CLOSE_BRACKET_PATTERN,
+)
+// Preserve tags (especially href/src attributes) while removing visible labels.
+private val futabaLinkLabelHtmlRegex = Regex(
+    "<[^>]*>|${futabaLinkLabelTextRegex.pattern}",
+    RegexOption.IGNORE_CASE,
+)
+
 private val futabaArchiveApuViewSpanRegex = Regex(
     pattern =
         "(?is)(<a\\b[^>]{0,1000}>\\s*((?:fu|f)\\d+\\.(?:$FUTABA_COMPAT_MEDIA_EXTENSION_PATTERN))" +
@@ -65,7 +75,10 @@ private val futabaArchiveApuViewPlainTextRegex = Regex(
  * filename and an HTML line/block boundary.
  */
 fun normalizeFutabaArchiveApuViewLabelHtml(messageHtml: String): String {
-    val withoutPreviewSpan = futabaArchiveApuViewSpanRegex.replace(messageHtml) { match ->
+    val withoutLinkLabel = futabaLinkLabelHtmlRegex.replace(messageHtml) { match ->
+        if (match.value.startsWith('<')) match.value else ""
+    }
+    val withoutPreviewSpan = futabaArchiveApuViewSpanRegex.replace(withoutLinkLabel) { match ->
         match.groupValues[1]
     }
     return futabaArchiveApuViewAdjacentRegex.replace(withoutPreviewSpan) { match ->
@@ -76,6 +89,7 @@ fun normalizeFutabaArchiveApuViewLabelHtml(messageHtml: String): String {
 /** Presentation fallback for legacy snapshots whose HTML tags were already removed. */
 internal fun normalizeFutabaArchiveApuViewLabelText(text: String): String =
     futabaArchiveApuViewPlainTextRegex.replace(text) { match -> match.groupValues[1] }
+        .replace(futabaLinkLabelTextRegex, "")
 
 internal enum class FutabaMediaKind {
     IMAGE,

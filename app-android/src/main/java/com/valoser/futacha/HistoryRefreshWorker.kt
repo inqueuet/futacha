@@ -239,9 +239,7 @@ class HistoryRefreshWorker(
             val existencePolicy = parseCompatForegroundNetworkPolicy(
                 preferences["compat.background.backgroundThreadExistCheck"]
             )
-            val compatWatchWordsEnabled = parseCompatWatchWords(
-                preferences["compat.catalog.監視ワード"]
-            ).isNotEmpty()
+            val compatWatchWordsEnabled = com.valoser.futacha.shared.compat.compatWatchAllowed(preferences, isWifiConnected())
             val wifi = isWifiConnected()
             fun allowed(policy: CompatForegroundNetworkPolicy): Boolean = when (policy) {
                 CompatForegroundNetworkPolicy.ALWAYS -> true
@@ -265,9 +263,11 @@ class HistoryRefreshWorker(
                 val newMatches = refreshResult.newWatchMatches
                     .map { it.toCatalogWatchAlertMatch() }
                 val notifyMatches = filterNewWatchAlertMatches(applicationContext, newMatches)
-                if (notifyMatches.isNotEmpty() && isCurrentGeneration()) {
-                    WatchAlertNotifier(applicationContext).notifyMatches(notifyMatches)
-                    markWatchAlertMatchesNotified(applicationContext, notifyMatches)
+                if (notifyMatches.isNotEmpty() && isCurrentGeneration() &&
+                    preferences[com.valoser.futacha.shared.compat.COMPAT_WATCH_NOTIFY_KEY] != "OFF") {
+                    if (WatchAlertNotifier(applicationContext).notifyMatches(notifyMatches)) {
+                        markWatchAlertMatchesNotified(applicationContext, notifyMatches)
+                    }
                 }
                 if (isCurrentGeneration()) {
                     val completedAt = compatForegroundLastCheckStoredValue(System.currentTimeMillis())

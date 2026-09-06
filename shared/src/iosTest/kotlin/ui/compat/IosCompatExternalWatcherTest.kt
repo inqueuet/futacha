@@ -3,6 +3,10 @@ package com.valoser.futacha.shared.ui.compat
 import com.valoser.futacha.shared.compat.CompatBoard
 import com.valoser.futacha.shared.compat.CompatHistoryEntry
 import com.valoser.futacha.shared.compat.IosCompatibilityStore
+import com.valoser.futacha.shared.compat.CompatWatcherRepository
+import com.valoser.futacha.shared.compat.CompatWatchMatch
+import kotlinx.coroutines.flow.first
+import kotlin.time.Clock
 import com.valoser.futacha.shared.util.createFileSystem
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -11,7 +15,7 @@ import kotlin.test.assertTrue
 
 class IosCompatExternalWatcherTest {
     @Test
-    fun inAppWatcherListsAndDeletesPersistedCompatibilityHistory() = runBlocking {
+    fun inAppWatcherListsAndDeletesResultsWithoutDeletingCompatibilityHistory() = runBlocking {
         val fileSystem = createFileSystem()
         fileSystem.deleteRecursively("compatibility").getOrThrow()
         try {
@@ -29,8 +33,14 @@ class IosCompatExternalWatcherTest {
                     sortOrder = 0
                 )
             )
-            store.upsertHistory(history(firstUrl, "123456", "古い巡回結果", 1_000L))
-            store.upsertHistory(history(secondUrl, "123457", "新しい巡回結果", 2_000L))
+            val now = Clock.System.now().toEpochMilliseconds()
+            val first = history(firstUrl, "123456", "古い巡回結果", now - 1000)
+            val second = history(secondUrl, "123457", "新しい巡回結果", now)
+            store.upsertHistory(first)
+            store.upsertHistory(second)
+            val results = CompatWatcherRepository(store)
+            results.record(CompatWatchMatch(first, true, "古い"))
+            results.record(CompatWatchMatch(second, true, "新しい"))
             val watcher = IosCompatExternalWatcher(store)
 
             val initial = watcher.load().getOrThrow()
@@ -43,6 +53,7 @@ class IosCompatExternalWatcherTest {
 
             watcher.deleteAll().getOrThrow()
             assertTrue(watcher.load().getOrThrow().entries.isEmpty())
+            assertEquals(2, store.history.first().size)
         } finally {
             fileSystem.deleteRecursively("compatibility").getOrThrow()
         }

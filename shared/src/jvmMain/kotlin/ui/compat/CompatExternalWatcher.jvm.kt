@@ -24,6 +24,6 @@ private object JvmCompatExternalWatcher : CompatExternalWatcher {
 @Composable
 internal actual fun rememberCompatExternalWatcher(
     store: com.valoser.futacha.shared.compat.CompatibilityStore
-): CompatExternalWatcher = remember {
-    JvmCompatExternalWatcher
+): CompatExternalWatcher = remember(store) {
+    CompatInternalWatcher(store)
 }

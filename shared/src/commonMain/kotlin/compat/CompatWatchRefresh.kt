@@ -10,7 +10,8 @@ import com.valoser.futacha.shared.model.normalizeWatchWords
  */
 data class CompatWatchMatch(
     val history: CompatHistoryEntry,
-    val isNew: Boolean
+    val isNew: Boolean,
+    val keyword: String = ""
 )
 
 /**
@@ -22,9 +23,8 @@ fun parseCompatWatchWords(raw: String?): List<String> = normalizeWatchWords(
 )
 
 /**
- * Convert catalog matches into history entries.  The history entry is also
- * the source for the compatibility drawer's WATCHER page, so this keeps the
- * foreground refresh, background worker, and manual catalog refresh in sync.
+ * Convert catalog matches into entries shared by the existing history update
+ * and the independent built-in crawl log.
  */
 fun collectCompatWatchMatches(
     board: CompatBoard,
@@ -33,7 +33,7 @@ fun collectCompatWatchMatches(
     existingHistory: List<CompatHistoryEntry>,
     nowEpochMillis: Long
 ): List<CompatWatchMatch> {
-    val normalizedWords = normalizeWatchWords(watchWords)
+    val normalizedWords = watchWords.map(::normalizeCompatWatchText).filter(String::isNotBlank).distinct()
     if (normalizedWords.isEmpty()) return emptyList()
 
     val existingByUrl = existingHistory.associateBy(CompatHistoryEntry::canonicalUrl)
@@ -42,17 +42,7 @@ fun collectCompatWatchMatches(
         .distinctBy { it.id.ifBlank { it.threadUrl } }
         .filter { item ->
             val title = item.title.orEmpty()
-            val normalizedTitle = title
-                .map { char ->
-                    when (char) {
-                        '\u3000' -> ' '
-                        in '\uFF01'..'\uFF5E' -> char - 0xFEE0
-                        else -> char
-                    }
-                }
-                .joinToString("")
-                .trim()
-                .lowercase()
+            val normalizedTitle = normalizeCompatWatchText(title)
             normalizedWords.any { normalizedTitle.contains(it) }
         }
         .mapNotNull { item ->
@@ -72,7 +62,10 @@ fun collectCompatWatchMatches(
                     contentUpdatedAtEpochMillis = nowEpochMillis,
                     scrollAnchor = previous?.scrollAnchor ?: ScrollAnchor()
                 ),
-                isNew = previous == null
+                isNew = previous == null,
+                keyword = watchWords.filter { word ->
+                    normalizeCompatWatchText(word).let { it.isNotBlank() && normalizeCompatWatchText(item.title.orEmpty()).contains(it) }
+                }.joinToString(" / ")
             )
         }
         .toList()

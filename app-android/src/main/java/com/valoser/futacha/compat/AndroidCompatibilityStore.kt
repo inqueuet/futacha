@@ -1051,6 +1051,10 @@ class AndroidCompatibilityStore(
             } else 0
             val importedPreferences = if (restoreUserSettings) {
                 backup.preferences.forEach { (key, value) ->
+                    if (key == com.valoser.futacha.shared.compat.COMPAT_WATCH_WORDS_PREFERENCE_KEY &&
+                        com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY !in backup.preferences) {
+                        db.delete("compat_preference", "key = ?", arrayOf(com.valoser.futacha.shared.compat.COMPAT_WATCH_RULES_KEY))
+                    }
                     require(key.startsWith("compat.")) { "バックアップの設定キーが不正です" }
                     db.insertWithOnConflict(
                         "compat_preference",

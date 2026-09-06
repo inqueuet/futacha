@@ -102,12 +102,13 @@ suspend fun refreshCompatTabsInBackground(
     }
 
     if (checkWatchWords) {
-        val watchWords = parseCompatWatchWords(
-            store.preferences.first()["compat.catalog.監視ワード"]
-        )
-        if (watchWords.isNotEmpty()) {
+        val watchPreferences = store.preferences.first()
+        val watcher = CompatWatcherRepository(store)
+        if (compatWatchRules(watchPreferences).any { it.enabled }) {
             val existingHistory = store.history.first()
             boards.forEach { board ->
+                val watchWords = compatWatchWordsForBoard(watchPreferences, board.key)
+                if (watchWords.isEmpty()) return@forEach
                 listOf(CatalogMode.New, CatalogMode.Old).forEach { mode ->
                     try {
                         val catalog = repository.getCatalog(board.originalUrl, mode)
@@ -119,7 +120,11 @@ suspend fun refreshCompatTabsInBackground(
                             nowEpochMillis = nowEpochMillis
                         )
                         matches.forEach { match ->
-                            if (commitGate { store.upsertHistory(match.history) } && match.isNew) {
+                            var isNewResult = false
+                            if (commitGate {
+                                isNewResult = watcher.record(match)
+                                store.upsertHistory(match.history)
+                            } && isNewResult) {
                                 newWatchMatches += match
                             }
                         }
@@ -131,6 +136,25 @@ suspend fun refreshCompatTabsInBackground(
                 }
             }
         }
+        val completed = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+            watcher.load(nowEpochMillis).filter { it.active && it.checkedAtEpochMillis < nowEpochMillis }
+                .sortedBy { it.checkedAtEpochMillis }.take(100).forEach { result ->
+                    try {
+                        val gone = kotlinx.coroutines.withTimeoutOrNull(5_000L) {
+                            repository.probeThreadGone(result.history.originalUrl)
+                        }
+                        if (gone == null) failures++
+                        commitGate { watcher.markChecked(result, gone ?: false, nowEpochMillis) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        failures++
+                        commitGate { watcher.markChecked(result, false, nowEpochMillis) }
+                    }
+                }
+            true
+        } ?: false
+        if (!completed) failures++
     }
 
     return CompatBackgroundRefreshResult(updated, dead, skipped, failures, newWatchMatches)

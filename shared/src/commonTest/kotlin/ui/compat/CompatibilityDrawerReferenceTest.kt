@@ -12,8 +12,51 @@ import kotlinx.datetime.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 
 class CompatibilityDrawerReferenceTest {
+    private fun candidate(key: String, dead: Boolean = false, favorite: Boolean = false) = CompatTab(
+        key = key, canonicalUrl = "https://may.2chan.net/b/res/$key.htm",
+        originalUrl = "https://may.2chan.net/b/res/$key.htm", boardKey = "may-b",
+        boardName = "may", threadNo = key, title = key, isDead = dead, favorite = favorite,
+        insertedAtEpochMillis = Long.MAX_VALUE, contentUpdatedAtEpochMillis = Long.MAX_VALUE
+    )
+
+    @Test
+    fun deletionChecksRecentTabsAndKeepsLiveFailedAndProtectedTabs() = runBlocking {
+        val tabs = listOf(candidate("known", dead = true), candidate("gone"), candidate("live"),
+            candidate("failed"), candidate("favorite", favorite = true))
+        val requests = mutableSetOf<String>()
+        assertEquals(setOf("known", "gone"), checkCompatDeadTabCloseKeys(tabs, true, { tabs }) { url ->
+            requests += url.substringAfterLast('/').substringBefore('.')
+            if (url.endsWith("failed.htm")) error("network unavailable")
+            url.endsWith("gone.htm")
+        })
+        assertEquals(setOf("gone", "live", "failed"), requests)
+        assertEquals(setOf("favorite"), checkCompatDeadTabCloseKeys(
+            listOf(tabs.last()), false, { listOf(tabs.last()) }
+        ) { true })
+    }
+
+    @Test
+    fun deletionRechecksFavoritesRemovedTabsAndNewerContentAfterNetworkCheck() = runBlocking {
+        val tabs = listOf(candidate("favorite"), candidate("removed"), candidate("updated"), candidate("gone"),
+            candidate("revived", dead = true))
+        val current = listOf(tabs[0].copy(favorite = true),
+            tabs[2].copy(contentUpdatedAtEpochMillis = 1), tabs[3], candidate("new"), tabs[4].copy(isDead = false))
+        assertEquals(setOf("gone"), checkCompatDeadTabCloseKeys(tabs, true, { current }) { true })
+    }
+
+    @Test
+    fun cancelledDeletionDoesNotReturnAnyCloseTargets() = runBlocking<Unit> {
+        val tabs = listOf(candidate("gone"))
+        assertFailsWith<CancellationException> {
+            checkCompatDeadTabCloseKeys(tabs, true, { tabs }) { throw CancellationException("left screen") }
+        }
+    }
+
     @Test
     fun drawerToolbarUsesFiveDistinctOldAndFinalApkResourcesInReferenceOrder() {
         assertEquals(

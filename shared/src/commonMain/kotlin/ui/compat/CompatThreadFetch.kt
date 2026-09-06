@@ -28,8 +28,16 @@ internal data class CompatThreadFetchResult(
      * must not make the read-aloud poller believe that the live thread is
      * still active.
      */
-    val primaryThreadGone: Boolean = false
+    val primaryThreadGone: Boolean = false,
+    val primaryThreadConfirmedAlive: Boolean = source == CompatThreadFetchSource.PRIMARY
 )
+
+internal fun resolveCompatThreadDeadState(previouslyDead: Boolean, fetched: CompatThreadFetchResult): Boolean =
+    when {
+        fetched.primaryThreadGone -> true
+        fetched.primaryThreadConfirmedAlive -> false
+        else -> previouslyDead
+    }
 
 internal fun shouldFetchCompatThread(
     manual: Boolean,
@@ -134,7 +142,9 @@ internal suspend fun loadCompatThreadWithFallback(
             if (merged.posts.size > primaryPage.posts.size ||
                 (primaryPage.isTruncated && !merged.isTruncated)
             ) {
-                return Result.success(CompatThreadFetchResult(merged, CompatThreadFetchSource.MERGED))
+                return Result.success(CompatThreadFetchResult(
+                    merged, CompatThreadFetchSource.MERGED, primaryThreadConfirmedAlive = true
+                ))
             }
         }
         return Result.success(CompatThreadFetchResult(primaryPage, CompatThreadFetchSource.PRIMARY))

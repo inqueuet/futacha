@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,11 +38,11 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
 import coil3.compose.LocalPlatformContext
-import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.rememberViewerImagePainter
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 
 @Composable
@@ -102,17 +101,19 @@ internal fun ImagePreviewDialog(
                     .build()
             }
         }
-        val painter = rememberAsyncImagePainter(
-            model = previewRequest,
+        val image = rememberViewerImagePainter(
+            request = previewRequest,
             imageLoader = imageLoader
         )
-        val thumbnailPainter = rememberAsyncImagePainter(
-            model = thumbnailRequest,
+        val thumbnail = rememberViewerImagePainter(
+            request = thumbnailRequest,
             imageLoader = imageLoader
         )
-        val painterState by painter.state.collectAsState()
-        val thumbnailPainterState by thumbnailPainter.state.collectAsState()
-        val isLoadingState = previewRequest == null || painterState is AsyncImagePainter.State.Loading
+        val painter = image.painter
+        val thumbnailPainter = thumbnail.painter
+        val painterState = image.state
+        val thumbnailPainterState = thumbnail.state
+        val isLoadingState = painterState is AsyncImagePainter.State.Empty || painterState is AsyncImagePainter.State.Loading
         val isErrorState = painterState is AsyncImagePainter.State.Error
         val loadFailureDetail = formatMediaLoadFailure(
             (painterState as? AsyncImagePainter.State.Error)?.result?.throwable

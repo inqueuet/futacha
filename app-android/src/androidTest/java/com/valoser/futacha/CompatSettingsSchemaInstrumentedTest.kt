@@ -423,7 +423,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.3-0")
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.4-0")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }
@@ -1158,6 +1158,48 @@ class CompatSettingsSchemaInstrumentedTest {
     }
 
     @Test
+    fun nativeWatcherResultsSurviveRestartAndNeverDeleteBrowsingHistory() = runBlocking {
+        val boardUrl = "https://may.2chan.net/b/"
+        val url = "${boardUrl}res/123456.htm"
+        store.upsertBoard(CompatBoard("watch-board", "虹裏", boardUrl, boardUrl, 0))
+        val history = CompatHistoryEntry(url, url, "watch-board", "虹裏", "123456", "巡回テスト", contentUpdatedAtEpochMillis = System.currentTimeMillis())
+        store.upsertHistory(history)
+        com.valoser.futacha.shared.compat.CompatWatcherRepository(store).record(
+            com.valoser.futacha.shared.compat.CompatWatchMatch(history, true, "テスト")
+        )
+        store.closeForTest()
+        store = AndroidCompatibilityStore(context, databaseName = databaseName)
+        store.initialize()
+        val watcher = com.valoser.futacha.shared.compat.CompatWatcherRepository(store)
+        assertEquals("テスト", watcher.load(System.currentTimeMillis()).single().keyword)
+        watcher.deleteAll()
+        assertTrue(watcher.load(System.currentTimeMillis()).isEmpty())
+        assertEquals(url, store.history.first().single().canonicalUrl)
+    }
+
+    @Test
+    fun emptyWatcherOpensManagerAndPersistsKeywordWithoutExternalApp() {
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme { CompatibilityApp(store = store, repository = null, onExitApplication = {}) }
+            }
+        }
+        rule.onNodeWithContentDescription("ドロワー").performClick()
+        rule.onNodeWithContentDescription("巡回結果").performClick()
+        rule.onNodeWithText("巡回管理").performClick()
+        rule.onNodeWithText("キーワード").performScrollTo().performTextInput("内蔵巡回テスト")
+        rule.onNodeWithText("追加").performScrollTo().performClick()
+        rule.waitUntil(5_000) {
+            runBlocking {
+                com.valoser.futacha.shared.compat.compatWatchRules(store.preferences.first()).any { it.word == "内蔵巡回テスト" }
+            }
+        }
+        rule.onNodeWithText("閉じる").performClick()
+        rule.onNodeWithText("アプリ内巡回の結果（7日間・最大500件）").assertIsDisplayed()
+        runBlocking { assertTrue(store.history.first().isEmpty()) }
+    }
+
+    @Test
     fun drawerRemembersLastSelectedPageAfterCloseAndReopen() {
         rule.setContent {
             CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
@@ -1169,7 +1211,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithContentDescription("ドロワー").performClick()
         rule.onNodeWithContentDescription("巡回結果").performClick()
-        rule.onNodeWithText("にじろぐ(仮) 未インストール").assertIsDisplayed()
+        rule.onNodeWithText("アプリ内巡回の結果（7日間・最大500件）").assertIsDisplayed()
 
         pressBack()
         rule.waitUntil(5_000) {
@@ -1181,7 +1223,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         // Closing the drawer clears only its visibility. The selected page
         // must remain WATCHER instead of falling back to TABS/HISTORY (#41).
-        rule.onNodeWithText("にじろぐ(仮) 未インストール").assertIsDisplayed()
+        rule.onNodeWithText("アプリ内巡回の結果（7日間・最大500件）").assertIsDisplayed()
     }
 
     @Test
@@ -1295,7 +1337,7 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithText("+5").assertIsDisplayed()
 
         rule.onNodeWithContentDescription("巡回結果").performClick()
-        rule.onNodeWithText("にじろぐ(仮) 未インストール").assertIsDisplayed()
+        rule.onNodeWithText("アプリ内巡回の結果（7日間・最大500件）").assertIsDisplayed()
         rule.onAllNodesWithText(first.title).assertCountEquals(0)
     }
 

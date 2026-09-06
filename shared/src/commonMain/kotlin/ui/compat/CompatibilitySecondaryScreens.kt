@@ -6,6 +6,8 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.image.rememberViewerImagePainter
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -5775,16 +5777,18 @@ private fun CompatViewerImagePage(
                     .build()
             }
         }
-        val thumbnailPainter = rememberAsyncImagePainter(
-            model = thumbnailRequest,
+        val thumbnailImage = rememberViewerImagePainter(
+            request = thumbnailRequest,
             imageLoader = imageLoader
         )
-        val sourcePainter = rememberAsyncImagePainter(
-            model = sourceRequest,
+        val sourceImage = rememberViewerImagePainter(
+            request = sourceRequest,
             imageLoader = imageLoader
         )
-        val thumbnailState by thumbnailPainter.state.collectAsState()
-        val sourceState by sourcePainter.state.collectAsState()
+        val thumbnailPainter = thumbnailImage.painter
+        val sourcePainter = sourceImage.painter
+        val thumbnailState = thumbnailImage.state
+        val sourceState = sourceImage.state
         val sourceReady = sourceState is coil3.compose.AsyncImagePainter.State.Success
         val sourceFailed = sourceState is coil3.compose.AsyncImagePainter.State.Error
         val sourceFailureDetail = formatMediaLoadFailure(

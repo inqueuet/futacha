@@ -11,6 +11,47 @@ import futacha.shared.generated.resources.menu_ico_drawer_toolbar_watcher
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Instant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** Explicit deletion checks all eligible tabs, including recently viewed ones. */
+internal suspend fun checkCompatDeadTabCloseKeys(
+    tabs: List<CompatTab>,
+    protectFavorites: Boolean,
+    currentTabs: suspend () -> List<CompatTab>,
+    probeGone: suspend (String) -> Boolean
+): Set<String> = coroutineScope {
+    val permits = Semaphore(4)
+    val candidates = tabs.distinctBy(CompatTab::key)
+        .filterNot { protectFavorites && it.favorite }
+    val confirmed = candidates.map { tab ->
+        async {
+            val gone = tab.isDead || permits.withPermit {
+                try {
+                    withTimeoutOrNull(10_000L) { probeGone(tab.originalUrl) } == true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            tab.takeIf { gone }
+        }
+    }.awaitAll().filterNotNull().associateBy(CompatTab::key)
+    // Re-read after network I/O: favorites and tabs can change while checking.
+    currentTabs().filter { current ->
+        val checked = confirmed[current.key]
+        checked != null && checked.originalUrl == current.originalUrl &&
+            (!protectFavorites || !current.favorite) &&
+            (current.isDead || (!checked.isDead &&
+                current.contentUpdatedAtEpochMillis == checked.contentUpdatedAtEpochMillis))
+    }.mapTo(linkedSetOf(), CompatTab::key)
+}
 
 internal val compatReferenceDrawerToolbarKeys = listOf(
     "tabs",

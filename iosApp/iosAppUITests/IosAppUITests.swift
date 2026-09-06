@@ -57,7 +57,7 @@ final class IosAppUITests: XCTestCase {
             // Keep unrelated UI tests on the current already-read version so
             // the automatic change log does not replace their intended start
             // screen. Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "10.3"
+            "-commonUsedVersion", "10.4"
         ]
         return app
     }
@@ -1599,9 +1599,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.3"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.4"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "Android版にGoogle Playのアプリ内アップデートを追加しました。更新が認識された当日から6日目まではアプリを使い続けながら更新でき、7日目以降またはGoogle Playの重要度が4以上の場合は更新を優先して案内します。"
+            "としあき（仮）モードに、にじろぐ相当の内蔵巡回機能を追加しました。外部アプリを入れなくても、「巡回結果 → 巡回管理」から利用できます。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)

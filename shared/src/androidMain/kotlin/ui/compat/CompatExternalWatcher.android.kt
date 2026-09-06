@@ -148,5 +148,5 @@ internal actual fun rememberCompatExternalWatcher(
     store: com.valoser.futacha.shared.compat.CompatibilityStore
 ): CompatExternalWatcher {
     val context = LocalContext.current
-    return remember(context) { AndroidCompatExternalWatcher(context.applicationContext) }
+    return remember(context, store) { CompatSelectableWatcher(store, AndroidCompatExternalWatcher(context.applicationContext)) }
 }

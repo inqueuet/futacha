@@ -699,7 +699,10 @@ internal class IosCompatibilityStore(
         val nextRules = if (restoreNgRules) validRules.fold(it.ngRules) { all, rule ->
             replaceBy(all, rule, CompatNgRule::id)
         }.sortedByDescending(CompatNgRule::createdAtEpochMillis).take(MAX_COMPAT_NG_RULES) else it.ngRules
-        val nextPreferences = if (restoreUserSettings) it.preferences + backup.preferences.also { values ->
+        val retainedPreferences = if (COMPAT_WATCH_WORDS_PREFERENCE_KEY in backup.preferences && COMPAT_WATCH_RULES_KEY !in backup.preferences) {
+            it.preferences - COMPAT_WATCH_RULES_KEY
+        } else it.preferences
+        val nextPreferences = if (restoreUserSettings) retainedPreferences + backup.preferences.also { values ->
             values.forEach { (key, value) -> requireValidCompatPreference(key, value) }
         } else it.preferences
         val nextCatalogPrefs = if (restoreUserSettings) backup.catalogPreferences.filter { pref -> pref.boardKey in boardKeys }

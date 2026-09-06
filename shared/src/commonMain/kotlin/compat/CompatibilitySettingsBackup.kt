@@ -51,7 +51,8 @@ data class CompatWatchNgBackup(
     val schemaVersion: Int = CURRENT_COMPAT_SETTINGS_BACKUP_VERSION,
     val exportedAtEpochMillis: Long,
     val watchWords: List<String> = emptyList(),
-    val ngRules: List<CompatNgRule> = emptyList()
+    val ngRules: List<CompatNgRule> = emptyList(),
+    val watchRules: List<CompatWatchRule>? = null
 )
 
 const val CURRENT_COMPAT_SETTINGS_BACKUP_VERSION = 1
@@ -99,7 +100,8 @@ fun encodeCompatWatchNgBackup(backup: CompatSettingsBackup): String {
         CompatWatchNgBackup(
             exportedAtEpochMillis = backup.exportedAtEpochMillis,
             watchWords = words,
-            ngRules = backup.ngRules
+            ngRules = backup.ngRules,
+            watchRules = if (COMPAT_WATCH_RULES_KEY in backup.preferences) compatWatchRules(backup.preferences) else null
         )
     )
     require(encoded.encodeToByteArray().size <= MAX_COMPAT_SETTINGS_BACKUP_BYTES) {
@@ -134,7 +136,12 @@ fun decodeCompatWatchNgBackup(raw: String): CompatSettingsBackup {
         exportedAtEpochMillis = decoded.exportedAtEpochMillis,
         preferences = mapOf(
             COMPAT_WATCH_WORDS_PREFERENCE_KEY to normalizedWatchWords
-        ),
+        ) + (decoded.watchRules?.let { rules ->
+            require(rules.size <= 500 && rules.all { it.word.isNotBlank() && it.word.length <= 100 }) { "巡回キーワードが不正です" }
+            val value = compatSettingsBackupJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(CompatWatchRule.serializer()), rules)
+            requireValidCompatPreference(COMPAT_WATCH_RULES_KEY, value)
+            mapOf(COMPAT_WATCH_RULES_KEY to value)
+        } ?: emptyMap()),
         ngRules = decoded.ngRules
     )
 }
@@ -145,7 +152,7 @@ fun decodeCompatWatchNgBackup(raw: String): CompatSettingsBackup {
  * replacing a hand-maintained keyword list.
  */
 fun CompatSettingsBackup.settingsOnly(): CompatSettingsBackup = copy(
-    preferences = preferences - COMPAT_WATCH_WORDS_PREFERENCE_KEY,
+    preferences = preferences.filterKeys { it != COMPAT_WATCH_WORDS_PREFERENCE_KEY && it != COMPAT_WATCH_RULES_KEY && !it.startsWith("compat.watcher.result.") },
     ngRules = emptyList()
 )
 
@@ -158,7 +165,7 @@ fun CompatSettingsBackup.settingsOnly(): CompatSettingsBackup = copy(
 fun CompatSettingsBackup.watchAndNgOnly(): CompatSettingsBackup = CompatSettingsBackup(
     schemaVersion = schemaVersion,
     exportedAtEpochMillis = exportedAtEpochMillis,
-    preferences = preferences.filterKeys { it == COMPAT_WATCH_WORDS_PREFERENCE_KEY },
+    preferences = preferences.filterKeys { it == COMPAT_WATCH_WORDS_PREFERENCE_KEY || it == COMPAT_WATCH_RULES_KEY },
     ngRules = ngRules
 )
 

@@ -3,11 +3,8 @@ package com.valoser.futacha.shared.ui.compat
 import androidx.compose.runtime.Composable
 
 /**
- * A row supplied by the optional legacy "にじろぐ(仮)" watcher application.
- *
- * The reference APK does not derive this page from its own history.  It reads
- * the watcher's crawl log through an Android ContentProvider, so keep this
- * source separate from the compatibility mode's built-in watch-word list.
+ * A crawl-log row supplied by the built-in watcher or optional にじろぐ provider.
+ * Neither source is derived from the browsing history.
  */
 internal data class CompatExternalWatcherEntry(
     val key: String,
@@ -41,9 +38,8 @@ internal interface CompatExternalWatcher {
 
 @Composable
 /**
- * Android reads the optional legacy provider.  Platforms without a provider
- * receive the compatibility store so they can present an equivalent in-app
- * crawl result list instead of a successful-looking no-op.
+ * The built-in log is the default on every platform. Android can additionally
+ * select the optional legacy provider without merging either source with history.
  */
 internal expect fun rememberCompatExternalWatcher(
     store: com.valoser.futacha.shared.compat.CompatibilityStore

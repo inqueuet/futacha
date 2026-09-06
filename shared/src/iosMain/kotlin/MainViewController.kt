@@ -851,7 +851,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                             )
                             update != CompatForegroundNetworkPolicy.NONE ||
                                 existence != CompatForegroundNetworkPolicy.NONE ||
-                                parseCompatWatchWords(compatPreferences["compat.catalog.監視ワード"]).isNotEmpty() ||
+                                com.valoser.futacha.shared.compat.compatWatchEnabled(compatPreferences) ||
                                 archiveReportEnabled
                         }
                     }
@@ -1150,9 +1150,7 @@ private suspend fun runIosBackgroundRefresh(
             val existencePolicy = parseCompatForegroundNetworkPolicy(
                 preferences["compat.background.backgroundThreadExistCheck"]
             )
-            val watchWordsEnabled = parseCompatWatchWords(
-                preferences["compat.catalog.監視ワード"]
-            ).isNotEmpty()
+            val watchWordsEnabled = com.valoser.futacha.shared.compat.compatWatchAllowed(preferences, isCompatWifiConnected(null))
             val archiveReportEnabled = preferences[ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY] != "OFF"
             val wifi = isCompatWifiConnected(null)
             fun allowed(policy: CompatForegroundNetworkPolicy): Boolean = when (policy) {
@@ -1168,7 +1166,7 @@ private suspend fun runIosBackgroundRefresh(
             }
             withTimeout(refreshTimeoutMillis) {
                 if (updateAllowed || existenceAllowed || watchWordsEnabled) {
-                    refreshCompatTabsInBackground(
+                    val watchResult = refreshCompatTabsInBackground(
                         store = store,
                         repository = repo,
                         maxTabs = maxThreadsPerRun,
@@ -1183,6 +1181,26 @@ private suspend fun runIosBackgroundRefresh(
                             )
                         }
                     )
+                    if (preferences[com.valoser.futacha.shared.compat.COMPAT_WATCH_NOTIFY_KEY] != "OFF" &&
+                        profileStore.isGenerationCommitAllowed(ExperienceProfile.TOSHIAKI_COMPAT, expectedGeneration)) {
+                        val matches = watchResult.newWatchMatches.map { match ->
+                            com.valoser.futacha.shared.service.CatalogWatchAlertMatch(
+                                threadId = match.history.threadNo,
+                                boardId = match.history.boardKey,
+                                boardName = match.history.boardName,
+                                boardUrl = match.history.originalUrl.substringBefore("/res/"),
+                                title = match.history.title,
+                                titleImageUrl = match.history.thumbnailUrl.orEmpty(),
+                                replyCount = match.history.replyCount,
+                                detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis
+                            )
+                        }
+                        val fresh = filterNewIosWatchAlertMatches(matches)
+                        if (fresh.isNotEmpty()) {
+                            notifyIosWatchAlertMatches(fresh)
+                            markIosWatchAlertMatchesNotified(fresh)
+                        }
+                    }
                     if (updateAllowed || existenceAllowed) {
                         val completedAt = compatForegroundLastCheckStoredValue(
                             kotlin.time.Clock.System.now().toEpochMilliseconds()

@@ -362,11 +362,7 @@ class FutachaApplication : Application() {
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
                             val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]
                             val existence = compatPreferences["compat.background.backgroundThreadExistCheck"]
-                            val watchWords = compatPreferences["compat.catalog.監視ワード"]
-                                .orEmpty()
-                                .lineSequence()
-                                .map(String::trim)
-                                .any(String::isNotEmpty)
+                            val watchWords = com.valoser.futacha.shared.compat.compatWatchEnabled(compatPreferences)
                             compatForegroundPolicyEnabled(update) ||
                                 compatForegroundPolicyEnabled(existence) ||
                                 watchWords

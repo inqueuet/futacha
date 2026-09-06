@@ -43,6 +43,22 @@ class CompatThreadFetchTest {
 
         assertEquals(CompatThreadFetchSource.CACHE, result.getOrThrow().source)
         assertEquals(listOf("https://cache.example/b/res/123.htm"), requests)
+        assertTrue(resolveCompatThreadDeadState(true, result.getOrThrow()))
+        assertEquals(false, resolveCompatThreadDeadState(false, result.getOrThrow()))
+    }
+
+    @Test
+    fun onlyConfirmedLiveResponsesClearAnExistingDeadState() {
+        listOf(CompatThreadFetchSource.CACHE, CompatThreadFetchSource.MERGED, CompatThreadFetchSource.ARCHIVE)
+            .forEach { source ->
+                assertTrue(resolveCompatThreadDeadState(true, CompatThreadFetchResult(page, source)))
+            }
+        assertEquals(false, resolveCompatThreadDeadState(true,
+            CompatThreadFetchResult(page, CompatThreadFetchSource.PRIMARY)))
+        assertEquals(false, resolveCompatThreadDeadState(true,
+            CompatThreadFetchResult(page, CompatThreadFetchSource.MERGED, primaryThreadConfirmedAlive = true)))
+        assertTrue(resolveCompatThreadDeadState(false,
+            CompatThreadFetchResult(page, CompatThreadFetchSource.ARCHIVE, primaryThreadGone = true)))
     }
 
     @Test

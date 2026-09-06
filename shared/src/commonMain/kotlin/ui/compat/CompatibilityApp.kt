@@ -364,6 +364,9 @@ import com.valoser.futacha.shared.compat.compatForegroundLastCheckStoredValue
 import com.valoser.futacha.shared.compat.parseCompatForegroundNetworkPolicy
 import com.valoser.futacha.shared.compat.parseCompatForegroundLastCheckEpochMillis
 import com.valoser.futacha.shared.compat.parseCompatWatchWords
+import com.valoser.futacha.shared.compat.CompatWatcherRepository
+import com.valoser.futacha.shared.compat.compatWatchAllowed
+import com.valoser.futacha.shared.compat.compatWatchWordsForBoard
 import com.valoser.futacha.shared.compat.collectCompatWatchMatches
 import com.valoser.futacha.shared.ui.compat.CompatTouchScrollAction
 import com.valoser.futacha.shared.ui.compat.compatTouchScrollAction
@@ -872,6 +875,7 @@ private fun CompatibilityAppContent(
     val catalogStateHolder = rememberSaveableStateHolder()
     val compatPlatformContext = LocalPlatformContext.current
     val externalWatcher = rememberCompatExternalWatcher(store)
+    var watcherManagerOpen by remember { mutableStateOf(false) }
     var externalWatcherSnapshot by remember {
         mutableStateOf(CompatExternalWatcherSnapshot())
     }
@@ -1235,8 +1239,7 @@ private fun CompatibilityAppContent(
                     )
                 }
             }
-            val watchWords = parseCompatWatchWords(currentPreferences["compat.catalog.監視ワード"])
-            val watchDue = watchWords.isNotEmpty() && hasEpochIntervalElapsed(
+            val watchDue = compatWatchAllowed(currentPreferences, isCompatWifiConnected(compatPlatformContext)) && hasEpochIntervalElapsed(
                 nowMillis = now,
                 startedAtMillis = lastWatchCheckAt,
                 intervalMillis = com.valoser.futacha.shared.compat.COMPAT_THREAD_UPDATE_INTERVAL_MILLIS
@@ -1284,11 +1287,12 @@ private fun CompatibilityAppContent(
                                 collectCompatWatchMatches(
                                     board = board,
                                     items = catalog,
-                                    watchWords = watchWords,
+                                    watchWords = compatWatchWordsForBoard(currentPreferences, board.key),
                                     existingHistory = latestCompatHistories,
                                     nowEpochMillis = now
                                 ).forEach { match ->
                                     persistStoreSafely("foreground watch history refresh") {
+                                        CompatWatcherRepository(store).record(match)
                                         store.upsertHistory(match.history)
                                     }
                                 }
@@ -1308,11 +1312,12 @@ private fun CompatibilityAppContent(
                                     collectCompatWatchMatches(
                                         board = board,
                                         items = catalog,
-                                        watchWords = watchWords,
+                                        watchWords = compatWatchWordsForBoard(currentPreferences, board.key),
                                         existingHistory = latestCompatHistories,
                                         nowEpochMillis = now
                                     ).forEach { match ->
                                         persistStoreSafely("foreground watch history refresh") {
+                                            CompatWatcherRepository(store).record(match)
                                             store.upsertHistory(match.history)
                                         }
                                     }
@@ -1575,6 +1580,15 @@ private fun CompatibilityAppContent(
 
     LaunchedEffect(state.drawerPage, externalWatcher) {
         if (state.drawerPage == CompatDrawerPage.WATCHER) refreshExternalWatcher()
+    }
+
+    if (watcherManagerOpen) {
+        CompatWatcherManager(
+            store = store, repository = repository,
+            onDismiss = { watcherManagerOpen = false; refreshExternalWatcher() },
+            onResultsChanged = ::refreshExternalWatcher,
+            onOpenExternal = if (isAndroid()) ({ externalWatcher.openManager() }) else null
+        )
     }
 
     // Settings is a host-level screen, not a child of the navigation drawer.
@@ -1851,9 +1865,10 @@ private fun CompatibilityAppContent(
                 val word = command.wordParameter()
                 if (word.isNullOrBlank()) deepLinkError = "追加する監視ワードを指定してください"
                 else scope.launch {
-                    val key = "compat.catalog.監視ワード"
-                    val existing = preferences[key].orEmpty().lineSequence().map(String::trim).filter(String::isNotEmpty).toSet()
-                    store.savePreference(key, (existing + word.trim()).joinToString("\n"))
+                    val existing = com.valoser.futacha.shared.compat.compatWatchRules(preferences)
+                    CompatWatcherRepository(store).saveRules(
+                        (existing + com.valoser.futacha.shared.compat.CompatWatchRule(word.trim())).distinct()
+                    )
                 }
             }
             FutachaAiAction.AddNgWord,
@@ -2344,6 +2359,14 @@ private fun CompatibilityAppContent(
             onTabsClosed = { keys ->
                 dispatch(CompatibilityEvent.CloseTabs(keys, Clock.System.now().toEpochMilliseconds()))
             },
+            onCheckDeadTabs = { protectFavorites ->
+                checkCompatDeadTabCloseKeys(
+                    tabs = store.tabs.first(),
+                    protectFavorites = protectFavorites,
+                    currentTabs = { store.tabs.first() },
+                    probeGone = { url -> repository?.probeThreadGone(url) == true }
+                )
+            },
             onHistoryDeleted = { entry ->
                 launchStoreSafely("history deletion", "履歴を削除できませんでした") {
                     val modernStore = stateStore
@@ -2389,86 +2412,18 @@ private fun CompatibilityAppContent(
             },
             onExternalWatcherSelected = ::openExternalWatcherEntry,
             onExternalWatcherDelete = { entry ->
-                if (!isAndroid()) {
-                    // iOS's watcher rows are compatibility history rows, so
-                    // reuse the canonical deletion path.  Besides the SQLite
-                    // tombstone this removes mirrored modern history and any
-                    // saved payload, preventing a deleted row from returning
-                    // after a profile switch.
-                    launchStoreSafely("watcher history deletion", "巡回結果を削除できませんでした") {
-                        histories.firstOrNull { it.canonicalUrl == entry.key }?.let { historyEntry ->
-                            val modernStore = stateStore
-                            val modernEntry = modernStore?.history?.first()
-                                ?.firstOrNull { candidate ->
-                                    candidate.toCompatHistoryEntry()?.canonicalUrl == historyEntry.canonicalUrl
-                                }
-                                ?: historyEntry.toModernThreadHistoryEntry()
-                            if (modernStore != null && modernEntry != null) {
-                                dismissHistoryEntry(
-                                    stateStore = modernStore,
-                                    autoSavedThreadRepository = historyAutoSavedThreadRepository,
-                                    importedHistoryRepository = importedHistoryRepository,
-                                    compatibilityStore = store,
-                                    entry = modernEntry,
-                                    onAutoSavedThreadDeleteFailure = { failure ->
-                                        Logger.e("CompatibilityApp", "Watcher history payload deletion failed", failure)
-                                    }
-                                )
-                            } else {
-                                store.deleteHistory(historyEntry.canonicalUrl)
-                            }
-                        }
-                    }
-                } else {
-                    scope.launch {
-                        externalWatcher.delete(entry.key)
-                        refreshExternalWatcher()
-                    }
+                launchStoreSafely("watcher result deletion", "巡回結果を削除できませんでした") {
+                    externalWatcher.delete(entry.key).getOrThrow()
+                    refreshExternalWatcher()
                 }
             },
             onExternalWatcherDeleteAll = {
-                if (!isAndroid()) {
-                    launchStoreSafely("watcher history clear", "巡回結果をすべて削除できませんでした") {
-                        val modernStore = stateStore
-                        if (modernStore != null) {
-                            clearHistory(
-                                stateStore = modernStore,
-                                autoSavedThreadRepository = historyAutoSavedThreadRepository,
-                                importedHistoryRepository = importedHistoryRepository,
-                                compatibilityStore = store,
-                                onSkippedThreadsCleared = {},
-                                onAutoSavedThreadDeleteFailure = { failure ->
-                                    Logger.e("CompatibilityApp", "Watcher history payload purge failed", failure)
-                                }
-                            )
-                        } else {
-                            store.clearHistory()
-                        }
-                    }
-                } else {
-                    scope.launch {
-                        externalWatcher.deleteAll()
-                        refreshExternalWatcher()
-                    }
+                launchStoreSafely("watcher result clear", "巡回結果をすべて削除できませんでした") {
+                    externalWatcher.deleteAll().getOrThrow()
+                    refreshExternalWatcher()
                 }
             },
-            onOpenExternalWatcherManager = {
-                if (isAndroid()) {
-                    externalWatcher.openManager()
-                } else {
-                    // iOS presents the in-app crawl list above. Its settings
-                    // live in this app rather than in a foreign provider.
-                    val origin = state.host
-                    closeDrawerForNavigation()
-                    scope.launch {
-                        dispatch(
-                            CompatibilityEvent.OpenHost(
-                                CompatHost.Settings(path = "background", origin = origin)
-                            )
-                        )
-                    }
-                }
-            },
+            onOpenExternalWatcherManager = { watcherManagerOpen = true },
             onRefreshExternalWatcher = ::refreshExternalWatcher,
             onRefreshAllTabs = {
                 val activeRepository = repository
@@ -4171,7 +4126,6 @@ private fun CompatCatalogScreen(
     var catalogImagePhashes by remember(board.key) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var catalogImageNgProgress by remember(board.key) { mutableStateOf<Pair<Int, Int>?>(null) }
     var watchWordsDialogOpen by remember { mutableStateOf(false) }
-    var watchWordsText by remember { mutableStateOf("") }
     var cacheSearchOpen by remember(board.key) { mutableStateOf(false) }
     var archiveSearchOpen by remember(board.key) { mutableStateOf(false) }
     var boardSelectorOpen by remember { mutableStateOf(false) }
@@ -4197,14 +4151,7 @@ private fun CompatCatalogScreen(
         buildCompatCatalogRuleIndex(catalogRules)
     }
     val catalogPrivacyEnabled = preferences.compatPrivacyEnabled()
-    val watchWords = remember(preferences["compat.catalog.監視ワード"]) {
-        preferences["compat.catalog.監視ワード"].orEmpty()
-            .lineSequence()
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-            .distinct()
-            .toList()
-    }
+    val watchWords = remember(preferences, board.key) { compatWatchWordsForBoard(preferences, board.key) }
     val priorityThreshold = preferences
         .compatPreferenceValue("catalog", "delayFewReplies", "レス数で優先ソート")
         ?.filter(Char::isDigit)?.toIntOrNull()?.coerceIn(0, 30) ?: 0
@@ -4627,12 +4574,13 @@ private fun CompatCatalogScreen(
                 val watchMatches = collectCompatWatchMatches(
                     board = board,
                     items = loadedItems,
-                    watchWords = parseCompatWatchWords(preferences["compat.catalog.監視ワード"]),
+                    watchWords = compatWatchWordsForBoard(preferences, board.key),
                     existingHistory = localHistory,
                     nowEpochMillis = fetchedAt
                 )
                 watchMatches.forEach { match ->
                     launchCatalogStoreSafely("watch history persistence", "監視履歴の保存に失敗しました") {
+                        CompatWatcherRepository(store).record(match)
                         store.upsertHistory(match.history)
                     }
                 }
@@ -5469,37 +5417,10 @@ private fun CompatCatalogScreen(
         )
     }
     if (watchWordsDialogOpen) {
-        AlertDialog(
-            onDismissRequest = { watchWordsDialogOpen = false },
-            title = { Text("監視ワード") },
-            text = {
-                Column {
-                    Text("1行に1語ずつ入力してください")
-                    TextField(
-                        value = watchWordsText,
-                        onValueChange = { watchWordsText = it.take(5_000) },
-                        minLines = 6,
-                        maxLines = 12,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val normalized = watchWordsText.lineSequence()
-                        .map(String::trim)
-                        .filter(String::isNotEmpty)
-                        .distinct()
-                        .take(500)
-                        .joinToString("\n")
-                    watchWordsDialogOpen = false
-                    launchCatalogStoreSafely("watch word persistence", "監視ワードの保存に失敗しました") {
-                        store.savePreference("compat.catalog.監視ワード", normalized)
-                        refresh(preference.sort)
-                    }
-                }) { Text("保存") }
-            },
-            dismissButton = { TextButton(onClick = { watchWordsDialogOpen = false }) { Text("キャンセル") } }
+        CompatWatcherManager(
+            store = store, repository = repository,
+            onDismiss = { watchWordsDialogOpen = false },
+            onResultsChanged = { launchCatalogStoreSafely("watch refresh", "巡回後の更新に失敗しました") { refresh(preference.sort) } }
         )
     }
     if (archiveSearchOpen) {
@@ -6732,7 +6653,12 @@ private fun CompatThreadScreen(
                 val loadedFromCache = fetched?.source == CompatThreadFetchSource.CACHE
                 val loadedFromArchive = fetched?.source == CompatThreadFetchSource.ARCHIVE
                 val archiveSupplemented = fetched?.source == CompatThreadFetchSource.MERGED
-                val primaryThreadGone = fetched?.primaryThreadGone == true
+                val primaryThreadGone = fetched?.let {
+                    resolveCompatThreadDeadState(
+                        store.tabs.first().firstOrNull { current -> current.key == tab.key }?.isDead ?: tab.isDead,
+                        it
+                    )
+                } ?: tab.isDead
                 if (page != null) {
                     val now = Clock.System.now().toEpochMilliseconds()
                     // A live thread can contain thousands of posts.  Mapping
@@ -12772,6 +12698,7 @@ private fun CompatNavigationDrawer(
     onHistorySelected: (CompatHistoryEntry) -> Unit,
     onTabFavoriteToggle: (CompatTab) -> Unit,
     onTabsClosed: (Set<String>) -> Unit,
+    onCheckDeadTabs: suspend (Boolean) -> Set<String>,
     onHistoryDeleted: (CompatHistoryEntry) -> Unit,
     onHistoryCleared: () -> Unit,
     onExternalWatcherSelected: (CompatExternalWatcherEntry) -> Unit,
@@ -12788,6 +12715,8 @@ private fun CompatNavigationDrawer(
     var contextHistory by remember { mutableStateOf<CompatHistoryEntry?>(null) }
     var contextExternalWatcher by remember { mutableStateOf<CompatExternalWatcherEntry?>(null) }
     var transientMessage by remember { mutableStateOf<String?>(null) }
+    var checkingDeadTabs by remember { mutableStateOf(false) }
+    val deadTabCheckScope = rememberCoroutineScope()
     val uniqueTabs = remember(tabs) { distinctCompatTabs(tabs) }
     val uniqueHistories = remember(histories) { distinctCompatHistory(histories) }
     // The reference APK keeps the activity action bar visible while the
@@ -12821,6 +12750,11 @@ private fun CompatNavigationDrawer(
                         )
                     }
                     HorizontalDivider()
+                    if (page == CompatDrawerPage.WATCHER) {
+                        TextButton(onClick = onOpenExternalWatcherManager, modifier = Modifier.fillMaxWidth()) {
+                            Text("巡回管理")
+                        }
+                    }
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         when (page) {
                             CompatDrawerPage.TABS -> {
@@ -12865,7 +12799,7 @@ private fun CompatNavigationDrawer(
                                         )
                                     }
                                 }
-                                val externalEntries = externalWatcherSnapshot.entries.take(100)
+                                val externalEntries = externalWatcherSnapshot.entries.take(500)
                                 itemsIndexed(
                                     externalEntries,
                                     key = { index, entry ->
@@ -12950,7 +12884,12 @@ private fun CompatNavigationDrawer(
                         color = Color.White,
                         fontSize = 12.sp
                     )
-                    LaunchedEffect(message) { delay(2_000); transientMessage = null }
+                    LaunchedEffect(message, checkingDeadTabs) {
+                        if (!checkingDeadTabs) {
+                            delay(2_000)
+                            transientMessage = null
+                        }
+                    }
                 }
             }
         }
@@ -12960,6 +12899,31 @@ private fun CompatNavigationDrawer(
             mutableStateOf(COMPAT_REFERENCE_DRAWER_PROTECT_FAVORITES_DEFAULT)
         }
         fun closeCandidates(action: CompatDrawerTabCloseAction) {
+            if (action == CompatDrawerTabCloseAction.DEAD) {
+                if (checkingDeadTabs) return
+                val protect = protectFavorites
+                contextTab = null
+                checkingDeadTabs = true
+                transientMessage = "スレッドの生存確認中…"
+                deadTabCheckScope.launch {
+                    try {
+                        val keys = onCheckDeadTabs(protect)
+                        if (keys.isNotEmpty()) onTabsClosed(keys)
+                        transientMessage = if (keys.isEmpty()) {
+                            "削除できる落ちスレは確認できませんでした"
+                        } else {
+                            "落ちたスレを${keys.size}件閉じました"
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        transientMessage = failure.toCompatUserMessage("生存確認に失敗しました")
+                    } finally {
+                        checkingDeadTabs = false
+                    }
+                }
+                return
+            }
             val keys = compatDrawerTabCloseKeys(
                 tabs = uniqueTabs,
                 selectedKey = selected.key,
@@ -13058,11 +13022,11 @@ private fun CompatExternalWatcherMetadataRow(
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center
             )
-            Text(entry.boardName.orEmpty(), maxLines = 1, color = secondaryColor, fontSize = 12.sp, textAlign = TextAlign.Center)
+            Text(listOfNotNull(entry.boardName, entry.extractedKeyword?.takeIf(String::isNotBlank)).joinToString(" / "), maxLines = 1, color = secondaryColor, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("${entry.replyCount}レス", maxLines = 1, fontSize = 16.sp, color = replyColor, textAlign = TextAlign.Center)
+            Text("${entry.replyCount}レス${if (entry.active) "" else "・落"}", maxLines = 1, fontSize = 16.sp, color = replyColor, textAlign = TextAlign.Center)
             Text(
                 formatCompatDrawerWatcherTimestamp(entry.insertedAtEpochMillis),
                 maxLines = 1,

@@ -1,11 +1,34 @@
 package com.valoser.futacha.shared.media
 
+import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.ui.board.messageHtmlToPlainText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class FutabaMediaSupportTest {
+    @Test
+    fun linkLabelsAreHiddenInBodiesQuotesAndCachedTextWithoutChangingHtmlTargets() {
+        val html = "本文<br><a href=\"https://example.test/[link]\">fu123.png</a>" +
+            "<span>[link]</span><br>&gt;fu123.png&#91;link&#93;"
+        val expected = "本文<br><a href=\"https://example.test/[link]\">fu123.png</a>" +
+            "<span></span><br>&gt;fu123.png"
+        assertEquals(expected, normalizeFutabaArchiveApuViewLabelHtml(html))
+        assertEquals("本文\nfu123.png\n>fu123.png", messageHtmlToPlainText(html))
+        assertEquals("本文\nfu123.png\n>fu123.png", html.toCompatPlainText())
+        assertEquals(
+            "本文\n>fu123.png\nhttps://example.test/",
+            normalizeFutabaArchiveApuViewLabelText("本文\n>fu123.png[link]\nhttps://example.test/")
+        )
+        assertEquals(
+            "本文 link <a href=\"https://example.test/\">通常リンク</a>",
+            normalizeFutabaArchiveApuViewLabelHtml(
+                "本文 link <a href=\"https://example.test/\">通常リンク</a>"
+            )
+        )
+    }
+
     @Test
     fun fileExtensionIgnoresCaseQueryFragmentAndDirectoryDots() {
         assertEquals("webm", mediaFileExtension(" https://img.2chan.net/a.b/src/1.WEBM?x=.jpg#png "))
