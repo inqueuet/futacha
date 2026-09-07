@@ -1,6 +1,0 @@
-
-com.valoser.futacha.TextSelectionStateApiInstrumentedTest:.....
-
-Time: 10.395
-
-OK (5 tests)

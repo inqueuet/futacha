@@ -56,11 +56,15 @@ OS 固有機能を除き、画面、状態管理、通信、HTML 解析、保存
 .
 ├── app-android/   Android ホストアプリ、WorkManager、通知、端末連携
 ├── app-wear/      Wear OS アプリ、Tile、Data Layer 連携
+├── baselineprofile/ Android の起動最適化プロファイル生成・性能計測
+├── buildSrc/      Android の文字選択補強などのビルド処理
 ├── iosApp/        SwiftUI ホスト、Xcode プロジェクト、watchOS ホスト
 ├── shared/        共通 UI、状態、通信、解析、保存、プラットフォーム実装
-├── quality/       機能・挙動・リリース確認用の回帰契約
-└── tools/         開発者環境の構築・検査スクリプト
+└── quality/       機能・挙動・リリース確認用の回帰契約
 ```
+
+公開ソースには、ビルド・テストに必要なコードと品質契約を含めています。内部の調査資料・生ログ・開発ツール・生成済みAPK／AABは含めません。
+AndroidのReleaseビルドでは `baselineprofile/` を使い、専用のAPI 35エミュレーターで最適化プロファイルを生成します。生成済みプロファイルは公開ソースに同梱しません。
 
 `shared/src/` の主な領域は次のとおりです。
 
@@ -185,7 +189,7 @@ Firebase の設定ファイルがなくてもビルドと起動は可能です�
 ./gradlew validateQualityContracts
 ```
 
-GitHub Actions は使用しません。JDK 17 の開発者環境で `qualityGate` を実行し、リリース前は `docs/device-regression-runbook.md` と `quality/release-device-matrix.tsv` に従って Android / iOS の端末テストを完了させます。
+GitHub Actions は使用しません。開発者環境で `qualityGate` を実行し、リリース前は `quality/release-device-matrix.tsv` に従って Android / iOS の端末テストを完了させます。開発元の実機手順書と実機証跡は非公開で、品質ゲートの成功だけで実機確認済みとは扱いません。
 
 ## データとネットワークについて
 
