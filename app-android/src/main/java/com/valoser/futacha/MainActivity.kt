@@ -421,6 +421,7 @@ class MainActivity : ComponentActivity() {
                             stateStore = stateStore,
                             versionChecker = versionChecker,
                             httpClient = httpClient,
+                            imageTransport = if (networkServicesReady) app?.imageTransport else null,
                             sharedRepository = if (networkServicesReady) app?.boardRepository else null,
                             sharedHistoryRefresher = if (networkServicesReady) app?.historyRefresher else null,
                             fileSystem = fileSystem,

@@ -195,7 +195,7 @@ class ImageLoaderProviderTest {
 
     @Test
     fun concurrentRequestsForTheSameImageAreDeduplicated() {
-        assertIs<DeDupeConcurrentRequestStrategy>(createFutachaConcurrentRequestStrategy())
+        assertIs<RetryingImageRequestStrategy>(createFutachaConcurrentRequestStrategy())
     }
 
     @Test

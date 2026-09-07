@@ -57,7 +57,7 @@ final class IosAppUITests: XCTestCase {
             // Keep unrelated UI tests on the current already-read version so
             // the automatic change log does not replace their intended start
             // screen. Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "10.4"
+            "-commonUsedVersion", "10.5"
         ]
         return app
     }
@@ -1599,9 +1599,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.4"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.5"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "としあき（仮）モードに、にじろぐ相当の内蔵巡回機能を追加しました。外部アプリを入れなくても、「巡回結果 → 巡回管理」から利用できます。"
+            "Android版で、通信の接続が切れた後に画像の表示まで長く待たされる問題を改善しました。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)
@@ -2145,12 +2145,15 @@ final class IosAppUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.50)).tap()
         app.buttons["戻る"].firstMatch.tap()
 
-        let saveMode = app.buttons["保存モード"]
+        let saveMode = app.buttons["一括保存"]
         XCTAssertTrue(saveMode.waitForExistence(timeout: 5), "Compatibility gallery save mode is missing.")
         saveMode.tap()
+        let endSelection = app.buttons["選択を終了"]
+        XCTAssertTrue(endSelection.waitForExistence(timeout: 5))
         XCTAssertTrue(
-            app.staticTexts["保存モード"].waitForExistence(timeout: 5),
-            "Enabling gallery save mode did not update its persistent state label."
+            app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "件選択"))
+                .firstMatch.waitForExistence(timeout: 5),
+            "Enabling gallery save mode did not expose the selected media count."
         )
         app.buttons["その他"].firstMatch.tap()
         XCTAssertTrue(app.buttons["表示オプション"].waitForExistence(timeout: 5))
@@ -2158,6 +2161,8 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ヘルプ"].exists)
         XCTAssertFalse(app.buttons["すべて保存"].exists)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.25)).tap()
+        endSelection.tap()
+        XCTAssertTrue(saveMode.waitForExistence(timeout: 5))
         app.buttons["戻る"].firstMatch.tap()
         XCTAssertTrue(threadPager.waitForExistence(timeout: 10), "Gallery Back did not restore the thread pager.")
 

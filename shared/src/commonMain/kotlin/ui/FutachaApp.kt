@@ -105,6 +105,7 @@ fun FutachaApp(
     history: List<ThreadHistoryEntry> = mockThreadHistory,
     versionChecker: VersionChecker? = null,
     httpClient: io.ktor.client.HttpClient? = null,
+    imageTransport: com.valoser.futacha.shared.network.FutachaImageTransport? = null,
     sharedRepository: BoardRepository? = null,
     sharedHistoryRefresher: HistoryRefresher? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
@@ -303,6 +304,7 @@ fun FutachaApp(
             lightweightMode = devicePerformanceProfile.isLowSpec,
             performanceProfile = devicePerformanceProfile,
             httpClient = httpClient,
+            imageTransport = imageTransport,
             diskCacheBytesOverride = compatibilityImageCacheBytes,
             cacheLocation = compatibilityCacheLocation,
             parallelismOverride = compatibilityImageParallelism
@@ -311,6 +313,7 @@ fun FutachaApp(
             lightweightMode = devicePerformanceProfile.isLowSpec,
             performanceProfile = devicePerformanceProfile,
             httpClient = httpClient,
+            imageTransport = imageTransport,
             diskCacheBytesOverride = compatibilityCatalogImageCacheBytes,
             cacheLocation = compatibilityCatalogCacheLocation,
             parallelismOverride = compatibilityImageParallelism,
@@ -412,7 +415,8 @@ fun FutachaApp(
         val imageLoader = rememberFutachaImageLoader(
             lightweightMode = shouldUseLightweightMode,
             performanceProfile = devicePerformanceProfile,
-            httpClient = httpClient
+            httpClient = httpClient,
+            imageTransport = imageTransport
         )
         DisposableEffect(imageLoader) {
             onDispose {

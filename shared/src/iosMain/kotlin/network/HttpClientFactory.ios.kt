@@ -39,18 +39,14 @@ actual fun createHttpClient(
         install(HttpTimeout) {
             requestTimeoutMillis = 75_000
             connectTimeoutMillis = 15_000
-            socketTimeoutMillis = 45_000
+            // Preserve the general client's previous effective timeout while allowing
+            // image requests to override it through HttpTimeout.
+            socketTimeoutMillis = 75_000
         }
 
         install(HttpCookies) {
             storage = cookieStorage ?: AcceptAllCookiesStorage()
         }
 
-        engine {
-            configureRequest {
-                // Set proper timeout for connections
-                setTimeoutInterval(75.0)
-            }
-        }
     }
 }

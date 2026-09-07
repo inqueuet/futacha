@@ -423,7 +423,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.4-0")
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.5-0")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }

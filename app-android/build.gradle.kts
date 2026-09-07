@@ -79,8 +79,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 166
-        versionName = "10.4"
+        versionCode = 168
+        versionName = "10.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
@@ -230,6 +230,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.media3.exoplayer)
     androidTestImplementation(libs.coil3.compose)
+    androidTestImplementation(libs.coil3.network.ktor)
     androidTestImplementation(libs.ktor.client.mock)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

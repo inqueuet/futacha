@@ -96,7 +96,7 @@ actual fun createHttpClient(
     }
 }
 
-private object MainThreadSafeResponseCloseInterceptor : Interceptor {
+internal object MainThreadSafeResponseCloseInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
         val response = chain.proceed(chain.request())
         return response.newBuilder()

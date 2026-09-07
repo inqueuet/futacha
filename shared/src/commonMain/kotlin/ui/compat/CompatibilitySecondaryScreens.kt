@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -100,6 +101,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -4784,7 +4786,10 @@ internal fun CompatViewerScreen(
     val share = rememberCompatShareLauncher()
     val clipboard = LocalClipboardManager.current
     val imageLoader = LocalFutachaImageLoader.current
-    var posts by remember(tabKey, directMediaUrl) { mutableStateOf<List<CompatPostSnapshot>>(emptyList()) }
+    var loadedPosts by remember(tabKey, directMediaUrl, directSourcePosition, initialIndex, initialPostNo) {
+        mutableStateOf<List<CompatPostSnapshot>?>(null)
+    }
+    val posts = loadedPosts.orEmpty()
     var snapshotRevision by remember(tabKey) { mutableStateOf(tab.snapshotRevision) }
     var chromeVisible by remember { mutableStateOf(true) }
     var quickMenu by remember { mutableStateOf(false) }
@@ -4873,7 +4878,9 @@ internal fun CompatViewerScreen(
         httpClient,
         showDeletedContent,
         directMediaUrl,
-        directSourcePosition
+        directSourcePosition,
+        initialIndex,
+        initialPostNo
     ) {
         val hiddenImages = ngRules.asSequence()
             .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
@@ -4891,7 +4898,7 @@ internal fun CompatViewerScreen(
             }
         if (directMediaUrl != null) {
             val sourcePost = rawPosts.firstOrNull { it.postNo == initialPostNo }
-            posts = listOf(
+            loadedPosts = listOf(
                 CompatPostSnapshot(
                     position = directSourcePosition ?: sourcePost?.position ?: 0,
                     postNo = initialPostNo ?: sourcePost?.postNo ?: tab.threadNo,
@@ -4911,7 +4918,7 @@ internal fun CompatViewerScreen(
             rules = imageNgPhashRules,
             threshold = imageNgPhashThreshold
         )
-        posts = withContext(AppDispatchers.parsing) {
+        loadedPosts = withContext(AppDispatchers.parsing) {
             compatViewerMediaPosts(
                 posts = rawPosts,
                 hiddenImages = hiddenImages,
@@ -4922,22 +4929,27 @@ internal fun CompatViewerScreen(
         }
     }
     LaunchedEffect(toolbarRefreshToken) { toolbarItems = store.loadToolbar(CompatToolbarSurface.VIEWER) }
-    val pagerState = rememberPagerState(initialPage = initialIndex.coerceAtLeast(0)) { posts.size.coerceAtLeast(1) }
-    LaunchedEffect(posts.size, initialIndex, initialPostNo) {
-        if (posts.isNotEmpty()) {
-            val targetPage = compatViewerInitialPage(posts, initialPostNo, initialIndex)
-            // The snapshot is loaded from a LaunchedEffect while the pager is
-            // still being subcomposed for its new page count.  Scrolling the
-            // PagerState in that same frame can race PagerMeasure and trigger
-            // Compose's "Unsupported concurrent change during composition".
-            // Wait for the next frame so the page-count update and its measure
-            // pass are complete before changing the scroll state.
-            withFrameNanos { }
-            if (pagerState.currentPage != targetPage) {
-                pagerState.scrollToPage(targetPage)
+    if (posts.isEmpty()) {
+        // Never create a placeholder pager with pageCount=1: it can paint
+        // page zero before the asynchronously loaded launch identity is applied.
+        PlatformBackHandler(onBack = onBack)
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            IconButton(onClick = onBack, modifier = Modifier.statusBarsPadding()) {
+                Icon(Icons.Filled.ArrowBack, contentDescription = "戻る", tint = Color.White)
+            }
+            if (loadedPosts == null) {
+                CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            } else {
+                Text("表示できる画像がありません", color = Color.White, modifier = Modifier.align(Alignment.Center))
             }
         }
+        return
     }
+    // Resolve the actual media identity before the very first pager measure.
+    // No corrective scroll (and no intervening wrong-image frame) is needed.
+    val pagerState = rememberPagerState(
+        initialPage = compatViewerInitialPage(posts, initialPostNo, initialIndex)
+    ) { posts.size }
     val canDismissVertically = verticalSwipeCloseEnabled && !isZoomed
     val renderedVerticalOffset = renderCompatViewerVerticalOffset(
         rawOffsetPx = verticalRawOffset,
@@ -4953,25 +4965,25 @@ internal fun CompatViewerScreen(
         verticalRawOffset = 0f
         verticalDismissAnimating = false
     }
-    LaunchedEffect(pagerState.currentPage, viewerPreloadMode, wifiConnected, posts) {
-        val preloadEnabled = shouldPreloadCompatViewer(viewerPreloadMode, wifiConnected)
-        if (!preloadEnabled || posts.isEmpty()) return@LaunchedEffect
-        listOf(pagerState.currentPage - 1, pagerState.currentPage + 1)
-            .mapNotNull(posts::getOrNull)
-            .mapNotNull { post ->
-                val url = resolveCompatPostPreviewUrl(post, upsThumbnailMethod, wifiConnected)
-                    ?: return@mapNotNull null
-                if (isCompatVideoMediaUrl(url)) return@mapNotNull null
-                ImageRequest.Builder(platformContext)
-                    .data(url)
-                    .compatImageFallbackPolicy()
-                    // Preloading is only a latency optimization. Do not let
-                    // an attachment without a server thumbnail decode its
-                    // full camera resolution before the user opens it.
-                    .size(1024, 1024)
-                    .build()
-            }
-            .forEach { request -> imageLoader.enqueue(request) }
+    val imagePrefetcher = remember(imageLoader) { com.valoser.futacha.shared.ui.image.ImagePrefetcher(imageLoader) }
+    DisposableEffect(imagePrefetcher) { onDispose { imagePrefetcher.close() } }
+    LaunchedEffect(pagerState.currentPage, viewerPreloadMode, wifiConnected, upsThumbnailMethod, posts) {
+        val currentUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
+        val requests = if (!shouldPreloadCompatViewer(viewerPreloadMode, wifiConnected)) emptyList() else {
+            listOf(pagerState.currentPage - 1, pagerState.currentPage + 1)
+                .mapNotNull(posts::getOrNull)
+                .mapNotNull { post ->
+                    val url = resolveCompatPostPreviewUrl(post, upsThumbnailMethod, wifiConnected)
+                        ?: return@mapNotNull null
+                    if (isCompatVideoMediaUrl(url)) return@mapNotNull null
+                    ImageRequest.Builder(platformContext)
+                        .data(url)
+                        .compatImageFallbackPolicy()
+                        .size(1024, 1024)
+                        .build()
+                }
+        }
+        imagePrefetcher.update(requests, currentUrl)
     }
     fun saveCurrent(shareAfterSave: Boolean) {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
@@ -5361,6 +5373,7 @@ internal fun CompatViewerScreen(
     ) { padding ->
         HorizontalPager(
             state = pagerState,
+            key = { page -> compatMediaIdentity(posts[page]) },
             // Horizontal navigation is owned by the viewer surface below.
             // The stock pager recognizer can lose the reverse (right) swipe
             // when the current page replaces its thumbnail with the full

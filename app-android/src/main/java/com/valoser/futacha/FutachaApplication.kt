@@ -107,6 +107,11 @@ class FutachaApplication : Application() {
     val fileSystem: FileSystem
         get() = requireMainProcessValue("fileSystem", fileSystemValue)
 
+    @Volatile
+    private var imageTransportValue: com.valoser.futacha.shared.network.FutachaImageTransport? = null
+    val imageTransport: com.valoser.futacha.shared.network.FutachaImageTransport
+        get() = requireMainProcessValue("imageTransport", imageTransportValue)
+
     private var cookieStorageValue: PersistentCookieStorage? = null
     val cookieStorage: PersistentCookieStorage
         get() = requireMainProcessValue("cookieStorage", cookieStorageValue)
@@ -237,11 +242,13 @@ class FutachaApplication : Application() {
         // jars. Do it off the main thread; the Activity shows a short loading state
         // until this graph is ready instead of paying that cost during first frame.
         applicationScope.launch {
+            var initializingImages: com.valoser.futacha.shared.network.FutachaImageTransport? = null
             var initializingClient: io.ktor.client.HttpClient? = null
             runCatching {
                 val client = createHttpClient(applicationContext, cookieStorage).also {
                     initializingClient = it
                 }
+                val images = com.valoser.futacha.shared.network.createAndroidImageTransport(cookieStorage).also { initializingImages = it }
                 val repository = DefaultBoardRepository(
                     api = HttpBoardApi(client),
                     parser = createHtmlParser(),
@@ -308,6 +315,7 @@ class FutachaApplication : Application() {
                         )
                     }
                 )
+                imageTransportValue = images
                 httpClientValue = client
                 boardRepositoryValue = repository
                 historyRefresherValue = history
@@ -315,6 +323,7 @@ class FutachaApplication : Application() {
                 watchSyncManagerValue = watchSync
                 networkServicesReadyValue.value = true
             }.onFailure { error ->
+                initializingImages?.close()
                 // The client is created before the remaining repository graph.
                 // Do not retain its engine/pool when a later constructor fails.
                 initializingClient?.let { client ->
@@ -489,6 +498,7 @@ class FutachaApplication : Application() {
         applicationScope.cancel()
         // httpClient will be closed automatically when scope is cancelled
         // Avoid runBlocking to prevent ANR
+        imageTransportValue?.close()
         boardRepositoryValue?.closeAsync()
         super.onTerminate()
     }

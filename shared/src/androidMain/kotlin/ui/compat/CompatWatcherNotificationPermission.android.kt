@@ -3,7 +3,7 @@ package com.valoser.futacha.shared.ui.compat
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
+import com.valoser.futacha.shared.compat.rememberExperienceProfileActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
@@ -12,7 +12,7 @@ import androidx.core.content.ContextCompat
 @Composable
 internal actual fun rememberCompatWatcherNotificationPermission(onResult: (Boolean) -> Unit): () -> Unit {
     val context = LocalContext.current
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(), onResult)
+    val launcher = rememberExperienceProfileActivityResultLauncher(ActivityResultContracts.RequestPermission()) { granted, _ -> onResult(granted) }
     return {
         if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context,
                 Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) onResult(true)

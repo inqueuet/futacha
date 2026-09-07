@@ -201,6 +201,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
+import com.valoser.futacha.shared.ui.image.refreshImageOnce
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import futacha.shared.generated.resources.Res
@@ -11603,10 +11604,7 @@ private fun CompatPostRow(
                             completedRetries = completedPreviewRetries,
                             reloadToken = thumbnailReloadToken
                         )?.let(::memoryCacheKey)
-                        if (thumbnailReloadToken != 0L) {
-                            diskCachePolicy(CachePolicy.DISABLED)
-                            memoryCachePolicy(CachePolicy.DISABLED)
-                        }
+                        refreshImageOnce(thumbnailReloadToken)
                     }
                     .build()
             }
@@ -11674,7 +11672,8 @@ private fun CompatPostRow(
                             CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
                         } else resolveCompatThumbnailFailureAction(
                             completedRetries = completedPreviewRetries,
-                            hasOriginalFallback = hasOriginalFallback
+                            hasOriginalFallback = hasOriginalFallback,
+                            failure = (painterState as? coil3.compose.AsyncImagePainter.State.Error)?.result?.throwable
                         )
                     ) {
                         CompatThumbnailFailureAction.RETRY_CURRENT -> {
@@ -11717,7 +11716,8 @@ private fun CompatPostRow(
                         usesDirectApuSource ||
                             resolveCompatThumbnailFailureAction(
                                 completedRetries = completedPreviewRetries,
-                                hasOriginalFallback = hasOriginalFallback
+                                hasOriginalFallback = hasOriginalFallback,
+                            failure = (painterState as? coil3.compose.AsyncImagePainter.State.Error)?.result?.throwable
                             ) == CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
                         )
             Box(

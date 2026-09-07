@@ -1,49 +1,33 @@
+@file:OptIn(coil3.annotation.ExperimentalCoilApi::class)
 package com.valoser.futacha.shared.ui.compat
 
-import kotlin.test.Test
-import kotlin.test.assertEquals
+import coil3.network.HttpException
+import coil3.network.NetworkResponse
+import kotlin.test.*
 
 class CompatThumbnailRetryTest {
-    @Test
-    fun directApuSourceSharesTheDefaultCacheKeyAcrossThreadAndViewer() {
+    @Test fun directApuSourceSharesTheDefaultCacheKeyAcrossThreadAndViewer() {
         val source = "https://example.test/source.png"
-        assertEquals(
-            null,
-            compatThumbnailMemoryCacheKey(source, usesDirectApuSource = true, completedRetries = 0, reloadToken = 0L)
-        )
-        assertEquals(
-            "$source#compat-42",
-            compatThumbnailMemoryCacheKey(source, usesDirectApuSource = true, completedRetries = 0, reloadToken = 42L)
-        )
-        assertEquals(
-            "$source#compat-auto-1",
-            compatThumbnailMemoryCacheKey(source, usesDirectApuSource = false, completedRetries = 1, reloadToken = 0L)
-        )
+        assertNull(compatThumbnailMemoryCacheKey(source, true, 0, 0L))
+        assertEquals("$source#compat-42", compatThumbnailMemoryCacheKey(source, true, 0, 42L))
+        assertEquals("$source#compat-auto-1", compatThumbnailMemoryCacheKey(source, false, 1, 0L))
     }
-
-    @Test
-    fun retriesTwiceBeforeFallingBackToTheOriginalImage() {
-        assertEquals(
-            CompatThumbnailFailureAction.RETRY_CURRENT,
-            resolveCompatThumbnailFailureAction(completedRetries = 0, hasOriginalFallback = true)
-        )
-        assertEquals(
-            CompatThumbnailFailureAction.RETRY_CURRENT,
-            resolveCompatThumbnailFailureAction(completedRetries = 1, hasOriginalFallback = true)
-        )
-        assertEquals(
-            CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL,
-            resolveCompatThumbnailFailureAction(completedRetries = 2, hasOriginalFallback = true)
-        )
-        assertEquals(500L, compatThumbnailRetryDelayMillis(0))
-        assertEquals(1_500L, compatThumbnailRetryDelayMillis(1))
+    @Test fun missingThumbnailFallsBackWithoutRepeatingTheSameUrl() {
+        for (status in listOf(404, 410)) {
+            assertEquals(CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL,
+                resolveCompatThumbnailFailureAction(0, true, HttpException(NetworkResponse(code = status))))
+        }
     }
-
-    @Test
-    fun originalImageFailureBecomesTerminalAfterTheBoundedRetries() {
-        assertEquals(
-            CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR,
-            resolveCompatThumbnailFailureAction(completedRetries = 2, hasOriginalFallback = false)
-        )
+    @Test fun transportFailuresDoNotMultiplyRetriesOrDownloadTheOriginal() {
+        for (status in listOf(401, 403, 429, 500, 503)) {
+            assertEquals(CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR,
+                resolveCompatThumbnailFailureAction(0, true, HttpException(NetworkResponse(code = status))))
+        }
+        assertEquals(CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR,
+            resolveCompatThumbnailFailureAction(0, true, IllegalStateException("transport already exhausted")))
+    }
+    @Test fun originalImageFailureBecomesTerminalAfterTheBoundedRetries() {
+        assertEquals(CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR,
+            resolveCompatThumbnailFailureAction(2, false, HttpException(NetworkResponse(code = 404))))
     }
 }

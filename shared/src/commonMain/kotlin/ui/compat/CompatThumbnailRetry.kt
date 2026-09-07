@@ -30,10 +30,13 @@ internal fun compatThumbnailMemoryCacheKey(
 
 internal fun resolveCompatThumbnailFailureAction(
     completedRetries: Int,
-    hasOriginalFallback: Boolean
-): CompatThumbnailFailureAction = when {
-    completedRetries < COMPAT_INLINE_THUMBNAIL_MAX_RETRIES ->
-        CompatThumbnailFailureAction.RETRY_CURRENT
-    hasOriginalFallback -> CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL
-    else -> CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
-}
+    hasOriginalFallback: Boolean,
+    failure: Throwable? = null
+): CompatThumbnailFailureAction =
+    if (hasOriginalFallback && com.valoser.futacha.shared.ui.image.isMissingImage(failure)) {
+        CompatThumbnailFailureAction.FALLBACK_TO_ORIGINAL
+    } else {
+        // HTTP retries are owned by the transport. UI retries multiplied them
+        // and could retry a permanently cached error without reaching the server.
+        CompatThumbnailFailureAction.SHOW_TERMINAL_ERROR
+    }

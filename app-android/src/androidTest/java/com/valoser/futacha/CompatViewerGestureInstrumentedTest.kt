@@ -192,7 +192,7 @@ class CompatViewerGestureInstrumentedTest {
     }
 
     @Test
-    fun threadThumbnailRetriesTransientFailuresBeforeOriginalFallback() {
+    fun threadThumbnailDoesNotMultiplyExhaustedTransportRetries() {
         val sourceUrl = "test://compat-thread/source"
         val thumbnailUrl = "test://compat-thread/thumbnail"
         runBlocking {
@@ -251,15 +251,84 @@ class CompatViewerGestureInstrumentedTest {
             }
         }
 
-        rule.waitUntil(10_000) {
-            thumbnailRequests.get() == 3 &&
-                rule.onAllNodesWithTag("compat-thread-thumbnail-1-ready", useUnmergedTree = true)
-                    .fetchSemanticsNodes(atLeastOneRootRequired = false)
-                    .isNotEmpty()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithTag("compat-thread-thumbnail-1-terminal-error", useUnmergedTree = true)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
         }
-        check(sourceRequests.get() == 0) {
-            "Original image was requested before thumbnail retries were exhausted"
+        rule.mainClock.advanceTimeBy(3_000)
+        rule.waitForIdle()
+        check(thumbnailRequests.get() == 1) { "UI repeated a transport failure" }
+        check(sourceRequests.get() == 0) { "Transport failure triggered an original image download" }
+    }
+
+    @Test
+    fun threadMissingThumbnailFallsBackOnce() {
+        val sourceUrl = "test://compat-thread/source"
+        val thumbnailUrl = "test://compat-thread/thumbnail"
+        runBlocking {
+            val tabKey = compatTabKey(canonicalizeThreadUrl(threadUrl)!!.canonicalUrl)
+            store.saveThreadSnapshot(
+                CompatThreadSnapshot(
+                    tabKey = tabKey,
+                    revision = 2L,
+                    fetchedAtEpochMillis = 2L,
+                    posts = listOf(postWithThumbnail(0, "1", sourceUrl, thumbnailUrl))
+                )
+            )
         }
+        val thumbnailRequests = AtomicInteger(0)
+        val sourceRequests = AtomicInteger(0)
+        val interceptor = object : Interceptor {
+            override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
+                return when (chain.request.data.toString()) {
+                    thumbnailUrl -> if (thumbnailRequests.incrementAndGet() < 3) {
+                        ErrorResult(
+                            image = null,
+                            request = chain.request,
+                            throwable = coil3.network.HttpException(coil3.network.NetworkResponse(code = 404))
+                        )
+                    } else {
+                        SuccessResult(
+                            image = bitmap(android.graphics.Color.GREEN, 24, 24).asImage(),
+                            request = chain.request,
+                            dataSource = DataSource.MEMORY
+                        )
+                    }
+
+                    sourceUrl -> {
+                        sourceRequests.incrementAndGet()
+                        SuccessResult(
+                            image = bitmap(android.graphics.Color.YELLOW, 48, 48).asImage(),
+                            request = chain.request,
+                            dataSource = DataSource.MEMORY
+                        )
+                    }
+
+                    else -> chain.proceed()
+                }
+            }
+        }
+        testImageLoader = ImageLoader.Builder(context).components { add(interceptor) }.build()
+        rule.setContent {
+            MaterialTheme {
+                CompatibilityApp(
+                    store = store,
+                    repository = null,
+                    imageLoader = testImageLoader,
+                    initialThreadDeepLink = threadUrl,
+                    onExitApplication = {}
+                )
+            }
+        }
+
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithTag("compat-thread-thumbnail-1-ready", useUnmergedTree = true)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+        }
+        rule.mainClock.advanceTimeBy(3_000)
+        rule.waitForIdle()
+        check(thumbnailRequests.get() == 1) { "UI repeated a transport failure" }
+        check(sourceRequests.get() == 1) { "Missing thumbnail must switch to the original once" }
     }
 
     @Test
@@ -811,6 +880,75 @@ class CompatViewerGestureInstrumentedTest {
         val afterDescription = image.fetchSemanticsNode().config[SemanticsProperties.StateDescription]
         check(afterDescription == beforeDescription) {
             "Viewer transform changed during recomposition: before=$beforeDescription after=$afterDescription"
+        }
+    }
+
+    @Test
+    fun openingSecondImageNeverDrawsTheFirstViewerImage() = assertOpeningSecondImage(addEarlierImage = false)
+
+    @Test
+    fun openingByIdentityNeverDrawsAStaleIndexAfterSnapshotChanges() = assertOpeningSecondImage(addEarlierImage = true)
+
+    private fun assertOpeningSecondImage(addEarlierImage: Boolean) {
+        val viewerDraws = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val viewerOpening = AtomicBoolean(false)
+        val delayedStore = object : com.valoser.futacha.shared.compat.CompatibilityStore by store {
+            override suspend fun loadThreadSnapshot(tabKey: String): CompatThreadSnapshot? {
+                if (viewerOpening.get()) kotlinx.coroutines.delay(200)
+                val snapshot = store.loadThreadSnapshot(tabKey)
+                // The viewer loads its own media list. An intervening snapshot
+                // update can shift indexes; the tapped media identity stays 2.
+                return if (viewerOpening.get() && addEarlierImage) snapshot?.copy(
+                    posts = listOf(post(0, "0", "test://newly-added")) + snapshot.posts
+                ) else snapshot
+            }
+        }
+        val firstUrl = "https://example.invalid/1.jpg"
+        val secondUrl = "https://example.invalid/2.jpg"
+        runBlocking {
+            val tabKey = compatTabKey(canonicalizeThreadUrl(threadUrl)!!.canonicalUrl)
+            store.saveThreadSnapshot(CompatThreadSnapshot(tabKey = tabKey, revision = 2L,
+                fetchedAtEpochMillis = 2L, posts = listOf(
+                    post(0, "1", firstUrl).copy(thumbnailUrl = "test://thumb/1"),
+                    post(1, "2", secondUrl).copy(thumbnailUrl = "test://thumb/2")
+                )))
+        }
+        val interceptor = Interceptor { chain ->
+            val url = chain.request.data.toString()
+            if (url == firstUrl || url == secondUrl) return@Interceptor chain.proceed()
+            val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(if (url == firstUrl) android.graphics.Color.RED else android.graphics.Color.BLUE)
+            }.asImage()
+            SuccessResult(image = bitmap, request = chain.request, dataSource = DataSource.MEMORY)
+        }
+        testImageLoader = ImageLoader.Builder(context).components { add(interceptor) }.build()
+        listOf(firstUrl, secondUrl).forEach { url ->
+            val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(if (url == firstUrl) android.graphics.Color.RED else android.graphics.Color.BLUE)
+            }.asImage()
+            val image = object : coil3.Image by bitmap {
+                override fun draw(canvas: android.graphics.Canvas) {
+                    // Record actual painting, not prefetch requests for adjacent pages.
+                    if (!canvas.clipBounds.isEmpty) viewerDraws.add(url)
+                    bitmap.draw(canvas)
+                }
+            }
+            testImageLoader!!.memoryCache!![coil3.memory.MemoryCache.Key(url)] = coil3.memory.MemoryCache.Value(image)
+        }
+        rule.setContent {
+            MaterialTheme {
+                CompatibilityApp(store = delayedStore, repository = null, imageLoader = testImageLoader,
+                    initialThreadDeepLink = threadUrl, onExitApplication = {})
+            }
+        }
+        rule.onNodeWithContentDescription("No.2の画像").assertIsDisplayed()
+        viewerDraws.clear()
+        viewerOpening.set(true)
+        rule.onNodeWithContentDescription("No.2の画像").performClick()
+        waitForViewerCounter(if (addEarlierImage) "3/3" else "2/2")
+        rule.waitUntil(10_000) { viewerDraws.isNotEmpty() }
+        check(viewerDraws.toList().all { it == secondUrl }) {
+            "Opening image 2 painted a different image first: ${viewerDraws.toList()}"
         }
     }
 

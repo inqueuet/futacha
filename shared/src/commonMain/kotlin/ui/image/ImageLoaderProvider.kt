@@ -43,6 +43,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
+import com.valoser.futacha.shared.network.FutachaImageTransport
+import com.valoser.futacha.shared.network.configureImageRequests
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import okio.FileSystem
@@ -120,7 +122,7 @@ private fun reportImageDiskCacheFailure(diagnostic: ImageDiskCacheFailureDiagnos
 }
 
 @OptIn(ExperimentalCoilApi::class)
-internal fun createFutachaConcurrentRequestStrategy() = DeDupeConcurrentRequestStrategy()
+internal fun createFutachaConcurrentRequestStrategy() = RetryingImageRequestStrategy()
 
 enum class CompatibilityCacheLocation {
     INTERNAL,
@@ -277,21 +279,16 @@ fun rememberFutachaImageLoader(
     diskCacheBytesOverride: Long? = null,
     cacheLocation: CompatibilityCacheLocation = CompatibilityCacheLocation.INTERNAL,
     parallelismOverride: Int? = null,
-    diskCacheDirectoryName: String = IMAGE_DISK_CACHE_DIR
+    diskCacheDirectoryName: String = IMAGE_DISK_CACHE_DIR,
+    imageTransport: FutachaImageTransport? = null
 ): ImageLoader {
     val platformContext = LocalPlatformContext.current
-    val imageHttpClient = remember(httpClient) {
-        httpClient?.config {
-            install(HttpTimeout) {
-                requestTimeoutMillis = IMAGE_REQUEST_TIMEOUT_MILLIS
-                connectTimeoutMillis = IMAGE_CONNECT_TIMEOUT_MILLIS
-                socketTimeoutMillis = IMAGE_SOCKET_TIMEOUT_MILLIS
-            }
-        }
+    val imageHttpClient = remember(httpClient, imageTransport) {
+        imageTransport?.client ?: httpClient?.config { configureImageRequests() }
     }
-    DisposableEffect(imageHttpClient, httpClient) {
+    DisposableEffect(imageHttpClient, httpClient, imageTransport) {
         onDispose {
-            if (imageHttpClient != null && imageHttpClient !== httpClient) {
+            if (imageTransport == null && imageHttpClient != null && imageHttpClient !== httpClient) {
                 imageHttpClient.close()
             }
         }
@@ -330,6 +327,7 @@ fun rememberFutachaImageLoader(
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
             .build()
     }
+    val refreshInterceptor = remember(imageHttpClient, configurationIdentity) { ImageRefreshInterceptor() }
     val normalMemoryPolicy = remember(cacheConfig, performanceProfile.totalRamMb) {
         resolveImageMemoryPressurePolicy(
             baseParallelism = cacheConfig.parallelism,
@@ -399,7 +397,8 @@ fun rememberFutachaImageLoader(
                 memoryCache = memoryCache,
                 diskCache = null,
                 pressureGate = pressureGate,
-                imageHttpClient = imageHttpClient
+                imageHttpClient = imageHttpClient,
+                refreshInterceptor = refreshInterceptor
             )
         )
     }
@@ -431,7 +430,8 @@ fun rememberFutachaImageLoader(
                         memoryCache = memoryCache,
                         diskCache = readyDiskCache,
                         pressureGate = pressureGate,
-                        imageHttpClient = imageHttpClient
+                        imageHttpClient = imageHttpClient,
+                refreshInterceptor = refreshInterceptor
                     )
                 )
                 handedOffToLoader = true
@@ -446,26 +446,30 @@ fun rememberFutachaImageLoader(
 }
 
 @OptIn(ExperimentalCoilApi::class)
-private fun buildFutachaImageLoader(
+internal fun buildFutachaImageLoader(
     platformContext: coil3.PlatformContext,
     fetcherDispatcher: CoroutineDispatcher,
     decoderDispatcher: CoroutineDispatcher,
     memoryCache: MemoryCache,
     diskCache: DiskCache?,
     pressureGate: AdaptiveImageRequestGate,
-    imageHttpClient: HttpClient?
+    imageHttpClient: HttpClient?,
+    refreshInterceptor: ImageRefreshInterceptor = ImageRefreshInterceptor()
 ): ImageLoader = ImageLoader.Builder(platformContext)
     .components {
+        add(refreshInterceptor)
         add(ImageMemoryPressureInterceptor(pressureGate))
         add(FutabaExtensionFallbackInterceptor())
+        add(VisibleImageRequestInterceptor())
         // A manually registered factory takes precedence over Coil's service-loaded
         // default. Reusing the app client also applies Android's main-thread-safe
         // response cleanup to image requests cancelled by Compose.
         imageHttpClient?.let {
             add(
                 KtorNetworkFetcherFactory(
-                    httpClient = it,
-                    concurrentRequestStrategy = createFutachaConcurrentRequestStrategy()
+                    httpClient = { it },
+                    cacheStrategy = { ImageCacheStrategy },
+                    concurrentRequestStrategy = { createFutachaConcurrentRequestStrategy() }
                 )
             )
         }
@@ -501,7 +505,7 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
         val policy = initialRequest.getExtra(FutabaExtensionFallbackPolicyKey)
 
         // Retry with alternative extensions for Futaba source media URLs.
-        if (initialResult is ErrorResult) {
+        if (initialResult is ErrorResult && isMissingImage(initialResult.throwable)) {
             val url = initialRequest.data.toString()
             // あぷ小 already gives the application the real source URL.  A
             // failed derived thumbnail must not fan out into every supported
@@ -523,6 +527,7 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
                             markRecovered(url, recoveredUrl)
                             return recoveredResult
                         }
+                        if (recoveredResult is ErrorResult && !isMissingImage(recoveredResult.throwable)) return recoveredResult
                         forgetRecoveredUrl(url)
                     }
                 }
@@ -546,6 +551,7 @@ private class FutabaExtensionFallbackInterceptor : Interceptor {
                         policy = policy
                     )
 
+                    if (newResult is ErrorResult && !isMissingImage(newResult.throwable)) return newResult
                     if (newResult is SuccessResult) {
                         markRecovered(url, newUrl)
                         return newResult
