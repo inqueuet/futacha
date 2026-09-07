@@ -1,0 +1,7 @@
+version	file	sha256	source
+1.12.0	PlatformSelectionBehaviors.android.kt	3eb08962bf29803a57487b54c4911d15c7b707cbdf2c0339c3e33adfb47f4002	https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.12.0/foundation-android-1.12.0-sources.jar
+1.12.0	TextFieldSelectionManager.kt	2bb6391ecdecf905d2403ebd77f0b45359b802a242175531f4e4ea531dc84282	https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.12.0/foundation-android-1.12.0-sources.jar
+1.12.0	TextFieldSelectionState.kt	f280043468169fa45f07c418d213c51330f8e5958bee28042746adca566b4477	https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.12.0/foundation-android-1.12.0-sources.jar
+1.13.0-alpha02	PlatformSelectionBehaviors.android.kt	a8a8d69d968f4fcd788f1196d06ad3af3e40255fb22eaddfc5ad465ec95fad63	https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.13.0-alpha02/foundation-android-1.13.0-alpha02-sources.jar
+1.13.0-alpha02	TextFieldSelectionManager.kt	2bb6391ecdecf905d2403ebd77f0b45359b802a242175531f4e4ea531dc84282	https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.13.0-alpha02/foundation-android-1.13.0-alpha02-sources.jar
+1.13.0-alpha02	TextFieldSelectionState.kt	4db49044ec3acc0dc50312ac6387bd37a4012e0a3c1be56b221add78a4d9c641	https://dl.google.com/dl/android/maven2/androidx/compose/foundation/foundation-android/1.13.0-alpha02/foundation-android-1.13.0-alpha02-sources.jar

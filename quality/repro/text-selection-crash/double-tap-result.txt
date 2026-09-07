@@ -1,0 +1,6 @@
+
+com.valoser.futacha.TextSelectionCrashInstrumentedTest:.
+
+Time: 3.096
+
+OK (1 test)

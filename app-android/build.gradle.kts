@@ -79,8 +79,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 168
-        versionName = "10.5"
+        versionCode = 169
+        versionName = "10.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
@@ -127,6 +127,13 @@ android {
 
 androidComponents {
     onVariants(selector().all()) { variant ->
+        variant.instrumentation.transformClassesWith(
+            com.valoser.futacha.instrumentation.ComposeSelectionGuardFactory::class.java,
+            com.android.build.api.instrumentation.InstrumentationScope.ALL
+        ) {}
+        variant.instrumentation.setAsmFramesComputationMode(
+            com.android.build.api.instrumentation.FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
+        )
         if (variant.name == "nonMinifiedRelease" || variant.name == "benchmarkRelease") {
             variant.manifestPlaceholders.put("benchmarkFixtureEnabled", "true")
         }
@@ -194,19 +201,35 @@ kotlin {
 
 dependencies {
 
+    constraints {
+        implementation(libs.androidx.compose.foundation.guarded) {
+            because("ComposeSelectionGuardFactory patches two verified 1.13.0-alpha02 call sites; review before upgrading")
+        }
+    }
+
     implementation(project(":shared"))
 
     // Ktor Client for network operations
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.serialization.core)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.ktor.http)
+    implementation(libs.ktor.io)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.annotation)
+    implementation(libs.androidx.lifecycle.common)
     implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.runtime)
+    implementation(libs.androidx.compose.ui.text)
+    implementation(libs.androidx.compose.ui.unit)
+    implementation(libs.androidx.compose.ui.geometry)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons)
@@ -215,6 +238,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.play.services.wearable)
+    implementation(libs.play.services.tasks)
     implementation(libs.google.play.app.update)
     implementation(libs.google.play.app.update.ktx)
     implementation(libs.androidx.profileinstaller)
@@ -225,11 +249,18 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.monitor)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.compose.ui.test)
     androidTestImplementation(libs.androidx.media3.exoplayer)
+    androidTestImplementation(libs.androidx.media3.common)
+    androidTestImplementation(libs.androidx.media3.datasource)
     androidTestImplementation(libs.coil3.compose)
+    androidTestImplementation(libs.coil3.core)
     androidTestImplementation(libs.coil3.network.ktor)
     androidTestImplementation(libs.ktor.client.mock)
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
-    id("org.jetbrains.kotlin.native.cocoapods")
+    alias(libs.plugins.kotlin.cocoapods)
 }
 
 kotlin {
@@ -65,32 +65,58 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 implementation(libs.jetbrains.compose.runtime)
+                implementation(libs.jetbrains.compose.runtime.saveable)
+                implementation(libs.androidx.lifecycle.common)
+                implementation(libs.androidx.lifecycle.runtime.compose)
+                implementation(libs.jetbrains.compose.ui)
+                implementation(libs.jetbrains.compose.ui.graphics)
+                implementation(libs.jetbrains.compose.ui.text)
+                implementation(libs.jetbrains.compose.ui.unit)
+                implementation(libs.jetbrains.compose.ui.geometry)
+                implementation(libs.jetbrains.compose.animation)
+                implementation(libs.jetbrains.compose.animation.core)
                 implementation(libs.jetbrains.compose.foundation)
                 implementation(libs.jetbrains.compose.material3)
                 implementation(libs.jetbrains.compose.material.icons)
                 implementation(libs.jetbrains.compose.components.resources)
                 implementation(libs.jetbrains.compose.components.ui.tooling.preview)
                 implementation(libs.kotlinx.serialization.json)
+                implementation(libs.kotlinx.serialization.core)
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.datetime)
                 implementation(libs.coil3.compose)
+                implementation(libs.coil3.core)
+                implementation(libs.coil3.compose.core)
+                implementation(libs.coil3.network.core)
+                implementation(libs.okio)
                 implementation(libs.coil3.network.ktor)
                 implementation(libs.ktor.client.core)
+                implementation(libs.ktor.http)
+                implementation(libs.ktor.io)
+                implementation(libs.ktor.utils)
             }
         }
         val commonTest by getting {
             dependencies {
-                implementation(kotlin("test"))
+                implementation(libs.kotlin.test)
+                implementation(libs.kotlinx.io.core)
                 implementation(libs.ktor.client.mock)
             }
         }
         val androidMain by getting {
             dependencies {
+                implementation(project.dependencies.platform(libs.androidx.compose.bom))
                 implementation(libs.androidx.datastore.preferences)
+                implementation(libs.androidx.core.ktx)
+                implementation(libs.okhttp)
+                implementation(libs.guava)
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.jetbrains.compose.preview)
                 implementation(libs.androidx.media3.exoplayer)
+                implementation(libs.androidx.media3.common)
+                implementation(libs.androidx.media3.database)
+                implementation(libs.androidx.media3.datasource)
                 implementation(libs.androidx.media3.ui)
                 implementation(libs.androidx.documentfile)
                 implementation(libs.coil3.video)
@@ -101,12 +127,17 @@ kotlin {
                 // Android 26/27 do not have ImageDecoder's animated-WebP
                 // support; the reference client decodes those frames too.
                 implementation(libs.penfeizhou.animation.awebp)
+                implementation(libs.penfeizhou.animation.core)
                 implementation(project.dependencies.platform(libs.firebase.bom))
                 implementation(libs.firebase.analytics)
+                implementation(libs.firebase.common)
                 implementation(libs.firebase.performance)
                 implementation(libs.firebase.crashlytics)
                 implementation(libs.mlkit.genai.summarization)
                 implementation(libs.mlkit.genai.prompt)
+                implementation(libs.mlkit.common)
+                implementation(libs.mlkit.genai.common)
+                implementation(libs.play.services.tasks)
                 implementation(libs.google.play.billing)
             }
         }
@@ -120,6 +151,7 @@ kotlin {
         val jvmMain by getting {
             dependencies {
                 implementation(libs.ktor.client.okhttp)
+                implementation(libs.okhttp)
             }
         }
     }

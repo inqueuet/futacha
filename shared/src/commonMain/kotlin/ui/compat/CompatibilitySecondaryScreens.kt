@@ -2966,6 +2966,8 @@ fun CompatPostAttachmentPreview(
     }
 }
 
+private enum class CompatPostDraftField { NAME, EMAIL, SUBJECT, COMMENT, DELETE_KEY, ATTACHMENT }
+
 @Composable
 internal fun CompatPostScreen(
     tab: CompatTab,
@@ -2990,6 +2992,9 @@ internal fun CompatPostScreen(
     val palette = LocalCompatibilityPalette.current
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    // A delayed restore must not overwrite edits, including an edit back to empty.
+    // Mutated/read on the UI thread; this is bookkeeping, not observable UI state.
+    val editedDraftFields = remember(ownerKey) { mutableSetOf<CompatPostDraftField>() }
     var name by remember(ownerKey) { mutableStateOf("") }
     var email by remember(ownerKey) { mutableStateOf("") }
     var subject by remember(ownerKey) { mutableStateOf("") }
@@ -3001,7 +3006,12 @@ internal fun CompatPostScreen(
     }
     val comment = commentValue.text
 
-    fun replaceComment(text: String, selection: TextRange = TextRange(text.length)) {
+    fun replaceComment(
+        text: String,
+        selection: TextRange = TextRange(text.length),
+        restoringDraft: Boolean = false
+    ) {
+        if (!restoringDraft) editedDraftFields.add(CompatPostDraftField.COMMENT)
         // Programmatic edits must clear any stale composition belonging to the
         // previous value. User edits below retain it by assigning the complete
         // TextFieldValue supplied by Compose.
@@ -3112,15 +3122,19 @@ internal fun CompatPostScreen(
             deleteKey = effectiveDraft.deleteKey.ifBlank { storedDeleteKey }
         )
         initialDraft = draftWithStoredDeleteKey
-        name = draft.name.take(COMPAT_POST_NAME_MAX_CHARS)
-        email = draft.email.take(COMPAT_POST_EMAIL_MAX_CHARS)
-        subject = draft.subject.take(COMPAT_POST_SUBJECT_MAX_CHARS)
-        replaceComment(draft.comment, TextRange(draft.comment.length))
+        if (CompatPostDraftField.NAME !in editedDraftFields) name = draft.name.take(COMPAT_POST_NAME_MAX_CHARS)
+        if (CompatPostDraftField.EMAIL !in editedDraftFields) email = draft.email.take(COMPAT_POST_EMAIL_MAX_CHARS)
+        if (CompatPostDraftField.SUBJECT !in editedDraftFields) subject = draft.subject.take(COMPAT_POST_SUBJECT_MAX_CHARS)
+        if (CompatPostDraftField.COMMENT !in editedDraftFields) {
+            replaceComment(draft.comment, TextRange(draft.comment.length), restoringDraft = true)
+        }
         // Quick replies are inserted before opening this form. Put the caret
         // after the generated quote, matching the legacy app's reply flow.
-        deleteKey = draftWithStoredDeleteKey.deleteKey
-        attachment = restoredAttachment
-        attachmentLocator = effectiveDraft.attachmentUri
+        if (CompatPostDraftField.DELETE_KEY !in editedDraftFields) deleteKey = draftWithStoredDeleteKey.deleteKey
+        if (CompatPostDraftField.ATTACHMENT !in editedDraftFields) {
+            attachment = restoredAttachment
+            attachmentLocator = effectiveDraft.attachmentUri
+        }
         initialAttachment = restoredAttachment
         initialAttachmentLocator = effectiveDraft.attachmentUri
         if (draft.attachmentUri != null && restoredAttachment == null) {
@@ -3141,7 +3155,9 @@ internal fun CompatPostScreen(
     // Preferences can arrive one frame after the form's draft. Fill the field once in that
     // case, while preserving a draft or an edit the user has already made.
     LaunchedEffect(ownerKey, storedDeleteKey, draftLoaded) {
-        if (!draftLoaded || storedDeleteKey.isBlank() || deleteKey.isNotBlank()) return@LaunchedEffect
+        if (!draftLoaded || storedDeleteKey.isBlank() || deleteKey.isNotBlank() ||
+            CompatPostDraftField.DELETE_KEY in editedDraftFields
+        ) return@LaunchedEffect
         deleteKey = storedDeleteKey
         initialDraft = initialDraft.copy(deleteKey = storedDeleteKey)
     }
@@ -3168,6 +3184,7 @@ internal fun CompatPostScreen(
     }
 
     fun clearAttachment(deleteContainer: Boolean = false) {
+        editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
         val locator = attachmentLocator
         attachmentLocator = null
         attachment = null
@@ -3183,6 +3200,7 @@ internal fun CompatPostScreen(
     fun persistAcceptedAttachment(selected: ImageData) {
         val localFileSystem = fileSystem
         if (localFileSystem == null) {
+            editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
             attachmentLocator = null
             attachment = selected
             return
@@ -3191,6 +3209,7 @@ internal fun CompatPostScreen(
         scope.launch {
             persistCompatPostAttachment(localFileSystem, ownerKey, selected)
                 .onSuccess { persistedLocator ->
+                    editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
                     attachmentLocator = persistedLocator
                     attachment = selected
                     if (previousLocator != null && previousLocator != persistedLocator) {
@@ -3383,14 +3402,15 @@ internal fun CompatPostScreen(
         "sio" to { upsUploadCommand() },
         "voice_input" to {},
         "network_info" to {
-            val commentBeforeLookup = comment
             scope.launch {
                 val info = fetchCompatPostNetworkInfo(httpClient, "Futacha/$appVersion")
-                replaceComment(appendCompatPostText(commentBeforeLookup, info))
+                // Read the actual state after the suspension, not this composition's String.
+                replaceComment(appendCompatPostText(commentValue.text, info))
             }
         },
         "model_info" to { replaceComment(appendCompatPostText(comment, compatPostDeviceInfo(appVersion))) },
         "reset" to {
+            editedDraftFields.addAll(CompatPostDraftField.entries)
             val resetFields = compatPostResetFields(isBuild, deleteKey, initialDraft)
             name = resetFields.name
             email = resetFields.email
@@ -3496,6 +3516,7 @@ internal fun CompatPostScreen(
             TextField(
                 value = commentValue,
                 onValueChange = {
+                    if (it.text != commentValue.text) editedDraftFields.add(CompatPostDraftField.COMMENT)
                     // Preserve IME composition while the user is converting
                     // Japanese text. This is intentionally not reconstructed
                     // from it.text/it.selection.
@@ -3538,7 +3559,7 @@ internal fun CompatPostScreen(
             }
             TextField(
                 name,
-                { name = it.take(COMPAT_POST_NAME_MAX_CHARS) },
+                { editedDraftFields.add(CompatPostDraftField.NAME); name = it.take(COMPAT_POST_NAME_MAX_CHARS) },
                 label = { Text("おなまえ", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("compat-post-name-field"),
@@ -3547,7 +3568,7 @@ internal fun CompatPostScreen(
             Spacer(Modifier.height(10.dp))
             TextField(
                 email,
-                { email = it.take(COMPAT_POST_EMAIL_MAX_CHARS) },
+                { editedDraftFields.add(CompatPostDraftField.EMAIL); email = it.take(COMPAT_POST_EMAIL_MAX_CHARS) },
                 label = { Text("メール", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -3572,13 +3593,16 @@ internal fun CompatPostScreen(
                         modifier = Modifier
                             .width(80.dp)
                             .fillMaxHeight()
-                            .clickable { email = applyCompatMailPreset(email, preset, isBuild) }
+                            .clickable {
+                                editedDraftFields.add(CompatPostDraftField.EMAIL)
+                                email = applyCompatMailPreset(email, preset, isBuild)
+                            }
                     )
                 }
             }
             TextField(
                 subject,
-                { subject = it.take(COMPAT_POST_SUBJECT_MAX_CHARS) },
+                { editedDraftFields.add(CompatPostDraftField.SUBJECT); subject = it.take(COMPAT_POST_SUBJECT_MAX_CHARS) },
                 label = { Text("題名", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -3587,7 +3611,7 @@ internal fun CompatPostScreen(
             Spacer(Modifier.height(10.dp))
             TextField(
                 deleteKey,
-                { deleteKey = it.take(COMPAT_POST_DELETE_KEY_MAX_LENGTH) },
+                { editedDraftFields.add(CompatPostDraftField.DELETE_KEY); deleteKey = it.take(COMPAT_POST_DELETE_KEY_MAX_LENGTH) },
                 label = { Text("削除キー", modifier = Modifier.offset(x = (-12).dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
@@ -3784,7 +3808,7 @@ internal fun CompatPostScreen(
                                 deleteKey = upsDeleteKey,
                                 appVersion = appVersion
                             ).onSuccess { fileName ->
-                                replaceComment(appendCompatPostText(comment, fileName))
+                                replaceComment(appendCompatPostText(commentValue.text, fileName))
                                 message = "${fileName}を追記しました"
                             }.onFailure { error ->
                                 message = error.message ?: "あぷ小へのアップロードに失敗しました"
@@ -3810,6 +3834,7 @@ internal fun CompatPostScreen(
             confirmButton = {
                 TextButton(onClick = {
                     discardConfirm = false
+                    editedDraftFields.addAll(CompatPostDraftField.entries)
                     val discardedAttachmentLocator = attachmentLocator
                     name = ""; email = ""; subject = ""; replaceComment(""); deleteKey = ""; attachment = null
                     attachmentLocator = null

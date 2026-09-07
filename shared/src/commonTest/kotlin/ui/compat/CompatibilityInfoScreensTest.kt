@@ -12,7 +12,7 @@ class CompatibilityInfoScreensTest {
 
         assertEquals(
             listOf(
-                "10.5", "10.4", "10.3", "10.2", "10.1", "10.0", "9.9", "9.8", "9.7", "9.6", "9.5", "9.4", "9.3", "9.1", "9.0", "8.9", "8.8", "8.6", "8.5", "8.4", "8.2", "8.0",
+                "10.6", "10.5", "10.4", "10.3", "10.2", "10.1", "10.0", "9.9", "9.8", "9.7", "9.6", "9.5", "9.4", "9.3", "9.1", "9.0", "8.9", "8.8", "8.6", "8.5", "8.4", "8.2", "8.0",
                 "7.8", "7.7", "7.5", "7.2", "7.1", "6.7", "6.6", "6.3", "6.2", "6.1", "6.0",
                 "5.9", "5.8", "5.6", "5.4", "5.3", "5.1", "5.0", "4.9", "4.7", "4.6", "4.4",
                 "4.2", "4.1", "4.0", "3.9", "3.8", "3.7", "3.6", "3.4", "3.3", "3.2", "3.0",
@@ -71,9 +71,9 @@ class CompatibilityInfoScreensTest {
         val previousChanges = FUTACHA_CHANGE_LOG_ENTRIES.first { it.version == "10.4" }.changes.joinToString("\n")
         listOf("巡回管理", "板ごと", "閲覧履歴とは別", "Wi-Fi", "バックアップ", "生存確認", "画像が読み込めませんでした", "[link]")
             .forEach { assertTrue(it in previousChanges, "v10.4 must describe $it") }
-        val latestChanges = FUTACHA_CHANGE_LOG_ENTRIES.first().changes.joinToString("\n")
+        val imageLoadingChanges = FUTACHA_CHANGE_LOG_ENTRIES.first { it.version == "10.5" }.changes.joinToString("\n")
         listOf("Android版", "再試行", "キャッシュ", "再読み込み", "先読み", "iOS版")
-            .forEach { assertTrue(it in latestChanges, "v10.5 must describe $it") }
+            .forEach { assertTrue(it in imageLoadingChanges, "v10.5 must describe $it") }
     }
 
     @Test

@@ -60,5 +60,7 @@ if (providers.gradleProperty("android.injected.apk.location").isPresent) {
 dependencies {
     implementation(libs.androidx.benchmark.macro.junit4)
     implementation(libs.androidx.junit)
+    implementation(libs.junit)
+    implementation(libs.androidx.test.monitor)
     implementation(libs.androidx.test.uiautomator)
 }

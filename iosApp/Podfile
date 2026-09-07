@@ -1,11 +1,13 @@
 platform :ios, '15.0'
 use_modular_headers!
 
+firebase_version = '12.18.0'
+
 target 'iosApp' do
   pod 'shared', :path => '../shared'
-  pod 'FirebaseAnalytics'
-  pod 'FirebasePerformance'
-  pod 'FirebaseCrashlytics'
+  pod 'FirebaseAnalytics', firebase_version
+  pod 'FirebasePerformance', firebase_version
+  pod 'FirebaseCrashlytics', firebase_version
 end
 
 post_install do |installer|

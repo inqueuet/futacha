@@ -1,0 +1,438 @@
+> Task :buildSrc:compileJava UP-TO-DATE
+> Task :buildSrc:compileGroovy NO-SOURCE
+> Task :buildSrc:processResources NO-SOURCE
+> Task :buildSrc:classes UP-TO-DATE
+> Task :buildSrc:jar UP-TO-DATE
+> Task :validateQualityContracts
+> Task :app-android:preBuild UP-TO-DATE
+> Task :app-android:preDebugBuild UP-TO-DATE
+> Task :app-android:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app-android:generateDebugResources UP-TO-DATE
+> Task :app-android:injectCrashlyticsMappingFileIdDebug UP-TO-DATE
+> Task :app-android:injectCrashlyticsVersionControlInfoDebug UP-TO-DATE
+> Task :app-android:processDebugGoogleServices UP-TO-DATE
+> Task :app-android:packageDebugResources UP-TO-DATE
+> Task :shared:androidPreBuild UP-TO-DATE
+> Task :shared:preAndroidMainBuild UP-TO-DATE
+> Task :shared:generateAndroidMainEmptyResourceFiles UP-TO-DATE
+> Task :app-android:processDebugNavigationResources UP-TO-DATE
+> Task :app-android:parseDebugLocalResources UP-TO-DATE
+> Task :app-android:generateDebugRFile UP-TO-DATE
+> Task :shared:kmpPartiallyResolvedDependenciesChecker
+> Task :shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :shared:convertXmlValueResourcesForAndroidMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForAndroidMain NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForAndroidMain NO-SOURCE
+> Task :shared:generateResourceAccessorsForAndroidMain NO-SOURCE
+> Task :shared:convertXmlValueResourcesForCommonMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForCommonMain UP-TO-DATE
+> Task :shared:prepareComposeResourcesTaskForCommonMain UP-TO-DATE
+> Task :shared:generateResourceAccessorsForCommonMain UP-TO-DATE
+> Task :shared:generateActualResourceCollectorsForAndroidMain UP-TO-DATE
+> Task :shared:generateComposeResClass UP-TO-DATE
+> Task :shared:generateExpectResourceCollectorsForCommonMain UP-TO-DATE
+> Task :shared:compileAndroidMain UP-TO-DATE
+> Task :shared:bundleAndroidMainClassesToCompileJar UP-TO-DATE
+> Task :app-android:compileDebugKotlin UP-TO-DATE
+> Task :app-android:javaPreCompileDebug UP-TO-DATE
+> Task :app-android:compileDebugJavaWithJavac NO-SOURCE
+> Task :app-android:generateDebugAssets UP-TO-DATE
+> Task :app-android:syncSharedComposeResourcesForAndroid UP-TO-DATE
+> Task :app-android:mergeDebugAssets UP-TO-DATE
+> Task :app-android:compressDebugAssets UP-TO-DATE
+> Task :app-android:generateDebugGlobalSynthetics UP-TO-DATE
+> Task :app-android:processDebugJavaRes UP-TO-DATE
+> Task :shared:processAndroidMainJavaRes UP-TO-DATE
+> Task :app-android:mergeDebugJavaResource UP-TO-DATE
+> Task :app-android:checkDebugDuplicateClasses UP-TO-DATE
+> Task :app-android:desugarDebugFileDependencies UP-TO-DATE
+> Task :app-android:mergeExtDexDebug UP-TO-DATE
+> Task :shared:bundleAndroidMainClassesToRuntimeJar UP-TO-DATE
+> Task :shared:writeAndroidMainAarMetadata UP-TO-DATE
+> Task :app-android:checkDebugAarMetadata UP-TO-DATE
+> Task :app-android:mergeLibDexDebug UP-TO-DATE
+> Task :app-android:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app-android:compileDebugNavigationResources UP-TO-DATE
+> Task :app-android:mergeDebugResources UP-TO-DATE
+> Task :app-android:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app-android:extractDeepLinksDebug UP-TO-DATE
+> Task :shared:processAndroidMainManifest UP-TO-DATE
+> Task :app-android:processDebugMainManifest UP-TO-DATE
+> Task :app-android:processDebugManifest UP-TO-DATE
+> Task :app-android:processDebugManifestForPackage UP-TO-DATE
+> Task :app-android:processDebugResources UP-TO-DATE
+> Task :app-android:transformDebugClassesWithAsm UP-TO-DATE
+> Task :app-android:dexBuilderDebug UP-TO-DATE
+> Task :app-android:mergeProjectDexDebug UP-TO-DATE
+> Task :app-android:mergeDebugJniLibFolders UP-TO-DATE
+> Task :shared:mergeAndroidMainJniLibFolders UP-TO-DATE
+> Task :shared:mergeAndroidMainNativeLibs NO-SOURCE
+> Task :shared:copyAndroidMainJniLibsProjectOnly UP-TO-DATE
+> Task :app-android:mergeDebugNativeLibs UP-TO-DATE
+> Task :app-android:stripDebugDebugSymbols UP-TO-DATE
+> Task :app-android:validateSigningDebug UP-TO-DATE
+> Task :app-android:writeDebugAppMetadata UP-TO-DATE
+> Task :app-android:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :app-android:packageDebug UP-TO-DATE
+> Task :app-android:createDebugApkListingFileRedirect UP-TO-DATE
+> Task :app-android:assembleDebug UP-TO-DATE
+> Task :shared:checkAndroidMainAarMetadata UP-TO-DATE
+> Task :shared:extractAndroidMainAnnotations UP-TO-DATE
+> Task :shared:mergeAndroidMainJavaResource UP-TO-DATE
+> Task :shared:syncAndroidMainLibJars UP-TO-DATE
+> Task :shared:bundleAndroidMainLocalLintAar UP-TO-DATE
+> Task :app-android:bundleDebugClassesToCompileJar UP-TO-DATE
+> Task :app-android:preDebugAndroidTestBuild SKIPPED
+> Task :shared:createFullJarAndroidMain UP-TO-DATE
+> Task :shared:prepareLintJarForPublish UP-TO-DATE
+> Task :app-android:generateDebugAndroidTestLintModel
+> Task :app-android:extractProguardFiles UP-TO-DATE
+> Task :app-android:generateDebugLintReportModel UP-TO-DATE
+> Task :app-android:preDebugUnitTestBuild UP-TO-DATE
+> Task :app-android:generateDebugUnitTestLintModel UP-TO-DATE
+> Task :app-android:lintAnalyzeDebug UP-TO-DATE
+> Task :app-android:lintAnalyzeDebugUnitTest UP-TO-DATE
+> Task :shared:convertXmlValueResourcesForAndroidHostTest NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForAndroidHostTest NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForAndroidHostTest NO-SOURCE
+> Task :shared:generateResourceAccessorsForAndroidHostTest NO-SOURCE
+> Task :shared:convertXmlValueResourcesForAppleMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForAppleMain NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForAppleMain NO-SOURCE
+> Task :shared:generateResourceAccessorsForAppleMain NO-SOURCE
+> Task :shared:convertXmlValueResourcesForAppleTest NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForAppleTest NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForAppleTest NO-SOURCE
+> Task :shared:generateResourceAccessorsForAppleTest NO-SOURCE
+> Task :shared:convertXmlValueResourcesForCommonTest NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForCommonTest NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForCommonTest NO-SOURCE
+> Task :shared:generateResourceAccessorsForCommonTest NO-SOURCE
+> Task :shared:convertXmlValueResourcesForIosMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForIosMain NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForIosMain NO-SOURCE
+> Task :shared:generateResourceAccessorsForIosMain NO-SOURCE
+> Task :shared:convertXmlValueResourcesForIosSimulatorArm64Main NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForIosSimulatorArm64Main NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForIosSimulatorArm64Main NO-SOURCE
+> Task :shared:generateResourceAccessorsForIosSimulatorArm64Main NO-SOURCE
+> Task :shared:convertXmlValueResourcesForIosSimulatorArm64Test NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForIosSimulatorArm64Test NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForIosSimulatorArm64Test NO-SOURCE
+> Task :shared:generateResourceAccessorsForIosSimulatorArm64Test NO-SOURCE
+> Task :shared:convertXmlValueResourcesForIosTest NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForIosTest NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForIosTest NO-SOURCE
+> Task :shared:generateResourceAccessorsForIosTest NO-SOURCE
+> Task :shared:convertXmlValueResourcesForJvmMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForJvmMain NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForJvmMain NO-SOURCE
+> Task :shared:generateResourceAccessorsForJvmMain NO-SOURCE
+> Task :shared:convertXmlValueResourcesForJvmTest NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForJvmTest NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForJvmTest NO-SOURCE
+> Task :shared:generateResourceAccessorsForJvmTest NO-SOURCE
+> Task :shared:convertXmlValueResourcesForNativeMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForNativeMain NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForNativeMain NO-SOURCE
+> Task :shared:generateResourceAccessorsForNativeMain NO-SOURCE
+> Task :shared:convertXmlValueResourcesForNativeTest NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForNativeTest NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForNativeTest NO-SOURCE
+> Task :shared:generateResourceAccessorsForNativeTest NO-SOURCE
+> Task :shared:preAndroidHostTestBuild UP-TO-DATE
+> Task :shared:generateAndroidHostTestLintModel UP-TO-DATE
+> Task :shared:lintAnalyzeAndroidHostTest UP-TO-DATE
+> Task :app-android:bundleDebugClassesToRuntimeJar UP-TO-DATE
+> Task :app-android:compileDebugUnitTestKotlin UP-TO-DATE
+> Task :app-android:javaPreCompileDebugUnitTest UP-TO-DATE
+> Task :app-android:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app-android:processDebugUnitTestJavaRes UP-TO-DATE
+> Task :app-android:testDebugUnitTest UP-TO-DATE
+> Task :shared:cinteropSqlite3IosSimulatorArm64 UP-TO-DATE
+> Task :shared:checkIosSimulatorArm64MainComposeLibrariesCompatibility
+> Task :shared:downloadKotlinNativeDistribution UP-TO-DATE
+> Task :shared:generateActualResourceCollectorsForIosSimulatorArm64Main UP-TO-DATE
+> Task :shared:compileKotlinIosSimulatorArm64 UP-TO-DATE
+> Task :shared:checkIosSimulatorArm64TestComposeLibrariesCompatibility
+> Task :shared:iosSimulatorArm64ResolveResourcesFromDependencies UP-TO-DATE
+> Task :shared:assembleIosSimulatorArm64MainResources UP-TO-DATE
+> Task :shared:iosSimulatorArm64ResolveSelfResourcesCopyHierarchicalMultiplatformResources UP-TO-DATE
+> Task :shared:iosSimulatorArm64AggregateResources UP-TO-DATE
+> Task :shared:iosSimulatorArm64ProcessResources UP-TO-DATE
+> Task :shared:iosSimulatorArm64MainKlibrary UP-TO-DATE
+> Task :shared:compileTestKotlinIosSimulatorArm64 UP-TO-DATE
+> Task :shared:computeLocalPackageDependencyInputFiles UP-TO-DATE
+> Task :shared:generateSyntheticLinkageSwiftPMImportProjectForCinteropsAndLdDump SKIPPED
+> Task :shared:serializeSwiftPMDependenciesMetadataForLockFiles UP-TO-DATE
+> Task :shared:generateUmbrellaPackageIdentifierBasedResolutionForDefault SKIPPED
+> Task :shared:fetchUmbrellaPackageIdentifierForDefault SKIPPED
+> Task :shared:syncPersistedPackageResolvedToSynthetic SKIPPED
+> Task :shared:fetchSyntheticImportProjectPackages SKIPPED
+> Task :shared:convertSyntheticImportProjectIntoDefFileIphonesimulator UP-TO-DATE
+> Task :shared:assembleIosSimulatorArm64TestResources UP-TO-DATE
+> Task :shared:copyTestComposeResourcesForIosSimulatorArm64 UP-TO-DATE
+> Task :shared:linkDebugTestIosSimulatorArm64 UP-TO-DATE
+> Task :shared:iosSimulatorArm64Test UP-TO-DATE
+> Task :shared:checkJvmMainComposeLibrariesCompatibility
+> Task :shared:generateActualResourceCollectorsForJvmMain UP-TO-DATE
+> Task :shared:compileKotlinJvm UP-TO-DATE
+> Task :shared:compileJvmMainJava NO-SOURCE
+> Task :shared:checkJvmTestComposeLibrariesCompatibility
+> Task :shared:assembleJvmMainResources UP-TO-DATE
+> Task :shared:jvmProcessResources UP-TO-DATE
+> Task :shared:processJvmMainResources SKIPPED
+> Task :shared:jvmMainClasses UP-TO-DATE
+> Task :shared:jvmJar UP-TO-DATE
+> Task :shared:compileTestKotlinJvm UP-TO-DATE
+> Task :shared:compileJvmTestJava NO-SOURCE
+> Task :shared:assembleJvmTestResources UP-TO-DATE
+> Task :shared:jvmTestProcessResources UP-TO-DATE
+> Task :shared:processJvmTestResources SKIPPED
+> Task :shared:jvmTestClasses UP-TO-DATE
+> Task :shared:jvmTest UP-TO-DATE
+> Task :shared:androidJar UP-TO-DATE
+> Task :shared:compileAndroidHostTest UP-TO-DATE
+> Task :shared:processAndroidHostTestJavaRes NO-SOURCE
+> Task :shared:testAndroidHostTest UP-TO-DATE
+> Task :shared:allTests UP-TO-DATE
+> Task :shared:testAndroid UP-TO-DATE
+> Task :shared:validateAiActionCatalog
+> Task :shared:check
+> Task :app-android:generateDebugAndroidTestResources UP-TO-DATE
+> Task :app-android:packageDebugAndroidTestResources UP-TO-DATE
+> Task :app-android:processDebugAndroidTestNavigationResources UP-TO-DATE
+> Task :app-android:parseDebugAndroidTestLocalResources UP-TO-DATE
+> Task :app-android:generateDebugAndroidTestRFile UP-TO-DATE
+
+> Task :app-android:compileDebugAndroidTestKotlin
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/TextSelectionFeatureRegressionTest.kt:102:54 Redundant call of conversion method.
+
+> Task :app-android:javaPreCompileDebugAndroidTest UP-TO-DATE
+> Task :app-android:compileDebugAndroidTestJavaWithJavac NO-SOURCE
+> Task :app-android:generateDebugAndroidTestAssets UP-TO-DATE
+> Task :app-android:mergeDebugAndroidTestAssets UP-TO-DATE
+> Task :app-android:compressDebugAndroidTestAssets UP-TO-DATE
+> Task :app-android:generateDebugAndroidTestGlobalSynthetics UP-TO-DATE
+> Task :app-android:processDebugAndroidTestJavaRes UP-TO-DATE
+> Task :app-android:mergeDebugAndroidTestJavaResource UP-TO-DATE
+> Task :app-android:checkDebugAndroidTestDuplicateClasses UP-TO-DATE
+> Task :app-android:desugarDebugAndroidTestFileDependencies UP-TO-DATE
+> Task :app-android:mergeExtDexDebugAndroidTest UP-TO-DATE
+> Task :shared:bundleLibRuntimeToDirAndroidMain UP-TO-DATE
+> Task :app-android:mergeLibDexDebugAndroidTest UP-TO-DATE
+> Task :app-android:checkDebugAndroidTestAarMetadata UP-TO-DATE
+> Task :app-android:mapDebugAndroidTestSourceSetPaths UP-TO-DATE
+> Task :app-android:compileDebugAndroidTestNavigationResources UP-TO-DATE
+> Task :app-android:mergeDebugAndroidTestResources UP-TO-DATE
+> Task :app-android:mergeDebugAndroidTestManifest UP-TO-DATE
+> Task :app-android:processDebugAndroidTestManifest UP-TO-DATE
+> Task :app-android:processDebugAndroidTestResources UP-TO-DATE
+> Task :app-android:dexBuilderDebugAndroidTest
+> Task :app-android:mergeProjectDexDebugAndroidTest
+> Task :app-android:mergeDebugAndroidTestJniLibFolders UP-TO-DATE
+> Task :app-android:mergeDebugAndroidTestNativeLibs NO-SOURCE
+> Task :app-android:stripDebugAndroidTestDebugSymbols NO-SOURCE
+> Task :app-android:validateSigningDebugAndroidTest UP-TO-DATE
+> Task :app-android:writeDebugAndroidTestSigningConfigVersions UP-TO-DATE
+> Task :app-android:packageDebugAndroidTest
+> Task :app-android:createDebugAndroidTestApkListingFileRedirect UP-TO-DATE
+> Task :app-android:assembleDebugAndroidTest
+> Task :app-android:preReleaseBuild UP-TO-DATE
+> Task :app-android:mergeReleaseJniLibFolders UP-TO-DATE
+> Task :app-android:mergeReleaseNativeLibs UP-TO-DATE
+> Task :app-android:stripReleaseDebugSymbols UP-TO-DATE
+> Task :app-android:extractReleaseNativeSymbolTables UP-TO-DATE
+> Task :app-android:mergeReleaseNativeDebugMetadata NO-SOURCE
+> Task :shared:mergeAndroidMainGeneratedProguardFiles UP-TO-DATE
+> Task :shared:exportAndroidMainConsumerProguardFiles UP-TO-DATE
+> Task :app-android:checkReleaseDuplicateClasses UP-TO-DATE
+> Task :app-android:preNonMinifiedReleaseBuild UP-TO-DATE
+> Task :app-android:checkNonMinifiedReleaseDuplicateClasses UP-TO-DATE
+> Task :app-android:generateNonMinifiedReleaseResources UP-TO-DATE
+> Task :app-android:injectCrashlyticsMappingFileIdNonMinifiedRelease UP-TO-DATE
+> Task :app-android:extractNonMinifiedReleaseVersionControlInfo UP-TO-DATE
+> Task :app-android:injectCrashlyticsVersionControlInfoNonMinifiedRelease UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseGoogleServices UP-TO-DATE
+> Task :app-android:packageNonMinifiedReleaseResources UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseNavigationResources UP-TO-DATE
+> Task :app-android:parseNonMinifiedReleaseLocalResources UP-TO-DATE
+> Task :app-android:generateNonMinifiedReleaseRFile UP-TO-DATE
+> Task :app-android:compileNonMinifiedReleaseKotlin UP-TO-DATE
+> Task :app-android:javaPreCompileNonMinifiedRelease UP-TO-DATE
+> Task :app-android:compileNonMinifiedReleaseJavaWithJavac NO-SOURCE
+> Task :app-android:checkNonMinifiedReleaseAarMetadata UP-TO-DATE
+> Task :app-android:mapNonMinifiedReleaseSourceSetPaths UP-TO-DATE
+> Task :app-android:compileNonMinifiedReleaseNavigationResources UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseResources UP-TO-DATE
+> Task :app-android:createNonMinifiedReleaseCompatibleScreenManifests UP-TO-DATE
+> Task :app-android:extractDeepLinksNonMinifiedRelease UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseMainManifest UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseManifest UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseManifestForPackage UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseResources UP-TO-DATE
+> Task :app-android:transformNonMinifiedReleaseClassesWithAsm UP-TO-DATE
+> Task :app-android:dexBuilderNonMinifiedRelease UP-TO-DATE
+> Task :app-android:desugarNonMinifiedReleaseFileDependencies UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseStartupProfile UP-TO-DATE
+> Task :app-android:mergeExtDexNonMinifiedRelease UP-TO-DATE
+> Task :app-android:mergeDexNonMinifiedRelease UP-TO-DATE
+> Task :shared:prepareAndroidMainArtProfile UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseArtProfile UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseGlobalSynthetics UP-TO-DATE
+> Task :app-android:compileNonMinifiedReleaseArtProfile UP-TO-DATE
+> Task :app-android:generateNonMinifiedReleaseAssets UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseAssets UP-TO-DATE
+> Task :app-android:compressNonMinifiedReleaseAssets UP-TO-DATE
+> Task :app-android:processNonMinifiedReleaseJavaRes UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseJavaResource UP-TO-DATE
+> Task :app-android:optimizeNonMinifiedReleaseResources UP-TO-DATE
+> Task :app-android:collectNonMinifiedReleaseDependencies UP-TO-DATE
+> Task :app-android:sdkNonMinifiedReleaseDependencyData UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseJniLibFolders UP-TO-DATE
+> Task :app-android:mergeNonMinifiedReleaseNativeLibs UP-TO-DATE
+> Task :app-android:stripNonMinifiedReleaseDebugSymbols UP-TO-DATE
+> Task :app-android:validateSigningNonMinifiedRelease UP-TO-DATE
+> Task :app-android:writeNonMinifiedReleaseAppMetadata UP-TO-DATE
+> Task :app-android:writeNonMinifiedReleaseSigningConfigVersions UP-TO-DATE
+> Task :app-android:packageNonMinifiedRelease UP-TO-DATE
+> Task :app-android:createNonMinifiedReleaseApkListingFileRedirect UP-TO-DATE
+> Task :baselineprofile:preBuild UP-TO-DATE
+> Task :baselineprofile:preNonMinifiedReleaseBuild UP-TO-DATE
+> Task :baselineprofile:checkTestedAppObfuscationNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:generateNonMinifiedReleaseResources UP-TO-DATE
+> Task :baselineprofile:packageNonMinifiedReleaseResources UP-TO-DATE
+> Task :baselineprofile:processNonMinifiedReleaseNavigationResources UP-TO-DATE
+> Task :baselineprofile:parseNonMinifiedReleaseLocalResources UP-TO-DATE
+> Task :baselineprofile:generateNonMinifiedReleaseRFile UP-TO-DATE
+> Task :baselineprofile:compileNonMinifiedReleaseKotlin UP-TO-DATE
+> Task :baselineprofile:javaPreCompileNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:compileNonMinifiedReleaseJavaWithJavac NO-SOURCE
+> Task :baselineprofile:futachaBaselineApi35Setup
+> Task :baselineprofile:generateNonMinifiedReleaseAssets UP-TO-DATE
+> Task :baselineprofile:mergeNonMinifiedReleaseAssets UP-TO-DATE
+> Task :baselineprofile:compressNonMinifiedReleaseAssets UP-TO-DATE
+> Task :baselineprofile:generateNonMinifiedReleaseGlobalSynthetics UP-TO-DATE
+> Task :baselineprofile:checkNonMinifiedReleaseDuplicateClasses UP-TO-DATE
+> Task :baselineprofile:desugarNonMinifiedReleaseFileDependencies UP-TO-DATE
+> Task :baselineprofile:mergeExtDexNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:mergeLibDexNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:processNonMinifiedReleaseJavaRes UP-TO-DATE
+> Task :baselineprofile:mergeNonMinifiedReleaseJavaResource UP-TO-DATE
+> Task :baselineprofile:checkNonMinifiedReleaseAarMetadata UP-TO-DATE
+> Task :baselineprofile:mapNonMinifiedReleaseSourceSetPaths UP-TO-DATE
+> Task :baselineprofile:compileNonMinifiedReleaseNavigationResources UP-TO-DATE
+> Task :baselineprofile:mergeNonMinifiedReleaseResources UP-TO-DATE
+> Task :baselineprofile:mergeNonMinifiedReleaseManifest UP-TO-DATE
+> Task :baselineprofile:processNonMinifiedReleaseManifest UP-TO-DATE
+> Task :baselineprofile:processNonMinifiedReleaseResources UP-TO-DATE
+> Task :baselineprofile:dexBuilderNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:mergeProjectDexNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:mergeNonMinifiedReleaseJniLibFolders UP-TO-DATE
+> Task :baselineprofile:mergeNonMinifiedReleaseNativeLibs UP-TO-DATE
+> Task :baselineprofile:stripNonMinifiedReleaseDebugSymbols UP-TO-DATE
+> Task :baselineprofile:validateSigningNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:writeNonMinifiedReleaseSigningConfigVersions UP-TO-DATE
+> Task :baselineprofile:packageNonMinifiedRelease UP-TO-DATE
+> Task :baselineprofile:createNonMinifiedReleaseApkListingFileRedirect UP-TO-DATE
+> Task :app-android:lintAnalyzeDebugAndroidTest
+
+> Task :baselineprofile:futachaBaselineApi35NonMinifiedReleaseAndroidTest
+Running tests on devices: futachaBaselineApi35
+
+> Task :app-android:lintReportDebug UP-TO-DATE
+> Task :app-android:lintDebug
+> Task :qualityGate
+
+> Task :baselineprofile:mergeNonMinifiedReleaseTestResultProtos
+Test execution completed. See the report at: file://${HOME}/Desktop/futacha/baselineprofile/build/reports/androidTests/managedDevice/nonminifiedrelease/allDevices/index.html
+
+> Task :baselineprofile:collectNonMinifiedReleaseBaselineProfile
+> Task :app-android:mergeBaselineProfile
+
+> Task :app-android:copyBaselineProfileIntoSrc
+
+A baseline profile was generated for the variant `release`:
+file://${HOME}/Desktop/futacha/app-android/src/main/generated/baselineProfiles/baseline-prof.txt
+
+Comparison with previous baseline profile:
+  52275 Old rules
+  52214 New rules
+  35 Added rules (0.07%)
+  96 Removed rules (0.18%)
+  52179 Unmodified rules (99.75%)
+
+
+A startup profile was generated for the variant `release`:
+file://${HOME}/Desktop/futacha/app-android/src/main/generated/baselineProfiles/startup-prof.txt
+
+Comparison with previous startup profile:
+  37901 Old rules
+  37921 New rules
+  41 Added rules (0.11%)
+  21 Removed rules (0.06%)
+  37880 Unmodified rules (99.84%)
+
+
+> Task :app-android:generateReleaseResources UP-TO-DATE
+> Task :app-android:injectCrashlyticsMappingFileIdRelease
+> Task :app-android:extractReleaseVersionControlInfo UP-TO-DATE
+> Task :app-android:injectCrashlyticsVersionControlInfoRelease UP-TO-DATE
+> Task :app-android:processReleaseGoogleServices UP-TO-DATE
+> Task :app-android:mergeReleaseArtProfile
+> Task :app-android:packageReleaseResources
+> Task :app-android:processReleaseNavigationResources UP-TO-DATE
+> Task :app-android:javaPreCompileRelease
+> Task :app-android:parseReleaseLocalResources
+> Task :app-android:generateReleaseRFile UP-TO-DATE
+> Task :app-android:checkReleaseAarMetadata
+> Task :app-android:compileReleaseKotlin UP-TO-DATE
+> Task :app-android:compileReleaseJavaWithJavac NO-SOURCE
+> Task :app-android:mapReleaseSourceSetPaths
+> Task :app-android:compileReleaseNavigationResources
+> Task :app-android:createReleaseCompatibleScreenManifests
+> Task :app-android:extractDeepLinksRelease
+> Task :app-android:processReleaseMainManifest
+> Task :app-android:processReleaseManifest
+> Task :app-android:processReleaseManifestForPackage
+> Task :app-android:processReleaseJavaRes
+> Task :app-android:mergeReleaseResources
+> Task :app-android:mergeReleaseJavaResource
+> Task :app-android:mergeReleaseStartupProfile
+> Task :app-android:generateReleaseAssets UP-TO-DATE
+> Task :app-android:mergeReleaseAssets
+> Task :app-android:compressReleaseAssets
+> Task :app-android:generateReleaseLintVitalReportModel
+> Task :app-android:processReleaseResources
+> Task :app-android:transformReleaseClassesWithAsm
+> Task :app-android:expandReleaseArtProfileWildcards
+> Task :app-android:mergeReleaseGeneratedProguardFiles
+> Task :app-android:lintVitalAnalyzeRelease
+> Task :app-android:produceReleaseComposeMapping
+> Task :app-android:reportReleaseComposeMappingErrors
+> Task :app-android:lintVitalReportRelease
+> Task :app-android:lintVitalRelease
+> Task :app-android:collectReleaseDependencies
+> Task :app-android:sdkReleaseDependencyData
+> Task :app-android:writeReleaseAppMetadata
+> Task :app-android:writeReleaseSigningConfigVersions
+> Task :app-android:minifyReleaseWithR8
+> Task :app-android:mergeReleaseComposeMapping
+> Task :app-android:convertShrunkResourcesToBinaryRelease
+> Task :app-android:optimizeReleaseResources
+> Task :app-android:compileReleaseArtProfile
+> Task :app-android:packageRelease
+> Task :app-android:createReleaseApkListingFileRedirect
+> Task :app-android:assembleRelease
+
+[Incubating] Problems report is available at: file://${HOME}/Desktop/futacha/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.6.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 10m 33s
+290 actionable tasks: 60 executed, 230 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.6.0/userguide/configuration_cache_enabling.html

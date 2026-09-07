@@ -57,7 +57,7 @@ final class IosAppUITests: XCTestCase {
             // Keep unrelated UI tests on the current already-read version so
             // the automatic change log does not replace their intended start
             // screen. Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "10.5"
+            "-commonUsedVersion", "10.6"
         ]
         return app
     }
@@ -383,7 +383,7 @@ final class IosAppUITests: XCTestCase {
         )
 
         app.buttons["書き込み"].tap()
-        XCTAssertTrue(app.textViews["コメント"].waitForExistence(timeout: 10), "The compatibility reply form did not open.")
+        XCTAssertTrue(app.textViews["compat-post-comment-field"].waitForExistence(timeout: 10), "The compatibility reply form did not open.")
         XCTAssertTrue(app.buttons["送信する"].exists, "The compatibility reply form did not expose send.")
         XCTAssertTrue(app.buttons["添付画像"].exists, "The compatibility reply form did not expose image attachment.")
         XCTAssertTrue(app.buttons["手書き"].exists, "The compatibility reply form did not expose drawing attachment.")
@@ -1599,9 +1599,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.5"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.6"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "Android版で、通信の接続が切れた後に画像の表示まで長く待たされる問題を改善しました。"
+            "Android版で、文字の長押し・ダブルタップによる選択中に編集した際や、端末のスマート選択処理に失敗した際にアプリが終了する問題を修正しました。スマート選択に失敗した場合も、通常の文字選択やコピーを続けられるようにしました。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)

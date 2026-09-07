@@ -5,15 +5,18 @@ junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 appcompat = "1.8.0"
 material = "1.14.0"
-composeBom = "2026.08.00"
-activityCompose = "1.13.0"
+composeBom = "2026.08.01"
+# Build-time smart-selection patch: review its two call sites before changing this pin.
+composeFoundationGuard = { strictly = "1.13.0-alpha02" }
+asm = "9.10.1"
+activityCompose = "1.14.0-alpha01"
 composeMultiplatform = "1.12.0"
-composeMultiplatformMaterial3 = "1.9.0"
+composeMultiplatformMaterial3 = "1.12.0-alpha03"
 material-icons-extended = "1.7.3"
 coil = "2.7.0"
 coil3 = "3.6.2"
-datastore = "1.2.1"
-kotlinxSerializationJson = "1.11.0"
+datastore = "1.3.0-alpha10"
+kotlinxSerializationJson = "1.12.0-RC"
 kotlinxCoroutines = "1.11.0"
 kotlinxDatetime = "0.8.0"
 ktor = "3.5.2"
@@ -22,13 +25,13 @@ firebase = "34.18.0"
 mlkitGenaiSummarization = "1.0.0-beta1"
 mlkitGenaiPrompt = "1.0.0-beta4"
 gms = "4.5.0"
-kotlin = "2.4.10"
-agp = "9.4.0"
+kotlin = "2.4.20"
+agp = "9.5.0-alpha04"
 firebaseCrashlyticsGradle = "3.0.8"
-workManager = "2.11.2"
+workManager = "2.12.0-rc01"
 documentfile = "1.1.0"
-wearCompose = "1.6.2"
-wearRemoteInteractions = "1.2.0"
+wearCompose = "1.7.0-beta02"
+wearRemoteInteractions = "1.3.0-alpha01"
 playServicesWearable = "20.0.1"
 playBilling = "9.1.0"
 playAppUpdate = "2.1.0"
@@ -36,12 +39,28 @@ wearTiles = "1.6.2"
 wearProtolayout = "1.4.2"
 guava = "33.7.1-android"
 penfeizhouAnimation = "3.0.5"
-benchmark = "1.4.1"
+benchmark = "1.5.0-rc02"
 baselineProfilePlugin = "1.5.0-rc02"
 profileInstaller = "1.4.1"
 uiAutomator = "2.4.0"
 
+# Direct API dependencies previously supplied only transitively.
+okhttp = "5.5.0"
+okio = "3.18.2"
+kotlinxIo = "0.9.1"
+lifecycle = "2.12.0-alpha02"
+androidxAnnotation = "1.11.0-alpha02"
+androidxTestCore = "1.7.0"
+androidxTestMonitor = "1.9.0-alpha01"
+playServicesTasks = "18.4.1"
+mlkitCommon = "18.11.0"
+mlkitGenaiCommon = "1.0.0-beta4"
+
 [libraries]
+android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "agp" }
+kotlin-gradle-plugin-api = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin-api", version.ref = "kotlin" }
+asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
+androidx-compose-foundation-guarded = { module = "androidx.compose.foundation:foundation-android", version.ref = "composeFoundationGuard" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
@@ -49,7 +68,7 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
-androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom-alpha", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
@@ -110,6 +129,45 @@ androidx-wear-protolayout = { group = "androidx.wear.protolayout", name = "proto
 androidx-wear-protolayout-material = { group = "androidx.wear.protolayout", name = "protolayout-material", version.ref = "wearProtolayout" }
 androidx-wear-protolayout-expression = { group = "androidx.wear.protolayout", name = "protolayout-expression", version.ref = "wearProtolayout" }
 
+# Directly used APIs; related artifacts share versions or their existing BOM.
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinxIo" }
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinxSerializationJson" }
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidxAnnotation" }
+androidx-lifecycle-common = { module = "androidx.lifecycle:lifecycle-common", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
+androidx-test-monitor = { module = "androidx.test:monitor", version.ref = "androidxTestMonitor" }
+play-services-tasks = { module = "com.google.android.gms:play-services-tasks", version.ref = "playServicesTasks" }
+firebase-common = { module = "com.google.firebase:firebase-common" }
+mlkit-common = { module = "com.google.mlkit:common", version.ref = "mlkitCommon" }
+mlkit-genai-common = { module = "com.google.mlkit:genai-common", version.ref = "mlkitGenaiCommon" }
+penfeizhou-animation-core = { module = "com.github.penfeizhou.android.animation:frameanimation", version.ref = "penfeizhouAnimation" }
+androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "media3" }
+androidx-media3-database = { module = "androidx.media3:media3-database", version.ref = "media3" }
+androidx-media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "media3" }
+coil3-core = { module = "io.coil-kt.coil3:coil-core", version.ref = "coil3" }
+coil3-compose-core = { module = "io.coil-kt.coil3:coil-compose-core", version.ref = "coil3" }
+coil3-network-core = { module = "io.coil-kt.coil3:coil-network-core", version.ref = "coil3" }
+ktor-http = { module = "io.ktor:ktor-http", version.ref = "ktor" }
+ktor-io = { module = "io.ktor:ktor-io", version.ref = "ktor" }
+ktor-utils = { module = "io.ktor:ktor-utils", version.ref = "ktor" }
+jetbrains-compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
+jetbrains-compose-ui-graphics = { module = "org.jetbrains.compose.ui:ui-graphics", version.ref = "composeMultiplatform" }
+jetbrains-compose-ui-text = { module = "org.jetbrains.compose.ui:ui-text", version.ref = "composeMultiplatform" }
+jetbrains-compose-ui-unit = { module = "org.jetbrains.compose.ui:ui-unit", version.ref = "composeMultiplatform" }
+jetbrains-compose-ui-geometry = { module = "org.jetbrains.compose.ui:ui-geometry", version.ref = "composeMultiplatform" }
+jetbrains-compose-animation = { module = "org.jetbrains.compose.animation:animation", version.ref = "composeMultiplatform" }
+jetbrains-compose-animation-core = { module = "org.jetbrains.compose.animation:animation-core", version.ref = "composeMultiplatform" }
+jetbrains-compose-runtime-saveable = { module = "org.jetbrains.compose.runtime:runtime-saveable", version.ref = "composeMultiplatform" }
+androidx-compose-runtime = { module = "androidx.compose.runtime:runtime" }
+androidx-compose-ui-text = { module = "androidx.compose.ui:ui-text" }
+androidx-compose-ui-unit = { module = "androidx.compose.ui:ui-unit" }
+androidx-compose-ui-geometry = { module = "androidx.compose.ui:ui-geometry" }
+androidx-compose-ui-test = { module = "androidx.compose.ui:ui-test" }
+
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
@@ -122,3 +180,4 @@ android-test = { id = "com.android.test", version.ref = "agp" }
 androidx-baselineprofile = { id = "androidx.baselineprofile", version.ref = "baselineProfilePlugin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "gms" }
 firebase-crashlytics = { id = "com.google.firebase.crashlytics", version.ref = "firebaseCrashlyticsGradle" }
+kotlin-cocoapods = { id = "org.jetbrains.kotlin.native.cocoapods", version.ref = "kotlin" }

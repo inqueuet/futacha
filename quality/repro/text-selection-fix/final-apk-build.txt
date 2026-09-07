@@ -1,0 +1,213 @@
+> Task :buildSrc:compileJava
+> Task :buildSrc:compileGroovy NO-SOURCE
+> Task :buildSrc:processResources NO-SOURCE
+> Task :buildSrc:classes
+> Task :buildSrc:jar
+
+> Configure project :
+w: file://${HOME}/Desktop/futacha/build.gradle.kts:17:39: 'fun RegisteringDomainObjectDelegateProviderWithAction<out TaskContainer, Task>.provideDelegate(receiver: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<TaskProvider<Task>>' is deprecated. Use 'val task = tasks.register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/build.gradle.kts:17:39: 'fun <T : Any, C : NamedDomainObjectContainer<T>> C.registering(action: T.() -> Unit): RegisteringDomainObjectDelegateProviderWithAction<out C, T>' is deprecated. Use 'val element = register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/build.gradle.kts:17:39: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+
+> Configure project :app-android
+w: file://${HOME}/Desktop/futacha/app-android/build.gradle.kts:32:51: 'fun <U : Task> RegisteringDomainObjectDelegateProviderWithTypeAndAction<out TaskContainer, U>.provideDelegate(receiver: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<TaskProvider<U>>' is deprecated. Use 'val task = tasks.register<Type>(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/app-android/build.gradle.kts:32:51: 'fun <T : Any, C : PolymorphicDomainObjectContainer<T>, U : T> C.registering(type: KClass<U>, action: U.() -> Unit): RegisteringDomainObjectDelegateProviderWithTypeAndAction<out C, U>' is deprecated. Use 'val element = register<Type>(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/app-android/build.gradle.kts:32:51: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/app-android/build.gradle.kts:169:54: 'fun RegisteringDomainObjectDelegateProviderWithAction<out TaskContainer, Task>.provideDelegate(receiver: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<TaskProvider<Task>>' is deprecated. Use 'val task = tasks.register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/app-android/build.gradle.kts:169:54: 'fun <T : Any, C : NamedDomainObjectContainer<T>> C.registering(action: T.() -> Unit): RegisteringDomainObjectDelegateProviderWithAction<out C, T>' is deprecated. Use 'val element = register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/app-android/build.gradle.kts:169:54: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+
+> Configure project :baselineprofile
+w: file://${HOME}/Desktop/futacha/baselineprofile/build.gradle.kts:1:8: 'class ManagedDeviceInstrumentationTestTask : NonIncrementalTask, AndroidTestTask' is deprecated. Will be replaced with TestSuiteTestTask. Will be removed in AGP 10.0.
+w: file://${HOME}/Desktop/futacha/baselineprofile/build.gradle.kts:52:20: 'class ManagedDeviceInstrumentationTestTask : NonIncrementalTask, AndroidTestTask' is deprecated. Will be replaced with TestSuiteTestTask. Will be removed in AGP 10.0.
+
+> Configure project :shared
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:65:27: 'fun provideDelegate(thisRef: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<KotlinSourceSet>' is deprecated. Use 'val element = getByName(name)' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:65:27: 'fun <T : Any, U : NamedDomainObjectCollection<T>> U.getting(configuration: T.() -> Unit): NamedDomainObjectCollectionDelegateProvider<T>' is deprecated. Use 'val element = getByName(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:65:27: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:97:27: 'fun provideDelegate(thisRef: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<KotlinSourceSet>' is deprecated. Use 'val element = getByName(name)' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:97:27: 'fun <T : Any, U : NamedDomainObjectCollection<T>> U.getting(configuration: T.() -> Unit): NamedDomainObjectCollectionDelegateProvider<T>' is deprecated. Use 'val element = getByName(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:97:27: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:104:28: 'fun provideDelegate(thisRef: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<KotlinSourceSet>' is deprecated. Use 'val element = getByName(name)' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:104:28: 'fun <T : Any, U : NamedDomainObjectCollection<T>> U.getting(configuration: T.() -> Unit): NamedDomainObjectCollectionDelegateProvider<T>' is deprecated. Use 'val element = getByName(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:104:28: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:143:24: 'fun provideDelegate(thisRef: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<KotlinSourceSet>' is deprecated. Use 'val element = getByName(name)' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:143:24: 'fun <T : Any, U : NamedDomainObjectCollection<T>> U.getting(configuration: T.() -> Unit): NamedDomainObjectCollectionDelegateProvider<T>' is deprecated. Use 'val element = getByName(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:143:24: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:149:24: 'fun provideDelegate(thisRef: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<KotlinSourceSet>' is deprecated. Use 'val element = getByName(name)' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:149:24: 'fun <T : Any, U : NamedDomainObjectCollection<T>> U.getting(configuration: T.() -> Unit): NamedDomainObjectCollectionDelegateProvider<T>' is deprecated. Use 'val element = getByName(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:149:24: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:161:55: 'fun RegisteringDomainObjectDelegateProviderWithAction<out TaskContainer, Task>.provideDelegate(receiver: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<TaskProvider<Task>>' is deprecated. Use 'val task = tasks.register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:161:55: 'fun <T : Any, C : NamedDomainObjectContainer<T>> C.registering(action: T.() -> Unit): RegisteringDomainObjectDelegateProviderWithAction<out C, T>' is deprecated. Use 'val element = register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:161:55: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:176:38: 'fun RegisteringDomainObjectDelegateProviderWithAction<out TaskContainer, Task>.provideDelegate(receiver: Any?, property: KProperty<*>): ExistingDomainObjectDelegate<TaskProvider<Task>>' is deprecated. Use 'val task = tasks.register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:176:38: 'fun <T : Any, C : NamedDomainObjectContainer<T>> C.registering(action: T.() -> Unit): RegisteringDomainObjectDelegateProviderWithAction<out C, T>' is deprecated. Use 'val element = register(name) { }' instead. See the Gradle 9.6 upgrading guide.
+w: file://${HOME}/Desktop/futacha/shared/build.gradle.kts:176:38: 'fun <T> ExistingDomainObjectDelegate<out T>.getValue(receiver: Any?, property: KProperty<*>): T' is deprecated. Use the named() API instead. See the Gradle 9.6 upgrading guide.
+
+> Task :app-android:preBuild UP-TO-DATE
+> Task :app-android:preDebugBuild UP-TO-DATE
+> Task :app-android:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app-android:generateDebugResources
+> Task :app-android:injectCrashlyticsMappingFileIdDebug
+> Task :app-android:injectCrashlyticsVersionControlInfoDebug
+> Task :app-android:processDebugGoogleServices
+> Task :app-android:packageDebugResources
+> Task :shared:androidPreBuild UP-TO-DATE
+> Task :shared:preAndroidMainBuild UP-TO-DATE
+> Task :shared:generateAndroidMainEmptyResourceFiles
+> Task :app-android:processDebugNavigationResources
+> Task :app-android:parseDebugLocalResources
+> Task :shared:kmpPartiallyResolvedDependenciesChecker
+> Task :shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :shared:convertXmlValueResourcesForAndroidMain NO-SOURCE
+> Task :shared:copyNonXmlValueResourcesForAndroidMain NO-SOURCE
+> Task :shared:prepareComposeResourcesTaskForAndroidMain NO-SOURCE
+> Task :shared:generateResourceAccessorsForAndroidMain NO-SOURCE
+> Task :shared:convertXmlValueResourcesForCommonMain NO-SOURCE
+> Task :app-android:generateDebugRFile
+> Task :shared:copyNonXmlValueResourcesForCommonMain
+> Task :shared:prepareComposeResourcesTaskForCommonMain
+> Task :shared:generateResourceAccessorsForCommonMain
+> Task :shared:generateActualResourceCollectorsForAndroidMain
+> Task :shared:generateComposeResClass
+> Task :shared:generateExpectResourceCollectorsForCommonMain
+> Task :app-android:javaPreCompileDebug
+> Task :app-android:generateDebugAssets UP-TO-DATE
+> Task :app-android:syncSharedComposeResourcesForAndroid UP-TO-DATE
+> Task :app-android:mergeDebugAssets
+> Task :app-android:compressDebugAssets
+> Task :app-android:generateDebugGlobalSynthetics
+> Task :app-android:checkDebugDuplicateClasses
+> Task :app-android:desugarDebugFileDependencies
+
+> Task :shared:compileAndroidMain
+w: file://${HOME}/Desktop/futacha/shared/src/androidMain/kotlin/ui/compat/CompatPostPlatformActions.android.kt:387:40 'static field SOFT_INPUT_ADJUST_RESIZE: Int' is deprecated. Deprecated in Java.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatCacheServer.kt:49:17 'typealias Instant = Instant' is deprecated. This type is deprecated in favor of `kotlin.time.Instant`.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatReverseImageSearchScreen.kt:162:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:3715:64 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:5631:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:6163:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:9236:42 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:9250:104 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:9360:63 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:9821:63 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:10441:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityApp.kt:10539:51 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityInfoScreens.kt:60:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityInfoScreens.kt:68:43 'val Icons.Filled.Help: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Help.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityInfoScreens.kt:143:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityPostDrawingScreen.kt:145:43 'val Icons.Filled.Undo: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Undo.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityPostDrawingScreen.kt:153:43 'val Icons.Filled.Redo: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Redo.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:294:17 'typealias Instant = Instant' is deprecated. This type is deprecated in favor of `kotlin.time.Instant`.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:861:85 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:879:55 'val Icons.Filled.HelpOutline: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.HelpOutline.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:1727:51 Unnecessary safe call on a non-null receiver of type 'CookieRepository'.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:2059:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:3472:75 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:3935:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:4375:44 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:4812:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:4963:35 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:5329:89 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilitySecondaryScreens.kt:5533:41 Unnecessary safe call on a non-null receiver of type 'CompatPostSnapshot'.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityToolbarEditor.kt:432:45 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityToolbarEditor.kt:456:49 'val Icons.Filled.KeyboardArrowLeft: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.KeyboardArrowLeft.
+w: file://${HOME}/Desktop/futacha/shared/src/commonMain/kotlin/ui/compat/CompatibilityToolbarEditor.kt:457:45 'val Icons.Filled.KeyboardArrowRight: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.KeyboardArrowRight.
+
+> Task :app-android:mergeExtDexDebug
+> Task :shared:bundleAndroidMainClassesToCompileJar
+> Task :app-android:compileDebugKotlin
+> Task :app-android:compileDebugJavaWithJavac NO-SOURCE
+> Task :app-android:processDebugJavaRes
+> Task :shared:processAndroidMainJavaRes
+> Task :app-android:mergeDebugJavaResource
+> Task :shared:writeAndroidMainAarMetadata
+> Task :app-android:checkDebugAarMetadata
+> Task :app-android:mapDebugSourceSetPaths
+> Task :app-android:compileDebugNavigationResources
+> Task :shared:bundleAndroidMainClassesToRuntimeJar
+> Task :app-android:mergeDebugResources
+> Task :app-android:createDebugCompatibleScreenManifests
+> Task :app-android:extractDeepLinksDebug
+> Task :shared:processAndroidMainManifest
+> Task :app-android:processDebugMainManifest
+> Task :app-android:processDebugManifest
+> Task :app-android:processDebugManifestForPackage
+> Task :app-android:processDebugResources
+> Task :app-android:transformDebugClassesWithAsm
+> Task :app-android:dexBuilderDebug
+> Task :app-android:mergeProjectDexDebug
+> Task :app-android:mergeDebugJniLibFolders
+> Task :shared:mergeAndroidMainJniLibFolders
+> Task :shared:mergeAndroidMainNativeLibs NO-SOURCE
+> Task :shared:copyAndroidMainJniLibsProjectOnly
+> Task :app-android:mergeDebugNativeLibs
+
+> Task :app-android:stripDebugDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libdatastore_shared_counter.so. Run with --info option to learn more.
+
+> Task :app-android:validateSigningDebug
+> Task :app-android:writeDebugAppMetadata
+> Task :app-android:writeDebugSigningConfigVersions
+> Task :app-android:bundleDebugClassesToCompileJar
+> Task :app-android:preDebugAndroidTestBuild SKIPPED
+> Task :app-android:generateDebugAndroidTestResources
+> Task :app-android:packageDebugAndroidTestResources
+> Task :app-android:processDebugAndroidTestNavigationResources
+> Task :app-android:parseDebugAndroidTestLocalResources
+> Task :app-android:generateDebugAndroidTestRFile
+
+> Task :app-android:compileDebugAndroidTestKotlin
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/CompatPostNetworkSelectionRegressionTest.kt:1:16 Suppression of error 'INVISIBLE_REFERENCE' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED. Please report your use case to the Kotlin issue tracker instead: https://kotl.in/issue
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/CompatPostRestoreSelectionRegressionTest.kt:1:16 Suppression of error 'INVISIBLE_REFERENCE' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED. Please report your use case to the Kotlin issue tracker instead: https://kotl.in/issue
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/CompatSettingsSchemaInstrumentedTest.kt:3705:40 'static field SOFT_INPUT_ADJUST_RESIZE: Int' is deprecated. Deprecated in Java.
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/TextSelectionFeatureRegressionTest.kt:102:54 Redundant call of conversion method.
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/TextSelectionGuardInstrumentedTest.kt:1:16 Suppression of error 'INVISIBLE_REFERENCE' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED. Please report your use case to the Kotlin issue tracker instead: https://kotl.in/issue
+w: file://${HOME}/Desktop/futacha/app-android/src/androidTest/java/com/valoser/futacha/TextSelectionRegressionTest.kt:1:16 Suppression of error 'INVISIBLE_REFERENCE' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED. Please report your use case to the Kotlin issue tracker instead: https://kotl.in/issue
+
+> Task :app-android:javaPreCompileDebugAndroidTest
+> Task :app-android:compileDebugAndroidTestJavaWithJavac NO-SOURCE
+> Task :app-android:generateDebugAndroidTestAssets UP-TO-DATE
+> Task :app-android:mergeDebugAndroidTestAssets
+> Task :app-android:compressDebugAndroidTestAssets
+> Task :app-android:generateDebugAndroidTestGlobalSynthetics
+> Task :app-android:processDebugAndroidTestJavaRes
+> Task :app-android:mergeDebugAndroidTestJavaResource
+> Task :app-android:checkDebugAndroidTestDuplicateClasses
+> Task :app-android:desugarDebugAndroidTestFileDependencies
+> Task :app-android:mergeExtDexDebugAndroidTest
+> Task :shared:bundleLibRuntimeToDirAndroidMain
+> Task :app-android:mergeLibDexDebug
+> Task :app-android:packageDebug
+> Task :app-android:createDebugApkListingFileRedirect
+> Task :app-android:assembleDebug
+> Task :app-android:checkDebugAndroidTestAarMetadata
+> Task :app-android:mapDebugAndroidTestSourceSetPaths
+> Task :app-android:compileDebugAndroidTestNavigationResources
+> Task :app-android:mergeDebugAndroidTestResources
+> Task :app-android:mergeDebugAndroidTestManifest
+> Task :app-android:processDebugAndroidTestManifest
+> Task :app-android:processDebugAndroidTestResources
+> Task :app-android:dexBuilderDebugAndroidTest
+> Task :app-android:mergeProjectDexDebugAndroidTest
+> Task :app-android:mergeDebugAndroidTestJniLibFolders
+> Task :app-android:mergeDebugAndroidTestNativeLibs NO-SOURCE
+> Task :app-android:stripDebugAndroidTestDebugSymbols NO-SOURCE
+> Task :app-android:validateSigningDebugAndroidTest
+> Task :app-android:writeDebugAndroidTestSigningConfigVersions
+> Task :app-android:mergeLibDexDebugAndroidTest
+> Task :app-android:packageDebugAndroidTest
+> Task :app-android:createDebugAndroidTestApkListingFileRedirect
+> Task :app-android:assembleDebugAndroidTest
+
+[Incubating] Problems report is available at: file://${HOME}/Desktop/futacha/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.6.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 1m 50s
+91 actionable tasks: 90 executed, 1 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.6.0/userguide/configuration_cache_enabling.html

@@ -1,0 +1,30 @@
+Xcode 26.6; iPhone SE (3rd generation) Simulator; iOS 26.5
+Each test ran separately with fresh application data.
+
+ios-compat-retry.log
+Test Suite 'Selected tests' started at 2026-09-07 19:15:18.696.
+Test Suite 'iosAppUITests.xctest' started at 2026-09-07 19:15:18.696.
+Test Suite 'IosAppUITests' started at 2026-09-07 19:15:18.696.
+Test Case '-[iosAppUITests.IosAppUITests testToshiakiCompatibilityProfileReachesForeground]' started.
+Test Case '-[iosAppUITests.IosAppUITests testToshiakiCompatibilityProfileReachesForeground]' passed (24.333 seconds).
+Test Suite 'IosAppUITests' passed at 2026-09-07 19:15:43.030.
+	 Executed 1 test, with 0 failures (0 unexpected) in 24.333 (24.334) seconds
+Test Suite 'iosAppUITests.xctest' passed at 2026-09-07 19:15:43.031.
+	 Executed 1 test, with 0 failures (0 unexpected) in 24.333 (24.335) seconds
+Test Suite 'Selected tests' passed at 2026-09-07 19:15:43.032.
+	 Executed 1 test, with 0 failures (0 unexpected) in 24.333 (24.336) seconds
+** TEST SUCCEEDED **
+
+ios-futacha.log
+Test Suite 'Selected tests' started at 2026-09-07 19:16:38.048.
+Test Suite 'iosAppUITests.xctest' started at 2026-09-07 19:16:38.048.
+Test Suite 'IosAppUITests' started at 2026-09-07 19:16:38.048.
+Test Case '-[iosAppUITests.IosAppUITests testFutachaProfileReachesForeground]' started.
+Test Case '-[iosAppUITests.IosAppUITests testFutachaProfileReachesForeground]' passed (15.160 seconds).
+Test Suite 'IosAppUITests' passed at 2026-09-07 19:16:53.209.
+	 Executed 1 test, with 0 failures (0 unexpected) in 15.160 (15.161) seconds
+Test Suite 'iosAppUITests.xctest' passed at 2026-09-07 19:16:53.210.
+	 Executed 1 test, with 0 failures (0 unexpected) in 15.160 (15.162) seconds
+Test Suite 'Selected tests' passed at 2026-09-07 19:16:53.211.
+	 Executed 1 test, with 0 failures (0 unexpected) in 15.160 (15.163) seconds
+** TEST EXECUTE SUCCEEDED **
