@@ -65,7 +65,10 @@ private fun applyAppIconVariantNow(
     val persistedVariant = context.getSharedPreferences(ICON_STATE_PREFS, Context.MODE_PRIVATE)
         .getString(ICON_STATE_KEY, null)
         ?.let { name -> runCatching { AppIconVariant.valueOf(name) }.getOrNull() }
-    if (lastAppliedVariant == variant || persistedVariant == variant) {
+    val legacyModeIconEnabled = packageManager.getComponentEnabledSetting(
+        ComponentName(context.packageName, TOSHIAKI_COMPAT_ALIAS_CLASS)
+    ) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+    if (!legacyModeIconEnabled && (lastAppliedVariant == variant || persistedVariant == variant)) {
         lastAppliedVariant = variant
         return
     }

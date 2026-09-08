@@ -16,13 +16,12 @@ class AndroidLauncherAliasManager(context: Context) : AndroidLauncherAliasReconc
     private val packageManager = context.packageManager
 
     override fun reconcile(profile: ExperienceProfile, preferredFutachaIcon: AppIconVariant) {
-        val target = when (profile) {
-            ExperienceProfile.TOSHIAKI_COMPAT -> TOSHIAKI_COMPAT_ALIAS
-            ExperienceProfile.FUTACHA -> when (preferredFutachaIcon) {
-                AppIconVariant.Current -> CURRENT_ALIAS
-                AppIconVariant.Classic -> CLASSIC_ALIAS
-                AppIconVariant.Midnight -> MIDNIGHT_ALIAS
-            }
+        // Both experiences use the user's selected Futacha icon. Retain the old
+        // alias in ALL_ALIASES only to disable it for existing installations.
+        val target = when (preferredFutachaIcon) {
+            AppIconVariant.Current -> CURRENT_ALIAS
+            AppIconVariant.Classic -> CLASSIC_ALIAS
+            AppIconVariant.Midnight -> MIDNIGHT_ALIAS
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val needsUpdate = ALL_ALIASES.any { alias ->

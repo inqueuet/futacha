@@ -47,7 +47,6 @@ import com.valoser.futacha.shared.ui.board.mockThreadHistory
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.applyAppIconVariant
-import com.valoser.futacha.shared.util.applyIosToshiakiCompatibilityIcon
 import com.valoser.futacha.shared.util.releaseSecurityScopedResource
 import com.valoser.futacha.shared.util.createFileSystem
 import com.valoser.futacha.shared.compat.ExperienceProfile
@@ -137,12 +136,8 @@ private object IosAppGraph {
     val compatibilityStore by lazy { IosCompatibilityStore(fileSystem) }
     val experienceProfileStore by lazy { IosExperienceProfileStore() }
     val modeSwitchCoordinator by lazy {
-        IosModeSwitchCoordinator(experienceProfileStore) { profile, preferredFutachaIcon ->
-            if (profile == ExperienceProfile.TOSHIAKI_COMPAT) {
-                applyIosToshiakiCompatibilityIcon()
-            } else {
-                applyAppIconVariant(platformContext = null, variant = preferredFutachaIcon)
-            }
+        IosModeSwitchCoordinator(experienceProfileStore) { _, preferredFutachaIcon ->
+            applyAppIconVariant(platformContext = null, variant = preferredFutachaIcon)
         }
     }
     private var httpClient: io.ktor.client.HttpClient? = null
@@ -677,6 +672,11 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         val profileScope = rememberCoroutineScope()
         val activeProfile by profileStore.activeProfile.collectAsState()
         val profileGeneration by profileStore.generation.collectAsState()
+        LaunchedEffect(stateStore) {
+            stateStore.appIconVariant.collect { variant ->
+                applyAppIconVariant(platformContext = null, variant = variant)
+            }
+        }
         val preferredAppIcon by stateStore.appIconVariant.collectAsState(
             initial = com.valoser.futacha.shared.model.AppIconVariant.Current
         )

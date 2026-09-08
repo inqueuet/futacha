@@ -30,6 +30,7 @@ import com.valoser.futacha.shared.model.ThreadHistoryEntry
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadMenuEntryConfig
 import com.valoser.futacha.shared.ui.util.platformSystemGestureExclusion
+import com.valoser.futacha.shared.ui.util.ThreadDrawerBackGestureHandler
 
 private val THREAD_DRAWER_GESTURE_EXCLUSION_WIDTH = 48.dp
 
@@ -65,10 +66,14 @@ internal fun ThreadScreenScaffoldHost(
     bindings: ThreadScreenScaffoldBindings,
     content: @Composable BoxScope.() -> Unit
 ) {
+    ThreadDrawerBackGestureHandler(
+        enabled = !bindings.isDrawerOpen && !bindings.isSearchActive,
+        onOpenDrawer = bindings.topBarCallbacks.onOpenHistory
+    )
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = bindings.drawerState,
-            gesturesEnabled = true,
+            gesturesEnabled = !bindings.isSearchActive || bindings.isDrawerOpen,
             drawerContent = {
                 HistoryDrawerContent(
                     history = bindings.history,
@@ -177,7 +182,7 @@ internal fun ThreadScreenScaffoldHost(
         // The drawer and Android's system Back gesture both start at the physical left edge.
         // Reserve only the drawer's narrow start strip so a slow drawer drag cannot be delivered
         // as Back while the sheet is partially visible (issue #36). This is a no-op off Android.
-        Box(
+        if (!bindings.isSearchActive || bindings.isDrawerOpen) Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .width(THREAD_DRAWER_GESTURE_EXCLUSION_WIDTH)

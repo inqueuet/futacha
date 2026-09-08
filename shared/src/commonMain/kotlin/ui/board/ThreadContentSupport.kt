@@ -154,7 +154,7 @@ internal fun countThreadContentItemsBeforePosts(
     if (embeddedHtml.any { it.placement == EmbeddedHtmlPlacement.Header }) {
         count += 1
     }
-    if (!page.deletedNotice.isNullOrBlank()) {
+    if (com.valoser.futacha.shared.model.threadNoticeWithoutDeletionCount(page.deletedNotice) != null) {
         count += 1
     }
     if (hasAiHiddenPostsSummary) {

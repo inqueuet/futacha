@@ -59,7 +59,6 @@ import com.valoser.futacha.shared.ui.image.CATALOG_IMAGE_DISK_CACHE_DIR
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
-import com.valoser.futacha.shared.util.applyAppIconVariant
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.ExperienceProfile
 import com.valoser.futacha.shared.compat.COMPAT_IMAGE_CACHE_LOCATION_PREFERENCE_KEY
@@ -434,12 +433,6 @@ fun FutachaApp(
                 onSettingsChanged = { historyViewSettings = it }
             )
         ) {
-            LaunchedEffect(platformContext, observedRuntimeState.appIconVariant) {
-                applyAppIconVariant(
-                    platformContext = platformContext,
-                    variant = observedRuntimeState.appIconVariant
-                )
-            }
             Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
                 val coroutineScope = rememberCoroutineScope()
                 val saveableStateHolder = rememberSaveableStateHolder()

@@ -164,15 +164,16 @@ internal fun ThreadMessageText(
         }
         threadMessageAnnotationBaseCache.put(annotationCacheKey, value)
     }
-    val annotated = remember(baseAnnotated, highlightRanges, highlightStyle) {
-        applyHighlightsToAnnotatedMessage(baseAnnotated, highlightRanges, highlightStyle)
+    val annotated = remember(baseAnnotated, isDeleted, highlightRanges, highlightStyle) {
+        val withNotices = if (isDeleted) AnnotatedString.Builder(baseAnnotated).apply {
+            com.valoser.futacha.shared.model.postDeletionNoticeRanges(baseAnnotated.text).forEach { range ->
+                addStyle(SpanStyle(color = Color.Red), range.first, range.last + 1)
+            }
+        }.toAnnotatedString() else baseAnnotated
+        applyHighlightsToAnnotatedMessage(withNotices, highlightRanges, highlightStyle)
     }
 
-    val textColor = if (isDeleted) {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
+    val textColor = MaterialTheme.colorScheme.onSurface
     val baseTextStyle = MaterialTheme.typography.bodyMedium
     val textSizeTokens = remember(bodyTextSize, baseTextStyle.fontSize, baseTextStyle.lineHeight) {
         resolveThreadTextSizeTokens(

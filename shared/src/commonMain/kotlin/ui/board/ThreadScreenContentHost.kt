@@ -419,9 +419,12 @@ internal fun ThreadScreenContentHost(
                     }
                 }
             }
+            val deletionSummary = remember(state.page) { threadDeletionSummaryForPage(state.page) }
             when (bindings.threadDisplayMode) {
                 ThreadDisplayMode.Flat -> ThreadContent(
                     page = filteredPage,
+                    deletionSummary = deletionSummary,
+                    originalPostId = state.page.posts.firstOrNull()?.id,
                     embeddedHtml = state.embeddedHtml,
                     summaryState = summaryState,
                     aiPostModerationUiState = aiPostModerationUiState,
@@ -449,6 +452,8 @@ internal fun ThreadScreenContentHost(
 
                 ThreadDisplayMode.Tree -> ThreadTreeContent(
                     page = filteredPage,
+                    deletionSummary = deletionSummary,
+                    originalPostId = state.page.posts.firstOrNull()?.id,
                     embeddedHtml = state.embeddedHtml,
                     summaryState = summaryState,
                     aiPostModerationUiState = aiPostModerationUiState,

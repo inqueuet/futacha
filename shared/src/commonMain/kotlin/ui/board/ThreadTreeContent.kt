@@ -132,6 +132,8 @@ internal suspend fun buildThreadTreeNodes(posts: List<Post>): List<ThreadTreeNod
 @Composable
 internal fun ThreadTreeContent(
     page: ThreadPage,
+    deletionSummary: String? = null,
+    originalPostId: String? = page.posts.firstOrNull()?.id,
     embeddedHtml: List<EmbeddedHtmlContent>,
     summaryState: ThreadSummaryUiState?,
     aiPostModerationUiState: AiPostModerationUiState = AiPostModerationUiState(),
@@ -255,7 +257,7 @@ internal fun ThreadTreeContent(
                         )
                     }
                 }
-                page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+                com.valoser.futacha.shared.model.threadNoticeWithoutDeletionCount(page.deletedNotice)?.let { notice ->
                     item(key = "thread-tree-notice") {
                         ThreadNoticeCard(message = notice)
                     }
@@ -311,6 +313,7 @@ internal fun ThreadTreeContent(
                             post = post,
                             isOp = post.id == page.posts.firstOrNull()?.id,
                             isSelfPost = isSelfPost,
+                            deletionSummary = deletionSummary.takeIf { post.id == originalPostId },
                             posterIdLabel = posterIdLabels[post.id],
                             posterIdValue = normalizedPosterId,
                             saidaneLabelOverride = saidaneOverrides[post.id],

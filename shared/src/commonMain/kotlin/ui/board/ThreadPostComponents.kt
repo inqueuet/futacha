@@ -65,6 +65,7 @@ internal fun ThreadPostCard(
     post: Post,
     isOp: Boolean,
     isSelfPost: Boolean = false,
+    deletionSummary: String? = null,
     posterIdLabel: PosterIdLabel?,
     posterIdValue: String?,
     saidaneLabelOverride: String?,
@@ -243,13 +244,16 @@ internal fun ThreadPostCard(
         } else {
             ThreadMessageText(
                 messageHtml = post.messageHtml,
-                isDeleted = post.isDeleted,
+                isDeleted = post.isDeleted || post.isIsolated,
                 quoteReferences = post.quoteReferences,
                 onQuoteClick = onQuoteClick,
                 onUrlClick = onUrlClick,
                 highlightRanges = highlightRanges,
                 bodyTextSize = bodyTextSize
             )
+        }
+        deletionSummary?.let { summary ->
+            Text(text = summary, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

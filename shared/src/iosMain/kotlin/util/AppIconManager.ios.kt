@@ -4,10 +4,10 @@ import com.valoser.futacha.shared.model.AppIconVariant
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSSelectorFromString
 import platform.UIKit.UIApplication
+import platform.UIKit.alternateIconName
 
 private const val IOS_APP_ICON_MANAGER_TAG = "IosAppIconManager"
 private const val IOS_CLASSIC_ICON_NAME = "AppIconClassic"
-private const val IOS_TOSHIAKI_COMPAT_ICON_NAME = "AppIconToshiakiCompat"
 
 @OptIn(ExperimentalForeignApi::class)
 actual fun applyAppIconVariant(
@@ -23,14 +23,10 @@ actual fun applyAppIconVariant(
     )
 }
 
-/** Compatibility mode keeps a distinct Home Screen identity without altering the user's normal-mode icon choice. */
-internal fun applyIosToshiakiCompatibilityIcon() {
-    setIosAlternateIconName(IOS_TOSHIAKI_COMPAT_ICON_NAME)
-}
-
 @OptIn(ExperimentalForeignApi::class)
 private fun setIosAlternateIconName(targetName: String?) {
     val application = UIApplication.sharedApplication
+    if (application.alternateIconName == targetName) return
     val setNameSelector = NSSelectorFromString("setAlternateIconName:completionHandler:")
     if (!application.respondsToSelector(setNameSelector)) {
         Logger.d(

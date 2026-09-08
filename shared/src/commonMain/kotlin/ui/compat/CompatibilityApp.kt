@@ -434,6 +434,7 @@ import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.Logger
 import io.ktor.client.HttpClient
 import com.valoser.futacha.shared.ui.util.PlatformBackHandler
+import com.valoser.futacha.shared.ui.util.ThreadDrawerBackGestureHandler
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.VideoThumbnailRequestPriority
 import com.valoser.futacha.shared.ui.image.videoThumbnailRequestPriority
@@ -857,6 +858,7 @@ private fun CompatibilityAppContent(
     // snapshots regain their cache timestamp after process recreation (#46).
     var freshCatalogRevisions by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+    var threadDrawerOpeningAllowed by remember { mutableStateOf(true) }
     val toolbarLoadingStyle = preferences.compatPreferenceValue(
         "design", "designLoading", "ローディング"
     ) ?: "デフォルト"
@@ -2213,6 +2215,8 @@ private fun CompatibilityAppContent(
     // Settings is a separate host-level surface. It must not expose the
     // compatibility drawer's edge or modal drag recognizers (#43).
     val drawerGesturesEnabled = state.host !is CompatHost.Settings
+    val drawerOpeningGesturesEnabled = drawerGesturesEnabled &&
+        (state.host !is CompatHost.ThreadWorkspace || threadDrawerOpeningAllowed)
     var drawerPreviewOffsetPx by remember { mutableFloatStateOf(0f) }
     var drawerPreviewAnimationJob by remember { mutableStateOf<Job?>(null) }
     val edgeDrawerPage = preferredDrawerPage()
@@ -2248,9 +2252,9 @@ private fun CompatibilityAppContent(
         drawerEdgeWidthPx,
         drawerSwipeTriggerPx,
         drawerPreviewWidthPx,
-        drawerGesturesEnabled
+        drawerOpeningGesturesEnabled
     ) {
-        if (!drawerGesturesEnabled) return@pointerInput
+        if (!drawerOpeningGesturesEnabled) return@pointerInput
         awaitEachGesture {
             val down = awaitFirstDown(
                 requireUnconsumed = false,
@@ -2312,6 +2316,12 @@ private fun CompatibilityAppContent(
         }
     }
 
+    LaunchedEffect(drawerOpeningGesturesEnabled) {
+        if (!drawerOpeningGesturesEnabled) {
+            drawerPreviewAnimationJob?.cancel()
+            drawerPreviewOffsetPx = 0f
+        }
+    }
     LaunchedEffect(drawerGesturesEnabled) {
         if (!drawerGesturesEnabled) {
             drawerPreviewAnimationJob?.cancel()
@@ -2745,6 +2755,7 @@ private fun CompatibilityAppContent(
                             tab = tab,
                             tabs = distinctCompatTabs(state.tabs),
                             isDrawerOpen = drawerState.currentValue == DrawerValue.Open,
+                            onDrawerGestureAvailabilityChanged = { threadDrawerOpeningAllowed = it },
                             repository = threadRepository,
                             httpClient = httpClient,
                             cookieRepository = cookieRepository,
@@ -3555,7 +3566,7 @@ private fun CompatibilityAppContent(
     // delivered to Back after the preview has already moved, navigating from
     // ThreadWorkspace to Catalog (#36). Reserve only the drawer's narrow start
     // region; the rest of the screen keeps normal Back.
-    if (drawerGesturesEnabled) {
+    if (drawerOpeningGesturesEnabled || drawerState.isOpen) {
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
@@ -5910,6 +5921,7 @@ private fun CompatThreadScreen(
     tab: CompatTab,
     tabs: List<CompatTab>,
     isDrawerOpen: Boolean = false,
+    onDrawerGestureAvailabilityChanged: (Boolean) -> Unit,
     repository: BoardRepository?,
     httpClient: HttpClient?,
     cookieRepository: CookieRepository?,
@@ -6069,6 +6081,7 @@ private fun CompatThreadScreen(
             .toSet()
     }
     var snapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
+    val deletionSummary = remember(snapshot) { snapshot?.let(::compatThreadDeletionSummary) }
     var undoRefreshSnapshot by remember(tab.key) { mutableStateOf<CompatThreadSnapshot?>(null) }
     var newReplyNotice by remember(tab.key) { mutableStateOf<CompatNewReplyNotice?>(null) }
     var manualRefreshNotice by remember(tab.key) {
@@ -7637,6 +7650,14 @@ private fun CompatThreadScreen(
     ) {
         onBack()
     }
+    val drawerOpeningAllowed = !searchActive && quoteStack.isEmpty() &&
+        replyPopupPosts.isEmpty() && contextPost == null && selectionState == null &&
+        !extractionMenuOpen && !extractionKeywordOpen && otherMenuRoute == null
+    SideEffect { onDrawerGestureAvailabilityChanged(drawerOpeningAllowed) }
+    ThreadDrawerBackGestureHandler(
+        enabled = !isDrawerOpen && drawerOpeningAllowed,
+        onOpenDrawer = onOpenDrawer
+    )
     LaunchedEffect(tab.key, listState) {
         snapshotFlow {
             val anchor = buildCurrentScrollAnchor(visiblePosts, snapshot)
@@ -8075,6 +8096,7 @@ private fun CompatThreadScreen(
                             CompatPostRow(
                                 post,
                                 ownPostNos = ownPostNos,
+                                deletionSummary = deletionSummary.takeIf { post.postNo == snapshot?.posts?.firstOrNull()?.postNo },
                                 fontSize = threadFontSize,
                                 thumbnailSize = threadThumbnailSize,
                                 upsThumbnailSize = threadUpsThumbnailSize,
@@ -11310,6 +11332,7 @@ internal fun compatPostQuotesOwnPost(
 private fun CompatPostRow(
     post: CompatPostSnapshot,
     ownPostNos: Set<String> = emptySet(),
+    deletionSummary: String? = null,
     fontSize: Int,
     thumbnailSize: Int,
     upsThumbnailSize: Int = thumbnailSize,
@@ -11789,6 +11812,15 @@ private fun CompatPostRow(
             onUrlClick = mediaAwareUrlClick,
             onQuoteClick = onQuoteClick
         )
+        deletionSummary?.let { summary ->
+            Text(
+                text = summary,
+                color = palette.text,
+                fontSize = fontSize.sp,
+                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
+                    .testTag("compat-thread-deletion-summary")
+            )
+        }
     }
     HorizontalDivider(color = CompatDivider)
 }

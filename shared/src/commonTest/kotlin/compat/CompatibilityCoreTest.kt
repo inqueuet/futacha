@@ -1387,9 +1387,10 @@ class CompatibilityCoreTest {
         )
         val candidates = compatPostActionCandidates(post)
         assertEquals(listOf("No", "ID", "file", "mail", "本文", "本文"), candidates.map { it.label })
-        assertEquals(">一行目\n>二行目\n\n", compatQuickQuoteText(post))
-        assertEquals(">一行目\n>二行目\n\n", compatQuoteSelection(candidates, setOf(4, 5)))
+        assertEquals(">一行目\n>二行目\n", compatQuickQuoteText(post))
+        assertEquals(">一行目\n>二行目\n", compatQuoteSelection(candidates, setOf(4, 5)))
         assertEquals("", compatQuoteSelection(candidates, emptySet()))
+        assertEquals(">No.${post.postNo}\n", compatQuickQuoteText(post.copy(messageHtml = "")))
         assertEquals(
             listOf(
                 listOf("web", "抽出", "NG登録"),

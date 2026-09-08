@@ -57,7 +57,7 @@ final class IosAppUITests: XCTestCase {
             // Keep unrelated UI tests on the current already-read version so
             // the automatic change log does not replace their intended start
             // screen. Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "10.6"
+            "-commonUsedVersion", "10.7"
         ]
         return app
     }
@@ -587,6 +587,18 @@ final class IosAppUITests: XCTestCase {
         app.launch()
 
         let canonicalBoard = compatibilityBoardCardAfterUnwinding(in: app)
+        if app.staticTexts["板が登録されていません。右上のメニューから板を追加してください。"].exists {
+            app.buttons["その他"].firstMatch.tap()
+            app.buttons["新規追加"].tap()
+            let name = app.textViews["compat-board-name-input"]
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            name.tap()
+            name.typeText("mayb")
+            let url = app.textViews["compat-board-url-input"]
+            url.tap()
+            url.typeText("https://may.2chan.net/b/")
+            app.buttons["追加する"].tap()
+        }
         // A developer's physical device can intentionally keep a custom board
         // list instead of the simulator seed. The edge-owner contract is board
         // independent, so use the first persisted HTTP(S) board in that case.
@@ -621,6 +633,33 @@ final class IosAppUITests: XCTestCase {
             board.isHittable,
             "The same edge gesture also navigated back to the board list."
         )
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.50)).tap()
+        let catalogItem = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "compat-catalog-item-")
+        ).firstMatch
+        XCTAssertTrue(catalogItem.waitForExistence(timeout: 15))
+        catalogItem.tap()
+        let thread = app.otherElements["compat-thread-pager"]
+        XCTAssertTrue(thread.waitForExistence(timeout: 15))
+
+        // Exercise the thread itself, including different heights over its
+        // rendered posts. Catalog-only coverage misses thread pager and
+        // selectable text interference with the drawer's edge recognizer.
+        for height in [0.30, 0.55, 0.80] {
+            let threadStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: height))
+            let threadEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: height))
+            threadStart.press(forDuration: 0.05, thenDragTo: threadEnd)
+            XCTAssertTrue(app.buttons["開いているタブ"].waitForExistence(timeout: 10))
+            app.buttons["履歴"].tap()
+            XCTAssertTrue(app.staticTexts["履歴"].waitForExistence(timeout: 10))
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "thread-history-edge-\(height)"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.50)).tap()
+            XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        }
     }
 
     func testToshiakiDrawerFavoriteProtectionMatchesReferenceDeletion() {
@@ -1599,7 +1638,7 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.6"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.7"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
             "Android版で、文字の長押し・ダブルタップによる選択中に編集した際や、端末のスマート選択処理に失敗した際にアプリが終了する問題を修正しました。スマート選択に失敗した場合も、通常の文字選択やコピーを続けられるようにしました。"
         ]

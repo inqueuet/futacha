@@ -8,7 +8,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
-import android.window.BackEvent
 import android.window.OnBackAnimationCallback
 import android.window.OnBackInvokedDispatcher
 import androidx.activity.ComponentActivity
@@ -175,6 +174,11 @@ class MainActivity : ComponentActivity() {
             val preferredAppIconVariant by stateStore.appIconVariant.collectAsState(
                 initial = com.valoser.futacha.shared.model.AppIconVariant.Current
             )
+            androidx.compose.runtime.LaunchedEffect(stateStore) {
+                stateStore.appIconVariant.collect { variant ->
+                    com.valoser.futacha.shared.util.applyAppIconVariant(this@MainActivity, variant)
+                }
+            }
             val modernBoards by stateStore.boards.collectAsState(initial = emptyList())
             val modernHistory by stateStore.history.collectAsState(initial = emptyList())
             androidx.compose.runtime.LaunchedEffect(activeProfile, app, modernBoards, modernHistory) {
@@ -600,20 +604,8 @@ class MainActivity : ComponentActivity() {
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private fun registerCompatBackAnimationCallback() {
-        val callback = object : OnBackAnimationCallback {
-            override fun onBackStarted(backEvent: BackEvent) = Unit
-
-            override fun onBackProgressed(backEvent: BackEvent) = Unit
-
-            override fun onBackCancelled() = Unit
-
-            override fun onBackInvoked() {
-                // The reference APK never turns a normal Back gesture into a
-                // history-drawer open. It closes an already-open drawer through
-                // the screen handler, then lets the current Activity navigate
-                // back. Keep predictive Back on that same path for every mode.
-                onBackPressedDispatcher.onBackPressed()
-            }
+        val callback = ThreadDrawerBackAnimationCallback {
+            onBackPressedDispatcher.onBackPressed()
         }
         compatBackAnimationCallback = callback
         onBackInvokedDispatcher.registerOnBackInvokedCallback(

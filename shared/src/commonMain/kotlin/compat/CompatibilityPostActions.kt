@@ -51,19 +51,16 @@ fun compatQuoteSelection(candidates: List<CompatPostActionCandidate>, selectedIn
     val quoted = candidates.mapIndexedNotNull { index, candidate -> candidate.value.takeIf { index in selectedIndices } }
         .joinToString("\n") { line -> line.lineSequence().joinToString("\n") { ">$it" } }
     // Leave the caret on a fresh reply line, matching the legacy reply form.
-    return quoted.takeIf(String::isNotBlank)?.plus("\n\n").orEmpty()
+    return quoted.takeIf(String::isNotBlank)?.plus("\n").orEmpty()
 }
 
 fun compatQuickQuoteText(post: CompatPostSnapshot): String {
     val lines = compatSelectablePostBodyLines(post)
-    // The reference reply form leaves an empty line after the generated quote
-    // so the caret starts in the user's own reply area.  A single trailing LF
-    // places the caret on the same visual line as the quote on Compose/TextField
-    // implementations that normalize the final newline.
+    // Start the reply immediately on the next line.
     return if (lines.isEmpty()) {
-        ">No.${post.postNo}\n\n"
+        ">No.${post.postNo}\n"
     } else {
-        lines.joinToString("\n", postfix = "\n\n") { ">$it" }
+        lines.joinToString("\n", postfix = "\n") { ">$it" }
     }
 }
 

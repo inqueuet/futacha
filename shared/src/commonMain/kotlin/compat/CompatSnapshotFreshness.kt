@@ -65,7 +65,7 @@ internal fun applyCompatOwnDeletion(
                 post.copy(imageUrl = null, thumbnailUrl = null)
             } else {
                 post.copy(
-                    messageHtml = "削除されました",
+                    messageHtml = com.valoser.futacha.shared.model.PostDeletionKind.AUTHOR.notice,
                     imageUrl = null,
                     thumbnailUrl = null,
                     isDeleted = true

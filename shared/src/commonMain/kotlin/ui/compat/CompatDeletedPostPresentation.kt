@@ -1,6 +1,12 @@
 package com.valoser.futacha.shared.ui.compat
 
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
+import com.valoser.futacha.shared.compat.CompatThreadSnapshot
+import com.valoser.futacha.shared.compat.toCompatPlainText
+import com.valoser.futacha.shared.model.postDeletionKind
+import com.valoser.futacha.shared.model.postDeletionNoticeRanges
+import com.valoser.futacha.shared.model.threadDeletionSummary
+import com.valoser.futacha.shared.model.threadNoticeWithoutDeletionCount
 
 internal const val COMPAT_ISOLATED_POST_NOTICE = "削除依頼によって隔離されました"
 internal const val COMPAT_ADMIN_DELETED_POST_NOTICE = "スレッドを立てた人によって削除されました"
@@ -10,20 +16,15 @@ internal data class CompatDeletedNoticeRange(
     val endExclusive: Int
 )
 
-private val compatDeletedResponseCountNoticeRegex = Regex(
-    """削除された記事が\s*\d+\s*件あります"""
-)
+/** The aggregate belongs below the OP; other thread notices keep their own row. */
+internal fun compatThreadNoticeForDisplay(notice: String?): String? = threadNoticeWithoutDeletionCount(notice)
 
-/**
- * The reference thread UI does not render Futaba's aggregate deleted-response
- * counter above the OP. Keep the raw notice in the snapshot because it still
- * participates in thread status detection, but suppress only this presentation
- * row; other thread-wide notices remain available to the UI.
- */
-internal fun compatThreadNoticeForDisplay(notice: String?): String? = notice
-    ?.trim()
-    ?.takeIf(String::isNotEmpty)
-    ?.takeUnless(compatDeletedResponseCountNoticeRegex::containsMatchIn)
+internal fun compatThreadDeletionSummary(snapshot: CompatThreadSnapshot): String? = threadDeletionSummary(
+    snapshot.deletedNotice,
+    snapshot.posts.drop(1).mapNotNull { post ->
+        postDeletionKind(post.messageHtml.toCompatPlainText(), post.isDeleted, post.isIsolated)
+    }
+)
 
 /**
  * The reference keeps deleted/isolation rows in their original position.
@@ -36,11 +37,9 @@ internal fun presentCompatPostsForDeletedVisibility(
 ): List<CompatPostSnapshot> {
     if (showDeletedContent) return posts
     return posts.map { post ->
-        val notice = when {
-            post.isIsolated -> COMPAT_ISOLATED_POST_NOTICE
-            post.isDeleted -> COMPAT_ADMIN_DELETED_POST_NOTICE
-            else -> null
-        }
+        val notice = postDeletionKind(
+            post.messageHtml.toCompatPlainText(), post.isDeleted, post.isIsolated
+        )?.notice
         if (notice == null) post else post.copy(
             messageHtml = notice,
             imageUrl = null,
@@ -65,17 +64,7 @@ internal fun compatDeletedNoticeRanges(
     plainMessage: String
 ): List<CompatDeletedNoticeRange> {
     if (post.isContentRedacted || (!post.isDeleted && !post.isIsolated)) return emptyList()
-    return listOf(COMPAT_ISOLATED_POST_NOTICE, COMPAT_ADMIN_DELETED_POST_NOTICE)
-        .flatMap { notice ->
-            buildList {
-                var fromIndex = 0
-                while (fromIndex < plainMessage.length) {
-                    val start = plainMessage.indexOf(notice, startIndex = fromIndex)
-                    if (start < 0) break
-                    add(CompatDeletedNoticeRange(start, start + notice.length))
-                    fromIndex = start + notice.length
-                }
-            }
-        }
-        .sortedBy(CompatDeletedNoticeRange::start)
+    return postDeletionNoticeRanges(plainMessage).map { range ->
+        CompatDeletedNoticeRange(range.first, range.last + 1)
+    }
 }

@@ -63,6 +63,8 @@ private fun buildThreadPostStableLazyListKey(prefix: String, post: Post): String
 @Composable
 internal fun ThreadContent(
     page: ThreadPage,
+    deletionSummary: String? = null,
+    originalPostId: String? = page.posts.firstOrNull()?.id,
     embeddedHtml: List<EmbeddedHtmlContent>,
     summaryState: ThreadSummaryUiState?,
     aiPostModerationUiState: AiPostModerationUiState = AiPostModerationUiState(),
@@ -180,7 +182,7 @@ internal fun ThreadContent(
                         )
                     }
                 }
-                page.deletedNotice?.takeIf { it.isNotBlank() }?.let { notice ->
+                com.valoser.futacha.shared.model.threadNoticeWithoutDeletionCount(page.deletedNotice)?.let { notice ->
                     item(key = "thread-notice") {
                         ThreadNoticeCard(message = notice)
                     }
@@ -232,6 +234,7 @@ internal fun ThreadContent(
                             post = post,
                             isOp = index == 0,
                             isSelfPost = isSelfPost,
+                            deletionSummary = deletionSummary.takeIf { post.id == originalPostId },
                             posterIdLabel = posterIdLabels[post.id],
                             posterIdValue = normalizedPosterId,
                             saidaneLabelOverride = saidaneOverrides[post.id],

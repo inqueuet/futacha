@@ -36,11 +36,27 @@ class CompatDeletedPostPresentationTest {
 
         assertEquals(listOf("1", "2", "3"), presented.map(CompatPostSnapshot::postNo))
         assertEquals(COMPAT_ISOLATED_POST_NOTICE, presented[1].messageHtml)
-        assertEquals(COMPAT_ADMIN_DELETED_POST_NOTICE, presented[2].messageHtml)
+        assertEquals("削除されました", presented[2].messageHtml)
         assertNull(presented[1].imageUrl)
         assertNull(presented[2].thumbnailUrl)
         assertTrue(presented[1].isContentRedacted)
         assertFalse(presented[0].isContentRedacted)
+    }
+
+    @Test
+    fun authorAndAdministratorNoticesStayRedAndKeepTheirActualKindWhenHidden() {
+        listOf("書き込みをした人によって削除されました", "管理者によって削除されました").forEach { notice ->
+            val original = post("3", isDeleted = true).copy(messageHtml = "$notice\n元の本文")
+            assertEquals(listOf(CompatDeletedNoticeRange(0, notice.length)), compatDeletedNoticeRanges(original, original.messageHtml))
+            assertEquals(notice, presentCompatPostsForDeletedVisibility(listOf(original), false).single().messageHtml)
+            assertFalse(compatPostBodyUsesAlertColor(original))
+        }
+    }
+
+    @Test
+    fun quotedDeletionNoticesDoNotBecomeRed() {
+        val original = post("3", isDeleted = true).copy(messageHtml = ">管理者によって削除されました\n元の本文")
+        assertTrue(compatDeletedNoticeRanges(original, original.messageHtml).isEmpty())
     }
 
     @Test

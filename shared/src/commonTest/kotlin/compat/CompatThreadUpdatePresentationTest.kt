@@ -149,7 +149,7 @@ class CompatThreadUpdatePresentationTest {
 
         val deleted = applyCompatOwnDeletion(original, "100", imageOnly = false, revision = 10)
         assertTrue(deleted?.posts?.get(0)?.isDeleted == true)
-        assertEquals("削除されました", deleted?.posts?.get(0)?.messageHtml)
+        assertEquals("書き込みをした人によって削除されました", deleted?.posts?.get(0)?.messageHtml)
         assertNull(deleted?.posts?.get(0)?.thumbnailUrl)
         assertNull(applyCompatOwnDeletion(original, "999", imageOnly = false))
     }

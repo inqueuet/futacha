@@ -81,6 +81,9 @@ internal fun CompatChangeLogScreen(
     }
 }
 
+internal fun compatibilityChangeLogHeadingColor(palette: CompatibilityPalette) =
+    if (palette.chrome == palette.background) palette.uiPrimaryText else palette.chrome
+
 @Composable
 internal fun CompatChangeLogContent(modifier: Modifier = Modifier) {
     val palette = LocalCompatibilityPalette.current
@@ -103,7 +106,7 @@ internal fun CompatChangeLogContent(modifier: Modifier = Modifier) {
             ) {
                 Text(
                     text = entry.version,
-                    color = palette.chrome,
+                    color = compatibilityChangeLogHeadingColor(palette),
                     fontSize = 24.sp,
                     lineHeight = 30.sp
                 )
