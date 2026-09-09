@@ -423,7 +423,7 @@ class CompatSettingsSchemaInstrumentedTest {
 
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
-        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.7-0")
+        val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.8-0")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         val minimumReadableLineHeight = with(rule.density) { 24.dp.toPx() }
@@ -4992,10 +4992,11 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithTag("compat-tab-selector").assertIsDisplayed()
         rule.mainClock.autoAdvance = false
         val firstSelectorTab = rule.onNodeWithTag("compat-selector-tab-$firstKey")
+        val selectorTop = firstSelectorTab.fetchSemanticsNode().boundsInRoot.top
         firstSelectorTab.performTouchInput { down(center) }
         rule.mainClock.advanceTimeBy(650L)
         firstSelectorTab.performTouchInput {
-            moveTo(Offset(center.x, center.y - 100f), delayMillis = 80L)
+            moveTo(Offset(center.x, -selectorTop * 0.1f + 2f), delayMillis = 80L)
             up()
         }
         rule.mainClock.advanceTimeBy(800L)
@@ -5004,7 +5005,7 @@ class CompatSettingsSchemaInstrumentedTest {
         firstSelectorTab.performTouchInput { down(center) }
         rule.mainClock.advanceTimeBy(650L)
         firstSelectorTab.performTouchInput {
-            moveTo(Offset(center.x, center.y - 600f), delayMillis = 80L)
+            moveTo(Offset(center.x, -selectorTop * 0.1f - 2f), delayMillis = 80L)
         }
         rule.onNodeWithTag("compat-selector-drag-shadow").assertIsDisplayed()
         val shadowBounds = rule.onNodeWithTag("compat-selector-drag-shadow")

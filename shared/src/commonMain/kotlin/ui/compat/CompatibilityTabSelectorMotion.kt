@@ -131,12 +131,10 @@ internal fun isCompatSelectorCloseDrop(
     screenX: Float,
     screenY: Float,
     itemTopOnScreen: Float,
-    displayWidth: Float,
-    minimumTravelPx: Float = 0f
+    displayWidth: Float
 ): Boolean = itemTopOnScreen > 0f &&
     screenX >= 0f && screenX <= displayWidth &&
     screenY >= 0f && screenY / itemTopOnScreen < COMPAT_SELECTOR_CLOSE_REGION_BOTTOM
-    && (minimumTravelPx <= 0f || screenY <= itemTopOnScreen - minimumTravelPx)
 
 /** Target CanvasBasicView alphaAdd; the base black alpha is applied by the renderer. */
 internal fun compatSelectorShadowAlphaAdd(

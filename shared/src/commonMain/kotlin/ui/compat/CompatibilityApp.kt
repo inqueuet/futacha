@@ -10009,11 +10009,6 @@ private fun CompatTabSelector(
     var selectorWidthPx by remember { mutableStateOf(0f) }
     val closeTab by rememberUpdatedState(onClose)
     val palette = LocalCompatibilityPalette.current
-    // A short upward move in a short landscape selector otherwise crosses the
-    // legacy 90% close band immediately. Require a deliberate travel distance
-    // before arming close, while retaining the reference ratio for the actual
-    // drop target.
-    val selectorCloseTravelThresholdPx = with(LocalDensity.current) { 128.dp.toPx() }
     val windowSize = LocalWindowInfo.current.containerSize
     val previewWidthPx = with(LocalDensity.current) { 60.dp.roundToPx() }
     val previewHeightPx = with(LocalDensity.current) { 40.dp.roundToPx() }
@@ -10087,8 +10082,7 @@ private fun CompatTabSelector(
                         tab.key,
                         longTapAction,
                         currentTabKey,
-                        selectorWidthPx,
-                        selectorCloseTravelThresholdPx
+                        selectorWidthPx
                     ) {
                         var lastScreenX = 0f
                         var lastScreenY = 0f
@@ -10117,8 +10111,7 @@ private fun CompatTabSelector(
                                     screenX = lastScreenX,
                                     screenY = lastScreenY,
                                     itemTopOnScreen = itemRootOffset.y,
-                                    displayWidth = selectorWidthPx,
-                                    minimumTravelPx = selectorCloseTravelThresholdPx
+                                    displayWidth = selectorWidthPx
                                 )
                                 dragState = CompatSelectorDragState(
                                     tab = tab,
@@ -10236,15 +10229,22 @@ private fun CompatTabSelectorCell(tab: CompatTab, active: Boolean, threadContext
                     if (threadContext && active) palette.chrome.copy(alpha = 0.9f)
                     else Color.Black.copy(alpha = 0.46f)
                 )
-                .testTag("compat-tab-title-scrim-${tab.key}")
-        )
-        Text(
-            tab.title.take(4),
-            color = Color.White,
-            fontSize = 12.sp,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+                .testTag("compat-tab-title-scrim-${tab.key}"),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                tab.title.take(4),
+                color = Color.White,
+                fontSize = 12.sp,
+                // The selector label must not inherit the screen's 24sp body
+                // line height: that lifts its glyphs above the 16dp title band.
+                lineHeight = 16.sp,
+                maxLines = 1,
+                softWrap = false,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.testTag("compat-tab-title-${tab.key}")
+            )
+        }
         if (tab.unreadCount > 0) {
             Text(
                 "+${tab.unreadCount}",
@@ -11815,7 +11815,7 @@ private fun CompatPostRow(
         deletionSummary?.let { summary ->
             Text(
                 text = summary,
-                color = palette.text,
+                color = Color.Red,
                 fontSize = fontSize.sp,
                 modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
                     .testTag("compat-thread-deletion-summary")

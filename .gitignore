@@ -20,6 +20,8 @@ build/
 captures/
 app-android/release/
 app-android/nonMinifiedRelease/
+/app-android/src/main/generated/
+/artifacts/
 iosApp/Pods/
 iosApp/iosApp.xcworkspace/
 *.dSYM/
@@ -51,6 +53,9 @@ iosApp/Configuration/Local.xcconfig
 *.p8
 AuthKey_*.p8
 /futacha
+
+# Local reference APKs (existing tracked fixtures remain versioned).
+/sample/*.apk
 
 ### Claude ###
 .claude

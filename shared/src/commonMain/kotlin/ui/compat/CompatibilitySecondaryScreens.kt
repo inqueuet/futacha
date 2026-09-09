@@ -869,7 +869,7 @@ internal fun CompatSettingsScreen(
                             }
                             Box(Modifier.width(56.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
                                 IconButton(onClick = {
-                                    openUrl("https://play.google.com/store/apps/details?id=com.valoser.futacha")
+                                    openUrl(compatCurrentStoreUrl())
                                 }) {
                                     Icon(Icons.Filled.BusinessCenter, contentDescription = "ストア", tint = Color.White)
                                 }
@@ -2067,7 +2067,7 @@ internal fun CompatHelpScreen(
                         Icon(Icons.Filled.History, contentDescription = "変更履歴")
                     }
                     IconButton(onClick = {
-                        openUrl(COMPAT_CURRENT_STORE_URL)
+                        openUrl(compatCurrentStoreUrl())
                     }) {
                         Icon(Icons.Filled.BusinessCenter, contentDescription = "ストア")
                     }
@@ -3443,7 +3443,7 @@ internal fun CompatPostScreen(
         focusedContainerColor = Color.Transparent,
         unfocusedContainerColor = Color.Transparent,
         disabledContainerColor = Color.Transparent,
-        focusedIndicatorColor = palette.chrome,
+        focusedIndicatorColor = palette.inputCursor,
         unfocusedIndicatorColor = palette.divider,
         // Black uses black chrome but a white colorAccent in sample/1.apk.
         // Cursor visibility therefore follows the dedicated input token.
@@ -3589,7 +3589,7 @@ internal fun CompatPostScreen(
                         preset,
                         fontSize = 16.sp,
                         textAlign = TextAlign.Center,
-                        color = if (selected) palette.chrome else palette.text.copy(alpha = 0.82f),
+                        color = if (selected) palette.inputCursor else palette.text.copy(alpha = 0.82f),
                         modifier = Modifier
                             .width(80.dp)
                             .fillMaxHeight()
@@ -4566,7 +4566,7 @@ internal fun CompatGalleryScreen(
                             if (savingMediaKey == mediaIdentity) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.align(Alignment.Center).size(28.dp),
-                                    color = palette.chrome,
+                                    color = palette.loadingProgress,
                                     strokeWidth = 3.dp
                                 )
                             }

@@ -62,6 +62,19 @@ class CompatibilityTabSelectorMotionTest {
     }
 
     @Test
+    fun closeDistanceMatchesReferenceInPortraitAndLandscapeWithoutAnExtraDpMinimum() {
+        // At density 3 these selector tops represent 700dp portrait and
+        // 300dp landscape. Both must close before the former 128dp minimum.
+        for (top in listOf(2_100f, 900f)) {
+            val boundary = top * 0.9f
+            assertFalse(isCompatSelectorCloseDrop(90f, boundary + 1f, top, 1_080f))
+            assertTrue(isCompatSelectorCloseDrop(90f, boundary - 1f, top, 1_080f))
+            // Dragging back below the boundary disarms closing again.
+            assertFalse(isCompatSelectorCloseDrop(90f, top, top, 1_080f))
+        }
+    }
+
+    @Test
     fun shadowAndCloseAnimationMatchTargetEndpoints() {
         assertEquals(0f, compatSelectorShadowAlphaAdd(1_000f, 1_000f), 0.0001f)
         assertEquals(0.5f, compatSelectorShadowAlphaAdd(950f, 1_000f), 0.0001f)

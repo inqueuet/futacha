@@ -10,6 +10,97 @@ final class IosAppUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testPhysicalHelpStoreOpensIosFutachaListing() throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("App Store handoff requires a physical iPhone.")
+#else
+        let app = makeApplication()
+        // Argument-domain settings last for this process and preserve the
+        // user's saved mode and update preference.
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 10))
+        let more = app.buttons["その他"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10))
+        more.tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        let help = app.buttons["ヘルプ"].firstMatch
+        XCTAssertTrue(help.waitForExistence(timeout: 10))
+        help.tap()
+        XCTAssertTrue(app.staticTexts["ヘルプ"].waitForExistence(timeout: 10))
+        let before = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        before.name = "physical-iphone-help-before-store"
+        before.lifetime = .keepAlways
+        add(before)
+        app.buttons["ストア"].firstMatch.tap()
+
+        let store = XCUIApplication(bundleIdentifier: "com.apple.AppStore")
+        XCTAssertTrue(store.wait(for: .runningForeground, timeout: 30), "The help action must open the native iOS App Store.")
+        let listing = store.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "ふたちゃ")).firstMatch
+        let foundListing = listing.waitForExistence(timeout: 30)
+        let tree = XCTAttachment(string: store.debugDescription)
+        tree.name = "physical-iphone-app-store-hierarchy"
+        tree.lifetime = .keepAlways
+        add(tree)
+        let after = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        after.name = "physical-iphone-futacha-app-store"
+        after.lifetime = .keepAlways
+        add(after)
+        XCTAssertTrue(foundListing, "The destination must show Futacha's iOS listing.")
+#endif
+    }
+
+    func testSimulatorHelpStoreHandsOffToBrowser() throws {
+#if targetEnvironment(simulator)
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        safari.launch()
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "toshiaki_compat",
+            "-update_check_enabled", "false"
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 10))
+        app.buttons["その他"].firstMatch.tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        let help = app.buttons["ヘルプ"].firstMatch
+        XCTAssertTrue(help.waitForExistence(timeout: 10))
+        help.tap()
+        XCTAssertTrue(app.staticTexts["ヘルプ"].waitForExistence(timeout: 10))
+        let before = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        before.name = "simulator-help-before-store"
+        before.lifetime = .keepAlways
+        add(before)
+        app.buttons["ストア"].firstMatch.tap()
+
+        // Simulator has no native App Store. Inspect the actual outgoing URL
+        // in Safari, without replacing the production URL launcher.
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 30))
+        // tools/run-ios-store-link-test.sh verifies the complete URL from
+        // SpringBoard's real OpenURL event. Simulator Safari may replace
+        // App Store addresses with a blank tab because StoreKit is absent.
+        let tree = XCTAttachment(string: safari.debugDescription)
+        tree.name = "simulator-store-safari-hierarchy"
+        tree.lifetime = .keepAlways
+        add(tree)
+        let after = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        after.name = "simulator-store-browser-handoff"
+        after.lifetime = .keepAlways
+        add(after)
+#else
+        throw XCTSkip("Use the native App Store handoff test on physical iPhones.")
+#endif
+    }
+
     private func boardCard(in app: XCUIApplication, url: String) -> XCUIElement {
         app.buttons.matching(
             NSPredicate(format: "label CONTAINS %@", url)
@@ -57,7 +148,7 @@ final class IosAppUITests: XCTestCase {
             // Keep unrelated UI tests on the current already-read version so
             // the automatic change log does not replace their intended start
             // screen. Android and common tests exercise the mismatch path.
-            "-commonUsedVersion", "10.7"
+            "-commonUsedVersion", "10.8"
         ]
         return app
     }
@@ -1638,9 +1729,9 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(update.waitForExistence(timeout: 10), "The reference update action is missing.")
         update.tap()
         XCTAssertTrue(app.staticTexts["更新履歴"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["10.7"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["10.8"].waitForExistence(timeout: 10))
         let readableChange = app.staticTexts[
-            "Android版で、文字の長押し・ダブルタップによる選択中に編集した際や、端末のスマート選択処理に失敗した際にアプリが終了する問題を修正しました。スマート選択に失敗した場合も、通常の文字選択やコピーを続けられるようにしました。"
+            "としあき（仮）モードの画面下部にあるタブ一覧で、白いタイトル文字が背景帯より上にずれる問題を修正しました。"
         ]
         XCTAssertTrue(
             readableChange.waitForExistence(timeout: 10)

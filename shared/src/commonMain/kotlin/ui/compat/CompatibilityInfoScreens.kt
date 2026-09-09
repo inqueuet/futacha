@@ -28,12 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.util.rememberUrlLauncher
+import com.valoser.futacha.shared.util.isAndroid
 
 // CompatibilityStore reserves the compat.* namespace. This is the namespaced
 // equivalent of the reference SharedPreferences key commonUsedVersion.
 internal const val COMPAT_USED_VERSION_KEY = "compat.commonUsedVersion"
-internal const val COMPAT_CURRENT_STORE_URL =
-    "https://play.google.com/store/apps/details?id=com.valoser.futacha"
+internal fun compatCurrentStoreUrl(isAndroidPlatform: Boolean = isAndroid()): String =
+    if (isAndroidPlatform) "https://play.google.com/store/apps/details?id=com.valoser.futacha"
+    else "https://apps.apple.com/jp/app/id6756841201"
 internal const val COMPAT_REFERENCE_AUTHOR_URL = "https://twitter.com/AndosanDev"
 internal const val FUTACHA_AUTHOR_URL = "https://x.com/create_app_null"
 
@@ -61,7 +63,7 @@ internal fun CompatChangeLogScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { openUrl(COMPAT_CURRENT_STORE_URL) }) {
+                    IconButton(onClick = { openUrl(compatCurrentStoreUrl()) }) {
                         Icon(Icons.Filled.BusinessCenter, contentDescription = "ストア")
                     }
                     IconButton(onClick = onOpenHelp) {
@@ -114,14 +116,14 @@ internal fun CompatChangeLogContent(modifier: Modifier = Modifier) {
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = "•",
-                            color = palette.text,
+                            color = palette.uiPrimaryText,
                             fontSize = 17.sp,
                             lineHeight = 26.sp,
                             modifier = Modifier.width(20.dp)
                         )
                         Text(
                             text = change,
-                            color = palette.text,
+                            color = palette.uiPrimaryText,
                             fontSize = 17.sp,
                             lineHeight = 26.sp,
                             modifier = Modifier

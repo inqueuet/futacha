@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -45,6 +46,8 @@ import coil3.request.crossfade
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsSessionContextId
 import com.valoser.futacha.shared.model.Post
+import com.valoser.futacha.shared.model.PostDeletionKind
+import com.valoser.futacha.shared.model.postDeletionKind
 import com.valoser.futacha.shared.model.QuoteReference
 import com.valoser.futacha.shared.model.ThreadBodyTextSize
 import com.valoser.futacha.shared.model.ThreadPostImageSize
@@ -237,6 +240,10 @@ internal fun ThreadPostCard(
         }
         if (shouldCollapseDeletedBody) {
             DeletedPostBodyPlaceholder(
+                notice = remember(post.messageHtml, post.isDeleted, post.isIsolated) {
+                    postDeletionKind(messageHtmlToPlainText(post.messageHtml), post.isDeleted, post.isIsolated)
+                        ?.notice ?: PostDeletionKind.UNKNOWN.notice
+                },
                 hasBody = post.messageHtml.isNotBlank(),
                 onReveal = { showDeletedBody = true },
                 bodyTextSize = bodyTextSize
@@ -253,7 +260,7 @@ internal fun ThreadPostCard(
             )
         }
         deletionSummary?.let { summary ->
-            Text(text = summary, color = MaterialTheme.colorScheme.onSurface)
+            Text(text = summary, color = Color.Red)
         }
     }
 }
@@ -330,6 +337,7 @@ private fun AiHiddenPostRestoreAction(
 
 @Composable
 private fun DeletedPostBodyPlaceholder(
+    notice: String,
     hasBody: Boolean,
     onReveal: () -> Unit,
     bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
@@ -345,9 +353,9 @@ private fun DeletedPostBodyPlaceholder(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "削除されたレスです",
+            text = notice,
             style = textStyle,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color.Red,
             modifier = Modifier.weight(1f)
         )
         if (hasBody) {
