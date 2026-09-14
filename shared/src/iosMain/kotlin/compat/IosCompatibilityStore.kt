@@ -1155,8 +1155,48 @@ internal class IosCompatibilityStore(
     }
 
     private suspend fun persistLocked() {
-        val encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
+        var encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
+        val encodedBytes = encoded.encodeToByteArray().size
+        if (encodedBytes > MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES) {
+            // The user's cache quota may exceed the SQLite envelope limit (or
+            // be unlimited). Evict refetchable bodies before they prevent even
+            // a small setting/draft mutation from committing. Keep headroom for
+            // subsequent writes and preserve all user-owned records.
+            trimRefetchableCachesLocked(
+                encodedBytes.toLong() - MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES + 1024L * 1024L
+            )
+            encoded = json.encodeToString(PersistedCompatibilityState.serializer(), state)
+        }
         database.writePayload(encoded, nowMillis())
+    }
+
+    private fun trimRefetchableCachesLocked(bytesToRelease: Long) {
+        var remaining = bytesToRelease
+        val removedSnapshots = mutableSetOf<String>()
+        state.snapshots.sortedBy { state.snapshotAccess[it.tabKey] ?: it.fetchedAtEpochMillis }
+            .forEach { snapshot ->
+                if (remaining > 0L) {
+                    remaining -= encodedSnapshotBytes(snapshot)
+                    removedSnapshots += snapshot.tabKey
+                }
+            }
+        val removedCatalogs = mutableSetOf<Int>()
+        state.catalogSnapshots.withIndex().sortedBy { it.value.fetchedAtEpochMillis }
+            .forEach { (index, snapshot) ->
+                if (remaining > 0L) {
+                    remaining -= json.encodeToString(CatalogSnapshotRecord.serializer(), snapshot)
+                        .encodeToByteArray().size
+                    removedCatalogs += index
+                }
+            }
+        state = state.copy(
+            snapshots = state.snapshots.filterNot { it.tabKey in removedSnapshots },
+            snapshotAccess = state.snapshotAccess - removedSnapshots,
+            tabs = state.tabs.map { tab ->
+                if (tab.key in removedSnapshots) tab.copy(snapshotRevision = 0L) else tab
+            },
+            catalogSnapshots = state.catalogSnapshots.filterIndexed { index, _ -> index !in removedCatalogs }
+        )
     }
 
     private fun publishLocked() {

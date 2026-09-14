@@ -29,6 +29,9 @@ import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import com.valoser.futacha.shared.util.isAndroid
+import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import com.valoser.futacha.shared.version.isNewerVersion
 
 // CompatibilityStore reserves the compat.* namespace. This is the namespaced
 // equivalent of the reference SharedPreferences key commonUsedVersion.
@@ -40,7 +43,23 @@ internal const val COMPAT_REFERENCE_AUTHOR_URL = "https://twitter.com/AndosanDev
 internal const val FUTACHA_AUTHOR_URL = "https://x.com/create_app_null"
 
 internal fun shouldOpenCompatChangeLog(savedVersion: String?, currentVersion: String): Boolean =
-    currentVersion.isNotBlank() && savedVersion != currentVersion
+    !savedVersion.isNullOrBlank() && isNewerVersion(savedVersion, currentVersion)
+
+internal suspend fun consumeCompatChangeLogUpdate(
+    store: CompatibilityStore,
+    currentVersion: String
+): Boolean {
+    if (currentVersion.isBlank()) return false
+    // Read durable state rather than the UI Flow's possibly initial/stale map.
+    // An absent marker establishes a baseline; it is not evidence of an update.
+    val savedVersion = store.loadPreference(COMPAT_USED_VERSION_KEY)
+    val shouldOpen = shouldOpenCompatChangeLog(savedVersion, currentVersion)
+    if (savedVersion.isNullOrBlank() || shouldOpen) {
+        // Commit before navigation so recreation cannot repeat the same notice.
+        store.savePreference(COMPAT_USED_VERSION_KEY, currentVersion)
+    }
+    return shouldOpen
+}
 
 @Composable
 internal fun CompatChangeLogScreen(
@@ -51,7 +70,13 @@ internal fun CompatChangeLogScreen(
 ) {
     val openUrl = rememberUrlLauncher()
     LaunchedEffect(store, appVersion) {
-        if (appVersion.isNotBlank()) store.savePreference(COMPAT_USED_VERSION_KEY, appVersion)
+        if (appVersion.isNotBlank()) {
+            runSuspendCatchingPreservingCancellation {
+                store.savePreference(COMPAT_USED_VERSION_KEY, appVersion)
+            }.onFailure { failure ->
+                Logger.e("CompatChangeLog", "Failed to save the displayed version", failure)
+            }
+        }
     }
     Scaffold(
         topBar = {

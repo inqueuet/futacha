@@ -231,6 +231,7 @@ import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import io.ktor.client.HttpClient
@@ -541,6 +542,18 @@ internal fun CompatSettingsScreen(
     var referenceVersionMessage by remember(path) { mutableStateOf<String?>(null) }
     var infoDialog by remember(path) { mutableStateOf<String?>(null) }
     var transientNotice by remember(path) { mutableStateOf<String?>(null) }
+    fun launchSettingsSafely(block: suspend () -> Unit) {
+        scope.launch {
+            try {
+                block()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                Logger.e("CompatSettings", "Settings operation failed", failure)
+                transientNotice = "操作に失敗しました: ${failure.message.orEmpty()}"
+            }
+        }
+    }
     var cacheEnabled by remember(path, preferences[COMPAT_CACHE_ENABLED_KEY]) {
         mutableStateOf(preferences[COMPAT_CACHE_ENABLED_KEY] == "ON")
     }
@@ -603,7 +616,7 @@ internal fun CompatSettingsScreen(
             if (backupInProgress) return@rememberAttachmentPickerLauncher
             val backupKind = restoreBackupKind
             backupInProgress = true
-            scope.launch {
+            launchSettingsSafely {
                 val result = runSuspendCatchingPreservingCancellation {
                     val raw = selected.bytes.decodeToString()
                     if (backupKind == "ng") {
@@ -655,7 +668,7 @@ internal fun CompatSettingsScreen(
         onDirectorySelected = { location ->
             val value = location.toRawString()
             savedValues = savedValues + ("dummyDownloadDir" to value)
-            scope.launch {
+            launchSettingsSafely {
                 store.savePreference(compatPreferenceStorageKey("storage", "dummyDownloadDir"), value)
             }
         }
@@ -664,7 +677,7 @@ internal fun CompatSettingsScreen(
         onDirectorySelected = { location ->
             val value = location.toRawString()
             savedValues = savedValues + ("dummyDrawingDir" to value)
-            scope.launch {
+            launchSettingsSafely {
                 store.savePreference(compatPreferenceStorageKey("storage", "dummyDrawingDir"), value)
             }
         }
@@ -673,7 +686,7 @@ internal fun CompatSettingsScreen(
         onDirectorySelected = { location ->
             if (backupInProgress) return@rememberDirectoryPickerLauncher
             backupInProgress = true
-            scope.launch {
+            launchSettingsSafely {
                 val result = runSuspendCatchingPreservingCancellation {
                     val payload = if (restoreBackupKind == "save_settings") {
                         encodeCompatSettingsBackup(
@@ -768,7 +781,7 @@ internal fun CompatSettingsScreen(
             } else if (fileSystem == null) {
                 infoDialog = "フォントの保存先を利用できません"
             } else {
-                scope.launch {
+                launchSettingsSafely {
                     runSuspendCatchingPreservingCancellation {
                         // Keep only the selected extension. Otherwise a font
                         // replaced from OTF to TTF could leave two candidates
@@ -967,7 +980,7 @@ internal fun CompatSettingsScreen(
                                 selectedCustomSearchEngines - target
                             }
                             selectedCustomSearchEngines = next
-                            scope.launch {
+                            launchSettingsSafely {
                                 store.savePreference(
                                     COMPAT_CUSTOM_IMAGE_SEARCH_KEY,
                                     serializeCompatImageSearchTargets(next)
@@ -981,7 +994,7 @@ internal fun CompatSettingsScreen(
                             isUpdateCheckToggle -> onUpdateCheckChanged(next)
                             isArchiveReportToggle && !archiveReportSettingInProgress -> {
                                 archiveReportSettingInProgress = true
-                                scope.launch {
+                                launchSettingsSafely {
                                     runSuspendCatchingPreservingCancellation {
                                         store.savePreference(
                                             ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY,
@@ -999,7 +1012,7 @@ internal fun CompatSettingsScreen(
                                     cacheWarningOpen = true
                                 } else {
                                     cacheEnabled = false
-                                    scope.launch { store.savePreference(COMPAT_CACHE_ENABLED_KEY, "OFF") }
+                                    launchSettingsSafely { store.savePreference(COMPAT_CACHE_ENABLED_KEY, "OFF") }
                                 }
                             }
                             else -> {
@@ -1007,7 +1020,7 @@ internal fun CompatSettingsScreen(
                                 if (path == "design" && entry.preferenceKey == "designNavigationBar") {
                                     transientNotice = "画面の再描画時に反映されます"
                                 }
-                                scope.launch {
+                                launchSettingsSafely {
                                     store.savePreference(
                                         compatPreferenceStorageKey(path, entry.preferenceKey),
                                         if (next) "ON" else "OFF"
@@ -1120,7 +1133,7 @@ internal fun CompatSettingsScreen(
                                 ptmtCheck = ""
                                 ptmtMessage = null
                                 ptmtDialogOpen = true
-                                scope.launch {
+                                launchSettingsSafely {
                                     val loadedValue = cookieRepository?.listCookies()
                                         ?.firstOrNull { it.name == "ptmt" && it.domain.trimStart('.').endsWith("2chan.net") }
                                         ?.value.orEmpty()
@@ -1139,7 +1152,7 @@ internal fun CompatSettingsScreen(
                             else if (isCacheToggle) {
                                 if (cacheEnabled) {
                                     cacheEnabled = false
-                                    scope.launch {
+                                    launchSettingsSafely {
                                         store.savePreference(COMPAT_CACHE_ENABLED_KEY, "OFF")
                                     }
                                 } else {
@@ -1204,7 +1217,7 @@ internal fun CompatSettingsScreen(
                     enabled = !threadCacheClearInProgress,
                     onClick = {
                         threadCacheClearInProgress = true
-                        scope.launch {
+                        launchSettingsSafely {
                             runSuspendCatchingPreservingCancellation {
                                 store.clearThreadSnapshotCache()
                             }
@@ -1247,7 +1260,7 @@ internal fun CompatSettingsScreen(
                     TextButton(onClick = {
                         savedValues = savedValues + (entry.preferenceKey to "")
                         directoryMenuEntry = null
-                        scope.launch {
+                        launchSettingsSafely {
                             store.savePreference(
                                 compatPreferenceStorageKey("storage", entry.preferenceKey),
                                 ""
@@ -1269,7 +1282,7 @@ internal fun CompatSettingsScreen(
                     enabled = !imageCacheClearInProgress,
                     onClick = {
                         imageCacheClearInProgress = true
-                        scope.launch {
+                        launchSettingsSafely {
                             val usage = withContext(AppDispatchers.io) {
                                 runCatching {
                                     imageLoader.diskCache?.clear()
@@ -1312,7 +1325,7 @@ internal fun CompatSettingsScreen(
                     enabled = !attachmentClearInProgress,
                     onClick = {
                         attachmentClearInProgress = true
-                        scope.launch {
+                        launchSettingsSafely {
                             fileSystem?.deleteRecursively("private/compat_post_attachments")
                             attachmentCacheUsageBytes = runSuspendCatchingPreservingCancellation {
                                 compatibilityAttachmentCacheUsageBytes(fileSystem)
@@ -1340,7 +1353,7 @@ internal fun CompatSettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    scope.launch {
+                    launchSettingsSafely {
                         runSuspendCatchingPreservingCancellation {
                             store.clearArchiveReportOutbox()
                         }
@@ -1395,7 +1408,7 @@ internal fun CompatSettingsScreen(
                         cacheStatus = "接続先URLが不正です"
                     } else {
                         cacheBaseUrl = normalized.orEmpty()
-                        scope.launch {
+                        launchSettingsSafely {
                             store.savePreference(COMPAT_CACHE_BASE_URL_KEY, normalized.orEmpty())
                         }
                         cacheEndpointDialogOpen = false
@@ -1410,7 +1423,7 @@ internal fun CompatSettingsScreen(
             onConfirm = {
                 cacheWarningOpen = false
                 cacheEnabled = true
-                scope.launch { store.savePreference(COMPAT_CACHE_ENABLED_KEY, "ON") }
+                launchSettingsSafely { store.savePreference(COMPAT_CACHE_ENABLED_KEY, "ON") }
             }
         )
     }
@@ -1548,7 +1561,7 @@ internal fun CompatSettingsScreen(
                                         ) {
                                             backgroundAlwaysNotice = entry
                                         }
-                                        scope.launch {
+                                        launchSettingsSafely {
                                             if (cacheLocationEntry) cacheLocationChangeInProgress = true
                                             runSuspendCatchingPreservingCancellation {
                                                 applyCompatCacheLocationChange(
@@ -1679,7 +1692,7 @@ internal fun CompatSettingsScreen(
                         if (error != null) {
                             ptmtMessage = error
                         } else {
-                            scope.launch {
+                            launchSettingsSafely {
                                 val existing = repository?.listCookies()?.firstOrNull {
                                     it.name == "ptmt" && it.domain.trimStart('.').endsWith("2chan.net")
                                 }
@@ -1717,7 +1730,7 @@ internal fun CompatSettingsScreen(
                             if (checkError != null) {
                                 ptmtMessage = checkError
                             } else {
-                                scope.launch {
+                                launchSettingsSafely {
                                     val existing = repository?.listCookies()?.firstOrNull {
                                         it.name == "ptmt" && it.domain.trimStart('.').endsWith("2chan.net")
                                     }
@@ -1754,7 +1767,7 @@ internal fun CompatSettingsScreen(
                 Row {
                     TextButton(onClick = {
                         customFontDialogOpen = false
-                        scope.launch {
+                        launchSettingsSafely {
                             runSuspendCatchingPreservingCancellation {
                                 fileSystem?.deleteRecursively("private/compat_font")?.getOrThrow()
                                 store.savePreference(
@@ -3035,6 +3048,11 @@ internal fun CompatPostScreen(
     var draftLoaded by remember(ownerKey) { mutableStateOf(false) }
     var sending by remember(ownerKey) { mutableStateOf(false) }
     var message by remember(ownerKey) { mutableStateOf<String?>(null) }
+
+    fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
+        scope.launchCompatScreenAction("CompatPost", { failure ->
+            message = failure.toCompatUserMessage("操作に失敗しました")
+        }, block)
     var pendingCompression by remember(ownerKey) { mutableStateOf<ImageData?>(null) }
     var attachmentPreviewOpen by remember(ownerKey) { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
@@ -3094,63 +3112,70 @@ internal fun CompatPostScreen(
     }
 
     LaunchedEffect(ownerKey) {
-        val draft = if (isBuild) {
-            store.loadBuildDraft(board.key)?.let { build ->
-                CompatReplyDraft(
-                    tabKey = ownerKey,
-                    name = build.name,
-                    email = build.email,
-                    subject = build.subject,
-                    comment = build.comment,
-                    attachmentUri = build.attachmentUri,
-                    deleteKey = build.deleteKey,
-                    updatedAtEpochMillis = build.updatedAtEpochMillis
-                )
+        try {
+            val draft = if (isBuild) {
+                store.loadBuildDraft(board.key)?.let { build ->
+                    CompatReplyDraft(
+                        tabKey = ownerKey,
+                        name = build.name,
+                        email = build.email,
+                        subject = build.subject,
+                        comment = build.comment,
+                        attachmentUri = build.attachmentUri,
+                        deleteKey = build.deleteKey,
+                        updatedAtEpochMillis = build.updatedAtEpochMillis
+                    )
+                }
+            } else {
+                store.loadDraft(tab.key)
+            } ?: CompatReplyDraft(tabKey = ownerKey, updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds())
+            val restoredAttachment = draft.attachmentUri?.let { locator ->
+                fileSystem?.let { loadCompatPostAttachment(it, locator).getOrNull() }
             }
-        } else {
-            store.loadDraft(tab.key)
-        } ?: CompatReplyDraft(tabKey = ownerKey, updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds())
-        val restoredAttachment = draft.attachmentUri?.let { locator ->
-            fileSystem?.let { loadCompatPostAttachment(it, locator).getOrNull() }
+            val effectiveDraft = if (draft.attachmentUri != null && restoredAttachment == null) {
+                draft.copy(attachmentUri = null)
+            } else {
+                draft
+            }
+            val draftWithStoredDeleteKey = effectiveDraft.copy(
+                deleteKey = effectiveDraft.deleteKey.ifBlank { storedDeleteKey }
+            )
+            initialDraft = draftWithStoredDeleteKey
+            if (CompatPostDraftField.NAME !in editedDraftFields) name = draft.name.take(COMPAT_POST_NAME_MAX_CHARS)
+            if (CompatPostDraftField.EMAIL !in editedDraftFields) email = draft.email.take(COMPAT_POST_EMAIL_MAX_CHARS)
+            if (CompatPostDraftField.SUBJECT !in editedDraftFields) subject = draft.subject.take(COMPAT_POST_SUBJECT_MAX_CHARS)
+            if (CompatPostDraftField.COMMENT !in editedDraftFields) {
+                replaceComment(draft.comment, TextRange(draft.comment.length), restoringDraft = true)
+            }
+            // Quick replies are inserted before opening this form. Put the caret
+            // after the generated quote, matching the legacy app's reply flow.
+            if (CompatPostDraftField.DELETE_KEY !in editedDraftFields) deleteKey = draftWithStoredDeleteKey.deleteKey
+            if (CompatPostDraftField.ATTACHMENT !in editedDraftFields) {
+                attachment = restoredAttachment
+                attachmentLocator = effectiveDraft.attachmentUri
+            }
+            initialAttachment = restoredAttachment
+            initialAttachmentLocator = effectiveDraft.attachmentUri
+            if (draft.attachmentUri != null && restoredAttachment == null) {
+                message = "添付ファイルが\nリセットされました"
+            }
+            draftLoaded = true
+            // Wait until the form is attached before requesting focus. This matches
+            // the reference reply screen, which opens directly on the comment field
+            // with the IME already visible.
+            delay(150)
+            focusRequester.requestFocus()
+            // On Android the first IME request can race the navigation transition.
+            // Request it once more after the focused EditText has reached a frame;
+            // the reference app opens the keyboard immediately on entering this form.
+            delay(200)
+            keyboard?.show()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatPost", "下書きを読み込めませんでした", failure)
+            message = "下書きを読み込めませんでした"
         }
-        val effectiveDraft = if (draft.attachmentUri != null && restoredAttachment == null) {
-            draft.copy(attachmentUri = null)
-        } else {
-            draft
-        }
-        val draftWithStoredDeleteKey = effectiveDraft.copy(
-            deleteKey = effectiveDraft.deleteKey.ifBlank { storedDeleteKey }
-        )
-        initialDraft = draftWithStoredDeleteKey
-        if (CompatPostDraftField.NAME !in editedDraftFields) name = draft.name.take(COMPAT_POST_NAME_MAX_CHARS)
-        if (CompatPostDraftField.EMAIL !in editedDraftFields) email = draft.email.take(COMPAT_POST_EMAIL_MAX_CHARS)
-        if (CompatPostDraftField.SUBJECT !in editedDraftFields) subject = draft.subject.take(COMPAT_POST_SUBJECT_MAX_CHARS)
-        if (CompatPostDraftField.COMMENT !in editedDraftFields) {
-            replaceComment(draft.comment, TextRange(draft.comment.length), restoringDraft = true)
-        }
-        // Quick replies are inserted before opening this form. Put the caret
-        // after the generated quote, matching the legacy app's reply flow.
-        if (CompatPostDraftField.DELETE_KEY !in editedDraftFields) deleteKey = draftWithStoredDeleteKey.deleteKey
-        if (CompatPostDraftField.ATTACHMENT !in editedDraftFields) {
-            attachment = restoredAttachment
-            attachmentLocator = effectiveDraft.attachmentUri
-        }
-        initialAttachment = restoredAttachment
-        initialAttachmentLocator = effectiveDraft.attachmentUri
-        if (draft.attachmentUri != null && restoredAttachment == null) {
-            message = "添付ファイルが\nリセットされました"
-        }
-        draftLoaded = true
-        // Wait until the form is attached before requesting focus. This matches
-        // the reference reply screen, which opens directly on the comment field
-        // with the IME already visible.
-        delay(150)
-        focusRequester.requestFocus()
-        // On Android the first IME request can race the navigation transition.
-        // Request it once more after the focused EditText has reached a frame;
-        // the reference app opens the keyboard immediately on entering this form.
-        delay(200)
-        keyboard?.show()
     }
     // Preferences can arrive one frame after the form's draft. Fill the field once in that
     // case, while preserving a draft or an edit the user has already made.
@@ -3161,7 +3186,14 @@ internal fun CompatPostScreen(
         deleteKey = storedDeleteKey
         initialDraft = initialDraft.copy(deleteKey = storedDeleteKey)
     }
-    LaunchedEffect(toolbarRefreshToken) { toolbarItems = store.loadToolbar(CompatToolbarSurface.POST) }
+    LaunchedEffect(toolbarRefreshToken) {
+        runSuspendCatchingPreservingCancellation { store.loadToolbar(CompatToolbarSurface.POST) }
+            .onSuccess { toolbarItems = it }
+            .onFailure { failure ->
+                Logger.e("CompatPost", "Toolbar load failed", failure)
+                message = "ツールバー設定を読み込めませんでした"
+            }
+    }
     LaunchedEffect(repository, board.originalUrl) {
         postingCapabilities = runSuspendCatchingPreservingCancellation {
             repository?.getPostingCapabilities(board.originalUrl)
@@ -3170,7 +3202,14 @@ internal fun CompatPostScreen(
     LaunchedEffect(name, email, subject, comment, deleteKey, attachment, attachmentLocator, draftLoaded) {
         if (!draftLoaded) return@LaunchedEffect
         delay(300)
-        persistCurrentDraftOrDelete()
+        try {
+            persistCurrentDraftOrDelete()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatPost", "Draft persistence failed", failure)
+            message = "下書きを保存できませんでした"
+        }
     }
     LaunchedEffect(message) {
         val shownMessage = message ?: return@LaunchedEffect
@@ -3189,7 +3228,7 @@ internal fun CompatPostScreen(
         attachmentLocator = null
         attachment = null
         if (fileSystem != null && locator != null) {
-            scope.launch {
+            launchScreenAction {
                 deleteCompatPostAttachment(fileSystem, locator, deleteContainer).onFailure { error ->
                     message = "添付ファイルを削除できませんでした: ${error.message.orEmpty()}"
                 }
@@ -3206,7 +3245,7 @@ internal fun CompatPostScreen(
             return
         }
         val previousLocator = attachmentLocator
-        scope.launch {
+        launchScreenAction {
             persistCompatPostAttachment(localFileSystem, ownerKey, selected)
                 .onSuccess { persistedLocator ->
                     editedDraftFields.add(CompatPostDraftField.ATTACHMENT)
@@ -3304,68 +3343,82 @@ internal fun CompatPostScreen(
         if (validationError != null) {
             message = validationError
         } else if (!sending) {
-            scope.launch {
+            launchScreenAction {
                 sending = true
-                val currentLocator = attachmentLocator
-                if (currentLocator != null && fileSystem != null && !fileSystem.exists(currentLocator)) {
-                    message = "添付ファイルが見つかりません"
-                    attachment = null
-                    attachmentLocator = null
-                    sending = false
-                    return@launch
-                }
-                runSuspendCatchingPreservingCancellation {
-                    if (isBuild) {
-                        checkNotNull(repository).createThread(
-                            board = board.originalUrl,
-                            name = name,
-                            email = email,
-                            subject = subject,
-                            comment = comment,
-                            password = deleteKey,
-                            imageFile = attachment?.bytes,
-                            imageFileName = attachment?.fileName,
-                            textOnly = attachment == null
-                        )
-                    } else {
-                        checkNotNull(repository).replyToThread(
-                            board = board.originalUrl,
-                            threadId = tab.threadNo,
-                            name = name,
-                            email = email,
-                            subject = subject,
-                            comment = comment,
-                            password = deleteKey,
-                            imageFile = attachment?.bytes,
-                            imageFileName = attachment?.fileName,
-                            textOnly = attachment == null
-                        )
+                try {
+                    val currentLocator = attachmentLocator
+                    if (currentLocator != null && fileSystem != null && !fileSystem.exists(currentLocator)) {
+                        message = "添付ファイルが見つかりません"
+                        attachment = null
+                        attachmentLocator = null
+                        sending = false
+                        return@launchScreenAction
                     }
-                }.onSuccess { responseId ->
-                    store.savePreference(
-                        COMPAT_POST_DELETE_KEY_STORAGE_KEY,
-                        compatPostDeleteKeyForStorage(deleteKey)
-                    )
-                    if (!isBuild) {
-                        responseId?.let { raw ->
-                            compatSecondaryPostNumberRegex.find(raw)?.value?.let { postNo ->
-                                store.savePreference("compat.ownpost.${tab.key}.$postNo", "1")
+                    runSuspendCatchingPreservingCancellation {
+                        if (isBuild) {
+                            checkNotNull(repository).createThread(
+                                board = board.originalUrl,
+                                name = name,
+                                email = email,
+                                subject = subject,
+                                comment = comment,
+                                password = deleteKey,
+                                imageFile = attachment?.bytes,
+                                imageFileName = attachment?.fileName,
+                                textOnly = attachment == null
+                            )
+                        } else {
+                            checkNotNull(repository).replyToThread(
+                                board = board.originalUrl,
+                                threadId = tab.threadNo,
+                                name = name,
+                                email = email,
+                                subject = subject,
+                                comment = comment,
+                                password = deleteKey,
+                                imageFile = attachment?.bytes,
+                                imageFileName = attachment?.fileName,
+                                textOnly = attachment == null
+                            )
+                        }
+                    }.onSuccess { responseId ->
+                        draftLoaded = false
+                        suspend fun finishLocalStep(operation: suspend () -> Unit) {
+                            runSuspendCatchingPreservingCancellation { operation() }.onFailure { failure ->
+                                Logger.e("CompatPost", "Post accepted, but local cleanup failed", failure)
                             }
                         }
-                    }
-                    attachmentLocator?.let { locator ->
-                        fileSystem?.let { deleteCompatPostAttachment(it, locator, deleteContainer = true) }
-                    }
-                    if (isBuild) {
-                        store.deleteBuildDraft(board.key)
-                        onBuildCreated(responseId)
-                    } else {
-                        store.deleteDraft(tab.key)
-                        onPostSent()
-                        leave()
-                    }
-                }.onFailure { message = it.message ?: if (isBuild) "スレッドを立てられませんでした" else "投稿できませんでした" }
-                sending = false
+                        finishLocalStep {
+                            store.savePreference(
+                                COMPAT_POST_DELETE_KEY_STORAGE_KEY,
+                                compatPostDeleteKeyForStorage(deleteKey)
+                            )
+                        }
+                        if (!isBuild) {
+                            responseId?.let { raw ->
+                                compatSecondaryPostNumberRegex.find(raw)?.value?.let { postNo ->
+                                    finishLocalStep { store.savePreference("compat.ownpost.${tab.key}.$postNo", "1") }
+                                }
+                            }
+                        }
+                        finishLocalStep {
+                            if (isBuild) store.deleteBuildDraft(board.key) else store.deleteDraft(tab.key)
+                        }
+                        finishLocalStep {
+                            attachmentLocator?.let { locator ->
+                                fileSystem?.let { deleteCompatPostAttachment(it, locator, deleteContainer = true) }
+                            }
+                        }
+                        if (isBuild) {
+                            onBuildCreated(responseId)
+                        } else {
+                            onPostSent()
+                            leave()
+                        }
+                    }.onFailure { message = it.message ?: if (isBuild) "スレッドを立てられませんでした" else "投稿できませんでした" }
+                } finally {
+                    sending = false
+                }
             }
         }
     }
@@ -3393,7 +3446,7 @@ internal fun CompatPostScreen(
         "send" to ::requestSend,
         "attach" to { attachmentCommand() },
         "pallete" to {
-            scope.launch {
+            launchScreenAction {
                 persistCurrentDraftOrDelete()
                 keyboard?.hide()
                 onOpenDrawing()
@@ -3402,7 +3455,7 @@ internal fun CompatPostScreen(
         "sio" to { upsUploadCommand() },
         "voice_input" to {},
         "network_info" to {
-            scope.launch {
+            launchScreenAction {
                 val info = fetchCompatPostNetworkInfo(httpClient, "Futacha/$appVersion")
                 // Read the actual state after the suspension, not this composition's String.
                 replaceComment(appendCompatPostText(commentValue.text, info))
@@ -3426,7 +3479,7 @@ internal fun CompatPostScreen(
                 previousLocator != null &&
                 previousLocator != resetAttachmentLocator
             ) {
-                scope.launch { deleteCompatPostAttachment(fileSystem, previousLocator) }
+                launchScreenAction { deleteCompatPostAttachment(fileSystem, previousLocator) }
             }
             message = null
         },
@@ -3749,7 +3802,7 @@ internal fun CompatPostScreen(
         CompatPostImageCompressConfirmation(
             onCompress = {
                 pendingCompression = null
-                scope.launch {
+                launchScreenAction {
                     compressCompatPostImage(
                         oversizedImage,
                         attachmentLimitBytes
@@ -3800,7 +3853,7 @@ internal fun CompatPostScreen(
                         upsAttachment = null
                     } else {
                         upsUploadInProgress = true
-                        scope.launch {
+                        launchScreenAction {
                             uploadCompatUps(
                                 client = client,
                                 attachment = selected,
@@ -3838,7 +3891,7 @@ internal fun CompatPostScreen(
                     val discardedAttachmentLocator = attachmentLocator
                     name = ""; email = ""; subject = ""; replaceComment(""); deleteKey = ""; attachment = null
                     attachmentLocator = null
-                    scope.launch {
+                    launchScreenAction {
                         discardedAttachmentLocator?.let { locator ->
                             fileSystem?.let { deleteCompatPostAttachment(it, locator, deleteContainer = true) }
                         }
@@ -3948,6 +4001,11 @@ internal fun CompatGalleryScreen(
     var lastBatchSaveFormat by remember { mutableStateOf<CompatGalleryBatchSaveFormat?>(null) }
     var batchRetryAttempt by remember { mutableStateOf(0) }
     var message by remember { mutableStateOf<String?>(null) }
+
+    fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
+        scope.launchCompatScreenAction("CompatGallery", { failure ->
+            message = failure.toCompatUserMessage("操作に失敗しました")
+        }, block)
     var overflowOpen by remember { mutableStateOf(false) }
     var contextPost by remember { mutableStateOf<CompatPostSnapshot?>(null) }
     var imageNgRegistrationPost by remember { mutableStateOf<CompatPostSnapshot?>(null) }
@@ -4008,31 +4066,38 @@ internal fun CompatGalleryScreen(
         httpClient,
         showDeletedContent
     ) {
-        val hiddenImages = ngRules.asSequence()
-            .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
-            .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
-        val snapshot = store.loadThreadSnapshot(tabKey)?.let {
-            withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
-        }
-        snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
-        val rawPosts = presentCompatPostsForDeletedVisibility(
-            posts = snapshot?.posts.orEmpty(),
-            showDeletedContent = showDeletedContent
-        )
-        val hiddenPostNos = compatImagePhashHiddenPostNos(
-            httpClient = httpClient,
-            posts = rawPosts,
-            rules = imageNgPhashRules,
-            threshold = imageNgPhashThreshold
-        )
-        posts = withContext(AppDispatchers.parsing) {
-            compatViewerMediaPosts(
-                posts = rawPosts,
-                hiddenImages = hiddenImages,
-                hiddenPostNos = hiddenPostNos,
-                upsThumbnailMethod = upsThumbnailMethod,
-                wifiConnected = wifiConnected
+        try {
+            val hiddenImages = ngRules.asSequence()
+                .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
+                .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
+            val snapshot = store.loadThreadSnapshot(tabKey)?.let {
+                withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(it) }
+            }
+            snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
+            val rawPosts = presentCompatPostsForDeletedVisibility(
+                posts = snapshot?.posts.orEmpty(),
+                showDeletedContent = showDeletedContent
             )
+            val hiddenPostNos = compatImagePhashHiddenPostNos(
+                httpClient = httpClient,
+                posts = rawPosts,
+                rules = imageNgPhashRules,
+                threshold = imageNgPhashThreshold
+            )
+            posts = withContext(AppDispatchers.parsing) {
+                compatViewerMediaPosts(
+                    posts = rawPosts,
+                    hiddenImages = hiddenImages,
+                    hiddenPostNos = hiddenPostNos,
+                    upsThumbnailMethod = upsThumbnailMethod,
+                    wifiConnected = wifiConnected
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatGallery", "Media list load failed", failure)
+            message = "画像一覧を読み込めませんでした"
         }
     }
     LaunchedEffect(posts.size, initialIndex, initialPostNo) {
@@ -4048,17 +4113,17 @@ internal fun CompatGalleryScreen(
     }
     fun savePost(post: CompatPostSnapshot) {
         if (savingMediaKey != null || batchSaveJob != null) return
-        scope.launch {
+        launchScreenAction {
             val saver = mediaSaver
             if (saver == null) {
                 message = "保存機能を初期化できませんでした"
-                return@launch
+                return@launchScreenAction
             }
             val key = compatMediaIdentity(post)
             val mediaUrl = resolveCompatViewerMediaUrl(post)
             if (mediaUrl == null) {
                 message = "保存するメディアがありません"
-                return@launch
+                return@launchScreenAction
             }
             savingMediaKey = key
             try {
@@ -4096,7 +4161,7 @@ internal fun CompatGalleryScreen(
         failedBatchMediaKeys = emptySet()
         lastBatchSaveFormat = format
         if (!isRetry) batchRetryAttempt = 0 else batchRetryAttempt += 1
-        batchSaveJob = scope.launch {
+        batchSaveJob = launchScreenAction {
             val failedUrls = mutableSetOf<String>()
             var succeeded = 0
             try {
@@ -4190,12 +4255,12 @@ internal fun CompatGalleryScreen(
     }
     fun sharePost(post: CompatPostSnapshot) {
         val mediaUrl = resolveCompatViewerMediaUrl(post) ?: return
-        scope.launch {
+        launchScreenAction {
             val saver = mediaSaver
             val fs = fileSystem
             if (saver == null || fs == null) {
                 message = "画像共有を初期化できませんでした"
-                return@launch
+                return@launchScreenAction
             }
             saver.saveMedia(
                 mediaUrl,
@@ -4233,7 +4298,7 @@ internal fun CompatGalleryScreen(
         }
         val endpoint = compatAscii2dEndpoint(preferences)
         message = "二次元画像検索中…"
-        scope.launch {
+        launchScreenAction {
             searchCompatAscii2d(client, endpoint, mediaUrl)
                 .onSuccess { resultUrl ->
                     message = null
@@ -4266,7 +4331,7 @@ internal fun CompatGalleryScreen(
                     return
                 }
                 message = "Google画像検索に画像を送信中…"
-                scope.launch {
+                launchScreenAction {
                     searchCompatGoogleClassicFile(client, mediaUrl)
                         .onSuccess { resultUrl -> message = null; openSearchResult(resultUrl, mode.label) }
                         .onFailure { failure ->
@@ -4286,7 +4351,7 @@ internal fun CompatGalleryScreen(
                     return
                 }
                 message = "Google Lensに画像を送信中…"
-                scope.launch {
+                launchScreenAction {
                     searchCompatGoogleLensFile(client, mediaUrl)
                         .onSuccess { resultUrl ->
                             message = null
@@ -4324,7 +4389,7 @@ internal fun CompatGalleryScreen(
             return
         }
         message = "${target.label}に画像を送信中…"
-        scope.launch {
+        launchScreenAction {
             searchCompatImageFileTarget(client, target, mediaUrl)
                 .onSuccess { result -> message = null; reverseSearchResult = result }
                 .onFailure { failure ->
@@ -4632,7 +4697,7 @@ internal fun CompatGalleryScreen(
             testTag = "compat-gallery-context-menu",
             onChoice = { label ->
                 when (label) {
-                    "元レスに移動する" -> scope.launch {
+                    "元レスに移動する" -> launchScreenAction {
                         store.updateScrollAnchor(
                             tab.key,
                             ScrollAnchor(
@@ -4676,7 +4741,7 @@ internal fun CompatGalleryScreen(
                     message = "通信機能を初期化できませんでした"
                 } else {
                     message = "NG画像登録中"
-                    scope.launch {
+                    launchScreenAction {
                         fetchCompatImagePhash(client, mediaUrl)
                             .onSuccess { phash ->
                                 store.upsertNgRule(
@@ -4705,7 +4770,7 @@ internal fun CompatGalleryScreen(
             initialEndpoint = ascii2dRegistrationUrl,
             onDismiss = { ascii2dRegisterPost = null },
             onRegister = { endpoint ->
-                scope.launch {
+                launchScreenAction {
                     store.savePreference(COMPAT_ASCII2D_ENDPOINT_KEY, endpoint)
                     store.savePreference(COMPAT_ASCII2D_ENABLED_KEY, "ON")
                 }
@@ -4825,6 +4890,11 @@ internal fun CompatViewerScreen(
     var topOverflowOpen by remember { mutableStateOf(false) }
     var toolbarOverflowOpen by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+
+    fun launchScreenAction(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit): Job =
+        scope.launchCompatScreenAction("CompatViewer", { failure ->
+            message = failure.toCompatUserMessage("操作に失敗しました")
+        }, block)
     var infoOpen by remember { mutableStateOf(false) }
     var infoLoading by remember { mutableStateOf(false) }
     var remoteMediaInfo by remember { mutableStateOf<Map<String, CompatRemoteMediaInfo>>(emptyMap()) }
@@ -4907,53 +4977,68 @@ internal fun CompatViewerScreen(
         initialIndex,
         initialPostNo
     ) {
-        val hiddenImages = ngRules.asSequence()
-            .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
-            .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
-        val snapshot = store.loadThreadSnapshot(tabKey)
-        snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
-        val rawPosts = snapshot
-            ?.let { loadedSnapshot ->
-                withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(loadedSnapshot) }
-            }
-            ?.posts
-            .orEmpty()
-            .let { posts ->
-                presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
-            }
-        if (directMediaUrl != null) {
-            val sourcePost = rawPosts.firstOrNull { it.postNo == initialPostNo }
-            loadedPosts = listOf(
-                CompatPostSnapshot(
-                    position = directSourcePosition ?: sourcePost?.position ?: 0,
-                    postNo = initialPostNo ?: sourcePost?.postNo ?: tab.threadNo,
-                    timestamp = sourcePost?.timestamp.orEmpty(),
-                    messageHtml = sourcePost?.messageHtml.orEmpty(),
-                    imageUrl = directMediaUrl,
-                    thumbnailUrl = compatApuSmallThumbnailUrl(directMediaUrl)
-                        .takeIf { isCompatVideoMediaUrl(directMediaUrl) },
-                    mediaKey = "direct::$directMediaUrl"
+        try {
+            val hiddenImages = ngRules.asSequence()
+                .filter { it.kind == CompatNgKind.THREAD_IMAGE && it.appliesToThreadImage(tab.boardKey, tabKey) }
+                .mapTo(mutableSetOf(), CompatNgRule::normalizedValue)
+            val snapshot = store.loadThreadSnapshot(tabKey)
+            snapshotRevision = snapshot?.revision ?: tab.snapshotRevision
+            val rawPosts = snapshot
+                ?.let { loadedSnapshot ->
+                    withContext(AppDispatchers.parsing) { normalizeCompatThreadSnapshot(loadedSnapshot) }
+                }
+                ?.posts
+                .orEmpty()
+                .let { posts ->
+                    presentCompatPostsForDeletedVisibility(posts, showDeletedContent)
+                }
+            if (directMediaUrl != null) {
+                val sourcePost = rawPosts.firstOrNull { it.postNo == initialPostNo }
+                loadedPosts = listOf(
+                    CompatPostSnapshot(
+                        position = directSourcePosition ?: sourcePost?.position ?: 0,
+                        postNo = initialPostNo ?: sourcePost?.postNo ?: tab.threadNo,
+                        timestamp = sourcePost?.timestamp.orEmpty(),
+                        messageHtml = sourcePost?.messageHtml.orEmpty(),
+                        imageUrl = directMediaUrl,
+                        thumbnailUrl = compatApuSmallThumbnailUrl(directMediaUrl)
+                            .takeIf { isCompatVideoMediaUrl(directMediaUrl) },
+                        mediaKey = "direct::$directMediaUrl"
+                    )
                 )
-            )
-            return@LaunchedEffect
-        }
-        val hiddenPostNos = compatImagePhashHiddenPostNos(
-            httpClient = httpClient,
-            posts = rawPosts,
-            rules = imageNgPhashRules,
-            threshold = imageNgPhashThreshold
-        )
-        loadedPosts = withContext(AppDispatchers.parsing) {
-            compatViewerMediaPosts(
+                return@LaunchedEffect
+            }
+            val hiddenPostNos = compatImagePhashHiddenPostNos(
+                httpClient = httpClient,
                 posts = rawPosts,
-                hiddenImages = hiddenImages,
-                hiddenPostNos = hiddenPostNos,
-                upsThumbnailMethod = upsThumbnailMethod,
-                wifiConnected = wifiConnected
+                rules = imageNgPhashRules,
+                threshold = imageNgPhashThreshold
             )
+            loadedPosts = withContext(AppDispatchers.parsing) {
+                compatViewerMediaPosts(
+                    posts = rawPosts,
+                    hiddenImages = hiddenImages,
+                    hiddenPostNos = hiddenPostNos,
+                    upsThumbnailMethod = upsThumbnailMethod,
+                    wifiConnected = wifiConnected
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatViewer", "Media list load failed", failure)
+            message = "画像一覧を読み込めませんでした"
+            loadedPosts = emptyList()
         }
     }
-    LaunchedEffect(toolbarRefreshToken) { toolbarItems = store.loadToolbar(CompatToolbarSurface.VIEWER) }
+    LaunchedEffect(toolbarRefreshToken) {
+        runSuspendCatchingPreservingCancellation { store.loadToolbar(CompatToolbarSurface.VIEWER) }
+            .onSuccess { toolbarItems = it }
+            .onFailure { failure ->
+                Logger.e("CompatViewer", "Toolbar load failed", failure)
+                message = "ツールバー設定を読み込めませんでした"
+            }
+    }
     if (posts.isEmpty()) {
         // Never create a placeholder pager with pageCount=1: it can paint
         // page zero before the asynchronously loaded launch identity is applied.
@@ -4965,7 +5050,7 @@ internal fun CompatViewerScreen(
             if (loadedPosts == null) {
                 CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             } else {
-                Text("表示できる画像がありません", color = Color.White, modifier = Modifier.align(Alignment.Center))
+                Text(message ?: "表示できる画像がありません", color = Color.White, modifier = Modifier.align(Alignment.Center))
             }
         }
         return
@@ -5013,7 +5098,7 @@ internal fun CompatViewerScreen(
     fun saveCurrent(shareAfterSave: Boolean) {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
         if (mediaUrl == null || isSaving) return
-        scope.launch {
+        launchScreenAction {
             isSaving = true
             val saver = mediaSaver
             val fs = fileSystem
@@ -5071,7 +5156,7 @@ internal fun CompatViewerScreen(
         }
         val endpoint = compatAscii2dEndpoint(preferences)
         message = "二次元画像検索中…"
-        scope.launch {
+        launchScreenAction {
             searchCompatAscii2d(client, endpoint, mediaUrl)
                 .onSuccess { resultUrl ->
                     message = null
@@ -5103,7 +5188,7 @@ internal fun CompatViewerScreen(
                     return
                 }
                 message = "Google画像検索に画像を送信中…"
-                scope.launch {
+                launchScreenAction {
                     searchCompatGoogleClassicFile(client, mediaUrl)
                         .onSuccess { resultUrl -> message = null; openSearchResult(resultUrl, mode.label) }
                         .onFailure { failure ->
@@ -5123,7 +5208,7 @@ internal fun CompatViewerScreen(
                     return
                 }
                 message = "Google Lensに画像を送信中…"
-                scope.launch {
+                launchScreenAction {
                     searchCompatGoogleLensFile(client, mediaUrl)
                         .onSuccess { resultUrl ->
                             message = null
@@ -5159,7 +5244,7 @@ internal fun CompatViewerScreen(
             return
         }
         message = "${target.label}に画像を送信中…"
-        scope.launch {
+        launchScreenAction {
             searchCompatImageFileTarget(client, target, mediaUrl)
                 .onSuccess { result -> message = null; reverseSearchResult = result }
                 .onFailure { failure ->
@@ -5197,7 +5282,7 @@ internal fun CompatViewerScreen(
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl) ?: return
         val client = httpClient ?: return
         if (mediaUrl in remoteMediaInfo && mediaUrl in remoteExifInfo || infoLoading) return
-        scope.launch {
+        launchScreenAction {
             infoLoading = true
             fetchCompatRemoteMediaInfo(client, mediaUrl)
                 .onSuccess { info -> remoteMediaInfo = remoteMediaInfo + (mediaUrl to info) }
@@ -5227,7 +5312,7 @@ internal fun CompatViewerScreen(
             initialEndpoint = ascii2dRegistrationUrl,
             onDismiss = { ascii2dRegistrationOpen = false },
             onRegister = { endpoint ->
-                scope.launch {
+                launchScreenAction {
                     store.savePreference(COMPAT_ASCII2D_ENDPOINT_KEY, endpoint)
                     store.savePreference(COMPAT_ASCII2D_ENABLED_KEY, "ON")
                 }
@@ -5240,12 +5325,12 @@ internal fun CompatViewerScreen(
     val viewerActions: Map<String, () -> Unit> = buildMap {
         if (pagerState.currentPage > 0) {
             put("left") {
-                scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                launchScreenAction { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
             }
         }
         if (pagerState.currentPage < posts.lastIndex) {
             put("right") {
-                scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                launchScreenAction { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
             }
         }
         put("download") { saveCurrent(shareAfterSave = false) }
@@ -5269,7 +5354,7 @@ internal fun CompatViewerScreen(
         put("screen") { chromeVisible = !chromeVisible }
         put("privacy") {
             val enabled = threadPrivacyEnabled
-            scope.launch {
+            launchScreenAction {
                 store.savePreference(
                     COMPAT_COMMON_PRIVACY_STORAGE_KEY,
                     if (enabled) "OFF" else "ON"
@@ -5428,7 +5513,7 @@ internal fun CompatViewerScreen(
                                 val direction = if (verticalRawOffset < 0f) -1f else 1f
                                 val startOffset = verticalRawOffset
                                 verticalDismissAnimating = true
-                                verticalResetJob = scope.launch {
+                                verticalResetJob = launchScreenAction {
                                     Animatable(startOffset).animateTo(
                                         targetValue = direction * viewportHeight,
                                         animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
@@ -5439,7 +5524,7 @@ internal fun CompatViewerScreen(
                                 }
                             } else {
                                 val startOffset = verticalRawOffset
-                                verticalResetJob = scope.launch {
+                                verticalResetJob = launchScreenAction {
                                     Animatable(startOffset).animateTo(
                                         targetValue = 0f,
                                         animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
@@ -5450,7 +5535,7 @@ internal fun CompatViewerScreen(
                         },
                         onDragCancel = {
                             val startOffset = verticalRawOffset
-                            verticalResetJob = scope.launch {
+                            verticalResetJob = launchScreenAction {
                                 Animatable(startOffset).animateTo(
                                     targetValue = 0f,
                                     animationSpec = spring(stiffness = COMPAT_VIEWER_RESET_SPRING_STIFFNESS)
@@ -5515,7 +5600,7 @@ internal fun CompatViewerScreen(
                                     viewportWidthPx = size.width.toFloat(),
                                     pageCount = posts.size
                                 ) ?: return@awaitEachGesture
-                                scope.launch { pagerState.animateScrollToPage(target) }
+                                launchScreenAction { pagerState.animateScrollToPage(target) }
                             }
                         }
                     },
@@ -5626,7 +5711,7 @@ internal fun CompatViewerScreen(
                                 viewportWidthPx = viewportWidthPx,
                                 pageCount = posts.size
                             ) ?: return@CompatViewerImagePage
-                            scope.launch { pagerState.animateScrollToPage(target) }
+                            launchScreenAction { pagerState.animateScrollToPage(target) }
                         },
                         onDimensionsKnown = { width, height ->
                             if (mediaUrl != null) {

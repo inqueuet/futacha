@@ -530,7 +530,9 @@ class CompatViewerGestureInstrumentedTest {
             }
         }
 
-        runBlocking { requestStarted.await() }
+        // Let the Compose clock advance while cached posts are restored. A
+        // blocking await here can stop the test before the image enters UI.
+        rule.waitUntil(10_000) { requestStarted.isCompleted }
         rule.waitUntil(5_000) {
             rule.onAllNodesWithTag(
                 "compat-thread-thumbnail-1-placeholder",

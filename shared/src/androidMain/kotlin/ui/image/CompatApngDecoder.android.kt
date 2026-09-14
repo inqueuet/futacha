@@ -8,8 +8,6 @@ import coil3.decode.ImageSource
 import coil3.fetch.SourceFetchResult
 import coil3.request.Options
 import com.github.penfeizhou.animation.apng.APNGDrawable
-import com.github.penfeizhou.animation.apng.decode.APNGParser
-import com.github.penfeizhou.animation.io.StreamReader
 import com.github.penfeizhou.animation.loader.ByteBufferLoader
 import java.nio.ByteBuffer
 
@@ -25,6 +23,7 @@ internal class CompatApngDecoder(
 ) : Decoder {
     override suspend fun decode(): DecodeResult {
         val bytes = source.source().use { it.readBoundedCompatAnimatedImageBytes() }
+        requireSafeCompatAnimatedImageCanvas(bytes, CompatAnimatedImageFormat.PNG)
         val drawable = APNGDrawable(object : ByteBufferLoader() {
             override fun getByteBuffer(): ByteBuffer = ByteBuffer.wrap(bytes)
         }).apply {
@@ -41,11 +40,7 @@ internal class CompatApngDecoder(
             options: Options,
             imageLoader: ImageLoader,
         ): Decoder? {
-            val isApng = runCatching {
-                APNGParser.isAPNG(
-                    StreamReader(result.source.source().peek().inputStream())
-                )
-            }.getOrDefault(false)
+            val isApng = result.source.source().peek().use { hasCompatAnimatedPngHeader(it) }
             return CompatApngDecoder(result.source).takeIf { isApng }
         }
     }

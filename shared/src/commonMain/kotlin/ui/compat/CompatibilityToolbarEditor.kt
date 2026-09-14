@@ -148,6 +148,7 @@ fun CompatToolbarEditorScreen(
     val master = remember(surface) { compatToolbarMaster(surface).associateBy { it.key } }
     var items by remember(surface) { mutableStateOf<List<CompatToolbarItem>>(emptyList()) }
     var loaded by remember(surface) { mutableStateOf(false) }
+    var operationError by remember(surface) { mutableStateOf<String?>(null) }
     var draggedKey by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var dragTravel by remember { mutableFloatStateOf(0f) }
@@ -199,9 +200,12 @@ fun CompatToolbarEditorScreen(
         val normalized = next.mapIndexed { index, item -> item.copy(position = index) }
         items = normalized
         val previous = pendingPersist
-        pendingPersist = scope.launch {
+        pendingPersist = scope.launchCompatScreenAction("CompatToolbar", {
+            operationError = "ツールバーを保存できませんでした"
+        }) {
             previous?.join()
             store.saveToolbar(surface, normalized)
+            operationError = null
         }
     }
 
@@ -215,11 +219,18 @@ fun CompatToolbarEditorScreen(
     }
 
     LaunchedEffect(surface) {
-        items = store.loadToolbar(surface)
-        loaded = true
+        com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation {
+            store.loadToolbar(surface)
+        }.onSuccess {
+            items = it
+            loaded = true
+        }.onFailure {
+            operationError = "ツールバーを読み込めませんでした"
+            com.valoser.futacha.shared.util.Logger.e("CompatToolbar", "Toolbar load failed", it)
+        }
     }
 
-    PlatformBackHandler(enabled = loaded) { leaveAfterSaving() }
+    PlatformBackHandler(enabled = true) { leaveAfterSaving() }
 
     Scaffold(
         containerColor = palette.background,
@@ -241,8 +252,11 @@ fun CompatToolbarEditorScreen(
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            operationError?.let { Text(it, modifier = Modifier.padding(16.dp)) }
             if (!loaded) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("読み込み中…") }
+                if (operationError == null) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("読み込み中…") }
+                }
             } else {
                 LazyColumn(
                     state = listState,

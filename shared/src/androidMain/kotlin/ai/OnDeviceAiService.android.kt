@@ -189,7 +189,9 @@ private class AndroidOnDeviceAiService(
         requestRemoteThreadSummary(appContext, input)?.let {
             return it
         }
-        return Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
+        return withContext(AppDispatchers.parsing) {
+            Result.success(buildExtractiveThreadSummary(input, providerLabel = "Gemini Nano"))
+        }
     }
 
     override suspend fun classifyPosts(input: PostModerationInput): Result<List<PostModerationResult>> = withContext(AppDispatchers.io) {

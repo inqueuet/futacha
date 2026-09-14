@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -406,6 +407,50 @@ class CompatSettingsSchemaInstrumentedTest {
     }
 
     @Test
+    fun changeLogDoesNotRepeatAfterRecreationWithStalePreferenceEmission() {
+        runBlocking { store.savePreference("compat.commonUsedVersion", "10.6") }
+        val versionReads = AtomicInteger()
+        val staleStore = object : CompatibilityStore by store {
+            override val preferences = MutableStateFlow(mapOf("compat.commonUsedVersion" to "10.6"))
+            override suspend fun loadPreference(key: String): String? {
+                val value = store.loadPreference(key)
+                if (key == "compat.commonUsedVersion") versionReads.incrementAndGet()
+                return value
+            }
+        }
+        val generation = mutableStateOf(0)
+        rule.setContent {
+            key(generation.value) {
+                MaterialTheme {
+                    CompatibilityApp(
+                        store = staleStore,
+                        repository = null,
+                        appVersion = "10.8",
+                        imageLoader = imageLoader,
+                        onExitApplication = {}
+                    )
+                }
+            }
+        }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithTag("compat-change-log-content").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
+        assertEquals("10.8", runBlocking { store.loadPreference("compat.commonUsedVersion") })
+        rule.onNodeWithContentDescription("戻る").performClick()
+        rule.runOnIdle { generation.value++ }
+        rule.waitUntil(5_000) { versionReads.get() >= 2 }
+        rule.waitForIdle()
+        rule.onAllNodesWithTag("compat-change-log-content").assertCountEquals(0)
+
+        // Explicit navigation remains available even after the update is consumed.
+        rule.onNodeWithContentDescription("その他").performClick()
+        rule.onNodeWithText("設定").performClick()
+        rule.onNodeWithContentDescription("更新情報").performClick()
+        rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
+    }
+
+    @Test
     fun informationScreensUseFutachaHistoryAndCurrentLicenses() {
         runBlocking { store.savePreference("compat.commonUsedVersion", "8.8") }
         rule.setContent {
@@ -421,6 +466,9 @@ class CompatSettingsSchemaInstrumentedTest {
             }
         }
 
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithTag("compat-change-log-content").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("更新履歴").assertIsDisplayed()
         rule.onNodeWithTag("compat-change-log-content").assertIsDisplayed()
         val firstChangeBounds = rule.onNodeWithTag("compat-change-log-body-10.8-0")

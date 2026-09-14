@@ -1097,18 +1097,18 @@ private fun CompatibilityAppContent(
             initialThreadDeepLink != null || initialBoardDeepLink != null
         ) return@LaunchedEffect
         changeLogChecked = true
-        if (shouldOpenCompatChangeLog(preferences[COMPAT_USED_VERSION_KEY], appVersion)) {
-            // The reference APK commits the consumed version before opening
-            // ChangeLogActivity. Persist first so a process death or quick
-            // relaunch cannot show the same notice again.
-            store.savePreference(COMPAT_USED_VERSION_KEY, appVersion)
-            dispatch(CompatibilityEvent.OpenHost(CompatHost.ChangeLog()))
+        persistStoreSafely("change log startup check") {
+            if (consumeCompatChangeLogUpdate(store, appVersion)) {
+                dispatch(CompatibilityEvent.OpenHost(CompatHost.ChangeLog()))
+            }
         }
     }
     LaunchedEffect(store) { store.ngRules.collectLatest { ngRules = it } }
     LaunchedEffect(store, toolbarRefreshToken) {
-        toolbarItemsBySurface = CompatToolbarSurface.entries.associateWith { surface ->
-            store.loadToolbar(surface)
+        persistStoreSafely("toolbar load") {
+            toolbarItemsBySurface = CompatToolbarSurface.entries.associateWith { surface ->
+                store.loadToolbar(surface)
+            }
         }
     }
     var customFontPath by remember { mutableStateOf<String?>(null) }
@@ -1777,7 +1777,7 @@ private fun CompatibilityAppContent(
                 if (refresh == null) {
                     deepLinkError = "履歴更新サービスを利用できません"
                 } else {
-                    scope.launch {
+                    launchStoreSafely("AI command", "操作に失敗しました") {
                         refresh()
                             .onSuccess { message -> platformAiFeedback = message }
                             .onFailure { failure ->
@@ -1843,21 +1843,21 @@ private fun CompatibilityAppContent(
                 if (tab == null) deepLinkError = "先に対象スレを開いてください"
                 else dispatch(CompatibilityEvent.OpenHost(CompatHost.Gallery(tab)))
             }
-            FutachaAiAction.EnablePrivacyFilter -> scope.launch { stateStore?.setPrivacyFilterEnabled(true) }
-            FutachaAiAction.DisablePrivacyFilter -> scope.launch { stateStore?.setPrivacyFilterEnabled(false) }
-            FutachaAiAction.EnableBackgroundRefresh -> scope.launch { stateStore?.setBackgroundRefreshEnabled(true) }
-            FutachaAiAction.DisableBackgroundRefresh -> scope.launch { stateStore?.setBackgroundRefreshEnabled(false) }
-            FutachaAiAction.EnableThreadSummaryMode -> scope.launch { stateStore?.setThreadSummaryModeEnabled(true) }
-            FutachaAiAction.DisableThreadSummaryMode -> scope.launch { stateStore?.setThreadSummaryModeEnabled(false) }
-            FutachaAiAction.EnableAiPostFilter -> scope.launch { stateStore?.setAiPostFilterEnabled(true) }
-            FutachaAiAction.DisableAiPostFilter -> scope.launch { stateStore?.setAiPostFilterEnabled(false) }
+            FutachaAiAction.EnablePrivacyFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setPrivacyFilterEnabled(true) }
+            FutachaAiAction.DisablePrivacyFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setPrivacyFilterEnabled(false) }
+            FutachaAiAction.EnableBackgroundRefresh -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setBackgroundRefreshEnabled(true) }
+            FutachaAiAction.DisableBackgroundRefresh -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setBackgroundRefreshEnabled(false) }
+            FutachaAiAction.EnableThreadSummaryMode -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setThreadSummaryModeEnabled(true) }
+            FutachaAiAction.DisableThreadSummaryMode -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setThreadSummaryModeEnabled(false) }
+            FutachaAiAction.EnableAiPostFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setAiPostFilterEnabled(true) }
+            FutachaAiAction.DisableAiPostFilter -> launchStoreSafely("AI command", "操作に失敗しました") { stateStore?.setAiPostFilterEnabled(false) }
             FutachaAiAction.SetCatalogMode -> {
                 val board = resolvePlatformAiBoard(command)
                 val sort = resolvePlatformAiCatalogSort(command)
                 when {
                     board == null -> deepLinkError = "対象板を特定できませんでした"
                     sort == null -> deepLinkError = "カタログモードを特定できませんでした"
-                    else -> scope.launch {
+                    else -> launchStoreSafely("AI command", "操作に失敗しました") {
                         val current = store.loadCatalogPreference(board.key)
                         store.saveCatalogPreference(current.copy(sort = sort))
                         dispatch(CompatibilityEvent.OpenCatalog(board.key))
@@ -1867,7 +1867,7 @@ private fun CompatibilityAppContent(
             FutachaAiAction.AddWatchWord -> {
                 val word = command.wordParameter()
                 if (word.isNullOrBlank()) deepLinkError = "追加する監視ワードを指定してください"
-                else scope.launch {
+                else launchStoreSafely("AI command", "操作に失敗しました") {
                     val existing = com.valoser.futacha.shared.compat.compatWatchRules(preferences)
                     CompatWatcherRepository(store).saveRules(
                         (existing + com.valoser.futacha.shared.compat.CompatWatchRule(word.trim())).distinct()
@@ -1893,7 +1893,7 @@ private fun CompatibilityAppContent(
                     } else {
                         CompatNgKind.THREAD_WORD
                     }
-                    scope.launch {
+                    launchStoreSafely("AI command", "操作に失敗しました") {
                         val added = store.upsertNgRule(
                             CompatNgRule(
                                 id = compatNgRuleId(kind, "*", value),
@@ -1907,7 +1907,7 @@ private fun CompatibilityAppContent(
                     }
                 }
             }
-            FutachaAiAction.ClearHistory -> scope.launch {
+            FutachaAiAction.ClearHistory -> launchStoreSafely("AI command", "操作に失敗しました") {
                 val modernStore = stateStore
                 if (modernStore != null) {
                     clearHistory(
@@ -1934,13 +1934,13 @@ private fun CompatibilityAppContent(
             FutachaAiAction.DeleteHistoryEntry -> {
                 val target = resolvePlatformAiThread(command)
                 if (target == null) deepLinkError = "削除する履歴を特定できませんでした"
-                else scope.launch {
+                else launchStoreSafely("AI command", "操作に失敗しました") {
                     val compatibilityEntry = histories.firstOrNull { entry ->
                         entry.canonicalUrl == target.first.canonicalUrl
                     }
                     if (compatibilityEntry == null) {
                         deepLinkError = "削除する履歴を特定できませんでした"
-                        return@launch
+                        return@launchStoreSafely
                     }
                     val modernStore = stateStore
                     val modernEntry = modernStore?.history?.first()
@@ -1982,7 +1982,7 @@ private fun CompatibilityAppContent(
                     val active = currentPlatformAiTab()
                     val requestedThread = command.threadIdParameter() ?: active?.threadNo
                     val requestedBoard = resolvePlatformAiBoard(command)?.key ?: active?.boardKey
-                    scope.launch {
+                    launchStoreSafely("AI command", "操作に失敗しました") {
                         val matches = repository.getAllThreads().filter { saved ->
                             (requestedThread == null || saved.threadId == requestedThread) &&
                                 (requestedBoard == null || saved.boardId.equals(requestedBoard, ignoreCase = true))
@@ -2001,7 +2001,7 @@ private fun CompatibilityAppContent(
             FutachaAiAction.ClearSavedThreads -> {
                 val repository = savedThreadRepository
                 if (repository == null) deepLinkError = "保存済みスレの保存先を利用できません"
-                else scope.launch {
+                else launchStoreSafely("AI command", "操作に失敗しました") {
                     repository.deleteAllThreads().onFailure { failure ->
                         deepLinkError = "保存済みスレを全削除できませんでした: ${failure.message.orEmpty()}"
                     }
@@ -2018,7 +2018,7 @@ private fun CompatibilityAppContent(
                     val name = command.parameter("name", "board", "title", "label")
                         ?.takeIf { it.isNotBlank() }
                         ?: canonical.substringAfterLast('/')
-                    scope.launch {
+                    launchStoreSafely("AI command", "操作に失敗しました") {
                         store.upsertBoard(
                             CompatBoard(
                                 key = compatBoardKey(canonical),
@@ -2034,7 +2034,7 @@ private fun CompatibilityAppContent(
             FutachaAiAction.DeleteBoard -> {
                 val board = resolvePlatformAiBoard(command)
                 if (board == null) deepLinkError = "削除する板を特定できませんでした"
-                else scope.launch {
+                else launchStoreSafely("AI command", "操作に失敗しました") {
                     store.deleteBoard(board.key)
                     if ((state.host as? CompatHost.Catalog)?.boardKey == board.key) {
                         dispatch(CompatibilityEvent.OpenHost(CompatHost.Main))
@@ -3339,7 +3339,7 @@ private fun CompatibilityAppContent(
                 isUpdateCheckEnabled = updateCheckEnabled,
                 onUpdateCheckChanged = { enabled ->
                     stateStore?.let { sharedStore ->
-                        scope.launch { sharedStore.setUpdateCheckEnabled(enabled) }
+                        launchStoreSafely("update setting", "設定を保存できませんでした") { sharedStore.setUpdateCheckEnabled(enabled) }
                     }
                 },
                 onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
@@ -3386,7 +3386,7 @@ private fun CompatibilityAppContent(
                 onDismiss = { boardUpdateDialogOpen = false },
                 onExecute = { input ->
                     boardUpdateDialogOpen = false
-                    scope.launch {
+                    launchStoreSafely("board menu update", "板一覧を更新できませんでした") {
                         store.savePreference(COMPAT_BOARD_MENU_URL_KEY, input)
                         if (!isCompatBoardUpdateUrlAccepted(input)) {
                             boardUpdateNotice = "アドレスを確認して下さい"
@@ -3395,7 +3395,7 @@ private fun CompatibilityAppContent(
                             // new dialog retaining the invalid input.
                             yield()
                             boardUpdateDialogOpen = true
-                            return@launch
+                            return@launchStoreSafely
                         }
                         store.savePreference(
                             COMPAT_BOARD_MENU_URL_KEY,
@@ -5090,10 +5090,7 @@ private fun CompatCatalogScreen(
                     CompatFastScrollbar(
                         enabled = catalogFastScrollEnabled,
                         totalItems = displayedItems.size,
-                        firstVisibleItemIndex = catalogGridState.firstVisibleItemIndex,
-                        visibleItemCount = catalogGridState.layoutInfo.visibleItemsInfo.size,
-                        isScrollInProgress = catalogGridState.isScrollInProgress,
-                        onScrollToItem = catalogGridState::scrollToItem
+                        gridState = catalogGridState
                     )
                 } else {
                     LazyColumn(
@@ -5133,10 +5130,7 @@ private fun CompatCatalogScreen(
                     CompatFastScrollbar(
                         enabled = catalogFastScrollEnabled,
                         totalItems = displayedItems.size,
-                        firstVisibleItemIndex = catalogListState.firstVisibleItemIndex,
-                        visibleItemCount = catalogListState.layoutInfo.visibleItemsInfo.size,
-                        isScrollInProgress = catalogListState.isScrollInProgress,
-                        onScrollToItem = catalogListState::scrollToItem
+                        listState = catalogListState
                     )
                 }
             }
@@ -8165,10 +8159,7 @@ private fun CompatThreadScreen(
                             "thread", "threadFastScroll", "高速スクロールバー"
                         ) == "ON",
                         totalItems = visiblePosts.size + if (threadFooterLabel != null) 1 else 0,
-                        firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                        visibleItemCount = listState.layoutInfo.visibleItemsInfo.size,
-                        isScrollInProgress = listState.isScrollInProgress,
-                        onScrollToItem = listState::scrollToItem
+                        listState = listState
                     )
                 }
                 if (loading && snapshot == null) CompatLoadingIndicator(

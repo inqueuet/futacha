@@ -13,6 +13,7 @@ import com.valoser.futacha.shared.compat.CompatImagePhash
 import com.valoser.futacha.shared.util.currentIosPresentationController
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.autoreleasepool
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.useContents
 import kotlinx.coroutines.withContext
@@ -104,6 +105,7 @@ internal actual suspend fun compressCompatPostImage(
         coroutineContext.ensureActive()
         require(maxBytes > 0) { "画像サイズの上限が不正です" }
         require(attachment.bytes.isNotEmpty()) { "画像データが空です" }
+        require(attachment.bytes.size <= COMPAT_IOS_ENCODED_IMAGE_MAX_BYTES) { "画像データが大きすぎます" }
         val original = UIImage.imageWithData(attachment.bytes.toNSData())
             ?: error("画像を読み込めませんでした")
         require(original.size.useContents { width > 0.0 && height > 0.0 }) { "画像を読み込めませんでした" }
@@ -115,10 +117,10 @@ internal actual suspend fun compressCompatPostImage(
             1.0
         }
         var image = if (initialScale < 1.0) {
-            original.scaled(
-                max(1, (originalSize.first * initialScale).roundToInt()),
-                max(1, (originalSize.second * initialScale).roundToInt())
-            )
+            downsampleIosPostImage(
+                attachment.bytes,
+                max(1, (max(originalSize.first, originalSize.second) * initialScale).toInt())
+            ) ?: error("画像を縮小できませんでした")
         } else {
             original
         }
@@ -126,9 +128,11 @@ internal actual suspend fun compressCompatPostImage(
         var encoded: ByteArray? = null
         for (iteration in 0 until 18) {
             coroutineContext.ensureActive()
-            val candidateData = UIImageJPEGRepresentation(image, quality)
-                ?: error("画像を圧縮できませんでした")
-            val candidate = candidateData.toByteArrayOrNull(maxBytes.toLong())
+            val candidate = autoreleasepool {
+                val candidateData = UIImageJPEGRepresentation(image, quality)
+                    ?: error("画像を圧縮できませんでした")
+                candidateData.toByteArrayOrNull(maxBytes.toLong())
+            }
             if (candidate != null) {
                 encoded = candidate
                 break

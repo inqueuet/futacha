@@ -7,10 +7,8 @@ import coil3.decode.Decoder
 import coil3.decode.ImageSource
 import coil3.fetch.SourceFetchResult
 import coil3.request.Options
-import com.github.penfeizhou.animation.io.StreamReader
 import com.github.penfeizhou.animation.loader.ByteBufferLoader
 import com.github.penfeizhou.animation.webp.WebPDrawable
-import com.github.penfeizhou.animation.webp.decode.WebPParser
 import java.nio.ByteBuffer
 
 /** Animated WebP fallback for API 26/27, where Android ImageDecoder is absent. */
@@ -19,6 +17,7 @@ internal class CompatAwebpDecoder(
 ) : Decoder {
     override suspend fun decode(): DecodeResult {
         val bytes = source.source().use { it.readBoundedCompatAnimatedImageBytes() }
+        requireSafeCompatAnimatedImageCanvas(bytes, CompatAnimatedImageFormat.WEBP)
         val drawable = WebPDrawable(object : ByteBufferLoader() {
             override fun getByteBuffer(): ByteBuffer = ByteBuffer.wrap(bytes)
         }).apply {
@@ -33,11 +32,7 @@ internal class CompatAwebpDecoder(
             options: Options,
             imageLoader: ImageLoader,
         ): Decoder? {
-            val isAnimatedWebp = runCatching {
-                WebPParser.isAWebP(
-                    StreamReader(result.source.source().peek().inputStream())
-                )
-            }.getOrDefault(false)
+            val isAnimatedWebp = result.source.source().peek().use { hasCompatAnimatedWebpHeader(it) }
             return CompatAwebpDecoder(result.source).takeIf { isAnimatedWebp }
         }
     }

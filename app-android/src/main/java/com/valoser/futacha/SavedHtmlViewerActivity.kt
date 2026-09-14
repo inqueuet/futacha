@@ -1,6 +1,7 @@
 package com.valoser.futacha
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -10,6 +11,12 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.valoser.futacha.shared.media.normalizeFutabaArchiveApuViewLabelHtml
+import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 import java.io.ByteArrayOutputStream
 
 private const val MAX_SAVED_HTML_VIEWER_BYTES = 21 * 1024 * 1024
@@ -31,7 +38,7 @@ internal fun savedHtmlDocumentBaseUrl(uri: Uri): String {
 }
 
 /** Opens an exported/saved thread HTML file without enabling script or remote resources. */
-class SavedHtmlViewerActivity : Activity() {
+class SavedHtmlViewerActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private var sourceUri: Uri? = null
 
@@ -48,11 +55,6 @@ class SavedHtmlViewerActivity : Activity() {
             return
         }
         sourceUri = uri
-        val sanitizedHtml = readSavedHtmlDocument(uri)?.let(::sanitizeSavedHtmlDocument)
-        if (sanitizedHtml == null) {
-            finish()
-            return
-        }
         webView = WebView(this).apply {
             setBackgroundColor(Color.WHITE)
             settings.javaScriptEnabled = false
@@ -81,7 +83,17 @@ class SavedHtmlViewerActivity : Activity() {
                     }
                 }
             }
-            loadDataWithBaseURL(
+        }
+        setContentView(webView)
+        lifecycleScope.launch {
+            val sanitizedHtml = withContext(Dispatchers.IO) {
+                readSavedHtmlDocument(uri)?.let(::sanitizeSavedHtmlDocument)
+            }
+            if (sanitizedHtml == null) {
+                finish()
+                return@launch
+            }
+            webView.loadDataWithBaseURL(
                 savedHtmlDocumentBaseUrl(uri),
                 sanitizedHtml,
                 "text/html",
@@ -89,16 +101,16 @@ class SavedHtmlViewerActivity : Activity() {
                 null
             )
         }
-        setContentView(webView)
     }
 
-    private fun readSavedHtmlDocument(uri: Uri): String? {
-        return runCatching {
+    private suspend fun readSavedHtmlDocument(uri: Uri): String? {
+        return runSuspendCatchingPreservingCancellation {
             contentResolver.openInputStream(uri)?.use { input ->
                 val output = ByteArrayOutputStream()
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 var totalBytes = 0
                 while (true) {
+                    coroutineContext.ensureActive()
                     val read = input.read(buffer)
                     if (read == -1) break
                     if (read == 0) continue

@@ -35,7 +35,7 @@ import kotlinx.cinterop.toKString
 import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.value
 
-private const val MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES = 32 * 1024 * 1024
+internal const val MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES = 32 * 1024 * 1024
 private const val MAX_COMPATIBILITY_DATABASE_OVERLAY_ROWS = 20_000
 private const val MAX_COMPATIBILITY_DATABASE_TAB_KEY_BYTES = 4 * 1024
 private const val MAX_COMPATIBILITY_DATABASE_ANCHOR_BYTES = 64 * 1024

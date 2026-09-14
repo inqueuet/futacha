@@ -22,10 +22,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -522,6 +525,39 @@ internal fun CompatBidirectionalPullRefresh(
             content = content
         )
     }
+}
+
+// Read layout state inside a small restart scope, and not at all when disabled.
+// Reading layoutInfo in the catalog/thread caller invalidates its entire screen
+// on every scroll frame, even if the first row and visible count did not change.
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    totalItems: Int,
+    listState: LazyListState
+) {
+    if (!enabled) return
+    val metrics by remember(listState) {
+        derivedStateOf {
+            Triple(listState.firstVisibleItemIndex, listState.layoutInfo.visibleItemsInfo.size, listState.isScrollInProgress)
+        }
+    }
+    CompatFastScrollbar(true, totalItems, metrics.first, metrics.second, metrics.third, listState::scrollToItem)
+}
+
+@Composable
+internal fun BoxScope.CompatFastScrollbar(
+    enabled: Boolean,
+    totalItems: Int,
+    gridState: LazyGridState
+) {
+    if (!enabled) return
+    val metrics by remember(gridState) {
+        derivedStateOf {
+            Triple(gridState.firstVisibleItemIndex, gridState.layoutInfo.visibleItemsInfo.size, gridState.isScrollInProgress)
+        }
+    }
+    CompatFastScrollbar(true, totalItems, metrics.first, metrics.second, metrics.third, gridState::scrollToItem)
 }
 
 @Composable

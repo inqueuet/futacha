@@ -23,24 +23,22 @@ internal class CompatFallbackGifDecoder(
     private val options: Options
 ) : Decoder {
     override suspend fun decode(): DecodeResult {
+        // Bound the input before scanning frame descriptors: peeking an
+        // arbitrarily long extension block can otherwise buffer the whole file.
+        val bytes = source.source().use { it.readBoundedCompatAnimatedImageBytes() }
+        requireSafeCompatAnimatedImageCanvas(bytes, CompatAnimatedImageFormat.GIF)
+        val fileSystem = source.fileSystem
+        fun freshSource() = ImageSource(Buffer().write(bytes), fileSystem)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            return GifDecoder(source, options).decode()
+            return freshSource().use { GifDecoder(it, options).decode() }
         }
-        if (!hasMultipleGifFrames(source.source().peek())) {
-            return AnimatedImageDecoder(source, options).decode()
+        if (!hasMultipleGifFrames(Buffer().write(bytes))) {
+            return freshSource().use { AnimatedImageDecoder(it, options).decode() }
         }
 
-        val bytes = source.source().use { it.readByteArray() }
-        val fileSystem = source.fileSystem
-        val primary = AnimatedImageDecoder(
-            ImageSource(Buffer().write(bytes), fileSystem),
-            options
-        ).decode()
+        val primary = freshSource().use { AnimatedImageDecoder(it, options).decode() }
         if (primary.image !is BitmapImage) return primary
-        return GifDecoder(
-            ImageSource(Buffer().write(bytes), fileSystem),
-            options
-        ).decode()
+        return freshSource().use { GifDecoder(it, options).decode() }
     }
 
     internal class Factory : Decoder.Factory {

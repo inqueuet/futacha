@@ -61,33 +61,35 @@ private enum SavedHtmlUITestFixture {
 private struct SavedHtmlWebView: UIViewRepresentable {
     let url: URL
 
-    private func sanitizedHTML() -> String? {
-        guard var html = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let rules: [(String, String)] = [
-            (
-                #"(?is)(<a\b[^>]{0,1000}>\s*(?:fu|f)\d+\.(?:gif|jpe?g|jpe|png|webp|bmp|apng|avif|webm|mp4|m4v|mov|mkv|avi|ts|flv)\s*</a\s*>)\s*<span\b[^>]{0,1000}>\s*(?:\[|［|&#0*91;|&#x0*5b;|&lbrack;)\s*見る\s*(?:\]|］|&#0*93;|&#x0*5d;|&rbrack;)\s*</span\s*>"#,
-                "$1"
-            ),
-            (
-                #"(?i)((?:fu|f)\d+\.(?:gif|jpe?g|jpe|png|webp|bmp|apng|avif|webm|mp4|m4v|mov|mkv|avi|ts|flv))(\s*</a\s*>)?\s*(?:\[|［|&#0*91;|&#x0*5b;|&lbrack;)\s*見る\s*(?:\]|］|&#0*93;|&#x0*5d;|&rbrack;)(?=\s*(?:</a\s*>|<br\b[^>]*>|</?(?:font|span|blockquote|div|p|td)\b[^>]*>|$))"#,
-                "$1$2"
-            ),
-            (#"(?is)<script\b[^>]*>.*?</script\s*>"#, ""),
-            (#"(?is)<(?:iframe|object|embed)\b[^>]*>.*?</(?:iframe|object|embed)\s*>"#, ""),
-            (#"(?i)\b(src|href)\s*=\s*(['\"])\s*(?:https?:)?//.*?\2"#, "$1=$2#$2"),
-            (#"(?i)url\(\s*(['\"]?)(?:https?:)?//.*?\1\s*\)"#, "url()")
-        ]
-        for (pattern, replacement) in rules {
-            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
-            let range = NSRange(html.startIndex..<html.endIndex, in: html)
-            html = expression.stringByReplacingMatches(
-                in: html,
-                range: range,
-                withTemplate: replacement
-            )
+    final class Coordinator {
+        private var worker: Task<String?, Never>?
+        private var loadTask: Task<Void, Never>?
+
+        func load(_ url: URL, into view: WKWebView) {
+            cancel()
+            let worker = Task.detached(priority: .userInitiated) {
+                try? SavedHtmlDocumentLoader.load(url)
+            }
+            self.worker = worker
+            loadTask = Task { @MainActor [weak view] in
+                let html = await worker.value
+                guard !Task.isCancelled, let view else { return }
+                view.loadHTMLString(
+                    html ?? "<html><meta charset='UTF-8'><body>保存ファイルを読み込めませんでした。</body></html>",
+                    baseURL: url.deletingLastPathComponent()
+                )
+            }
         }
-        return html
+
+        func cancel() {
+            loadTask?.cancel()
+            worker?.cancel()
+        }
+
+        deinit { cancel() }
     }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -95,13 +97,17 @@ private struct SavedHtmlWebView: UIViewRepresentable {
         preferences.allowsContentJavaScript = false
         configuration.defaultWebpagePreferences = preferences
         let view = WKWebView(frame: .zero, configuration: configuration)
-        if let html = sanitizedHTML() {
-            view.loadHTMLString(html, baseURL: url.deletingLastPathComponent())
-        }
+        context.coordinator.load(url, into: view)
         return view
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        coordinator.cancel()
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+    }
 }
 
 private struct SavedHtmlDocumentView: View {

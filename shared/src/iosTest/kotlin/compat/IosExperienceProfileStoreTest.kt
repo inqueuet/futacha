@@ -10,6 +10,8 @@ import com.valoser.futacha.shared.model.ThreadPage
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repo.mock.FakeBoardRepository
 import com.valoser.futacha.shared.util.createFileSystem
+import com.valoser.futacha.shared.ui.compat.COMPAT_USED_VERSION_KEY
+import com.valoser.futacha.shared.ui.compat.consumeCompatChangeLogUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
@@ -23,6 +25,72 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class IosExperienceProfileStoreTest {
+    @Test
+    fun oversizedUnlimitedCacheEvictsOldBodiesAndPreservesUserDataAcrossReopen() = runBlocking {
+        val fileSystem = createFileSystem()
+        fileSystem.deleteRecursively("compatibility").getOrThrow()
+        var now = 1L
+        try {
+            val store = IosCompatibilityStore(fileSystem, nowMillis = { now++ })
+            store.initialize()
+            store.savePreference(COMPAT_THREAD_CACHE_PREFERENCE_KEY, "無制限")
+            val boardUrl = "https://may.2chan.net/b/"
+            val boardKey = compatBoardKey(boardUrl)
+            store.upsertBoard(CompatBoard(boardKey, "虹裏", boardUrl, boardUrl, 0))
+            val tabs = (0..2).map { index ->
+                val url = "${boardUrl}res/${123 + index}.htm"
+                CompatTab(compatTabKey(url), url, url, boardKey, "虹裏", "${123 + index}", "thread $index",
+                    insertedAtEpochMillis = now++, contentUpdatedAtEpochMillis = now)
+            }
+            tabs.forEach { store.openTab(it, null) }
+            val draft = CompatReplyDraft(tabs.first().key, comment = "失ってはいけない下書き", updatedAtEpochMillis = 1L)
+            store.saveDraft(draft)
+            val body = "x".repeat(12 * 1024 * 1024)
+            repeat(3) { index ->
+                assertTrue(store.saveThreadSnapshot(CompatThreadSnapshot(
+                    tabKey = tabs[index].key, revision = 1L, fetchedAtEpochMillis = now,
+                    posts = listOf(CompatPostSnapshot(0, "$index", timestamp = "now", messageHtml = body))
+                )))
+            }
+            store.savePreference("compat.stability-setting", "persisted")
+
+            val reopened = IosCompatibilityStore(fileSystem)
+            reopened.initialize()
+            assertNull(reopened.loadThreadSnapshot(tabs.first().key))
+            assertTrue(body == reopened.loadThreadSnapshot(tabs.last().key)?.posts?.single()?.messageHtml,
+                "The recent body must survive cache eviction and reopen")
+            assertEquals(draft, reopened.loadDraft(draft.tabKey))
+            assertEquals("persisted", reopened.loadPreference("compat.stability-setting"))
+            assertEquals("無制限", reopened.loadPreference(COMPAT_THREAD_CACHE_PREFERENCE_KEY))
+            assertTrue(reopened.threadSnapshotCacheUsageBytes() < MAX_COMPATIBILITY_DATABASE_PAYLOAD_BYTES)
+        } finally {
+            fileSystem.deleteRecursively("compatibility").getOrThrow()
+        }
+    }
+
+    @Test
+    fun changeLogUpdateIsConsumedOnceAcrossStoreRecreation() = runBlocking {
+        val fileSystem = createFileSystem()
+        fileSystem.deleteRecursively("compatibility").getOrThrow()
+        try {
+            val store = IosCompatibilityStore(fileSystem)
+            assertFalse(consumeCompatChangeLogUpdate(store, "10.6"))
+            assertEquals("10.6", store.loadPreference(COMPAT_USED_VERSION_KEY))
+            assertTrue(consumeCompatChangeLogUpdate(store, "10.8"))
+
+            val reopened = IosCompatibilityStore(fileSystem)
+            reopened.initialize()
+            assertEquals("10.8", reopened.loadPreference(COMPAT_USED_VERSION_KEY))
+            assertFalse(consumeCompatChangeLogUpdate(reopened, "10.8"))
+            assertFalse(consumeCompatChangeLogUpdate(reopened, "10.8.0"))
+            assertFalse(consumeCompatChangeLogUpdate(reopened, "10.6"))
+            assertFalse(consumeCompatChangeLogUpdate(reopened, "10.8"))
+            assertTrue(consumeCompatChangeLogUpdate(reopened, "10.9"))
+        } finally {
+            fileSystem.deleteRecursively("compatibility").getOrThrow()
+        }
+    }
+
     @Test
     fun backgroundExistenceCheckUsesLightweightProbeAndPropagatesCancellation() = runBlocking {
         val fileSystem = createFileSystem()
