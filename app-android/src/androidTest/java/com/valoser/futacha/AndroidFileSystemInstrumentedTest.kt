@@ -93,6 +93,30 @@ class AndroidFileSystemInstrumentedTest {
     }
 
     @Test
+    fun streamsSavedMediaFromPathAndFileProviderUriWithoutLoadingItWhole() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val source = "$privateBasePath/source.webm"
+        val payload = ByteArray(200_003) { (it % 251).toByte() }
+        fileSystem.writeBytes(source, payload).getOrThrow()
+        val absolute = fileSystem.resolveAbsolutePath(source)
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(absolute))
+        listOf(absolute, uri.toString()).forEachIndexed { index, path ->
+            val target = "$privateBasePath/copy$index.webm"
+            fileSystem.readByteStream(path) { input ->
+                fileSystem.writeByteStream(target) { output ->
+                    val buffer = ByteArray(1023)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                    }
+                }.getOrThrow()
+            }.getOrThrow()
+            org.junit.Assert.assertArrayEquals(payload, fileSystem.readBytes(target).getOrThrow())
+        }
+    }
+
+    @Test
     fun saveLocationPath_roundTripsWriteReadAndDelete() {
         val base = SaveLocation.Path(privateBasePath)
 

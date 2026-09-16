@@ -2650,6 +2650,364 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(persistedThreadVolume.waitForExistence(timeout: 5), "The thread volume choice was not restored.")
     }
 
+    // Seed the simulator library with the generated camera.heic / camera.mov fixtures.
+    // These checks require a real selection and never submit a network post.
+    func testFutachaReplyAcceptsPhotoAndCameraVideo() {
+        verifyPostingMedia(compat: false, build: false)
+    }
+
+    func testFutachaNewThreadAcceptsPhotoAndCameraVideo() {
+        verifyPostingMedia(compat: false, build: true)
+    }
+
+    func testCompatReplyAcceptsPhotoAndCameraVideo() {
+        verifyPostingMedia(compat: true, build: false)
+    }
+
+    func testCompatNewThreadAcceptsPhotoAndCameraVideo() {
+        verifyPostingMedia(compat: true, build: true)
+    }
+
+    private func verifyPostingMedia(compat: Bool, build: Bool) {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", compat ? "toshiaki_compat" : "futacha",
+            "-update_check_enabled", "false", "-commonUsedVersion", "11.0",
+            "-attachment_picker_preference", "MEDIA"
+        ]
+        app.launch()
+        if compat {
+            let board = compatibilityBoardCardAfterUnwinding(in: app)
+            XCTAssertTrue(board.waitForExistence(timeout: 15))
+            board.tap()
+            XCTAssertTrue(app.otherElements["compat-catalog-grid"].waitForExistence(timeout: 10))
+        } else {
+            ensureCompactHeaderTutorialBoard(in: app).tap()
+        }
+        if build {
+            app.buttons[compat ? "スレ立て" : "スレッド作成"].firstMatch.tap()
+        } else {
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+            let reply = app.buttons[compat ? "書き込み" : "返信"].firstMatch
+            XCTAssertTrue(reply.waitForExistence(timeout: 10))
+            reply.tap()
+        }
+        XCTAssertTrue(app.textViews[compat ? "compat-post-comment-field" : "コメント"].waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+        for video in [false, true] {
+            if compat && video {
+                // The toolbar changes its label while an attachment is present.
+                app.buttons["添付削除"].firstMatch.tap()
+            }
+            openPostingLibrary(in: app, compat: compat, video: video)
+            let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+            XCTAssertTrue(photo.waitForExistence(timeout: 15), "Seed the simulator with image and MOV fixtures before running.")
+            let cancel = app.buttons["Cancel"].firstMatch
+            XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+            cancel.tap()
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: photo)], timeout: 10), .completed)
+            openPostingLibrary(in: app, compat: compat, video: video)
+            XCTAssertTrue(photo.waitForExistence(timeout: 15))
+            // Interactive dismissal must release the same picker session as Cancel.
+            let photoBar = app.navigationBars.firstMatch.frame
+            // Avoid dragging the Photos/Collections segmented control itself.
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: photoBar.maxX - 16, dy: photoBar.midY))
+                .press(forDuration: 0.01,
+                       thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.9)),
+                       withVelocity: .fast, thenHoldForDuration: 0)
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: photo)], timeout: 10), .completed)
+            openPostingLibrary(in: app, compat: compat, video: video)
+            XCTAssertTrue(photo.waitForExistence(timeout: 15))
+            // iOS 26's remote Photos images can report not-hittable despite
+            // visible frames; use their displayed coordinates for the tap.
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: photo.frame.midX, dy: photo.frame.midY)).tap()
+            let name = app.descendants(matching: .any).matching(NSPredicate(format: "label MATCHES %@", video ? ".*\\.mp4" : ".*\\.jpe?g")).firstMatch
+            XCTAssertTrue(name.waitForExistence(timeout: 30), "The selected camera media did not become a posting attachment.")
+            XCTAssertFalse(photo.exists, "The camera roll remained open after selection.")
+            attachCompactHeader(app, name: "attachment-\(compat ? "compat" : "futacha")-\(build ? "build" : "reply")-\(video ? "video" : "image")")
+        }
+    }
+
+    private func openPostingLibrary(in app: XCUIApplication, compat: Bool, video: Bool) {
+        let button = app.buttons[compat ? "添付画像" : (video ? "動画を選択" : "画像を選択")].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        // Let the composer finish its keyboard/layout transition before tapping.
+        Thread.sleep(forTimeInterval: 0.5)
+        button.tap()
+        if compat {
+            XCTAssertTrue(app.buttons["フォトライブラリ"].waitForExistence(timeout: 5))
+            app.buttons["フォトライブラリ"].tap()
+            XCTAssertTrue(app.buttons[video ? "動画" : "写真"].waitForExistence(timeout: 5))
+            app.buttons[video ? "動画" : "写真"].tap()
+        }
+    }
+
+    func testFutachaCompactHeaderShrinksAndPersistsInFlatMode() {
+        verifyCompactHeader(mode: "Flat")
+    }
+
+    func testFutachaCompactHeaderShrinksAndPersistsInTreeMode() {
+        verifyCompactHeader(mode: "Tree")
+    }
+
+    private func verifyCompactHeader(mode: String) {
+        let app = makeApplication()
+        app.launchArguments += [
+            "-experience.active_profile", "futacha", "-update_check_enabled", "false",
+            "-commonUsedVersion", "11.0",
+            "-thread_display_mode", mode, "-compact_thread_header_enabled", "false"
+        ]
+        app.launch()
+        openCompactHeaderTutorial(in: app)
+        let bar = app.otherElements["futacha-thread-top-bar"].firstMatch
+        let header = app.otherElements["futacha-post-header-1364612020"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 10))
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        let originalBarHeight = bar.frame.height
+        let originalPostHeight = header.frame.height
+        attachCompactHeader(app, name: "compact-\(mode)-off")
+        toggleCompactHeader(in: app)
+        XCTAssertGreaterThanOrEqual(originalBarHeight - bar.frame.height, 15)
+        let compactBarHeight = bar.frame.height
+        XCTAssertLessThan(header.frame.height, originalPostHeight)
+        let compactPostHeight = header.frame.height
+        attachCompactHeader(app, name: "compact-\(mode)-on")
+        XCTAssertTrue(app.buttons["スレ内検索"].firstMatch.isHittable)
+        app.buttons["スレ内検索"].firstMatch.tap()
+        let closeSearch = app.buttons["検索を閉じる"].firstMatch
+        XCTAssertTrue(closeSearch.waitForExistence(timeout: 5))
+        closeSearch.tap()
+        XCTAssertEqual(bar.frame.height, compactBarHeight, accuracy: 1)
+
+        // Drop the initial argument-domain override, then read the actual saved value.
+        app.terminate()
+        if let index = app.launchArguments.firstIndex(of: "-compact_thread_header_enabled") {
+            app.launchArguments.removeSubrange(index...(index + 1))
+        }
+        app.launch()
+        openCompactHeaderTutorial(in: app)
+        XCTAssertEqual(bar.frame.height, compactBarHeight, accuracy: 1)
+        XCTAssertEqual(header.frame.height, compactPostHeight, accuracy: 1)
+        toggleCompactHeader(in: app)
+        XCTAssertEqual(bar.frame.height, originalBarHeight, accuracy: 1)
+        app.buttons["最上部"].firstMatch.tap()
+        Thread.sleep(forTimeInterval: 0.8)
+        // The tutorial randomizes ID/saidane/image variants on process launch,
+        // so normal metadata can legitimately gain or lose a wrapped line.
+        XCTAssertGreaterThan(header.frame.height, compactPostHeight)
+        attachCompactHeader(app, name: "compact-\(mode)-restored")
+    }
+
+    private func ensureCompactHeaderTutorialBoard(in app: XCUIApplication) -> XCUIElement {
+        let board = boardCard(in: app, url: "https://www.example.com/t/futaba.php")
+        if !board.waitForExistence(timeout: 3) {
+            app.buttons["メニュー"].tap()
+            app.buttons["新規追加"].tap()
+            let name = app.textViews["板の名前"]
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            name.tap()
+            for character in "Tutorial" { name.typeText(String(character)) }
+            let url = app.textViews["板のURL"]
+            url.tap()
+            for character in "https://www.example.com/t/futaba.php" { url.typeText(String(character)) }
+            app.buttons["追加"].tap()
+        }
+        XCTAssertTrue(board.waitForExistence(timeout: 15))
+        return board
+    }
+
+    private func openCompactHeaderTutorial(in app: XCUIApplication) {
+        ensureCompactHeaderTutorialBoard(in: app).tap()
+        let thread = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        thread.tap()
+        let top = app.buttons["最上部"].firstMatch
+        XCTAssertTrue(top.waitForExistence(timeout: 10))
+        top.tap()
+        Thread.sleep(forTimeInterval: 0.8)
+    }
+
+    private func toggleCompactHeader(in app: XCUIApplication) {
+        app.buttons["その他"].firstMatch.tap()
+        let settings = app.buttons.matching(NSPredicate(format: "label == %@", "設定"))
+            .allElementsBoundByIndex.last { $0.isHittable }
+        XCTAssertNotNil(settings)
+        settings?.tap()
+        let display = app.staticTexts["表示"].firstMatch
+        XCTAssertTrue(display.waitForExistence(timeout: 10))
+        display.tap()
+        let toggle = app.descendants(matching: .any)["compact-thread-header-switch"].firstMatch
+        // Compose exposes the expanded section's offscreen children with an
+        // empty activation point; asking isHittable for those fails in XCTest.
+        for _ in 0..<8 {
+            if toggle.exists, !toggle.frame.isEmpty,
+               toggle.frame.minY > 84, toggle.frame.maxY < app.frame.height - 20 { break }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+                .press(forDuration: 0.1,
+                       thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)),
+                       withVelocity: .slow, thenHoldForDuration: 0.6)
+        }
+        XCTAssertTrue(toggle.exists)
+        XCTAssertGreaterThan(toggle.frame.minY, 84)
+        XCTAssertLessThan(toggle.frame.maxY, app.frame.height - 20)
+        Thread.sleep(forTimeInterval: 1.5)
+        attachCompactHeader(app, name: "compact-settings-before-tap")
+        let point = toggle.frame
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.midX, dy: point.midY)).tap()
+        Thread.sleep(forTimeInterval: 0.8)
+        attachCompactHeader(app, name: "compact-settings-after-tap")
+        let back = app.buttons.matching(NSPredicate(format: "label == %@", "戻る"))
+            .allElementsBoundByIndex.last { $0.isHittable }
+        XCTAssertNotNil(back)
+        back?.tap()
+        XCTAssertTrue(app.otherElements["futacha-thread-top-bar"].firstMatch.waitForExistence(timeout: 10))
+    }
+
+    private func attachCompactHeader(_ app: XCUIApplication, name: String) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testCompatHeaderIgnoresFutachaOnlyCompactPreference() {
+        var heights: [CGFloat] = []
+        for value in ["false", "true"] {
+            let app = makeApplication()
+            app.launchArguments += [
+                "-experience.active_profile", "toshiaki_compat", "-update_check_enabled", "false",
+                "-commonUsedVersion", "11.0",
+                "-futacha.issue78.archive_fixture", "-compact_thread_header_enabled", value
+            ]
+            app.launch()
+            let body = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "りんみ")).firstMatch
+            XCTAssertTrue(body.waitForExistence(timeout: 20))
+            heights.append(body.frame.height)
+            XCTAssertFalse(app.otherElements["futacha-thread-top-bar"].exists)
+            attachCompactHeader(app, name: "compat-global-compact-\(value)")
+            app.terminate()
+        }
+        XCTAssertEqual(heights[0], heights[1], accuracy: 1)
+    }
+
+    func testFutachaQuoteSelectionHasBulkActions() {
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", "futacha", "-update_check_enabled", "false"]
+        app.launch()
+        let board = boardCard(in: app, url: "https://www.example.com/t/futaba.php")
+        if !board.waitForExistence(timeout: 3) {
+            // Compatibility fixture imports can leave only the remote board registered.
+            app.buttons["メニュー"].tap()
+            app.buttons["新規追加"].tap()
+            let name = app.textViews["板の名前"]
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            name.tap()
+            for character in "Tutorial" { name.typeText(String(character)) }
+            let url = app.textViews["板のURL"]
+            url.tap()
+            for character in "https://www.example.com/t/futaba.php" { url.typeText(String(character)) }
+            XCTAssertEqual(url.value as? String, "https://www.example.com/t/futaba.php")
+            app.buttons["追加"].tap()
+        }
+        XCTAssertTrue(board.waitForExistence(timeout: 10))
+        board.tap()
+        let thread = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        thread.tap()
+        let top = app.buttons["最上部"].firstMatch
+        XCTAssertTrue(top.waitForExistence(timeout: 10))
+        top.tap()
+        let post = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "No.")).firstMatch
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.press(forDuration: 1.0)
+        let quote = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "引用")).firstMatch
+        XCTAssertTrue(quote.waitForExistence(timeout: 5))
+        quote.tap()
+        verifyQuoteBulkActions(in: app, confirmLabel: "コピー", screenshotName: "futacha-quote-bulk-actions")
+    }
+
+    func testCompatQuoteSelectionHasBulkActions() {
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", "toshiaki_compat", "-futacha.issue78.archive_fixture", "-update_check_enabled", "false"]
+        app.launch()
+        let body = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "りんみ")).firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 20))
+        body.press(forDuration: 1.0)
+        let reply = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "返信")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 5))
+        reply.tap()
+        verifyQuoteBulkActions(in: app, confirmLabel: "上書き", screenshotName: "compat-quote-bulk-actions")
+    }
+
+    private func verifyQuoteBulkActions(in app: XCUIApplication, confirmLabel: String, screenshotName: String) {
+        let all = app.buttons["全選択"].firstMatch
+        let clear = app.buttons["全解除"].firstMatch
+        let confirm = app.buttons[confirmLabel].firstMatch
+        XCTAssertTrue(all.waitForExistence(timeout: 5))
+        XCTAssertTrue(all.isHittable)
+        all.tap()
+        XCTAssertFalse(all.isEnabled)
+        XCTAssertTrue(clear.isEnabled)
+        XCTAssertTrue(confirm.isEnabled)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = screenshotName
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        clear.tap()
+        XCTAssertTrue(all.isEnabled)
+        XCTAssertFalse(clear.isEnabled)
+        XCTAssertFalse(confirm.isEnabled)
+        app.buttons["キャンセル"].firstMatch.tap()
+    }
+
+    func testSavedDocumentsAreVisibleInFiles() throws {
+#if targetEnvironment(simulator)
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", "futacha", "-commonUsedVersion", "11.0", "-update_check_enabled", "false"]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        let board = boardCard(in: app, url: "https://www.example.com/t/futaba.php")
+        XCTAssertTrue(board.waitForExistence(timeout: 15))
+        board.tap()
+        let thread = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        thread.tap()
+        let save = app.buttons["保存"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        save.tap()
+        XCTAssertTrue(app.staticTexts["保存結果"].waitForExistence(timeout: 90), "The real thread save must finish before looking for its files.")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "保存先:")).firstMatch.exists)
+
+        let files = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
+        files.launch()
+        let browse = files.tabBars.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "ブラウズ"])).firstMatch
+        if browse.waitForExistence(timeout: 10) { browse.tap() }
+        let local = files.staticTexts.matching(NSPredicate(format: "label IN %@", ["On My iPhone", "このiPhone内"])).firstMatch
+        if !local.waitForExistence(timeout: 5) {
+            let back = files.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "ブラウズ"])).firstMatch
+            if back.exists { back.tap() }
+        }
+        XCTAssertTrue(local.waitForExistence(timeout: 10))
+        local.tap()
+        let folder = files.staticTexts["futacha"].firstMatch
+        let tree = XCTAttachment(string: files.debugDescription)
+        tree.name = "save-audit-files-app-folders"
+        tree.lifetime = .keepAlways
+        add(tree)
+        XCTAssertTrue(folder.waitForExistence(timeout: 10), "Files must expose Futacha Documents so saved files can be found.")
+        folder.tap()
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "save-audit-futacha-documents"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+#else
+        throw XCTSkip("Run this navigation check on the dedicated Simulator.")
+#endif
+    }
+
     func testFutachaSavedThreadsDestinationIsReachable() {
         let app = makeApplication()
         app.launchArguments += [

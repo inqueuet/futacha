@@ -564,6 +564,32 @@ class HttpBoardApiSupportTest {
     }
 
     @Test
+    fun postingAttachmentsKeepTheirBytesNameAndMimeInNewThreadAndReplyMultipart() {
+        val types = mapOf("jpg" to "image/jpeg", "png" to "image/png", "gif" to "image/gif", "webp" to "image/webp", "mp4" to "video/mp4", "webm" to "video/webm")
+        for (threadId in listOf(null, "777")) {
+            for ((extension, mime) in types) {
+                val bytes = byteArrayOf(1, 2, 0, 127, -1)
+                val parts = buildHttpBoardApiPostFormData(
+                    logTag = "HttpBoardApiTest", threadId = threadId,
+                    name = "", email = "", subject = "test", comment = "test", password = "1234",
+                    imageFile = bytes, imageFileName = "camera.$extension", textOnly = false,
+                    postingConfig = HttpBoardApiPostingConfig(
+                        encoding = HttpBoardApiPostEncoding.UTF8, chrencValue = "UTF-8",
+                        hashValue = "hash", ptuaValue = "ptua", maxFileSizeBytes = 8_192_000,
+                        supportedExtensions = types.keys
+                    )
+                )
+                val upload = parts.first { it.name == "upfile" } as PartData.BinaryItem
+                assertEquals(mime, upload.headers["Content-Type"])
+                assertTrue(upload.headers.getAll("Content-Disposition").orEmpty().any { it.contains("camera.$extension") })
+                assertTrue(bytes.contentEquals(upload.provider().readByteArray()))
+                val fields = parts.filterIsInstance<PartData.FormItem>().associate { it.name to it.value }
+                assertEquals(threadId, fields["resto"])
+            }
+        }
+    }
+
+    @Test
     fun postingHelpers_createMultipartContract_omitsRestoAndSendsExplicitEmptyUpload() {
         val formData = buildHttpBoardApiPostFormData(
             logTag = "HttpBoardApiTest",

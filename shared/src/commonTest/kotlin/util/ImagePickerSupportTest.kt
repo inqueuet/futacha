@@ -43,6 +43,16 @@ class ImagePickerSupportTest {
         assertNull(normalizePickedImageData(ImageData(ByteArray(0), "empty.png"), maxBytes = 3))
     }
 
+    @Test
+    fun callerLimitAllowsCompressionCandidatesAndStillRejectsOverflow() {
+        val largeImage = ByteArray(MAX_PICKED_IMAGE_BYTES.toInt() + 1) { 7 }
+        assertNull(buildPickedImageData(largeImage, "camera.jpg"))
+        val picked = buildPickedImageData(largeImage, "camera.jpg", maxBytes = 32_000_000)
+        assertTrue(picked != null)
+        assertTrue(picked.bytes === largeImage)
+        assertNull(buildPickedImageData(byteArrayOf(1, 2, 3), "video.mp4", maxBytes = 2))
+    }
+
     private fun assertPickedImageData(
         expectedBytes: ByteArray,
         expectedFileName: String,

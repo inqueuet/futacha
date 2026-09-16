@@ -80,7 +80,11 @@ private suspend fun readImageDataFromUriWithinTimeout(
                     totalRead += bytesRead
                 }
 
-                if (totalRead == expectedSize) output else output.copyOf(totalRead)
+                if (totalRead != expectedSize || runInterruptible { inputStream.read() } != -1) {
+                    Logger.w("ImagePicker", "Attachment length differs from provider metadata")
+                    return null
+                }
+                output
             } else {
                 val buffer = java.io.ByteArrayOutputStream()
                 val chunk = ByteArray(8192)
@@ -118,7 +122,7 @@ private suspend fun readImageDataFromUriWithinTimeout(
         }
 
         // FIX: 最終サイズチェック
-        if (bytes.size > maxFileSize) {
+        if (!isPickedImagePayloadSizeValid(bytes.size.toLong(), maxFileSize)) {
             Logger.w("ImagePicker", "Image file too large after reading: ${bytes.size / 1024}KB")
             return null
         }
@@ -130,7 +134,11 @@ private suspend fun readImageDataFromUriWithinTimeout(
                 val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                 if (nameIndex >= 0) cursor.getString(nameIndex) else null
             } else null
-        } ?: "image.jpg"
+        }?.takeIf { it.isNotBlank() } ?: run {
+            val extension = android.webkit.MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(context.contentResolver.getType(uri).orEmpty())
+            if (extension.isNullOrBlank()) "attachment" else "attachment.$extension"
+        }
 
         Logger.d("ImagePicker", "Successfully read image: $fileName (${bytes.size / 1024}KB)")
         ImageData(bytes, fileName)

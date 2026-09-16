@@ -74,6 +74,19 @@ private class JvmFileSystem : FileSystem {
         file.readBytes()
     }
 
+    override suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> =
+        runSuspendCatchingPreservingCancellation {
+            validateFileSystemPath(path)
+            File(resolveAbsolutePath(path)).inputStream().use { input ->
+                block(object : FileReadSource {
+                    override suspend fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                        coroutineContext.ensureActive()
+                        return input.read(bytes, offset, length)
+                    }
+                })
+            }
+        }
+
     override suspend fun readString(path: String): Result<String> = runCatching {
         validateFileSystemPath(path)
         val file = File(resolveAbsolutePath(path))

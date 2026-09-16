@@ -156,6 +156,7 @@ internal fun ThreadTreeContent(
     compactHeader: Boolean = false,
     searchScrollRequest: ThreadPostScrollRequest? = null,
     onDisplayedPostsChanged: (ThreadDisplayedPostsLayout) -> Unit = {},
+    newPostIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     val computedData by produceState(
@@ -182,6 +183,12 @@ internal fun ThreadTreeContent(
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
     val hasAiHiddenPostsSummary = aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }
+    val firstNewPostIndex = remember(displayedPosts, newPostIds) {
+        displayedPosts.indexOfFirst { it.id in newPostIds }
+    }
+    val newPostCount = remember(displayedPosts, newPostIds) {
+        displayedPosts.count { it.id in newPostIds }
+    }
     val itemsBeforePosts = countThreadContentItemsBeforePosts(
         page = page,
         embeddedHtml = embeddedHtml,
@@ -299,6 +306,9 @@ internal fun ThreadTreeContent(
                         onPostLongPress = onPostLongPress
                     )
                     val indent = (node.depth * 18).coerceAtMost(108).dp
+                    if (index == firstNewPostIndex) {
+                        ThreadNewRepliesDivider(newPostCount)
+                    }
                     if (isAiHidden) {
                         AiHiddenPostPlaceholder(
                             postId = post.id,

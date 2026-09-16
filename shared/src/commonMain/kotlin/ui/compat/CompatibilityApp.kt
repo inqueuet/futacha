@@ -339,6 +339,7 @@ import com.valoser.futacha.shared.compat.compatReferencePostContextLabels
 import com.valoser.futacha.shared.compat.compatQuickQuoteText
 import com.valoser.futacha.shared.compat.compatMissingQuoteNotice
 import com.valoser.futacha.shared.compat.hasCompatTabToolbarUpdate
+import com.valoser.futacha.shared.compat.resolveCompatThreadBottomScrollIndex
 import com.valoser.futacha.shared.compat.compatQuoteSelection
 import com.valoser.futacha.shared.compat.compatGoogleSearchTerms
 import com.valoser.futacha.shared.compat.extractCompatPosts
@@ -389,6 +390,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.model.normalizeCatalogSearchText
 import com.valoser.futacha.shared.model.Post
 import com.valoser.futacha.shared.model.SavePhase
+import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.model.SaveProgress
 import com.valoser.futacha.shared.model.SavedThread
 import com.valoser.futacha.shared.model.toThreadPage
@@ -3312,6 +3314,7 @@ private fun CompatibilityAppContent(
                 } else {
                     com.valoser.futacha.shared.ui.board.SavedThreadsScreen(
                         repository = savedRepository,
+                        recoverUnindexedThreads = true,
                         onThreadClick = ::openSavedThread,
                         onBack = { dispatch(CompatibilityEvent.Back) }
                     )
@@ -6152,7 +6155,8 @@ private fun CompatThreadScreen(
     var savingPage by remember(tab.key) { mutableStateOf(false) }
     var pageSaveJob by remember(tab.key) { mutableStateOf<Job?>(null) }
     var pageSaveCancelRequested by remember(tab.key) { mutableStateOf(false) }
-    var auxiliaryPageSaveProgress by remember(tab.key) { mutableStateOf<SaveProgress?>(null) }
+    val auxiliaryPageSaveProgressFlow = remember(tab.key) { kotlinx.coroutines.flow.MutableStateFlow<SaveProgress?>(null) }
+    val auxiliaryPageSaveProgress by auxiliaryPageSaveProgressFlow.collectAsState()
     var pageSavePartialSavedCount by remember(tab.key) { mutableIntStateOf(0) }
     var readingAloud by remember(tab.key) { mutableStateOf(false) }
     var readAloudDialogOpen by remember(tab.key) { mutableStateOf(false) }
@@ -6365,7 +6369,10 @@ private fun CompatThreadScreen(
             )
         }
 
-    fun saveCompatPage(mode: String) {
+    val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
+        error = it.toCompatUserMessage("保存先の設定を記録できませんでした")
+    }
+    fun saveCompatPageNow(mode: String, selectedLocation: SaveLocation?) {
         if (savingPage) {
             error = "別の保存を実行中です"
             return
@@ -6381,7 +6388,7 @@ private fun CompatThreadScreen(
         }
         pageSaver?.resetSaveProgress()
         pageSaveCancelRequested = false
-        auxiliaryPageSaveProgress = null
+        auxiliaryPageSaveProgressFlow.value = null
         pageSavePartialSavedCount = 0
         savingPage = true
         // A page save belongs to the compatibility workspace, not to this
@@ -6394,128 +6401,138 @@ private fun CompatThreadScreen(
                     savingPage = false
                     pageSaveJob = null
                     pageSaveCancelRequested = false
-                    auxiliaryPageSaveProgress = null
+                    auxiliaryPageSaveProgressFlow.value = null
                 }) {
-                    if (mode == "save_images_zip") {
-                        val urls = compatBatchMediaUrls(currentSnapshot.posts)
-                        auxiliaryPageSaveProgress = SaveProgress(
-                            phase = SavePhase.DOWNLOADING,
-                            current = 0,
-                            total = urls.size,
-                            currentItem = "しばらくお待ち下さい"
-                        )
-                        error = imageZipSaver?.save(
-                            mediaUrls = urls,
-                            boardId = tab.boardKey,
-                            threadId = tab.threadNo,
-                            baseSaveLocation = manualSaveLocation,
-                            baseDirectory = MANUAL_SAVE_DIRECTORY,
-                            onProgress = { current, total, item, itemBytes, itemTotalBytes ->
-                                auxiliaryPageSaveProgress = SaveProgress(
-                                    phase = SavePhase.DOWNLOADING,
-                                    current = current,
-                                    total = total,
-                                    currentItem = item,
-                                    currentItemBytes = itemBytes,
-                                    currentItemTotalBytes = itemTotalBytes
-                                )
-                            }
-                        )?.fold(
-                            onSuccess = { saved ->
-                                "${saved.fileName} を保存しました 成功${saved.savedItems}件 / 失敗${saved.failedItems}件"
-                            },
-                            onFailure = { it.toCompatUserMessage("ZIPを保存できませんでした") }
-                        ) ?: "保存機能を初期化できませんでした"
-                    } else if (mode == "save_images_folder") {
-                        val urls = compatBatchMediaUrls(currentSnapshot.posts)
-                        var success = 0
-                        var failure = 0
-                        val outputNames = compatBatchOutputFileNames(urls)
-                        val imageFolder = buildCompatManualImageFolderName(
-                            boardName = tab.boardName,
-                            title = tab.title,
-                            threadId = tab.threadNo
-                        )
-                        auxiliaryPageSaveProgress = SaveProgress(
-                            phase = SavePhase.DOWNLOADING,
-                            current = 0,
-                            total = urls.size,
-                            currentItem = "しばらくお待ち下さい"
-                        )
-                        urls.forEachIndexed { index, url ->
-                            auxiliaryPageSaveProgress = SaveProgress(
+                    runProtectedThreadSave(
+                        tab.title,
+                        if (mode == "save_images_zip" || mode == "save_images_folder") auxiliaryPageSaveProgressFlow
+                        else pageSaver?.saveProgress ?: auxiliaryPageSaveProgressFlow
+                    ) {
+                        if (mode == "save_images_zip") {
+                            val urls = compatBatchMediaUrls(currentSnapshot.posts)
+                            auxiliaryPageSaveProgressFlow.value = SaveProgress(
                                 phase = SavePhase.DOWNLOADING,
-                                current = index,
+                                current = 0,
                                 total = urls.size,
-                                currentItem = url.substringBefore('?').substringAfterLast('/')
+                                currentItem = "しばらくお待ち下さい"
                             )
-                            mediaSaver?.saveMedia(
-                                url,
-                                tab.boardKey,
-                                tab.threadNo,
-                                baseSaveLocation = manualSaveLocation,
+                            error = imageZipSaver?.save(
+                                mediaUrls = urls,
+                                boardId = tab.boardKey,
+                                threadId = tab.threadNo,
+                                baseSaveLocation = selectedLocation,
                                 baseDirectory = MANUAL_SAVE_DIRECTORY,
-                                storageDirectoryOverride = imageFolder,
-                                useTypeSubdirectory = false,
-                                outputFileNameOverride = outputNames[url],
-                                onProgress = { itemBytes, itemTotalBytes ->
-                                    auxiliaryPageSaveProgress = SaveProgress(
+                                onProgress = { current, total, item, itemBytes, itemTotalBytes ->
+                                    auxiliaryPageSaveProgressFlow.value = SaveProgress(
                                         phase = SavePhase.DOWNLOADING,
-                                        current = index,
-                                        total = urls.size,
-                                        currentItem = url.substringBefore('?').substringAfterLast('/'),
+                                        current = current,
+                                        total = total,
+                                        currentItem = item,
                                         currentItemBytes = itemBytes,
                                         currentItemTotalBytes = itemTotalBytes
                                     )
                                 }
+                            )?.fold(
+                                onSuccess = { saved ->
+                                    "${saved.fileName} を保存しました 成功${saved.savedItems}件 / 失敗${saved.failedItems}件\n保存先: ${manualSaveDestinationLabel(fileSystem, selectedLocation)}"
+                                },
+                                onFailure = { it.toCompatUserMessage("ZIPを保存できませんでした") }
+                            ) ?: "保存機能を初期化できませんでした"
+                        } else if (mode == "save_images_folder") {
+                            val urls = compatBatchMediaUrls(currentSnapshot.posts)
+                            var success = 0
+                            var failure = 0
+                            val outputNames = compatBatchOutputFileNames(urls)
+                            val imageFolder = buildCompatManualImageFolderName(
+                                boardName = tab.boardName,
+                                title = tab.title,
+                                threadId = tab.threadNo
                             )
-                                ?.fold({ success += 1 }, { failure += 1 })
-                            pageSavePartialSavedCount = success
-                        }
-                        error = "メディアを保存しました 成功${success}件 / 失敗${failure}件"
-                    } else {
-                        val includeFull = mode == "save_all"
-                        val includeThumb = mode == "save_thumb" || mode == "save_all"
-                        val posts = compatPostsForSave(includeFull, includeThumb)
-                        val result = pageSaver?.let { saver ->
-                            runProtectedThreadSave(tab.title, saver.saveProgress) {
-                                saver.saveThread(
-                                    threadId = tab.threadNo,
-                                    boardId = tab.boardKey,
-                                    boardName = tab.boardName,
-                                    boardUrl = BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl),
-                                    title = tab.title,
-                                    expiresAtLabel = currentSnapshot.expiresAtLabel,
-                                    posts = posts,
-                                    baseSaveLocation = manualSaveLocation,
-                                    baseDirectory = MANUAL_SAVE_DIRECTORY,
-                                    writeMetadata = true,
-                                    rawHtmlOptions = RawHtmlSaveOptions(enable = true, stripExternalResources = true),
-                                    limits = ThreadSaveLimits(
-                                        maxMediaItems = if (mode == "save_html") {
-                                            0
-                                        } else {
-                                            ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS
-                                        }
-                                    ),
-                                    storageOptions = buildManualThreadSaveStorageOptions(
-                                        tab.boardKey,
-                                        tab.threadNo
-                                    )
+                            auxiliaryPageSaveProgressFlow.value = SaveProgress(
+                                phase = SavePhase.DOWNLOADING,
+                                current = 0,
+                                total = urls.size,
+                                currentItem = "しばらくお待ち下さい"
+                            )
+                            urls.forEachIndexed { index, url ->
+                                auxiliaryPageSaveProgressFlow.value = SaveProgress(
+                                    phase = SavePhase.DOWNLOADING,
+                                    current = index,
+                                    total = urls.size,
+                                    currentItem = url.substringBefore('?').substringAfterLast('/')
                                 )
+                                mediaSaver?.saveMedia(
+                                    url,
+                                    tab.boardKey,
+                                    tab.threadNo,
+                                    baseSaveLocation = selectedLocation,
+                                    baseDirectory = MANUAL_SAVE_DIRECTORY,
+                                    storageDirectoryOverride = imageFolder,
+                                    useTypeSubdirectory = false,
+                                    outputFileNameOverride = outputNames[url],
+                                    onProgress = { itemBytes, itemTotalBytes ->
+                                        auxiliaryPageSaveProgressFlow.value = SaveProgress(
+                                            phase = SavePhase.DOWNLOADING,
+                                            current = index,
+                                            total = urls.size,
+                                            currentItem = url.substringBefore('?').substringAfterLast('/'),
+                                            currentItemBytes = itemBytes,
+                                            currentItemTotalBytes = itemTotalBytes
+                                        )
+                                    }
+                                )
+                                    ?.fold({ success += 1 }, { failure += 1 })
+                                pageSavePartialSavedCount = success
                             }
+                            error = "メディアを保存しました 成功${success}件 / 失敗${failure}件\n保存先: ${manualSaveDestinationLabel(fileSystem, selectedLocation)}/$imageFolder"
+                        } else {
+                            val includeFull = mode == "save_all"
+                            val includeThumb = mode == "save_thumb" || mode == "save_all"
+                            val posts = compatPostsForSave(includeFull, includeThumb)
+                            val result = pageSaver?.let { saver ->
+                                    saver.saveThread(
+                                        threadId = tab.threadNo,
+                                        boardId = tab.boardKey,
+                                        boardName = tab.boardName,
+                                        boardUrl = BoardUrlResolver.resolveBoardBaseUrl(tab.originalUrl),
+                                        title = tab.title,
+                                        expiresAtLabel = currentSnapshot.expiresAtLabel,
+                                        posts = posts,
+                                        baseSaveLocation = selectedLocation,
+                                        baseDirectory = MANUAL_SAVE_DIRECTORY,
+                                        writeMetadata = true,
+                                        rawHtmlOptions = RawHtmlSaveOptions(enable = true, stripExternalResources = true),
+                                        limits = ThreadSaveLimits(
+                                            maxMediaItems = if (mode == "save_html") {
+                                                0
+                                            } else {
+                                                ThreadSaveService.DEFAULT_MAX_MEDIA_ITEMS
+                                            }
+                                        ),
+                                        storageOptions = buildManualThreadSaveStorageOptions(
+                                            tab.boardKey,
+                                            tab.threadNo
+                                        )
+                                    )
+                            }
+                            error = result?.fold(
+                                onSuccess = { saved -> completeCompatThreadSave(saved, fileSystem, selectedLocation) },
+                                onFailure = { it.toCompatUserMessage("保存できませんでした") }
+                            ) ?: "保存機能を初期化できませんでした"
                         }
-                        error = result?.fold(
-                            onSuccess = ::compatThreadSaveCompletionMessage,
-                            onFailure = { it.toCompatUserMessage("保存できませんでした") }
-                        ) ?: "保存機能を初期化できませんでした"
                     }
                 }
             } catch (cancelled: CancellationException) {
                 error = compatThreadSaveCancellationMessage(pageSavePartialSavedCount)
                 throw cancelled
+            } catch (failure: Throwable) {
+                error = failure.toCompatUserMessage("保存できませんでした")
             }
         }
+    }
+    fun saveCompatPage(mode: String) {
+        if (savingPage) return
+        withSaveDestination { saveCompatPageNow(mode, it) }
     }
     fun snapshotThumbnail(snapshot: CompatThreadSnapshot?): String? = snapshot
         ?.posts
@@ -7295,6 +7312,18 @@ private fun CompatThreadScreen(
     }
     val threadListLastIndex = (visiblePosts.lastIndex + if (threadFooterLabel != null) 1 else 0)
         .coerceAtLeast(0)
+    suspend fun scrollToNewRepliesOrBottom() {
+        if (visiblePosts.isNotEmpty() || threadFooterLabel != null) {
+            listState.scrollToItem(
+                resolveCompatThreadBottomScrollIndex(
+                    visiblePosts = visiblePosts,
+                    newReplyNotice = newReplyNotice,
+                    firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                    lastItemIndex = threadListLastIndex
+                )
+            )
+        }
+    }
     val volumeKeyOwner = remember(tab.key) { Any() }
     DisposableEffect(threadVolumeKeyAction, tab.key, tabs.size, threadListLastIndex) {
         CompatVolumeKeyBus.register(volumeKeyOwner) { key ->
@@ -7702,9 +7731,7 @@ private fun CompatThreadScreen(
         },
         CompatToolbarCommand("bottom", compatToolbarArtwork(CompatToolbarSurface.THREAD, "bottom"), "ページ最下部へ") {
             scope.launch {
-                if (visiblePosts.isNotEmpty() || threadFooterLabel != null) {
-                    listState.scrollToItem(threadListLastIndex)
-                }
+                scrollToNewRepliesOrBottom()
             }
         },
         CompatToolbarCommand("gallery", compatToolbarArtwork(CompatToolbarSurface.THREAD, "gallery"), "画像一覧", onClick = onOpenGallery),
@@ -8311,9 +8338,7 @@ private fun CompatThreadScreen(
                         )
                     }
                     "bottom" -> scope.launch {
-                        if (visiblePosts.isNotEmpty() || threadFooterLabel != null) {
-                            listState.scrollToItem(threadListLastIndex)
-                        }
+                        scrollToNewRepliesOrBottom()
                     }
                     "ng_header" -> managedNgKinds = setOf(CompatNgKind.THREAD_POST_NO, CompatNgKind.THREAD_POSTER_ID)
                     "ng_word" -> managedNgKinds = setOf(CompatNgKind.THREAD_WORD)
@@ -9058,6 +9083,7 @@ private fun CompatThreadScreen(
             onDismiss = { mediaContextPost = null },
             onSave = {
                 mediaContextPost = null
+                withSaveDestination { selectedLocation ->
                 scope.launch {
                     val saver = mediaSaver
                     if (saver == null) error = "保存機能を初期化できませんでした"
@@ -9065,12 +9091,13 @@ private fun CompatThreadScreen(
                         mediaUrl,
                         tab.boardKey,
                         tab.threadNo,
-                        baseSaveLocation = manualSaveLocation,
+                        baseSaveLocation = selectedLocation,
                         storageDirectoryOverride = "",
                         useTypeSubdirectory = false
                     )
-                        .onSuccess { error = "${it.fileName}を保存しました" }
+                        .onSuccess { error = compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation) }
                         .onFailure { error = it.toCompatUserMessage("画像を保存できませんでした") }
+                }
                 }
             },
             onReloadThumbnail = {
@@ -12333,31 +12360,43 @@ private fun CompatPostSelectionDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (state.mode == CompatPostSelectionMode.WEB) "Google検索" else "レス欄に…") },
         text = {
-            LazyColumn(modifier = Modifier.fillMaxWidth().height(360.dp)) {
-                items(state.candidates.size) { index ->
-                    val item = state.candidates[index]
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val selected = state.selected.toMutableSet()
-                            if (!selected.add(index)) selected.remove(index)
-                            onStateChanged(state.copy(selected = selected))
-                        }.padding(vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = index in state.selected,
-                            onCheckedChange = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        enabled = state.selected.size < state.candidates.size,
+                        onClick = { onStateChanged(state.copy(selected = state.candidates.indices.toSet())) }
+                    ) { Text("全選択") }
+                    TextButton(
+                        enabled = state.selected.isNotEmpty(),
+                        onClick = { onStateChanged(state.copy(selected = emptySet())) }
+                    ) { Text("全解除") }
+                }
+                LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                    items(state.candidates.size) { index ->
+                        val item = state.candidates[index]
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
                                 val selected = state.selected.toMutableSet()
-                                if (it) selected.add(index) else selected.remove(index)
+                                if (!selected.add(index)) selected.remove(index)
                                 onStateChanged(state.copy(selected = selected))
-                            }
-                        )
-                        if (state.mode == CompatPostSelectionMode.WEB) {
-                            Text(item.value, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        } else {
-                            Column {
-                                Text(item.label, fontSize = 11.sp, color = Color.Gray)
+                            }.padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = index in state.selected,
+                                onCheckedChange = {
+                                    val selected = state.selected.toMutableSet()
+                                    if (it) selected.add(index) else selected.remove(index)
+                                    onStateChanged(state.copy(selected = selected))
+                                }
+                            )
+                            if (state.mode == CompatPostSelectionMode.WEB) {
                                 Text(item.value, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            } else {
+                                Column {
+                                    Text(item.label, fontSize = 11.sp, color = Color.Gray)
+                                    Text(item.value, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }

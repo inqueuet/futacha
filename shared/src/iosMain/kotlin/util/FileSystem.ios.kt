@@ -259,6 +259,35 @@ class IosFileSystem : FileSystem {
         }
     }
 
+    override suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> =
+        withContext(AppDispatchers.io) {
+            runSuspendCatchingPreservingCancellation {
+                validatePath(path, "path")
+                val absolute = resolveAbsolutePath(path)
+                val scopedUrl = bookmarkedMediaDirectoryForPath(absolute)
+                val started = scopedUrl?.startAccessingSecurityScopedResource() == true
+                try {
+                    val handle = NSFileHandle.fileHandleForReadingAtPath(absolute)
+                        ?: error("保存元のファイルを開けませんでした")
+                    withFileWriteCompletion(close = { closeFileHandle(handle) }) {
+                        block(object : FileReadSource {
+                            override suspend fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                                coroutineContext.ensureActive()
+                                require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
+                                if (length == 0) return 0
+                                val data = readFileHandleChunk(handle, minOf(length, streamWriteChunkBytes))
+                                if (data.length == 0uL) return -1
+                                bytes.usePinned { memcpy(it.addressOf(offset), data.bytes, data.length) }
+                                return data.length.toInt()
+                            }
+                        })
+                    }
+                } finally {
+                    if (started) scopedUrl?.stopAccessingSecurityScopedResource()
+                }
+            }
+        }
+
     override suspend fun readString(path: String): Result<String> {
         // Delegate to the chunked reader so a file that grows after stat() can
         // never trigger an unbounded Foundation allocation.
@@ -730,6 +759,17 @@ class IosFileSystem : FileSystem {
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
         // FIX: 入力検証はwriteBytesで実行される
         return writeBytes(base, relativePath, content.encodeToByteArray())
+    }
+
+    override suspend fun resolveSavedFile(base: SaveLocation, relativePath: String): Result<String> = withContext(AppDispatchers.io) {
+        runSuspendCatchingPreservingCancellation {
+            validatePath(relativePath, "relativePath")
+            if (base is SaveLocation.Bookmark) {
+                // Retain the original security-scoped URL for the native share sheet's lifetime.
+                resolveBookmarkPathForDisplay(base.bookmarkData)
+            }
+            withSaveLocationPath(base, relativePath, { error("保存したファイルを開けません") }) { it }
+        }
     }
 
     override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> = withContext(AppDispatchers.io) {

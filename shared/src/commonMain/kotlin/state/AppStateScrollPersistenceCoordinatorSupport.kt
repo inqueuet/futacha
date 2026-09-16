@@ -3,7 +3,6 @@ package com.valoser.futacha.shared.state
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -31,7 +30,7 @@ internal class AppStateHistoryScrollPersistenceCoordinator(
             scrollPositionJobs = scrollPositionJobs,
             scrollKey = scrollKey,
             startDebouncedJob = { scope, key ->
-                scope.launch {
+                scope.launchHistoryScrollPersistence {
                     delay(debounceDelayMillis)
                     try {
                         performImmediateUpdate(request)

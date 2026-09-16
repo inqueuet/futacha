@@ -508,7 +508,7 @@ class ThreadScreenSaveActionLogicTest {
 
         val expectedPath = "/tmp/futacha/${buildThreadStorageId(savedThread.boardId, savedThread.threadId)}"
         assertEquals(expectedPath, successState.displayedSavePath)
-        assertEquals("スレッドを保存しました: $expectedPath", successState.message)
+        assertEquals("スレッドを保存しました\n保存先: $expectedPath", successState.message)
 
         assertEquals(
             ThreadManualSaveErrorState(
@@ -1015,22 +1015,22 @@ class ThreadScreenSaveActionLogicTest {
         assertTrue(manualOutcome is ThreadManualSaveUiOutcome.Success)
         assertEquals("Failed to index manually saved thread 123", manualOutcome.indexFailureMessage)
         assertEquals(
-            "スレッドを保存しました: /tmp/futacha/b__123",
+            "スレッドを保存しました\n保存先: /tmp/futacha/b__123",
             manualOutcome.successState.message
         )
         assertEquals(
-            "スレッドを保存しましたが、保存一覧に反映できませんでした: /tmp/futacha/b__123",
+            "保存一覧に反映できませんでした: /tmp/futacha/b__123",
             buildThreadManualSaveIndexWarningMessage("/tmp/futacha/b__123")
         )
         assertEquals(
-            "スレッドを保存しました: /tmp/futacha/b__123",
+            "スレッドを保存しました\n保存先: /tmp/futacha/b__123",
             resolveThreadManualSaveCompletionMessage(
                 successState = manualOutcome.successState,
                 indexResult = Result.success(Unit)
             )
         )
         assertEquals(
-            "スレッドを保存しましたが、保存一覧に反映できませんでした: /tmp/futacha/b__123",
+            "スレッドを保存しました\n保存先: /tmp/futacha/b__123\n保存一覧に反映できませんでした: /tmp/futacha/b__123",
             resolveThreadManualSaveCompletionMessage(
                 successState = manualOutcome.successState,
                 indexResult = Result.failure(IllegalStateException("index failed"))
@@ -1052,7 +1052,7 @@ class ThreadScreenSaveActionLogicTest {
             resolvedManualSaveDirectory = "/tmp/futacha"
         )
         assertTrue(singleOutcome is ThreadSingleMediaSaveUiOutcome.Success)
-        assertEquals("画像を保存しました: /tmp/futacha/b__123/images/a.jpg", singleOutcome.successState.message)
+        assertEquals("画像を保存しました\n保存先: /tmp/futacha/b__123/images/a.jpg\nファイルとして保存しました。写真アプリへ追加する場合は「共有」を使ってください。", singleOutcome.successState.message)
 
         val autoApplyState = buildThreadAutoSaveUiApplyState(
             completionState = ThreadAutoSaveCompletionState(
@@ -1085,7 +1085,7 @@ class ThreadScreenSaveActionLogicTest {
 
         assertEquals("画像", successState.mediaLabel)
         assertEquals("/tmp/futacha/board__123/images/a.jpg", successState.displayedSavePath)
-        assertEquals("画像を保存しました: /tmp/futacha/board__123/images/a.jpg", successState.message)
+        assertEquals("画像を保存しました\n保存先: /tmp/futacha/board__123/images/a.jpg\nファイルとして保存しました。写真アプリへ追加する場合は「共有」を使ってください。", successState.message)
         assertEquals(
             resolveThreadManualSaveErrorState(
                 error = IllegalStateException("cannot resolve tree uri"),

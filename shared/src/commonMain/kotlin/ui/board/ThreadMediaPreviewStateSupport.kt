@@ -147,7 +147,7 @@ internal fun resolveThreadMediaPreviewDialogState(
         entry = entry,
         currentIndex = state.previewMediaIndex ?: 0,
         totalCount = entries.size,
-        isSaveEnabled = isRemoteMediaUrl(entry.url) && !isSaveInProgress,
+        isSaveEnabled = com.valoser.futacha.shared.util.isSupportedMediaSaveSource(entry.url) && !isSaveInProgress,
         isSaveInProgress = isSaveInProgress
     )
 }

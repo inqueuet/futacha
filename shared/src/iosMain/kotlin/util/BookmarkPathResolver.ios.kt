@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.cinterop.BetaInteropApi::class)
+@file:OptIn(kotlinx.cinterop.BetaInteropApi::class, kotlinx.cinterop.ExperimentalForeignApi::class)
 
 package com.valoser.futacha.shared.util
 
@@ -14,6 +14,19 @@ import kotlinx.cinterop.usePinned
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import platform.Foundation.*
+
+private val mediaBookmarkLock = NSLock()
+private val mediaBookmarkDirectories = linkedMapOf<String, NSURL>()
+
+/** Keep the security-scoped URL, not just its display path, while a saved thread is open. */
+internal fun bookmarkedMediaDirectoryForPath(path: String): NSURL? {
+    mediaBookmarkLock.lock()
+    return try {
+        mediaBookmarkDirectories.entries
+            .filter { path.startsWith(it.key.trimEnd('/') + "/") }
+            .maxByOrNull { it.key.length }?.value
+    } finally { mediaBookmarkLock.unlock() }
+}
 
 @OptIn(ExperimentalForeignApi::class, ExperimentalEncodingApi::class)
 internal actual fun resolveBookmarkPathForDisplay(bookmarkData: String): String? {
@@ -54,6 +67,16 @@ internal actual fun resolveBookmarkPathForDisplay(bookmarkData: String): String?
 
         val started = url.startAccessingSecurityScopedResource()
         try {
+            url.path?.let { path ->
+                mediaBookmarkLock.lock()
+                try {
+                    mediaBookmarkDirectories.remove(path)
+                    mediaBookmarkDirectories[path] = url
+                    while (mediaBookmarkDirectories.size > 32) {
+                        mediaBookmarkDirectories.remove(mediaBookmarkDirectories.keys.first())
+                    }
+                } finally { mediaBookmarkLock.unlock() }
+            }
             url.path ?: url.absoluteString?.removePrefix("file://")
         } finally {
             if (started) {

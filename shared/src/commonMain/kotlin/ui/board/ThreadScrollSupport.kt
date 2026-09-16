@@ -14,6 +14,46 @@ internal data class ThreadScrollRestoreTarget(
     val offset: Int
 )
 
+/** Kept for one open thread; failed loads and equal refreshes leave its new-post boundary intact. */
+internal class ThreadNewPostTracker(private val initialKnownPostCount: Int? = null) {
+    private var knownPostIds: Set<String>? = null
+    private var awaitingHistoryBaseline = initialKnownPostCount != null
+    var newPostIds: Set<String> = emptySet()
+        private set
+
+    fun onPostsLoaded(posts: List<Post>) {
+        val currentIds = posts.mapTo(mutableSetOf()) { it.id }
+        val knownIds = knownPostIds
+        val addedIds = when {
+            awaitingHistoryBaseline -> {
+                val count = initialKnownPostCount!!.coerceAtLeast(0)
+                if (posts.size >= count) awaitingHistoryBaseline = false
+                posts.drop(count).mapTo(mutableSetOf()) { it.id }
+            }
+            knownIds == null -> emptySet()
+            else -> currentIds - knownIds
+        }
+        newPostIds = if (addedIds.isNotEmpty()) addedIds else newPostIds.intersect(currentIds)
+        knownPostIds = knownIds.orEmpty() + currentIds
+    }
+}
+
+internal fun resolveThreadBottomScrollTarget(
+    layout: ThreadDisplayedPostsLayout,
+    newPostIds: Set<String>,
+    firstVisibleItemIndex: Int,
+    totalItems: Int
+): Int? {
+    if (totalItems <= 0) return null
+    val newPostIndex = layout.posts.indexOfFirst { it.id in newPostIds }
+    val newItemIndex = if (newPostIndex >= 0) layout.itemsBeforePosts.coerceAtLeast(0) + newPostIndex else -1
+    return if (newItemIndex in (firstVisibleItemIndex + 1) until totalItems) {
+        newItemIndex
+    } else {
+        totalItems - 1
+    }
+}
+
 internal fun resolveThreadScrollRestoreTarget(
     savedIndex: Int,
     savedOffset: Int,

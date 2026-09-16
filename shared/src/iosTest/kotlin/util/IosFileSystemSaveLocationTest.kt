@@ -88,6 +88,34 @@ class IosFileSystemSaveLocationTest {
         }
     }
 
+    @Test
+    fun bookmarkSavedFileCanBeReopenedAndStreamedForExport() = runBlocking {
+        val fs = createFileSystem()
+        val basePath = fs.resolveAbsolutePath("ios_bookmark_export_test")
+        val base = SaveLocation.Path(basePath)
+        try {
+            fs.createDirectory(base).getOrThrow()
+            val bookmark = securityScopedBookmark(basePath)
+            val payload = ByteArray(200_003) { (it % 251).toByte() }
+            fs.writeBytes(bookmark, "video.webm", payload).getOrThrow()
+            val reopened = createFileSystem()
+            val source = reopened.resolveSavedFile(bookmark, "video.webm").getOrThrow()
+            assertTrue(bookmarkedMediaDirectoryForPath(source) != null)
+            val copied = mutableListOf<Byte>()
+            reopened.readByteStream(source) { input ->
+                val buffer = ByteArray(1023)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    copied.addAll(buffer.take(count))
+                }
+            }.getOrThrow()
+            assertContentEquals(payload, copied.toByteArray())
+        } finally {
+            fs.delete(base).getOrThrow()
+        }
+    }
+
     @OptIn(ExperimentalEncodingApi::class)
     private fun securityScopedBookmark(path: String): SaveLocation.Bookmark = memScoped {
         val error = alloc<ObjCObjectVar<platform.Foundation.NSError?>>()

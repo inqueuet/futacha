@@ -207,7 +207,7 @@ internal fun buildThreadManualSaveSuccessState(
     )
     return ThreadManualSaveSuccessState(
         displayedSavePath = displayedSavePath,
-        message = "スレッドを保存しました: $displayedSavePath"
+        message = "${savedThreadCompletionSummary(savedThread)}\n保存先: $displayedSavePath"
     )
 }
 
@@ -216,7 +216,7 @@ internal fun buildThreadManualSaveIndexFailureMessage(threadId: String): String 
 }
 
 internal fun buildThreadManualSaveIndexWarningMessage(displayedSavePath: String): String {
-    return "スレッドを保存しましたが、保存一覧に反映できませんでした: $displayedSavePath"
+    return "保存一覧に反映できませんでした: $displayedSavePath"
 }
 
 internal fun resolveThreadManualSaveCompletionMessage(
@@ -224,7 +224,7 @@ internal fun resolveThreadManualSaveCompletionMessage(
     indexResult: Result<Unit>?
 ): String {
     return if (indexResult?.isFailure == true) {
-        buildThreadManualSaveIndexWarningMessage(successState.displayedSavePath)
+        successState.message + "\n" + buildThreadManualSaveIndexWarningMessage(successState.displayedSavePath)
     } else {
         successState.message
     }
@@ -294,7 +294,8 @@ internal data class ThreadSingleMediaSaveSuccessState(
 
 internal sealed interface ThreadSingleMediaSaveUiOutcome {
     data class Success(
-        val successState: ThreadSingleMediaSaveSuccessState
+        val successState: ThreadSingleMediaSaveSuccessState,
+        val savedMedia: SavedMediaFile? = null
     ) : ThreadSingleMediaSaveUiOutcome
 
     data class Failure(
@@ -321,7 +322,7 @@ internal fun buildThreadSingleMediaSaveSuccessState(
     return ThreadSingleMediaSaveSuccessState(
         mediaLabel = mediaLabel,
         displayedSavePath = displayedSavePath,
-        message = "${mediaLabel}を保存しました: $displayedSavePath"
+        message = "${mediaLabel}を保存しました\n保存先: $displayedSavePath\nファイルとして保存しました。写真アプリへ追加する場合は「共有」を使ってください。"
     )
 }
 
@@ -343,6 +344,7 @@ internal fun resolveThreadSingleMediaSaveUiOutcome(
 ): ThreadSingleMediaSaveUiOutcome {
     return when (saveResult) {
         is ThreadSingleMediaSaveRunResult.Success -> ThreadSingleMediaSaveUiOutcome.Success(
+            savedMedia = saveResult.savedMedia,
             successState = buildThreadSingleMediaSaveSuccessState(
                 savedMedia = saveResult.savedMedia,
                 manualSaveDirectory = manualSaveDirectory,

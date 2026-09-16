@@ -69,14 +69,8 @@ fun CompatThreadSaveProgressDialog(
 internal fun compatThreadSaveProgressItem(progress: SaveProgress, cancelRequested: Boolean): String =
     if (cancelRequested) "中断しています…" else progress.currentItem.ifBlank { "しばらくお待ち下さい" }
 
-internal fun compatThreadSaveCompletionMessage(savedThread: SavedThread): String = buildString {
-    append("保存しました")
-    if (savedThread.incompleteMediaCount > 0) {
-        append('\n')
-        append(savedThread.incompleteMediaCount)
-        append("件のメディアを取得できませんでした")
-    }
-}
+internal fun compatThreadSaveCompletionMessage(savedThread: SavedThread): String =
+    com.valoser.futacha.shared.ui.board.savedThreadCompletionSummary(savedThread)
 
 internal fun compatThreadSaveCancellationMessage(partiallySavedCount: Int = 0): String = buildString {
     append("キャンセルしました")

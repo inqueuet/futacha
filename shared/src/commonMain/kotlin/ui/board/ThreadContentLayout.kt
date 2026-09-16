@@ -87,6 +87,7 @@ internal fun ThreadContent(
     compactHeader: Boolean = false,
     searchScrollRequest: ThreadPostScrollRequest? = null,
     onDisplayedPostsChanged: (ThreadDisplayedPostsLayout) -> Unit = {},
+    newPostIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     val derivedPostData by produceState(
@@ -107,6 +108,12 @@ internal fun ThreadContent(
     var quotePreviewState by remember(page.posts) { mutableStateOf<QuotePreviewState?>(null) }
     val revealedAiHiddenPostIds = remember(page.threadId, aiHiddenPostIds) { mutableStateListOf<String>() }
     val hasAiHiddenPostsSummary = aiHiddenPostIds.any { it !in revealedAiHiddenPostIds }
+    val firstNewPostIndex = remember(page.posts, newPostIds) {
+        page.posts.indexOfFirst { it.id in newPostIds }
+    }
+    val newPostCount = remember(page.posts, newPostIds) {
+        page.posts.count { it.id in newPostIds }
+    }
     val itemsBeforePosts = countThreadContentItemsBeforePosts(
         page = page,
         embeddedHtml = embeddedHtml,
@@ -222,6 +229,9 @@ internal fun ThreadContent(
                         onMediaLongPress = onMediaLongPress,
                         onPostLongPress = onPostLongPress
                     )
+                    if (index == firstNewPostIndex) {
+                        ThreadNewRepliesDivider(newPostCount)
+                    }
                     if (isAiHidden) {
                         AiHiddenPostPlaceholder(
                             postId = post.id,

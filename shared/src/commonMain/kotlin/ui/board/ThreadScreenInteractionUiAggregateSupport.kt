@@ -119,6 +119,8 @@ internal data class ThreadScreenControllerInteractionRuntimeInputs(
     val replyDialogBinding: ThreadReplyDialogStateBinding,
     val currentIsRefreshing: () -> Boolean,
     val currentUiState: () -> ThreadUiState,
+    val currentDisplayedPostsLayout: () -> ThreadDisplayedPostsLayout = { ThreadDisplayedPostsLayout() },
+    val currentNewPostIds: () -> Set<String> = { emptySet() },
     val currentModalOverlayState: () -> ThreadModalOverlayState,
     val setModalOverlayState: (ThreadModalOverlayState) -> Unit,
     val currentSheetOverlayState: () -> ThreadSheetOverlayState,
@@ -176,10 +178,13 @@ internal fun buildThreadScreenControllerInteractionInputs(
             inputs.coroutineScope.launch {
                 val currentState = inputs.currentUiState()
                 if (currentState is ThreadUiState.Success) {
-                    val lastIndex = currentState.page.posts.size - 1
-                    if (lastIndex >= 0) {
-                        inputs.lazyListState.animateScrollToItem(lastIndex)
-                    }
+                    val target = resolveThreadBottomScrollTarget(
+                        layout = inputs.currentDisplayedPostsLayout(),
+                        newPostIds = inputs.currentNewPostIds(),
+                        firstVisibleItemIndex = inputs.lazyListState.firstVisibleItemIndex,
+                        totalItems = inputs.lazyListState.layoutInfo.totalItemsCount
+                    )
+                    if (target != null) inputs.lazyListState.animateScrollToItem(target)
                 }
             }
         },
@@ -599,6 +604,8 @@ internal data class ThreadScreenInteractionUiWiringInputs(
     val replyDialogBinding: ThreadReplyDialogStateBinding,
     val currentIsRefreshing: () -> Boolean,
     val currentUiState: () -> ThreadUiState,
+    val currentDisplayedPostsLayout: () -> ThreadDisplayedPostsLayout = { ThreadDisplayedPostsLayout() },
+    val currentNewPostIds: () -> Set<String> = { emptySet() },
     val currentSearchIndex: () -> Int,
     val currentSearchQuery: () -> String,
     val setCurrentSearchIndex: (Int) -> Unit,
@@ -666,6 +673,8 @@ internal fun buildThreadScreenInteractionUiWiring(
                 replyDialogBinding = inputs.replyDialogBinding,
                 currentIsRefreshing = inputs.currentIsRefreshing,
                 currentUiState = inputs.currentUiState,
+                currentDisplayedPostsLayout = inputs.currentDisplayedPostsLayout,
+                currentNewPostIds = inputs.currentNewPostIds,
                 currentModalOverlayState = overlayBindings.currentModalOverlayState,
                 setModalOverlayState = overlayBindings.setModalOverlayState,
                 currentSheetOverlayState = overlayBindings.currentSheetOverlayState,

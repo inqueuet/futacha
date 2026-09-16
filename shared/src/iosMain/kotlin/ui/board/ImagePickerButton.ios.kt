@@ -16,14 +16,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.ImageData
-import com.valoser.futacha.shared.util.pickImage
+import com.valoser.futacha.shared.util.normalizeIosPostingAttachment
+import com.valoser.futacha.shared.util.pickIosImage
 import com.valoser.futacha.shared.util.pickVideo
 import com.valoser.futacha.shared.util.pickMediaFromDocuments
 import com.valoser.futacha.shared.util.pickDirectorySaveLocation
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
-import com.valoser.futacha.shared.util.presentIosTwoOptionAlert
+import com.valoser.futacha.shared.util.awaitIosTwoOptionChoice
+import kotlin.concurrent.AtomicReference
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+
+// Shared by image/video buttons: UIKit can only own one attachment flow at a time.
+private val activeAttachmentPicker = AtomicReference<Any?>(null)
 
 @Composable
 actual fun rememberAttachmentPickerLauncher(
@@ -36,117 +41,46 @@ actual fun rememberAttachmentPickerLauncher(
 ): () -> Unit {
     val scope = rememberCoroutineScope()
     val currentOnSelectionError by rememberUpdatedState(onSelectionError)
+    val currentOnImageSelected by rememberUpdatedState(onImageSelected)
     val isVideo = mimeType.startsWith("video/", ignoreCase = true)
     val allowsAnyMedia = mimeType == "*/*" || mimeType.equals("application/octet-stream", ignoreCase = true)
 
-    fun launchPicker(block: suspend () -> Unit) {
+    suspend fun pickLibraryMedia(): ImageData? {
+        val video = if (allowsAnyMedia) {
+            when (awaitIosTwoOptionChoice("メディアを選択", "フォトライブラリから種類を選んでください。", "写真", "動画")) {
+                true -> false
+                false -> true
+                null -> return null
+            }
+        } else isVideo
+        return if (video) pickVideo(maxBytes) else pickIosImage(maxBytes)
+    }
+    suspend fun pickDocumentMedia() = pickMediaFromDocuments(mimeType, preferredFileManagerPackage, maxBytes)
+
+    return launch@{
+        val session = Any()
+        if (!activeAttachmentPicker.compareAndSet(null, session)) return@launch
         scope.launch {
-            runIosAttachmentPickerCatching(currentOnSelectionError, block)
-        }
-    }
-
-    fun pickLibraryMedia() {
-        launchPicker {
-            // PHPicker's image/video filters are separate on the deployed iOS
-            // range. Letting the user choose here preserves the Android
-            // `*/*` result (either a photo or a video) without misclassifying
-            // every wildcard attachment as an image.
-            if (allowsAnyMedia) {
-                val presented = presentIosTwoOptionAlert(
-                    title = "メディアを選択",
-                    message = "フォトライブラリから種類を選んでください。",
-                    primaryLabel = "写真",
-                    secondaryLabel = "動画",
-                    onPrimary = { launchPicker { pickImage()?.let(onImageSelected) } },
-                    onSecondary = { launchPicker { pickVideo()?.let(onImageSelected) } }
-                )
-                if (!presented) pickImage()?.let(onImageSelected)
-            } else {
-                (if (isVideo) pickVideo() else pickImage())?.let(onImageSelected)
-            }
-        }
-    }
-
-    return {
-        launchPicker {
-            val imageData = when (preference) {
-                AttachmentPickerPreference.MEDIA -> {
-                    if (allowsAnyMedia) {
-                        // This call owns its nested picker coroutine.
-                        pickLibraryMedia()
-                        null
-                    } else if (isVideo) {
-                        pickVideo()
-                    } else {
-                        pickImage()
-                    }
-                }
-                AttachmentPickerPreference.DOCUMENT -> pickMediaFromDocuments(
-                    mimeType = mimeType,
-                    preferredProviderIdentifier = preferredFileManagerPackage
-                )
-                AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT -> {
-                    // Android's ACTION_GET_CONTENT exposes both media and
-                    // document providers. Mapping it to Files alone on iOS
-                    // made photos appear impossible to attach in compatibility
-                    // mode. Preserve the reference semantics with an explicit
-                    // source chooser on a platform that has no equivalent
-                    // combined system intent.
-                    val presented = presentIosTwoOptionAlert(
-                        title = "添付ファイルを選択",
-                        message = "選択元を選んでください。",
-                        primaryLabel = "フォトライブラリ",
-                        secondaryLabel = "ファイル",
-                        onPrimary = { pickLibraryMedia() },
-                        onSecondary = {
-                            launchPicker {
-                                pickMediaFromDocuments(
-                                    mimeType = mimeType,
-                                    preferredProviderIdentifier = preferredFileManagerPackage
-                                )?.let(onImageSelected)
-                            }
+            runIosAttachmentPickerCatching(currentOnSelectionError) {
+                val selected = when (preference) {
+                    AttachmentPickerPreference.MEDIA -> pickLibraryMedia()
+                    AttachmentPickerPreference.DOCUMENT,
+                    AttachmentPickerPreference.LEGACY_GET_CONTENT -> pickDocumentMedia()
+                    AttachmentPickerPreference.COMPAT_REFERENCE_GET_CONTENT,
+                    AttachmentPickerPreference.ALWAYS_ASK -> {
+                        when (awaitIosTwoOptionChoice(
+                            title = "添付ファイルを選択", message = "選択元を選んでください。",
+                            primaryLabel = "フォトライブラリ", secondaryLabel = "ファイル"
+                        )) {
+                            true -> pickLibraryMedia()
+                            false -> pickDocumentMedia()
+                            null -> null
                         }
-                    )
-                    if (!presented) {
-                        pickMediaFromDocuments(
-                            mimeType = mimeType,
-                            preferredProviderIdentifier = preferredFileManagerPackage
-                        )
-                    } else {
-                        null
                     }
                 }
-                AttachmentPickerPreference.ALWAYS_ASK -> {
-                    val presented = presentIosTwoOptionAlert(
-                        title = if (isVideo) "動画を選択" else "画像を選択",
-                        message = "選択元を選んでください。",
-                        primaryLabel = if (isVideo) "ビデオライブラリ" else "フォトライブラリ",
-                        secondaryLabel = "ファイル",
-                        onPrimary = {
-                            pickLibraryMedia()
-                        },
-                        onSecondary = {
-                            launchPicker {
-                                pickMediaFromDocuments(
-                                    mimeType = mimeType,
-                                    preferredProviderIdentifier = preferredFileManagerPackage
-                                )?.let(onImageSelected)
-                            }
-                        }
-                    )
-                    if (!presented) {
-                        if (isVideo) pickVideo() else pickImage()
-                    } else {
-                        null
-                    }
-                }
-                AttachmentPickerPreference.LEGACY_GET_CONTENT -> pickMediaFromDocuments(
-                    mimeType = mimeType,
-                    preferredProviderIdentifier = preferredFileManagerPackage
-                )
+                selected?.let { currentOnImageSelected(normalizeIosPostingAttachment(it, maxBytes)) }
             }
-            imageData?.let(onImageSelected)
-        }
+        }.invokeOnCompletion { activeAttachmentPicker.compareAndSet(session, null) }
     }
 }
 

@@ -37,6 +37,7 @@ import com.valoser.futacha.shared.util.ImageData
 import com.valoser.futacha.shared.util.AttachmentPickerPreference
 import com.valoser.futacha.shared.util.readImageDataFromUri
 import com.valoser.futacha.shared.util.Logger
+import com.valoser.futacha.shared.ui.compat.compressCompatPostImage
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +95,7 @@ actual fun rememberAttachmentPickerLauncher(
     val coroutineScope = rememberCoroutineScope()
     val profileController by rememberUpdatedState(LocalExperienceProfileUiController.current)
     val currentOnSelectionError by rememberUpdatedState(onSelectionError)
+    val currentOnImageSelected by rememberUpdatedState(onImageSelected)
     if (context !is Activity) {
         return {
             Logger.w("ImagePicker", "ActivityResultRegistryOwner is unavailable; attachment picker is disabled")
@@ -123,7 +125,13 @@ actual fun rememberAttachmentPickerLauncher(
                 return@launch
             }
             if (imageData != null) {
-                onImageSelected(imageData)
+                val normalized = if (imageData.fileName.substringAfterLast('.', "").lowercase() in setOf("heic", "heif")) {
+                    compressCompatPostImage(imageData, maxBytes.toInt()).getOrNull()
+                } else imageData
+                // Decoding may suspend while the user switches profiles.
+                if (!isExperienceProfileSessionCurrent(session, profileController)) return@launch
+                if (normalized != null) currentOnImageSelected(normalized)
+                else currentOnSelectionError(ATTACHMENT_LOAD_FAILURE_MESSAGE)
             } else {
                 currentOnSelectionError(ATTACHMENT_LOAD_FAILURE_MESSAGE)
             }
@@ -366,6 +374,8 @@ actual fun rememberDirectoryPickerLauncher(
         }
         val uri = result.data?.data ?: return@rememberExperienceProfileActivityResultLauncher
         val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        // Keep grants still used by another mode, drawing, or backup settings.
+        val hadPermission = context.contentResolver.persistedUriPermissions.any { it.uri == uri }
         try {
             context.contentResolver.takePersistableUriPermission(
                 uri,
@@ -385,7 +395,7 @@ actual fun rememberDirectoryPickerLauncher(
             if (isActivityUnavailable(context)) {
                 Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
                 withContext(Dispatchers.IO) {
-                    releasePersistedUriPermission(context, uri, permissionFlags)
+                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                 }
                 return@launch
             }
@@ -395,7 +405,7 @@ actual fun rememberDirectoryPickerLauncher(
             if (!canWrite) {
                 Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
                 withContext(Dispatchers.IO) {
-                    releasePersistedUriPermission(context, uri, permissionFlags)
+                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                 }
                 android.widget.Toast.makeText(
                     context,
@@ -407,24 +417,14 @@ actual fun rememberDirectoryPickerLauncher(
             if (isActivityUnavailable(context)) {
                 Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
                 withContext(Dispatchers.IO) {
-                    releasePersistedUriPermission(context, uri, permissionFlags)
+                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                 }
                 return@launch
             }
             if (!isExperienceProfileSessionCurrent(session, profileController)) {
                 Logger.w("DirectoryPicker", "Dropping directory result because the experience profile session changed")
                 withContext(Dispatchers.IO) {
-                    releasePersistedUriPermission(context, uri, permissionFlags)
-                }
-                return@launch
-            }
-            withContext(Dispatchers.IO) {
-                releaseStalePersistedUriPermissions(context, keepUri = uri, permissionFlags = permissionFlags)
-            }
-            if (!isExperienceProfileSessionCurrent(session, profileController)) {
-                Logger.w("DirectoryPicker", "Dropping directory result after permission cleanup because the experience profile session changed")
-                withContext(Dispatchers.IO) {
-                    releasePersistedUriPermission(context, uri, permissionFlags)
+                    if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                 }
                 return@launch
             }
@@ -440,6 +440,8 @@ actual fun rememberDirectoryPickerLauncher(
         }
         if (uri != null) {
             val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            // Keep grants still used by another mode, drawing, or backup settings.
+            val hadPermission = context.contentResolver.persistedUriPermissions.any { it.uri == uri }
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
@@ -447,13 +449,14 @@ actual fun rememberDirectoryPickerLauncher(
                 )
             } catch (e: Exception) {
                 Logger.e("DirectoryPicker", "Failed to persist URI permission for $uri", e)
+                android.widget.Toast.makeText(context, "フォルダへのアクセス権限を保存できませんでした。別のフォルダを選択してください。", android.widget.Toast.LENGTH_LONG).show()
                 return@rememberExperienceProfileActivityResultLauncher
             }
             coroutineScope.launch {
                 if (isActivityUnavailable(context)) {
                     Logger.w("DirectoryPicker", "Skipping URI permission check because Activity is unavailable")
                     withContext(Dispatchers.IO) {
-                        releasePersistedUriPermission(context, uri, permissionFlags)
+                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                     }
                     return@launch
                 }
@@ -462,32 +465,23 @@ actual fun rememberDirectoryPickerLauncher(
                 }
                 if (!canWrite) {
                     Logger.w("DirectoryPicker", "Cannot write to selected URI: $uri")
+                    android.widget.Toast.makeText(context, "選択したフォルダに書き込みできません。別のフォルダを選択してください。", android.widget.Toast.LENGTH_LONG).show()
                     withContext(Dispatchers.IO) {
-                        releasePersistedUriPermission(context, uri, permissionFlags)
+                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                     }
                     return@launch
                 }
                 if (isActivityUnavailable(context)) {
                     Logger.w("DirectoryPicker", "Skipping directory selection callback because Activity is unavailable")
                     withContext(Dispatchers.IO) {
-                        releasePersistedUriPermission(context, uri, permissionFlags)
+                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                     }
                     return@launch
                 }
                 if (!isExperienceProfileSessionCurrent(session, profileController)) {
                     Logger.w("DirectoryPicker", "Dropping default directory result because the experience profile session changed")
                     withContext(Dispatchers.IO) {
-                        releasePersistedUriPermission(context, uri, permissionFlags)
-                    }
-                    return@launch
-                }
-                withContext(Dispatchers.IO) {
-                    releaseStalePersistedUriPermissions(context, keepUri = uri, permissionFlags = permissionFlags)
-                }
-                if (!isExperienceProfileSessionCurrent(session, profileController)) {
-                    Logger.w("DirectoryPicker", "Dropping default directory result after permission cleanup because the experience profile session changed")
-                    withContext(Dispatchers.IO) {
-                        releasePersistedUriPermission(context, uri, permissionFlags)
+                        if (!hadPermission) releasePersistedUriPermission(context, uri, permissionFlags)
                     }
                     return@launch
                 }
@@ -594,20 +588,6 @@ private fun releasePersistedUriPermission(
     }.onFailure { e ->
         Logger.w("DirectoryPicker", "Failed to release persisted URI permission for $uri: ${e.message}")
     }
-}
-
-private fun releaseStalePersistedUriPermissions(
-    context: android.content.Context,
-    keepUri: android.net.Uri,
-    permissionFlags: Int
-) {
-    val keep = keepUri.toString()
-    context.contentResolver.persistedUriPermissions
-        .mapNotNull { it.uri }
-        .filter { it.toString() != keep }
-        .forEach { staleUri ->
-            releasePersistedUriPermission(context, staleUri, permissionFlags)
-        }
 }
 
 private fun resolveDocumentTreeToPath(uri: android.net.Uri): String? {

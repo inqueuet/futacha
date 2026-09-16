@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -414,7 +415,7 @@ internal fun ThreadPostMetadata(
         fallbackLineHeight = 16.sp
     )
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("futacha-post-header-${post.id}"),
         verticalArrangement = Arrangement.spacedBy(if (compactHeader) 2.dp else 6.dp)
     ) {
         val subjectText = post.subject?.ifBlank { "無題" } ?: "無題"

@@ -15,6 +15,7 @@ import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.repository.SavedThreadRepository
 import com.valoser.futacha.shared.state.AppStateHistoryScrollUpdateRequest
 import com.valoser.futacha.shared.state.AppStateStore
+import com.valoser.futacha.shared.state.launchHistoryScrollPersistence
 import com.valoser.futacha.shared.util.safeEpochElapsedMillis
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -81,7 +82,7 @@ internal fun buildFutachaThreadMutationCallbacks(
 ): FutachaThreadMutationCallbacks {
     return FutachaThreadMutationCallbacks(
         onScrollPositionPersist = { threadId, index, offset, postId ->
-            coroutineScope.launch {
+            coroutineScope.launchHistoryScrollPersistence {
                 persistFutachaThreadScrollPosition(
                     stateStore = stateStore,
                     threadId = threadId,
@@ -94,7 +95,7 @@ internal fun buildFutachaThreadMutationCallbacks(
             }
         },
         onScrollPositionPersistImmediately = { threadId, index, offset, postId ->
-            coroutineScope.launch {
+            coroutineScope.launchHistoryScrollPersistence {
                 persistFutachaThreadScrollPositionImmediately(
                     stateStore = stateStore,
                     threadId = threadId,

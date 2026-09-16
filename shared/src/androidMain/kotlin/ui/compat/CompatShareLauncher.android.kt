@@ -21,7 +21,8 @@ actual fun rememberCompatShareLauncher(): (
                 type = mimeType
                 putExtra(Intent.EXTRA_TEXT, text)
                 absoluteFilePath?.let { path ->
-                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
+                    val uri = if (path.startsWith("content://")) android.net.Uri.parse(path)
+                    else FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
                     putExtra(Intent.EXTRA_STREAM, uri)
                     clipData = ClipData.newUri(context.contentResolver, "shared media", uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

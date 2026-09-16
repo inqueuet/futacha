@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -94,6 +95,10 @@ internal fun ThreadTopBar(
         currentSearchIndex.coerceIn(0, totalSearchMatches - 1) + 1
     }
     TopAppBar(
+        modifier = Modifier.testTag("futacha-thread-top-bar"),
+        // Changing title typography alone leaves Material's 64dp bar intact.
+        // Retain the 48dp action targets and the platform's status-bar inset.
+        expandedHeight = if (compactHeader && !isSearchActive) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
         navigationIcon = {
             if (!isSearchActive) {
                 IconButton(onClick = {
@@ -213,11 +218,14 @@ internal fun ThreadTopBar(
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(0.6f)
                         )
                         Text(
                             text = detailText,
                             style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(0.4f),
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
                         )
                     }

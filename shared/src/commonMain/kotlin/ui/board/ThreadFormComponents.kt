@@ -135,6 +135,7 @@ internal fun ThreadFormDialog(
     val imagePickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
         preferredFileManagerPackage = preferredFileManagerPackage,
+        onSelectionError = { attachmentProcessingError = it },
         onImageSelected = { image ->
             AnalyticsTracker.uiControl(
                 "thread_form_attachment_selection",
@@ -148,12 +149,14 @@ internal fun ThreadFormDialog(
         preference = attachmentPickerPreference,
         mimeType = "video/*",
         preferredFileManagerPackage = preferredFileManagerPackage,
+        onSelectionError = { attachmentProcessingError = it },
         onImageSelected = { image ->
             AnalyticsTracker.uiControl(
                 "thread_form_attachment_selection",
                 "投稿動画を選択",
                 mapOf("attachment_kind" to "動画", "selection_result" to "選択")
             )
+            attachmentProcessingError = null
             onImageSelected(image)
         }
     )

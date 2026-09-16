@@ -9,12 +9,7 @@ package com.valoser.futacha.shared.util
 import platform.Foundation.*
 
 private val persistentLogPath: String? by lazy {
-    val documents = NSSearchPathForDirectoriesInDomains(
-        NSDocumentDirectory,
-        NSUserDomainMask,
-        true
-    ).firstOrNull() as? String
-    documents?.let { "$it/$PERSISTENT_ERROR_LOG_FILE_NAME" }
+    iosDiagnosticPath(PERSISTENT_ERROR_LOG_FILE_NAME)
 }
 private val persistentLogQueue = NSOperationQueue().apply {
     maxConcurrentOperationCount = 1

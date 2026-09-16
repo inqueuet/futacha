@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -59,6 +60,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -498,15 +500,21 @@ internal fun GlobalSettingsDisplaySection(
             headlineContent = { Text("コンパクトヘッダー") },
             supportingContent = {
                 Text(
-                    text = "スレ上部とレスのヘッダー情報を1行寄せで表示し、縦の移動量を減らします。",
+                    text = "スレ上部のバーを低くし、レスのヘッダー情報を1行で表示します。通常表示・ツリー表示・引用プレビューに反映されます。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             },
             trailingContent = {
-                Switch(
-                    checked = isCompactThreadHeaderEnabled,
-                    onCheckedChange = {
+                Switch(checked = isCompactThreadHeaderEnabled, onCheckedChange = null)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("compact-thread-header-switch")
+                .toggleable(
+                    value = isCompactThreadHeaderEnabled,
+                    role = Role.Switch,
+                    onValueChange = {
                         AnalyticsTracker.uiControl(
                             "global_setting_toggle",
                             "コンパクトヘッダーを${if (it) "ON" else "OFF"}にする",
@@ -515,9 +523,6 @@ internal fun GlobalSettingsDisplaySection(
                         onCompactThreadHeaderChanged(it)
                     }
                 )
-            },
-            modifier = Modifier
-                .fillMaxWidth()
         )
         HorizontalDivider()
         ListItem(

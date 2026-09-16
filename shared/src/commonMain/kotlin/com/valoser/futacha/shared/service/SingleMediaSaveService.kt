@@ -3,19 +3,14 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.MediaSaveSource
+import com.valoser.futacha.shared.util.withMediaSaveSource
+import com.valoser.futacha.shared.util.isSupportedMediaSaveSource
 import com.valoser.futacha.shared.util.hasEpochDurationExceeded
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.timeout
-import io.ktor.client.request.get
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.isSuccess
-import io.ktor.utils.io.cancel
-import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -48,7 +43,7 @@ class SingleMediaSaveService(
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Result<SavedMediaFile> = withContext(AppDispatchers.io) {
         val normalizedUrl = mediaUrl.trim()
-        if (!normalizedUrl.isRemoteHttpUrl()) {
+        if (!isSupportedMediaSaveSource(normalizedUrl)) {
             return@withContext Result.failure(IllegalArgumentException("このメディアURLは保存に対応していません"))
         }
 
@@ -67,34 +62,15 @@ class SingleMediaSaveService(
                 try {
                     Result.success(run {
                         val startedAtMillis = Clock.System.now().toEpochMilliseconds()
-                        val response = withTimeoutOrNull(MEDIA_REQUEST_TIMEOUT_MILLIS) {
-                            httpClient.get(normalizedUrl) {
-                                headers[HttpHeaders.Accept] = "image/*,video/*;q=0.9,*/*;q=0.2"
-                                timeout {
-                                    // The client-wide request timeout (30s) keeps counting while
-                                    // the body streams and would abort large downloads; extend it
-                                    // to the save-duration budget.
-                                    requestTimeoutMillis = MAX_SAVE_DURATION_MILLIS
-                                }
-                            }
-                        } ?: throw IllegalStateException(
-                            "保存に失敗しました: ダウンロードがタイムアウトしました (${MEDIA_REQUEST_TIMEOUT_MILLIS}ms)"
-                        )
-
-                        try {
-                            if (!response.status.isSuccess()) {
-                                throw IllegalStateException("保存に失敗しました: HTTP ${response.status.value}")
-                            }
-
-                            val headerContentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
+                        withMediaSaveSource(httpClient, fileSystem, normalizedUrl) { source ->
+                            val headerContentLength = source.declaredSize
                             if (headerContentLength > MAX_FILE_SIZE_BYTES) {
                                 throw IllegalStateException(
                                     "保存に失敗しました: ファイルサイズが上限を超えています (${headerContentLength / 1024}KB)"
                                 )
                             }
 
-                            val contentType = response.headers[HttpHeaders.ContentType]
-                                ?.let { raw -> runCatching { ContentType.parse(raw) }.getOrNull() }
+                            val contentType = source.contentType
 
                             val extension = (
                                 getExtensionFromUrl(normalizedUrl)
@@ -147,8 +123,15 @@ class SingleMediaSaveService(
                                 ).getOrThrow()
                             }
                             val binaryTarget = resolveThreadSaveBinaryWriteTarget(storageTarget, relativeMediaPath)
+                            val sourcePath = com.valoser.futacha.shared.util.localMediaSavePath(normalizedUrl)
+                            if (!normalizedUrl.startsWith("http", true)) {
+                                val destination = fileSystem.resolveSavedFile(
+                                    baseSaveLocation ?: SaveLocation.Path(baseDirectory), relativePath
+                                ).getOrNull()
+                                require(sourcePath != destination) { "元のファイルと保存先が同じです。別のフォルダを選んでください。" }
+                            }
                             val byteSize = streamPayloadToStorage(
-                                response = response,
+                                source = source,
                                 binaryTarget = binaryTarget,
                                 startedAtMillis = startedAtMillis,
                                 declaredSize = headerContentLength,
@@ -162,8 +145,6 @@ class SingleMediaSaveService(
                                 byteSize = byteSize,
                                 savedAtEpochMillis = savedAt
                             )
-                        } finally {
-                            runCatching { response.bodyAsChannel().cancel() }
                         }
                     })
                 } catch (e: CancellationException) {
@@ -178,14 +159,13 @@ class SingleMediaSaveService(
     }
 
     private suspend fun streamPayloadToStorage(
-        response: HttpResponse,
+        source: MediaSaveSource,
         binaryTarget: ThreadSaveBinaryWriteTarget,
         startedAtMillis: Long,
         declaredSize: Long,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit
     ): Long {
         cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
-        val channel = response.bodyAsChannel()
         val buffer = ByteArray(STREAM_READ_BUFFER_BYTES)
         var totalBytesRead = 0L
         var zeroReadCount = 0
@@ -200,7 +180,7 @@ class SingleMediaSaveService(
                 while (true) {
                     coroutineContext.ensureActive()
                     val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
-                        channel.readAvailable(buffer, 0, buffer.size)
+                        source.read(buffer)
                     } ?: throw IllegalStateException("保存に失敗しました: ストリーム読み込みがタイムアウトしました")
 
                     if (read == -1) break
@@ -241,6 +221,7 @@ class SingleMediaSaveService(
             if (totalBytesRead <= 0L) {
                 throw IllegalStateException("保存に失敗しました: メディアファイルが空です")
             }
+            check(declaredSize <= 0L || totalBytesRead == declaredSize) { "保存に失敗しました: ファイルを最後まで読み込めませんでした" }
             return totalBytesRead
         } catch (t: Throwable) {
             cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
@@ -320,11 +301,6 @@ class SingleMediaSaveService(
         }
     }
 
-    private fun String.isRemoteHttpUrl(): Boolean {
-        return startsWith("https://", ignoreCase = true) ||
-            startsWith("http://", ignoreCase = true)
-    }
-
     companion object {
         private const val IMAGE_SUB_DIRECTORY = "images"
         private const val VIDEO_SUB_DIRECTORY = "videos"
@@ -335,7 +311,6 @@ class SingleMediaSaveService(
         private const val MAX_FILE_SIZE_BYTES = 512L * 1024L * 1024L
         private const val MAX_SAVE_DURATION_MILLIS = 15 * 60 * 1000L
         private const val STORAGE_LOCK_WAIT_TIMEOUT_MILLIS = 15_000L
-        private const val MEDIA_REQUEST_TIMEOUT_MILLIS = 30_000L
         private const val READ_IDLE_TIMEOUT_MILLIS = 15_000L
         private const val WRITE_TIMEOUT_MILLIS = 15_000L
         private const val STREAM_READ_BUFFER_BYTES = 512 * 1024

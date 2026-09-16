@@ -2200,7 +2200,7 @@ internal fun compatStorageDirectorySummary(preferenceKey: String, rawValue: Stri
     val defaultSummary = if (preferenceKey == "dummyDrawingDir") {
         "未設定時: 一時保存。残す場合は保存先を設定"
     } else {
-        "未設定時：標準フォルダに保存"
+        if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha"
     }
     val raw = rawValue?.trim().orEmpty()
     if (raw.isBlank()) return defaultSummary
@@ -2640,7 +2640,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("下にスワイプして閉じる", "ON", preferenceKey = "controlViewerSwipeClose")
     )
     "storage" -> listOf(
-        CompatSettingEntry("保存ファイル", "未設定時：標準フォルダに保存", preferenceKey = "dummyDownloadDir"),
+        CompatSettingEntry("保存ファイル", if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha", preferenceKey = "dummyDownloadDir"),
         CompatSettingEntry("手書きファイル", "未設定時: 一時保存。残す場合は保存先を設定", preferenceKey = "dummyDrawingDir"),
         CompatSettingEntry("画像キャッシュ上限", "512MB", preferenceKey = "commonImageCache"),
         CompatSettingEntry("画像キャッシュの保存先", "端末ストレージ", preferenceKey = "dummyImageCacheLocation"),
@@ -3993,7 +3993,8 @@ internal fun CompatGalleryScreen(
     var saveMode by remember { mutableStateOf(false) }
     var selectedMediaKeys by remember(tabKey) { mutableStateOf<Set<String>>(emptySet()) }
     var batchSaveFormatDialog by remember { mutableStateOf(false) }
-    var batchSaveProgress by remember { mutableStateOf<SaveProgress?>(null) }
+    val batchProtectionProgress = remember { kotlinx.coroutines.flow.MutableStateFlow<SaveProgress?>(null) }
+    val batchSaveProgress by batchProtectionProgress.collectAsState()
     var batchSaveCancelRequested by remember { mutableStateOf(false) }
     var batchSaveJob by remember { mutableStateOf<Job?>(null) }
     var savingMediaKey by remember { mutableStateOf<String?>(null) }
@@ -4027,6 +4028,10 @@ internal fun CompatGalleryScreen(
     val landscapeColumns = preferences.compatPreferenceValue(
         "viewer", "galleryGridViewLandscapeClmNum", "横持ちの列数"
     )?.toIntOrNull()?.coerceIn(2, 16) ?: 7
+    val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
+        message = it.toCompatUserMessage("保存先の設定を記録できませんでした")
+    }
+    var lastSavedFile by remember { mutableStateOf<Pair<com.valoser.futacha.shared.service.SavedMediaFile, SaveLocation?>?>(null) }
     val manualSaveLocation = parseCompatSaveLocation(
         preferences.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
     )
@@ -4111,7 +4116,7 @@ internal fun CompatGalleryScreen(
         val availableKeys = posts.mapTo(mutableSetOf(), ::compatMediaIdentity)
         selectedMediaKeys = selectedMediaKeys.intersect(availableKeys)
     }
-    fun savePost(post: CompatPostSnapshot) {
+    fun savePostNow(post: CompatPostSnapshot, selectedLocation: SaveLocation?) {
         if (savingMediaKey != null || batchSaveJob != null) return
         launchScreenAction {
             val saver = mediaSaver
@@ -4131,11 +4136,14 @@ internal fun CompatGalleryScreen(
                     mediaUrl,
                     tab.boardKey,
                     tab.threadNo,
-                    baseSaveLocation = manualSaveLocation,
+                    baseSaveLocation = selectedLocation,
                     storageDirectoryOverride = "",
                     useTypeSubdirectory = false
                 ).fold(
-                    onSuccess = { "${it.fileName}を保存しました" },
+                    onSuccess = {
+                        lastSavedFile = it to selectedLocation
+                        compatMediaSaveCompletionMessage(it, requireNotNull(fileSystem), selectedLocation)
+                    },
                     onFailure = { it.toCompatUserMessage("メディアを保存できませんでした") }
                 )
             } finally {
@@ -4143,10 +4151,14 @@ internal fun CompatGalleryScreen(
             }
         }
     }
-    fun startBatchSave(
+    fun savePost(post: CompatPostSnapshot) {
+        withSaveDestination { savePostNow(post, it) }
+    }
+    fun startBatchSaveNow(
         targets: List<CompatPostSnapshot>,
         format: CompatGalleryBatchSaveFormat,
-        isRetry: Boolean = false
+        isRetry: Boolean,
+        selectedLocation: SaveLocation?
     ) {
         if (targets.isEmpty() || batchSaveJob != null || savingMediaKey != null) return
         val targetByUrl = targets.mapNotNull { post ->
@@ -4165,70 +4177,73 @@ internal fun CompatGalleryScreen(
             val failedUrls = mutableSetOf<String>()
             var succeeded = 0
             try {
-                when (format) {
-                    CompatGalleryBatchSaveFormat.ZIP -> {
-                        val saver = mediaZipSaver ?: error("ZIP保存機能を初期化できませんでした")
-                        val result = saver.save(
-                            mediaUrls = targetByUrl.map { it.first },
-                            boardId = tab.boardKey,
-                            threadId = tab.threadNo,
-                            baseSaveLocation = manualSaveLocation,
-                            baseDirectory = MANUAL_SAVE_DIRECTORY,
-                            fileNameSuffix = batchRetryAttempt.takeIf { isRetry }?.let { "retry$it" },
-                            onProgress = { current, total, item, itemBytes, itemTotalBytes ->
-                                batchSaveProgress = SaveProgress(
-                                    SavePhase.DOWNLOADING,
-                                    current,
-                                    total,
-                                    item,
-                                    itemBytes,
-                                    itemTotalBytes
-                                )
-                            }
-                        ).getOrThrow()
-                        succeeded = result.savedItems
-                        failedUrls += result.failedUrls
-                        message = buildCompatGalleryBatchSaveMessage(format, succeeded, failedUrls.size)
-                    }
-                    CompatGalleryBatchSaveFormat.FOLDER -> {
-                        val saver = mediaSaver ?: error("保存機能を初期化できませんでした")
-                        val folder = buildCompatManualImageFolderName(
-                            boardName = tab.boardName,
-                            title = tab.title,
-                            threadId = tab.threadNo
-                        )
-                        val outputNames = compatBatchOutputFileNames(targetByUrl.map { it.first })
-                        targetByUrl.forEachIndexed { index, (url, _) ->
-                            val item = url.substringBefore('?').substringBefore('#').substringAfterLast('/')
-                            batchSaveProgress = SaveProgress(SavePhase.DOWNLOADING, index, targetByUrl.size, item)
-                            saver.saveMedia(
-                                url,
-                                tab.boardKey,
-                                tab.threadNo,
-                                baseSaveLocation = manualSaveLocation,
+                com.valoser.futacha.shared.service.runProtectedThreadSave(tab.title, batchProtectionProgress) {
+                    when (format) {
+                        CompatGalleryBatchSaveFormat.ZIP -> {
+                            val saver = mediaZipSaver ?: error("ZIP保存機能を初期化できませんでした")
+                            val result = saver.save(
+                                mediaUrls = targetByUrl.map { it.first },
+                                boardId = tab.boardKey,
+                                threadId = tab.threadNo,
+                                baseSaveLocation = selectedLocation,
                                 baseDirectory = MANUAL_SAVE_DIRECTORY,
-                                storageDirectoryOverride = folder,
-                                useTypeSubdirectory = false,
-                                outputFileNameOverride = outputNames[url],
-                                onProgress = { itemBytes, itemTotalBytes ->
-                                    batchSaveProgress = SaveProgress(
+                                fileNameSuffix = batchRetryAttempt.takeIf { isRetry }?.let { "retry$it" },
+                                onProgress = { current, total, item, itemBytes, itemTotalBytes ->
+                                    batchProtectionProgress.value = SaveProgress(
                                         SavePhase.DOWNLOADING,
-                                        index,
-                                        targetByUrl.size,
+                                        current,
+                                        total,
                                         item,
                                         itemBytes,
                                         itemTotalBytes
                                     )
                                 }
-                            ).fold(
-                                onSuccess = { succeeded += 1 },
-                                onFailure = { failedUrls += url }
-                            )
-                            batchSaveProgress = SaveProgress(SavePhase.DOWNLOADING, index + 1, targetByUrl.size, item)
+                            ).getOrThrow()
+                            succeeded = result.savedItems
+                            failedUrls += result.failedUrls
+                            message = buildCompatGalleryBatchSaveMessage(format, succeeded, failedUrls.size)
                         }
-                        message = buildCompatGalleryBatchSaveMessage(format, succeeded, failedUrls.size)
+                        CompatGalleryBatchSaveFormat.FOLDER -> {
+                            val saver = mediaSaver ?: error("保存機能を初期化できませんでした")
+                            val folder = buildCompatManualImageFolderName(
+                                boardName = tab.boardName,
+                                title = tab.title,
+                                threadId = tab.threadNo
+                            )
+                            val outputNames = compatBatchOutputFileNames(targetByUrl.map { it.first })
+                            targetByUrl.forEachIndexed { index, (url, _) ->
+                                val item = url.substringBefore('?').substringBefore('#').substringAfterLast('/')
+                                batchProtectionProgress.value = SaveProgress(SavePhase.DOWNLOADING, index, targetByUrl.size, item)
+                                saver.saveMedia(
+                                    url,
+                                    tab.boardKey,
+                                    tab.threadNo,
+                                    baseSaveLocation = selectedLocation,
+                                    baseDirectory = MANUAL_SAVE_DIRECTORY,
+                                    storageDirectoryOverride = folder,
+                                    useTypeSubdirectory = false,
+                                    outputFileNameOverride = outputNames[url],
+                                    onProgress = { itemBytes, itemTotalBytes ->
+                                        batchProtectionProgress.value = SaveProgress(
+                                            SavePhase.DOWNLOADING,
+                                            index,
+                                            targetByUrl.size,
+                                            item,
+                                            itemBytes,
+                                            itemTotalBytes
+                                        )
+                                    }
+                                ).fold(
+                                    onSuccess = { succeeded += 1 },
+                                    onFailure = { failedUrls += url }
+                                )
+                                batchProtectionProgress.value = SaveProgress(SavePhase.DOWNLOADING, index + 1, targetByUrl.size, item)
+                            }
+                            message = buildCompatGalleryBatchSaveMessage(format, succeeded, failedUrls.size)
+                        }
                     }
                 }
+                message = message.orEmpty() + "\n保存先: " + manualSaveDestinationLabel(requireNotNull(fileSystem), selectedLocation)
                 failedBatchMediaKeys = targetByUrl.asSequence()
                     .filter { it.first in failedUrls }
                     .map { compatMediaIdentity(it.second) }
@@ -4243,15 +4258,19 @@ internal fun CompatGalleryScreen(
                 } else {
                     "キャンセルしました"
                 }
+                throw cancelled
             } catch (failure: Throwable) {
                 failedBatchMediaKeys = targetByUrl.mapTo(mutableSetOf()) { compatMediaIdentity(it.second) }
                 message = failure.toCompatUserMessage("一括保存できませんでした")
             } finally {
-                batchSaveProgress = null
+                batchProtectionProgress.value = null
                 batchSaveCancelRequested = false
                 batchSaveJob = null
             }
         }
+    }
+    fun startBatchSave(targets: List<CompatPostSnapshot>, format: CompatGalleryBatchSaveFormat, isRetry: Boolean = false) {
+        withSaveDestination { startBatchSaveNow(targets, format, isRetry, it) }
     }
     fun sharePost(post: CompatPostSnapshot) {
         val mediaUrl = resolveCompatViewerMediaUrl(post) ?: return
@@ -4270,9 +4289,7 @@ internal fun CompatGalleryScreen(
             )
                 .onSuccess { saved ->
                     val mime = if (saved.mediaType.name == "VIDEO") "video/*" else "image/*"
-                    val localPath = if (manualSaveLocation == null) {
-                        fs.resolveAbsolutePath("$MANUAL_SAVE_DIRECTORY/${saved.relativePath}")
-                    } else null
+                    val localPath = fs.resolveSavedFile(manualSaveLocation ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
                     share(mediaUrl, mime, localPath)
                 }
                 .onFailure { message = it.toCompatUserMessage("画像を共有できませんでした") }
@@ -4786,6 +4803,14 @@ internal fun CompatGalleryScreen(
             text = { Text(current) },
             confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } },
             dismissButton = {
+                lastSavedFile?.let { (saved, location) ->
+                    TextButton(onClick = {
+                        launchScreenAction {
+                            val path = requireNotNull(fileSystem).resolveSavedFile(location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
+                            share("", if (saved.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
+                        }
+                    }) { Text("共有") }
+                }
                 if (failedBatchMediaKeys.isNotEmpty() && lastBatchSaveFormat != null) {
                     TextButton(onClick = {
                         val retryTargets = posts.filter { compatMediaIdentity(it) in failedBatchMediaKeys }
@@ -4924,6 +4949,10 @@ internal fun CompatViewerScreen(
     val mediaSaver = remember(httpClient, fileSystem) {
         if (httpClient != null && fileSystem != null) SingleMediaSaveService(httpClient, fileSystem) else null
     }
+    val withSaveDestination = rememberCompatManualSaveDestinationLauncher(store, preferences) {
+        message = it.toCompatUserMessage("保存先の設定を記録できませんでした")
+    }
+    var lastSavedFile by remember { mutableStateOf<Pair<com.valoser.futacha.shared.service.SavedMediaFile, SaveLocation?>?>(null) }
     val manualSaveLocation = parseCompatSaveLocation(
         preferences.compatPreferenceValue("storage", "dummyDownloadDir", "保存ファイルの保存先")
     )
@@ -5095,46 +5124,50 @@ internal fun CompatViewerScreen(
         }
         imagePrefetcher.update(requests, currentUrl)
     }
-    fun saveCurrent(shareAfterSave: Boolean) {
-        val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
-        if (mediaUrl == null || isSaving) return
+    fun saveCurrentNow(mediaUrl: String, shareAfterSave: Boolean, selectedLocation: SaveLocation?) {
+        if (isSaving) return
         launchScreenAction {
             isSaving = true
-            val saver = mediaSaver
-            val fs = fileSystem
-            if (saver == null || fs == null) {
-                message = if (shareAfterSave) "画像共有を初期化できませんでした" else "保存機能を初期化できませんでした"
-            } else {
-                saver.saveMedia(
-                    mediaUrl,
-                    tab.boardKey,
-                    tab.threadNo,
-                    baseSaveLocation = manualSaveLocation,
-                    storageDirectoryOverride = if (shareAfterSave) null else "",
-                    useTypeSubdirectory = shareAfterSave
-                )
-                    .onSuccess { saved ->
-                        if (shareAfterSave) {
-                            val mime = if (saved.mediaType.name == "VIDEO") "video/*" else "image/*"
-                            share(
-                                mediaUrl,
-                                mime,
-                                if (manualSaveLocation == null) {
-                                    fs.resolveAbsolutePath("$MANUAL_SAVE_DIRECTORY/${saved.relativePath}")
-                                } else null
-                            )
-                        } else {
-                            message = "${saved.fileName}を保存しました"
+            try {
+                val saver = mediaSaver
+                val fs = fileSystem
+                if (saver == null || fs == null) {
+                    message = if (shareAfterSave) "画像共有を初期化できませんでした" else "保存機能を初期化できませんでした"
+                } else {
+                    saver.saveMedia(
+                        mediaUrl,
+                        tab.boardKey,
+                        tab.threadNo,
+                        baseSaveLocation = selectedLocation,
+                        storageDirectoryOverride = if (shareAfterSave) null else "",
+                        useTypeSubdirectory = shareAfterSave
+                    )
+                        .onSuccess { saved ->
+                            if (shareAfterSave) {
+                                val mime = if (saved.mediaType.name == "VIDEO") "video/*" else "image/*"
+                                share(
+                                    mediaUrl,
+                                    mime,
+                                    fs.resolveSavedFile(selectedLocation ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
+                                )
+                            } else {
+                                lastSavedFile = saved to selectedLocation
+                                message = compatMediaSaveCompletionMessage(saved, fs, selectedLocation)
+                            }
                         }
-                    }
-                    .onFailure {
-                        message = it.toCompatUserMessage(
-                            if (shareAfterSave) "画像を共有できませんでした" else "画像を保存できませんでした"
-                        )
-                    }
-            }
-            isSaving = false
+                        .onFailure {
+                            message = it.toCompatUserMessage(
+                                if (shareAfterSave) "画像を共有できませんでした" else "画像を保存できませんでした"
+                            )
+                        }
+                }
+            } finally { isSaving = false }
         }
+    }
+    fun saveCurrent(shareAfterSave: Boolean) {
+        val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl) ?: return
+        if (isSaving) return
+        withSaveDestination { saveCurrentNow(mediaUrl, shareAfterSave, it) }
     }
     fun searchAscii2dCurrent() {
         val mediaUrl = posts.getOrNull(pagerState.currentPage)?.let(::resolveCompatViewerMediaUrl)
@@ -5797,7 +5830,17 @@ internal fun CompatViewerScreen(
         AlertDialog(
             onDismissRequest = { message = null },
             text = { Text(current) },
-            confirmButton = { TextButton(onClick = { message = null }) { Text("OK") } }
+            confirmButton = { TextButton(onClick = { message = null; lastSavedFile = null }) { Text("OK") } },
+            dismissButton = {
+                lastSavedFile?.let { (saved, location) ->
+                    TextButton(onClick = {
+                        launchScreenAction {
+                            val path = requireNotNull(fileSystem).resolveSavedFile(location ?: SaveLocation.Path(MANUAL_SAVE_DIRECTORY), saved.relativePath).getOrThrow()
+                            share("", if (saved.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
+                        }
+                    }) { Text("共有") }
+                }
+            }
         )
     }
     reverseSearchResult?.let { result ->

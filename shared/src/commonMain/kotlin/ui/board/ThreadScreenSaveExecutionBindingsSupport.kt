@@ -107,7 +107,8 @@ internal data class ThreadScreenManualSaveCallbacks(
 )
 
 internal data class ThreadScreenManualSaveBindings(
-    val handleThreadSaveRequest: () -> Unit
+    val handleThreadSaveRequest: () -> Unit,
+    val saveToLocation: (SaveLocation) -> Unit
 )
 
 internal fun buildThreadScreenManualSaveBindings(
@@ -117,6 +118,24 @@ internal fun buildThreadScreenManualSaveBindings(
     callbacks: ThreadScreenManualSaveCallbacks
 ): ThreadScreenManualSaveBindings {
     return ThreadScreenManualSaveBindings(
+        saveToLocation = { location ->
+            val directory = (location as? SaveLocation.Path)?.path ?: dependencies.manualSaveDirectory
+            buildThreadScreenManualSaveBindings(
+                coroutineScope, stateBindings,
+                dependencies.copy(
+                    manualSaveLocation = location,
+                    manualSaveDirectory = directory,
+                    resolvedManualSaveDirectory = (location as? SaveLocation.Path)?.let {
+                        dependencies.fileSystem?.resolveAbsolutePath(it.path)
+                    },
+                    manualSaveRepository = dependencies.fileSystem?.let {
+                        SavedThreadRepository(it, baseDirectory = directory, baseSaveLocation = location)
+                    },
+                    requiresManualLocationSelection = false,
+                    shouldRequireManualSaveDirectoryChange = false
+                ), callbacks
+            ).handleThreadSaveRequest()
+        },
         handleThreadSaveRequest = save@{
             when (resolveThreadSaveAvailability(
                 isAnySaveInProgress = stateBindings.currentIsManualSaveInProgress() || stateBindings.currentIsSingleMediaSaveInProgress(),
@@ -237,6 +256,8 @@ internal fun buildThreadScreenManualSaveBindings(
                     }
                 } catch (e: CancellationException) {
                     throw e
+                } catch (failure: Throwable) {
+                    callbacks.applySaveErrorState(resolveThreadManualSaveErrorState(failure, isUnexpected = true))
                 } finally {
                     progressJob?.cancel()
                     stateBindings.setSaveProgress(null)
@@ -282,11 +303,13 @@ internal data class ThreadScreenSingleMediaSaveCallbacks(
     val showOptionalMessage: (String?) -> Unit,
     val applySaveErrorState: (ThreadManualSaveErrorState) -> Unit,
     val showMessage: (String) -> Unit,
-    val openSaveSettings: (() -> Unit)? = null
+    val openSaveSettings: (() -> Unit)? = null,
+    val onSaved: (com.valoser.futacha.shared.service.SavedMediaFile, SaveLocation) -> Unit = { _, _ -> }
 )
 
 internal data class ThreadScreenSingleMediaSaveBindings(
-    val savePreviewMedia: (MediaPreviewEntry) -> Unit
+    val savePreviewMedia: (MediaPreviewEntry) -> Unit,
+    val saveToLocation: (MediaPreviewEntry, SaveLocation) -> Unit
 )
 
 internal fun buildThreadScreenSingleMediaSaveBindings(
@@ -296,6 +319,18 @@ internal fun buildThreadScreenSingleMediaSaveBindings(
     callbacks: ThreadScreenSingleMediaSaveCallbacks
 ): ThreadScreenSingleMediaSaveBindings {
     return ThreadScreenSingleMediaSaveBindings(
+        saveToLocation = { entry, location ->
+            buildThreadScreenSingleMediaSaveBindings(
+                coroutineScope, stateBindings,
+                dependencies.copy(
+                    manualSaveLocation = location,
+                    manualSaveDirectory = (location as? SaveLocation.Path)?.path ?: dependencies.manualSaveDirectory,
+                    resolvedManualSaveDirectory = (location as? SaveLocation.Path)?.path,
+                    requiresManualLocationSelection = false,
+                    shouldRequireManualSaveDirectoryChange = false
+                ), callbacks
+            ).savePreviewMedia(entry)
+        },
         savePreviewMedia = savePreviewMedia@{ entry ->
             if (dependencies.shouldRequireManualSaveDirectoryChange) {
                 callbacks.showMessage(buildThreadSaveDefaultAndroidDirectoryMessage())
@@ -304,7 +339,7 @@ internal fun buildThreadScreenSingleMediaSaveBindings(
             }
             val saveRequestState = resolveThreadMediaSaveRequestState(
                 isAnySaveInProgress = stateBindings.currentIsManualSaveInProgress() || stateBindings.currentIsSingleMediaSaveInProgress(),
-                isRemoteMedia = isRemoteMediaUrl(entry.url),
+                isRemoteMedia = com.valoser.futacha.shared.util.isSupportedMediaSaveSource(entry.url),
                 requiresManualLocationSelection = dependencies.requiresManualLocationSelection,
                 hasStorageDependencies = dependencies.hasStorageDependencies
             )
@@ -346,6 +381,9 @@ internal fun buildThreadScreenSingleMediaSaveBindings(
                     ) {
                         is ThreadSingleMediaSaveUiOutcome.Success -> {
                             callbacks.showMessage(outcome.successState.message)
+                            outcome.savedMedia?.let { saved ->
+                                callbacks.onSaved(saved, dependencies.manualSaveLocation ?: SaveLocation.Path(dependencies.manualSaveDirectory))
+                            }
                         }
                         is ThreadSingleMediaSaveUiOutcome.Failure -> {
                             callbacks.applySaveErrorState(outcome.errorState)

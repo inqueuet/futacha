@@ -42,7 +42,7 @@ class CompatThreadSaveProgressDialogTest {
             incompleteMediaCount = 4
         )
 
-        assertEquals("保存しました\n4件のメディアを取得できませんでした", compatThreadSaveCompletionMessage(partial))
+        assertEquals("一部を保存できませんでした\n4件の画像・動画を保存できませんでした。", compatThreadSaveCompletionMessage(partial))
         assertEquals("キャンセルしました", compatThreadSaveCancellationMessage())
         assertEquals(
             "キャンセルしました\n3件のメディアをここまで保存しました",

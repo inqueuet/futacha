@@ -14,6 +14,9 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
 import kotlinx.cinterop.usePinned
 import platform.Foundation.*
+import platform.UIKit.UIAdaptivePresentationControllerDelegateProtocol
+import platform.UIKit.UIPresentationController
+import platform.UIKit.presentationController
 import platform.UIKit.UIDocumentPickerDelegateProtocol
 import platform.UIKit.UIDocumentPickerViewController
 import platform.PhotosUI.PHPickerConfiguration
@@ -25,17 +28,7 @@ import platform.UIKit.UIApplication
 import platform.UIKit.UIWindowScene
 import platform.UIKit.UIViewController
 import platform.UIKit.UIWindow
-import platform.UniformTypeIdentifiers.UTType
-import platform.UniformTypeIdentifiers.UTTypeData
-import platform.UniformTypeIdentifiers.UTTypeFolder
-import platform.UniformTypeIdentifiers.UTTypeGIF
-import platform.UniformTypeIdentifiers.UTTypeImage
-import platform.UniformTypeIdentifiers.UTTypeJPEG
-import platform.UniformTypeIdentifiers.UTTypeMPEG4Movie
-import platform.UniformTypeIdentifiers.UTTypeMovie
-import platform.UniformTypeIdentifiers.UTTypePNG
-import platform.UniformTypeIdentifiers.UTTypeQuickTimeMovie
-import platform.UniformTypeIdentifiers.UTTypeWebP
+import platform.UniformTypeIdentifiers.*
 import platform.FileProvider.NSFileProviderDomain
 import platform.FileProvider.NSFileProviderManager
 import platform.darwin.NSObject
@@ -48,6 +41,7 @@ import kotlin.concurrent.AtomicReference
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 
@@ -125,14 +119,15 @@ private fun schedulePickedMediaLoadTimeout(
     return PickedMediaLoadTimeout(timer)
 }
 
-private fun documentContentTypesForMimeType(mimeType: String): List<UTType> {
+internal fun documentContentTypesForMimeType(mimeType: String): List<UTType> {
     return if (isVideoMimeType(mimeType)) {
-        listOf(
+        listOfNotNull(
             UTTypeMovie,
             UTTypeMPEG4Movie,
-            UTTypeQuickTimeMovie
+            UTTypeQuickTimeMovie,
+            UTType.typeWithFilenameExtension("webm")
         )
-    } else {
+    } else if (mimeType.startsWith("image/", ignoreCase = true)) {
         listOf(
             UTTypeImage,
             UTTypeJPEG,
@@ -140,32 +135,37 @@ private fun documentContentTypesForMimeType(mimeType: String): List<UTType> {
             UTTypeGIF,
             UTTypeWebP
         )
+    } else {
+        // ACTION_GET_CONTENT */* also includes videos and arbitrary documents.
+        listOf(UTTypeData)
     }
 }
 
-private fun loadPickedMediaFromUrl(
+internal fun loadPickedMediaFromUrl(
     url: NSURL,
     isVideo: Boolean,
-    fallbackFileName: String
+    fallbackFileName: String,
+    maxBytes: Long = MAX_PICKED_IMAGE_BYTES
 ): ImageData? {
+    require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "Invalid picker byte limit" }
     val mediaLabel = if (isVideo) "video" else "image"
     val knownFileSize = resolveFileSizeBytes(url)
-    if (knownFileSize != null && knownFileSize > MAX_PICKED_IMAGE_BYTES) {
+    if (knownFileSize != null && knownFileSize > maxBytes) {
         Logger.w(
             "ImagePicker.ios",
-            "Selected $mediaLabel is too large: ${knownFileSize / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+            "Selected $mediaLabel is too large: ${knownFileSize / 1024}KB (max: ${maxBytes / 1024}KB)"
         )
         return null
     }
 
     if (knownFileSize != null && knownFileSize > 0L) {
-        readPickedMediaBytesFromFileUrl(url, knownFileSize, mediaLabel)?.let { bytes ->
-            return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
+        readPickedMediaBytesFromFileUrl(url, knownFileSize, mediaLabel, maxBytes)?.let { bytes ->
+            return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName, maxBytes)
         }
     }
 
-    readPickedMediaBytesFromUnknownSizeFileUrl(url, mediaLabel)?.let { bytes ->
-        return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName)
+    readPickedMediaBytesFromUnknownSizeFileUrl(url, mediaLabel, maxBytes)?.let { bytes ->
+        return buildPickedImageData(bytes, url.lastPathComponent, fallbackFileName, maxBytes)
     }
 
     Logger.w("ImagePicker.ios", "Failed to load $mediaLabel from ${url.path}")
@@ -175,10 +175,11 @@ private fun loadPickedMediaFromUrl(
 private fun readPickedMediaBytesFromFileUrl(
     url: NSURL,
     expectedFileSize: Long,
-    mediaLabel: String
+    mediaLabel: String,
+    maxBytes: Long
 ): ByteArray? {
     val path = url.path ?: return null
-    if (expectedFileSize <= 0L || expectedFileSize > MAX_PICKED_IMAGE_BYTES) return null
+    if (expectedFileSize <= 0L || expectedFileSize > maxBytes) return null
 
     val expectedSize = expectedFileSize.toInt()
     val output = ByteArray(expectedSize)
@@ -219,7 +220,7 @@ private fun readPickedMediaBytesFromFileUrl(
         }
     }
 
-    if (totalRead <= 0 || totalRead > MAX_PICKED_IMAGE_BYTES) {
+    if (totalRead <= 0 || totalRead > maxBytes) {
         Logger.w("ImagePicker.ios", "Selected $mediaLabel payload is empty or too large")
         return null
     }
@@ -228,11 +229,11 @@ private fun readPickedMediaBytesFromFileUrl(
 
 private fun readPickedMediaBytesFromUnknownSizeFileUrl(
     url: NSURL,
-    mediaLabel: String
+    mediaLabel: String,
+    maxBytes: Long
 ): ByteArray? {
     val path = url.path ?: return null
-    val maxBytes = MAX_PICKED_IMAGE_BYTES.toInt()
-    val output = ByteArray(maxBytes)
+    val output = ByteArray(maxBytes.toInt())
     val fileHandle = NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
     var totalRead = 0
 
@@ -255,7 +256,7 @@ private fun readPickedMediaBytesFromUnknownSizeFileUrl(
                     Logger.w(
                         "ImagePicker.ios",
                         "Selected $mediaLabel is too large: ${(totalRead + chunkLength) / 1024}KB " +
-                            "(max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                            "(max: ${maxBytes / 1024}KB)"
                     )
                     return null
                 }
@@ -297,27 +298,35 @@ suspend fun pickImageFromDocuments(preferredProviderIdentifier: String? = null):
 
 suspend fun pickMediaFromDocuments(
     mimeType: String,
-    preferredProviderIdentifier: String? = null
+    preferredProviderIdentifier: String? = null,
+    maxBytes: Long = MAX_PICKED_IMAGE_BYTES
 ): ImageData? = suspendCancellableCoroutine { continuation ->
+    require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "Invalid picker byte limit" }
     if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present document media picker: root view controller is unavailable")
-        continuation.resume(null)
+        continuation.resumeWithException(IllegalStateException("Cannot present document media picker"))
         return@suspendCancellableCoroutine
     }
     val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
+    var pickerRef: UIDocumentPickerViewController? = null
     var loadTimeout: PickedMediaLoadTimeout? = null
-    fun complete(value: ImageData?) {
+    fun complete(value: ImageData?, failed: Boolean = false) {
         if (!resumeGate.tryOpen()) return
         loadTimeout?.cancel()
         loadTimeout = null
         releasePickerDelegate(delegateRef)
-        continuation.resume(value)
+        if (failed) continuation.resumeWithException(IllegalStateException("Could not load selected attachment"))
+        else continuation.resume(value)
     }
 
     val isVideo = isVideoMimeType(mimeType)
     val contentTypes = documentContentTypesForMimeType(mimeType)
-    val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol {
+    val delegate = object : NSObject(), UIDocumentPickerDelegateProtocol, UIAdaptivePresentationControllerDelegateProtocol {
+        override fun presentationControllerDidDismiss(presentationController: UIPresentationController) {
+            complete(null)
+        }
+
         override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
             controller.dismissViewControllerAnimated(true, null)
             val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
@@ -327,16 +336,17 @@ suspend fun pickMediaFromDocuments(
             }
             loadTimeout = schedulePickedMediaLoadTimeout(
                 logLabel = if (isVideo) "video" else "image",
-                complete = ::complete
+                complete = { complete(it, failed = true) }
             )
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0u)) {
                 val selected = loadPickedMediaFromUrl(
                     url = url,
                     isVideo = isVideo,
-                    fallbackFileName = if (isVideo) DEFAULT_PICKED_VIDEO_FILE_NAME else DEFAULT_PICKED_IMAGE_FILE_NAME
+                    fallbackFileName = if (isVideo) DEFAULT_PICKED_VIDEO_FILE_NAME else DEFAULT_PICKED_IMAGE_FILE_NAME,
+                    maxBytes = maxBytes
                 )
                 dispatch_async(dispatch_get_main_queue()) {
-                    complete(selected)
+                    complete(selected, failed = selected == null)
                 }
             }
         }
@@ -354,11 +364,14 @@ suspend fun pickMediaFromDocuments(
             dispatch_async(dispatch_get_main_queue()) {
                 loadTimeout?.cancel()
                 loadTimeout = null
-                releasePickerDelegate(delegateRef)
+                pickerRef?.let { picker ->
+                    dismissPresentedPicker(picker) { releasePickerDelegate(delegateRef) }
+                } ?: releasePickerDelegate(delegateRef)
             }
         }
     }
     resolvePreferredProviderUrl(preferredProviderIdentifier) { preferredUrl ->
+        if (!continuation.isActive) return@resolvePreferredProviderUrl
         val picker = UIDocumentPickerViewController(
             forOpeningContentTypes = contentTypes,
             asCopy = true
@@ -366,8 +379,11 @@ suspend fun pickMediaFromDocuments(
             directoryURL = preferredUrl
             this.delegate = delegate
         }
-        presentPicker(picker, logLabel = "document media picker") {
-            complete(null)
+        pickerRef = picker
+        presentPicker(picker, logLabel = "document media picker", onPresented = {
+            picker.presentationController?.delegate = delegate
+        }) {
+            complete(null, failed = true)
         }
     }
 }
@@ -512,19 +528,23 @@ private fun readPickedFileBytesUpTo(
     return if (totalRead == output.size) output else output.copyOf(totalRead)
 }
 
-suspend fun pickVideo(): ImageData? = pickFromPhotoLibrary(
+suspend fun pickVideo(maxBytes: Long = MAX_PICKED_IMAGE_BYTES): ImageData? = pickFromPhotoLibrary(
     filter = PHPickerFilter.videosFilter,
     typeIdentifier = "public.movie",
     fallbackFileName = DEFAULT_PICKED_VIDEO_FILE_NAME,
-    logLabel = "video"
+    logLabel = "video",
+    maxBytes = maxBytes
 )
 
-actual suspend fun pickImage(): ImageData? = suspendCancellableCoroutine { continuation ->
+actual suspend fun pickImage(): ImageData? = pickIosImage()
+
+internal suspend fun pickIosImage(maxBytes: Long = MAX_PICKED_IMAGE_BYTES): ImageData? = suspendCancellableCoroutine { continuation ->
     pickFromPhotoLibrary(
         filter = PHPickerFilter.imagesFilter,
         typeIdentifier = "public.image",
         fallbackFileName = DEFAULT_PICKED_IMAGE_FILE_NAME,
         logLabel = "image",
+        maxBytes = maxBytes,
         continuation = continuation
     )
 }
@@ -534,22 +554,25 @@ private fun pickFromPhotoLibrary(
     typeIdentifier: String,
     fallbackFileName: String,
     logLabel: String,
+    maxBytes: Long,
     continuation: CancellableContinuation<ImageData?>
 ) {
+    require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "Invalid picker byte limit" }
     if (getRootViewController() == null) {
         Logger.w("ImagePicker.ios", "Cannot present photo $logLabel picker: root view controller is unavailable")
-        continuation.resume(null)
+        continuation.resumeWithException(IllegalStateException("Cannot present photo picker"))
         return
     }
     val resumeGate = ResumeGate()
     var delegateRef: NSObject? = null
     var loadTimeout: PickedMediaLoadTimeout? = null
-    fun complete(value: ImageData?) {
+    fun complete(value: ImageData?, failed: Boolean = false) {
         if (!resumeGate.tryOpen()) return
         loadTimeout?.cancel()
         loadTimeout = null
         releasePickerDelegate(delegateRef)
-        continuation.resume(value)
+        if (failed) continuation.resumeWithException(IllegalStateException("Could not load selected attachment"))
+        else continuation.resume(value)
     }
 
     val config = PHPickerConfiguration().apply {
@@ -559,7 +582,11 @@ private fun pickFromPhotoLibrary(
 
     val picker = PHPickerViewController(configuration = config)
 
-    val delegate = object : NSObject(), PHPickerViewControllerDelegateProtocol {
+    val delegate = object : NSObject(), PHPickerViewControllerDelegateProtocol, UIAdaptivePresentationControllerDelegateProtocol {
+        override fun presentationControllerDidDismiss(presentationController: UIPresentationController) {
+            complete(null)
+        }
+
         override fun picker(picker: PHPickerViewController, didFinishPicking: List<*>) {
             picker.dismissViewControllerAnimated(true, null)
 
@@ -571,44 +598,51 @@ private fun pickFromPhotoLibrary(
 
             val result = results.first()
             val itemProvider = result.itemProvider
-            loadTimeout = schedulePickedMediaLoadTimeout(logLabel = logLabel, complete = ::complete)
+            val mediaType = if (logLabel == "video") UTTypeMovie else UTTypeImage
+            val requestedType = itemProvider.registeredTypeIdentifiers.filterIsInstance<String>()
+                .firstOrNull { UTType.typeWithIdentifier(it)?.conformsToType(mediaType) == true }
+                ?: typeIdentifier
+            val dataFileName = UTType.typeWithIdentifier(requestedType)?.preferredFilenameExtension
+                ?.let { "$logLabel.$it" } ?: fallbackFileName
+            loadTimeout = schedulePickedMediaLoadTimeout(logLabel = logLabel, complete = { complete(it, failed = true) })
 
-            itemProvider.loadFileRepresentationForTypeIdentifier(typeIdentifier) { url, fileError ->
+            itemProvider.loadFileRepresentationForTypeIdentifier(requestedType) { url, fileError ->
                 if (url != null) {
                     val selected = loadPickedMediaFromUrl(
                         url = url,
                         isVideo = logLabel == "video",
-                        fallbackFileName = fallbackFileName
+                        fallbackFileName = fallbackFileName,
+                        maxBytes = maxBytes
                     )
                     dispatch_async(dispatch_get_main_queue()) {
-                        complete(selected)
+                        complete(selected, failed = selected == null)
                     }
                     return@loadFileRepresentationForTypeIdentifier
                 }
 
-                itemProvider.loadDataRepresentationForTypeIdentifier(typeIdentifier) { data, dataError ->
+                itemProvider.loadDataRepresentationForTypeIdentifier(requestedType) { data, dataError ->
                     if (dataError != null || data == null) {
                         Logger.w(
                             "ImagePicker.ios",
                             "Failed to load selected $logLabel as file or data: ${fileError?.localizedDescription ?: dataError?.localizedDescription.orEmpty()}"
                         )
                         dispatch_async(dispatch_get_main_queue()) {
-                            complete(null)
+                            complete(null, failed = true)
                         }
                         return@loadDataRepresentationForTypeIdentifier
                     }
                     val dataLength = data.length.toLong()
-                    if (!isPickedImagePayloadSizeValid(dataLength)) {
+                    if (!isPickedImagePayloadSizeValid(dataLength, maxBytes)) {
                         Logger.w(
                             "ImagePicker.ios",
-                            if (dataLength > MAX_PICKED_IMAGE_BYTES) {
-                                "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${MAX_PICKED_IMAGE_BYTES / 1024}KB)"
+                            if (dataLength > maxBytes) {
+                                "Selected $logLabel is too large: ${dataLength / 1024}KB (max: ${maxBytes / 1024}KB)"
                             } else {
                                 "Selected $logLabel payload is empty"
                             }
                         )
                         dispatch_async(dispatch_get_main_queue()) {
-                            complete(null)
+                            complete(null, failed = true)
                         }
                         return@loadDataRepresentationForTypeIdentifier
                     }
@@ -618,9 +652,9 @@ private fun pickFromPhotoLibrary(
                         memcpy(pinned.addressOf(0), data.bytes, data.length)
                     }
 
-                    val selected = buildPickedImageData(bytes, null, fallbackFileName)
+                    val selected = buildPickedImageData(bytes, null, dataFileName, maxBytes)
                     dispatch_async(dispatch_get_main_queue()) {
-                        complete(selected)
+                        complete(selected, failed = selected == null)
                     }
                 }
             }
@@ -642,8 +676,10 @@ private fun pickFromPhotoLibrary(
     }
     picker.delegate = delegate
 
-    presentPicker(picker, logLabel = "photo $logLabel picker") {
-        complete(null)
+    presentPicker(picker, logLabel = "photo $logLabel picker", onPresented = {
+        picker.presentationController?.delegate = delegate
+    }) {
+        complete(null, failed = true)
     }
 }
 
@@ -651,13 +687,15 @@ private suspend fun pickFromPhotoLibrary(
     filter: PHPickerFilter,
     typeIdentifier: String,
     fallbackFileName: String,
-    logLabel: String
+    logLabel: String,
+    maxBytes: Long
 ): ImageData? = suspendCancellableCoroutine { continuation ->
     pickFromPhotoLibrary(
         filter = filter,
         typeIdentifier = typeIdentifier,
         fallbackFileName = fallbackFileName,
         logLabel = logLabel,
+        maxBytes = maxBytes,
         continuation = continuation
     )
 }
@@ -941,9 +979,10 @@ internal fun currentIosPresentationController(): UIViewController? = getPresente
  * 警告ログだけで静かに失敗する。その場合デリゲートが永遠に呼ばれず、ピッカー待ちの
  * コルーチンが再開されないため、present 後に実際に提示されたかを検証する。
  */
-private fun presentPicker(
+internal fun presentPicker(
     picker: UIViewController,
     logLabel: String,
+    onPresented: () -> Unit = {},
     onPresentFailed: () -> Unit
 ) {
     val presenter = getPresenterViewController()
@@ -952,17 +991,35 @@ private fun presentPicker(
         onPresentFailed()
         return
     }
+    var acknowledged = false
+    var presentationTimeout: NSTimer? = null
     runCatching {
-        presenter.presentViewController(picker, animated = true, completion = null)
+        presenter.presentViewController(picker, animated = true) {
+            acknowledged = true
+            onPresented()
+            presentationTimeout?.invalidate()
+            presentationTimeout = null
+        }
     }.onFailure { error ->
         Logger.e("ImagePicker.ios", "Failed to present $logLabel", error)
         onPresentFailed()
         return
     }
-    dispatch_async(dispatch_get_main_queue()) {
-        if (picker.presentingViewController == null && !picker.isBeingPresented()) {
-            Logger.e("ImagePicker.ios", "Presenting $logLabel silently failed; resuming with null")
-            onPresentFailed()
+    if (!acknowledged) {
+        // UIKit may defer establishing presentingViewController. Testing it on
+        // the next main-queue turn released PHPicker's weak delegate while its
+        // UI was visible, breaking both selection and Cancel. Keep the delegate
+        // until completion, or a bounded check confirms no presentation exists.
+        presentationTimeout = NSTimer.scheduledTimerWithTimeInterval(5.0, repeats = false) {
+            presentationTimeout = null
+            val attached = picker.presentingViewController != null ||
+                presenter.presentedViewController == picker ||
+                picker.isBeingPresented() ||
+                (picker.isViewLoaded() && picker.view.window != null)
+            if (!acknowledged && !attached) {
+                Logger.e("ImagePicker.ios", "Presenting $logLabel failed")
+                onPresentFailed()
+            }
         }
     }
 }

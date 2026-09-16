@@ -11,9 +11,10 @@ internal fun isPickedImagePayloadSizeValid(
 internal fun buildPickedImageData(
     bytes: ByteArray,
     fileName: String?,
-    fallbackFileName: String = DEFAULT_PICKED_IMAGE_FILE_NAME
+    fallbackFileName: String = DEFAULT_PICKED_IMAGE_FILE_NAME,
+    maxBytes: Long = MAX_PICKED_IMAGE_BYTES
 ): ImageData? {
-    if (!isPickedImagePayloadSizeValid(bytes.size.toLong())) {
+    if (!isPickedImagePayloadSizeValid(bytes.size.toLong(), maxBytes)) {
         return null
     }
     val resolvedFileName = fileName?.trim().orEmpty().ifBlank { fallbackFileName }

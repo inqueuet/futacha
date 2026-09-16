@@ -419,7 +419,7 @@ class CompatPreferenceSchemaTest {
         assertEquals("外部SDカード", compatPreferenceDisplayValue("dummyImageCacheLocation", "sdcard"))
 
         assertEquals(
-            "未設定時：標準フォルダに保存",
+            if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha",
             compatStorageDirectorySummary("dummyDownloadDir", null)
         )
         assertEquals(

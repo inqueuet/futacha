@@ -6,6 +6,11 @@ interface FileWriteSink {
     suspend fun write(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size)
 }
 
+interface FileReadSource {
+    /** Returns -1 at EOF. The supplied buffer is owned by the caller. */
+    suspend fun read(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size): Int
+}
+
 /**
  * プラットフォーム非依存のファイルシステムインターフェース
  *
@@ -40,6 +45,16 @@ interface FileWriteSink {
  * - メモリマップドファイルの適切な解放
  */
 interface FileSystem {
+    /** Resolve a saved file for native sharing without guessing document provider IDs. */
+    suspend fun resolveSavedFile(base: SaveLocation, relativePath: String): Result<String> =
+        runSuspendCatchingPreservingCancellation {
+            require(relativePath.isNotBlank() && !relativePath.startsWith('/') &&
+                relativePath.split('/').none { it == ".." })
+            val path = (base as? SaveLocation.Path)?.path
+                ?: error("この保存先のファイルを開けません")
+            resolveAbsolutePath(path).trimEnd('/') + "/" + relativePath
+        }
+
     /**
      * ディレクトリを作成
      * @param path ディレクトリパス
@@ -79,6 +94,25 @@ interface FileSystem {
      * @param path ファイルパス
      */
     suspend fun readBytes(path: String): Result<ByteArray>
+
+    /** Platforms override this to keep local media exports independent of file size. */
+    suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> =
+        runSuspendCatchingPreservingCancellation {
+            // Small in-memory/test implementations can use their existing reader.
+            val payload = readBytes(path).getOrThrow()
+            var position = 0
+            block(object : FileReadSource {
+                override suspend fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
+                    if (length == 0) return 0
+                    if (position == payload.size) return -1
+                    val count = minOf(length, payload.size - position)
+                    payload.copyInto(bytes, offset, position, position + count)
+                    position += count
+                    return count
+                }
+            })
+        }
 
     /**
      * ファイルから文字列を読み込み

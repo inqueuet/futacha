@@ -997,7 +997,7 @@ internal class InMemoryFileSystem : FileSystem {
     }
 
     override suspend fun delete(base: SaveLocation, relativePath: String): Result<Unit> {
-        return delete(resolvePath(base, relativePath))
+        return deleteRecursively(resolvePath(base, relativePath))
     }
 
     private fun resolvePath(base: SaveLocation, relativePath: String): String {

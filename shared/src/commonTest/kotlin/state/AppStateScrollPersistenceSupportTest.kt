@@ -1,15 +1,105 @@
 package com.valoser.futacha.shared.state
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class AppStateScrollPersistenceSupportTest {
+    @Test
+    fun immediateWriteFailureKeepsUiScopeAlive() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val parent = Job()
+        val scope = CoroutineScope(coroutineContext + parent + CoroutineExceptionHandler { _, error ->
+            uncaught.add(error)
+        })
+        try {
+            val failedWrite = scope.launchHistoryScrollPersistence {
+                throw IllegalStateException("simulated storage write failure")
+            }
+            failedWrite.join()
+            assertTrue(parent.isActive)
+            assertTrue(!failedWrite.isCancelled)
+            assertTrue(uncaught.isEmpty())
+            var saved = false
+            scope.launchHistoryScrollPersistence { saved = true }.join()
+            assertTrue(saved)
+        } finally {
+            parent.cancel()
+        }
+    }
+
+    @Test
+    fun scrollWriteCancellationRemainsCancellation() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        try {
+            val job = scope.launchHistoryScrollPersistence { throw CancellationException("screen closed") }
+            job.join()
+            assertTrue(job.isCancelled)
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun fatalScrollWriteErrorStillReachesExceptionHandler() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val scope = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, error ->
+            uncaught.add(error)
+        })
+        val fatal = Error("fatal failure")
+        try {
+            scope.launchHistoryScrollPersistence { throw fatal }.join()
+            assertSame(fatal, uncaught.single())
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun debouncedWriteFailureDoesNotEscapeAndNextScrollCanSave() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val scope = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, error ->
+            uncaught.add(error)
+        })
+        var attempts = 0
+        var saved = 0
+        val coordinator = AppStateHistoryScrollPersistenceCoordinator(
+            debounceDelayMillis = 0L,
+            buildScrollKey = { it.threadId },
+            performImmediateUpdate = {
+                attempts++
+                if (attempts == 1) throw IllegalStateException("simulated storage write failure")
+                saved++
+            }
+        )
+        try {
+            coordinator.setScope(scope)
+            val request = AppStateHistoryScrollUpdateRequest(
+                threadId = "123", index = 9, offset = 12, boardId = "b", title = "title",
+                titleImageUrl = "", boardName = "board", boardUrl = "https://example.com/b/", replyCount = 10
+            )
+            coordinator.schedule(request)
+            yield()
+            assertEquals(1, attempts)
+            assertTrue(uncaught.isEmpty(), "Storage failure escaped the scroll coroutine: $uncaught")
+            coordinator.schedule(request.copy(index = 10))
+            yield()
+            assertEquals(2, attempts)
+            assertEquals(1, saved)
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+        }
+    }
+
     @Test
     fun scheduleAppStateHistoryScrollPersistence_runsImmediateWithoutScope() {
         runBlocking {

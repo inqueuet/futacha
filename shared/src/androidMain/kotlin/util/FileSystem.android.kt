@@ -227,6 +227,26 @@ class AndroidFileSystem(
         }
     }
 
+    override suspend fun <T> readByteStream(path: String, block: suspend (FileReadSource) -> T): Result<T> =
+        withContext(Dispatchers.IO) {
+            runSuspendCatchingPreservingCancellation {
+                validatePath(path, "path")
+                val input = runInterruptible {
+                    if (path.startsWith("content://")) context.contentResolver.openInputStream(Uri.parse(path))
+                    else File(resolveAbsolutePath(path)).inputStream()
+                } ?: error("保存元のファイルを開けませんでした")
+                input.use {
+                    block(object : FileReadSource {
+                        override suspend fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                            coroutineContext.ensureActive()
+                            require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
+                            return runInterruptible { input.read(bytes, offset, length) }
+                        }
+                    })
+                }
+            }
+        }
+
     override suspend fun readString(path: String): Result<String> {
         return readBytes(path).mapCatching { bytes ->
             bytes.toString(Charsets.UTF_8)
@@ -619,7 +639,9 @@ class AndroidFileSystem(
                         val output = runInterruptible {
                             context.contentResolver.openOutputStream(file.uri, "wt")
                         } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
-                        try {
+                        withFileWriteCompletion(
+                            close = { withSafWriteTimeout { runInterruptible { output.close() } } }
+                        ) {
                             var offset = 0
                             while (offset < bytes.size) {
                                 coroutineContext.ensureActive()
@@ -631,11 +653,6 @@ class AndroidFileSystem(
                             }
                             runInterruptible {
                                 output.flush()
-                            }
-                        } finally {
-                            try {
-                                runInterruptible { output.close() }
-                            } catch (_: Throwable) {
                             }
                         }
                     }
@@ -675,7 +692,9 @@ class AndroidFileSystem(
                         val output = runInterruptible {
                             context.contentResolver.openOutputStream(file.uri, "wa")
                         } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
-                        try {
+                        withFileWriteCompletion(
+                            close = { withSafWriteTimeout { runInterruptible { output.close() } } }
+                        ) {
                             var offset = 0
                             while (offset < bytes.size) {
                                 coroutineContext.ensureActive()
@@ -687,11 +706,6 @@ class AndroidFileSystem(
                             }
                             runInterruptible {
                                 output.flush()
-                            }
-                        } finally {
-                            try {
-                                runInterruptible { output.close() }
-                            } catch (_: Throwable) {
                             }
                         }
                     }
@@ -736,7 +750,9 @@ class AndroidFileSystem(
                                 context.contentResolver.openOutputStream(file.uri, "wt")
                             } ?: throw IllegalStateException("Failed to open output stream for ${file.uri}")
                         }
-                        try {
+                        withFileWriteCompletion(
+                            close = { withSafWriteTimeout { runInterruptible { output.close() } } }
+                        ) {
                             var totalWritten = 0L
                             val sink = object : FileWriteSink {
                                 override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
@@ -762,13 +778,6 @@ class AndroidFileSystem(
                                     output.flush()
                                 }
                             }
-                        } finally {
-                            try {
-                                withSafWriteTimeout {
-                                    runInterruptible { output.close() }
-                                }
-                            } catch (_: Throwable) {
-                            }
                         }
                     }
                     result
@@ -785,6 +794,20 @@ class AndroidFileSystem(
     override suspend fun writeString(base: SaveLocation, relativePath: String, content: String): Result<Unit> {
         // FIX: 入力検証はwriteBytesで実行される
         return writeBytes(base, relativePath, content.toByteArray(Charsets.UTF_8))
+    }
+
+    override suspend fun resolveSavedFile(base: SaveLocation, relativePath: String): Result<String> = withContext(Dispatchers.IO) {
+        runFsCatching { validatePath(relativePath, "relativePath") }.getOrElse {
+            return@withContext Result.failure(it)
+        }
+        when (base) {
+            is SaveLocation.Path -> runFsCatching { resolveSaveLocationPath(base.path, relativePath) }
+            is SaveLocation.TreeUri -> runTreeUriCatching(base) { directory ->
+                val (parent, name) = resolveTreeParentDirectory(directory, relativePath, false)
+                (parent.findFile(name) ?: error("保存したファイルが見つかりません")).uri.toString()
+            }
+            is SaveLocation.Bookmark -> Result.failure(IllegalArgumentException("Unsupported bookmark"))
+        }
     }
 
     override suspend fun readBytes(base: SaveLocation, relativePath: String): Result<ByteArray> = withContext(Dispatchers.IO) {

@@ -53,6 +53,14 @@ internal fun QuoteSelectionDialog(
             )
         )
     }
+    fun selectAll(selected: Boolean) {
+        selectedIds = if (selected) selectionItems.map { it.id }.toSet() else emptySet()
+        AnalyticsTracker.uiControl(
+            if (selected) "quote_selection_all" else "quote_selection_clear",
+            if (selected) "引用する項目を全選択" else "引用する項目を全解除",
+            mapOf("selection_count_bucket" to analyticsCountBucket(selectedIds.size))
+        )
+    }
     AlertDialog(
         onDismissRequest = {
             AnalyticsTracker.uiControl("quote_selection_dismiss", "引用選択を閉じる")
@@ -106,43 +114,68 @@ internal fun QuoteSelectionDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    selectionItems.forEach { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(MaterialTheme.shapes.small)
-                                .clickable {
-                                    updateSelection(item.id, !selectedIds.contains(item.id))
-                                }
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = selectedIds.contains(item.id),
-                                onCheckedChange = { checked ->
-                                    updateSelection(item.id, checked)
-                                }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { selectAll(true) },
+                            enabled = selectedIds.size < selectionItems.size,
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Column(
-                                modifier = Modifier.padding(start = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) { Text("全選択") }
+                        TextButton(
+                            onClick = { selectAll(false) },
+                            enabled = selectedIds.isNotEmpty(),
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        ) { Text("全解除") }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        selectionItems.forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(MaterialTheme.shapes.small)
+                                    .clickable {
+                                        updateSelection(item.id, !selectedIds.contains(item.id))
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = item.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
+                                Checkbox(
+                                    checked = selectedIds.contains(item.id),
+                                    onCheckedChange = { checked ->
+                                        updateSelection(item.id, checked)
+                                    }
                                 )
-                                Text(
-                                    text = item.preview,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                Column(
+                                    modifier = Modifier.padding(start = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = item.preview,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }

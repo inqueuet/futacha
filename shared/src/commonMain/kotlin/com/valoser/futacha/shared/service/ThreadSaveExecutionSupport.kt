@@ -61,7 +61,8 @@ internal data class ThreadSaveMetadataWriteRequest(
     val strippedExternalResources: Boolean,
     val isTruncated: Boolean,
     val truncationReason: String?,
-    val baseTotalSize: Long
+    val baseTotalSize: Long,
+    val isHtmlMissing: Boolean = false
 )
 
 internal data class ThreadSaveRawHtmlWriteResult(
@@ -252,6 +253,7 @@ internal suspend fun writeThreadSaveMetadataIfEnabled(
         strippedExternalResources = request.strippedExternalResources,
         isTruncated = request.isTruncated,
         truncationReason = request.truncationReason,
+        isHtmlMissing = request.isHtmlMissing,
         version = 1
     )
     val (metadataPayload, payloadSize) = buildThreadSaveMetadataPayloadWithStableSize(
@@ -299,6 +301,7 @@ internal suspend fun saveThreadRawHtmlIfEnabled(
             ThreadSaveRawHtmlWriteResult(relativePath = fileName, sizeBytes = sizeBytes)
         }
         .getOrElse { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
             logWarning("Failed to save raw HTML: ${error.message}")
             ThreadSaveRawHtmlWriteResult(relativePath = null, sizeBytes = 0L)
         }
@@ -320,7 +323,8 @@ internal fun buildThreadSaveSavedThread(
     skippedMediaCount: Int,
     totalMediaCount: Int,
     isContentTruncated: Boolean = false,
-    statusOverride: SaveStatus? = null
+    statusOverride: SaveStatus? = null,
+    isHtmlMissing: Boolean = false
 ): SavedThread {
     return SavedThread(
         threadId = threadId,
@@ -335,7 +339,8 @@ internal fun buildThreadSaveSavedThread(
         videoCount = videoCount,
         totalSize = totalSize,
         incompleteMediaCount = downloadFailureCount + skippedMediaCount,
-        status = statusOverride ?: resolveThreadSaveStatus(
+        isHtmlMissing = isHtmlMissing,
+        status = statusOverride ?: if (isHtmlMissing) SaveStatus.PARTIAL else resolveThreadSaveStatus(
             incompleteMediaCount = downloadFailureCount + skippedMediaCount,
             totalMediaCount = totalMediaCount,
             isContentTruncated = isContentTruncated

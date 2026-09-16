@@ -326,6 +326,9 @@ class ThreadSaveService(
                 val skippedMediaCount = mediaDownloadResult.skippedMediaCount
                 val totalMediaCount = mediaPlan.totalMediaCount
 
+                if (rawHtmlOptions.enable) {
+                    updateProgress(SavePhase.CONVERTING, 0, 1, "HTMLを保存中...")
+                }
                 val rawHtmlWriteResult = saveThreadRawHtmlIfEnabled(
                     enabled = rawHtmlOptions.enable,
                     fileSystem = fileSystem,
@@ -396,7 +399,8 @@ class ThreadSaveService(
                         strippedExternalResources = rawHtmlOptions.stripExternalResources,
                         isTruncated = isTruncated,
                         truncationReason = truncationReason,
-                        baseTotalSize = totalSize
+                        baseTotalSize = totalSize,
+                        isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null
                     ),
                     encodeMetadata = json::encodeToString
                 )
@@ -425,7 +429,8 @@ class ThreadSaveService(
                     downloadFailureCount = downloadFailureCount,
                     skippedMediaCount = skippedMediaCount,
                     totalMediaCount = totalMediaCount,
-                    isContentTruncated = isTruncated
+                    isContentTruncated = isTruncated,
+                    isHtmlMissing = rawHtmlOptions.enable && rawHtmlRelativePath == null
                 )
             })
         } catch (e: CancellationException) {

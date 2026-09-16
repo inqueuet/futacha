@@ -48,6 +48,7 @@ internal data class ThreadScreenContentHostBindings(
     val lazyListState: LazyListState,
     val searchScrollRequest: ThreadPostScrollRequest? = null,
     val onDisplayedPostsChanged: (ThreadDisplayedPostsLayout) -> Unit = {},
+    val newPostIds: Set<String> = emptySet(),
     val saidaneOverrides: Map<String, String>,
     val selfPostIdentifierSet: Set<String>,
     val postHighlightRanges: Map<Post, List<IntRange>>,
@@ -447,6 +448,7 @@ internal fun ThreadScreenContentHost(
                     compactHeader = bindings.preferencesState.isCompactThreadHeaderEnabled,
                     searchScrollRequest = bindings.searchScrollRequest,
                     onDisplayedPostsChanged = bindings.onDisplayedPostsChanged,
+                    newPostIds = bindings.newPostIds,
                     modifier = modifier.fillMaxSize()
                 )
 
@@ -476,6 +478,7 @@ internal fun ThreadScreenContentHost(
                     compactHeader = bindings.preferencesState.isCompactThreadHeaderEnabled,
                     searchScrollRequest = bindings.searchScrollRequest,
                     onDisplayedPostsChanged = bindings.onDisplayedPostsChanged,
+                    newPostIds = bindings.newPostIds,
                     modifier = modifier.fillMaxSize()
                 )
             }

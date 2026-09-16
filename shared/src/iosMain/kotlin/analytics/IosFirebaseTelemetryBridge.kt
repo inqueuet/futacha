@@ -7,7 +7,7 @@ object IosFirebaseTelemetryBridge {
     var setCrashlyticsCollectionEnabledHandler: ((Boolean) -> Unit)? = null
     var setCrashlyticsCustomKeyHandler: ((name: String, value: String) -> Unit)? = null
     var logCrashlyticsMessageHandler: ((String) -> Unit)? = null
-    var recordCrashlyticsExceptionHandler: ((name: String, message: String) -> Unit)? = null
+    var recordCrashlyticsExceptionHandler: ((name: String, message: String, stackTraceAddresses: List<Long>) -> Unit)? = null
     var startTraceHandler: ((name: String, keys: List<String>, values: List<String>) -> String?)? = null
     var putTraceAttributeHandler: ((traceId: String, name: String, value: String) -> Unit)? = null
     var putTraceMetricHandler: ((traceId: String, name: String, value: Long) -> Unit)? = null
@@ -37,8 +37,14 @@ object IosFirebaseTelemetryBridge {
         logCrashlyticsMessageHandler?.invoke(message)
     }
 
-    fun recordCrashlyticsException(name: String, message: String) {
-        recordCrashlyticsExceptionHandler?.invoke(name, message)
+    private val kotlinExceptionHook = IosUnhandledExceptionHookInstaller()
+
+    fun installKotlinExceptionHook() {
+        kotlinExceptionHook.install()
+    }
+
+    fun recordCrashlyticsException(name: String, message: String, stackTraceAddresses: List<Long>) {
+        recordCrashlyticsExceptionHandler?.invoke(name, message, stackTraceAddresses)
     }
 
     fun startTrace(name: String, attributes: Map<String, String> = emptyMap()): String? {

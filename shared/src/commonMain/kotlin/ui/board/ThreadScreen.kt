@@ -87,6 +87,7 @@ import com.valoser.futacha.shared.ai.draftPasswordParameter
 import com.valoser.futacha.shared.ai.draftSubjectParameter
 import com.valoser.futacha.shared.ai.searchQueryParameter
 import com.valoser.futacha.shared.model.*
+import com.valoser.futacha.shared.model.SaveLocation.Companion.toRawString
 import com.valoser.futacha.shared.repo.BoardRepository
 import com.valoser.futacha.shared.repository.CookieRepository
 import com.valoser.futacha.shared.repository.SavedThreadRepository
@@ -317,6 +318,19 @@ private fun ThreadScreenContent(
     val selfPostIdentifierSet = persistentBindings.selfPostIdentifierSet
     val isSelfPost = persistentBindings.isSelfPost
     var modalOverlayState by interactionStateRefs.modalOverlayState
+    var saveResultMessage by remember(threadId, board.id) { mutableStateOf<String?>(null) }
+    var savedFileToShare by remember(threadId, board.id) {
+        mutableStateOf<Pair<com.valoser.futacha.shared.service.SavedMediaFile, SaveLocation>?>(null)
+    }
+    val shareSavedFile = com.valoser.futacha.shared.ui.compat.rememberCompatShareLauncher()
+    val withSaveDestination = rememberManualSaveDestinationLauncher(
+        location = preferencesState.manualSaveLocation,
+        onSelected = {
+            preferencesCallbacks.onManualSaveDirectoryChanged(it.toRawString())
+            preferencesCallbacks.onSaveDirectorySelectionChanged(com.valoser.futacha.shared.util.SaveDirectorySelection.PICKER)
+        },
+        preferredFileManagerPackage = preferencesState.preferredFileManagerPackage
+    )
     var saveLocationGuideTarget by remember {
         mutableStateOf<ThreadSaveLocationGuideTarget?>(null)
     }
@@ -425,6 +439,9 @@ private fun ThreadScreenContent(
     val isPrivacyFilterEnabled = screenSetupHandles.isPrivacyFilterEnabled
     val currentState = uiState.value
     val initialHistoryEntry = screenSetupHandles.initialHistoryEntry
+    val newPostTracker = remember(effectiveBoardUrl, threadId) {
+        ThreadNewPostTracker(initialHistoryEntry?.replyCount)
+    }
     val lazyListState = runtimeHandles.lazyListState
     val actionStateBindings = ThreadScreenActionStateBindings(
         currentActionInProgress = { actionInProgress },
@@ -462,7 +479,7 @@ private fun ThreadScreenContent(
     var hasRestoredInitialScroll by refreshStateRefs.hasRestoredInitialScroll
     val offlineLookupContext = screenSetupHandles.offlineLookupContext
     val offlineSources = screenSetupHandles.offlineSources
-    val asyncRuntimeBindingsBundle = buildThreadScreenAsyncRuntimeBindingsBundle(
+    val originalAsyncRuntimeBindings = buildThreadScreenAsyncRuntimeBindingsBundle(
         ThreadScreenAsyncRuntimeInputs(
             currentAutoSaveJob = { autoSaveJob },
             setAutoSaveJob = { autoSaveJob = it },
@@ -495,7 +512,12 @@ private fun ThreadScreenContent(
             currentManualRefreshGeneration = { manualRefreshGeneration },
             setManualRefreshGeneration = { manualRefreshGeneration = it },
             setIsRefreshing = { isRefreshing = it },
-            setUiState = { uiState.value = it },
+            setUiState = { nextState ->
+                if (nextState is ThreadUiState.Success) {
+                    newPostTracker.onPostsLoaded(nextState.page.posts)
+                }
+                uiState.value = nextState
+            },
             setResolvedThreadUrlOverride = { resolvedThreadUrlOverride = it },
             setIsShowingOfflineCopy = { isShowingOfflineCopy = it },
             onHistoryEntryUpdated = onHistoryEntryUpdated,
@@ -515,6 +537,24 @@ private fun ThreadScreenContent(
                     }
                 )
             }
+        )
+    )
+    val saveError: (ThreadManualSaveErrorState) -> Unit = { failure ->
+        savedFileToShare = null
+        saveResultMessage = failure.message
+        if (failure.shouldOpenDirectoryPicker) {
+            saveLocationGuideTarget = ThreadSaveLocationGuideTarget.DirectoryPicker
+        }
+    }
+    val asyncRuntimeBindingsBundle = originalAsyncRuntimeBindings.copy(
+        manualSaveCallbacks = originalAsyncRuntimeBindings.manualSaveCallbacks.copy(
+            showMessage = { saveResultMessage = it }, applySaveErrorState = saveError
+        ),
+        singleMediaSaveCallbacks = originalAsyncRuntimeBindings.singleMediaSaveCallbacks.copy(
+            showMessage = { saveResultMessage = it },
+            showOptionalMessage = { if (it != null) saveResultMessage = it },
+            applySaveErrorState = saveError,
+            onSaved = { saved, location -> savedFileToShare = saved to location }
         )
     )
     val asyncBindingsBundle = rememberThreadScreenAsyncBindingsBundle(
@@ -544,10 +584,28 @@ private fun ThreadScreenContent(
     val threadReplyActionCallbacks = asyncHandles.threadReplyActionCallbacks
     val autoSaveBindings = asyncHandles.autoSaveBindings
     val manualSaveBindings = asyncHandles.manualSaveBindings
-    val singleMediaSaveBindings = asyncHandles.singleMediaSaveBindings
+    val singleMediaSaveBindings = asyncHandles.singleMediaSaveBindings.copy(
+        savePreviewMedia = { entry ->
+            if (!isManualSaveInProgress && !isSingleMediaSaveInProgress) {
+                savedFileToShare = null
+                withSaveDestination { location ->
+                    if (location == null) asyncHandles.singleMediaSaveBindings.savePreviewMedia(entry)
+                    else asyncHandles.singleMediaSaveBindings.saveToLocation(entry, location)
+                }
+            }
+        }
+    )
     val loadBindings = asyncHandles.loadBindings
     val startManualRefresh = loadBindings.startManualRefresh
-    val handleThreadSaveRequest = manualSaveBindings.handleThreadSaveRequest
+    val handleThreadSaveRequest: () -> Unit = {
+        if (!isManualSaveInProgress && !isSingleMediaSaveInProgress) {
+            savedFileToShare = null
+            withSaveDestination { location ->
+                if (location == null) manualSaveBindings.handleThreadSaveRequest()
+                else manualSaveBindings.saveToLocation(location)
+            }
+        }
+    }
     val runtimeLifecycleBindings = buildThreadScreenLifecycleBindings(
         coroutineScope = coroutineScope,
         resolvePauseMessage = readAloudRuntimeBindings.pause,
@@ -889,6 +947,8 @@ private fun ThreadScreenContent(
             },
             currentUiState = { uiState.value },
             currentSearchIndex = { currentSearchResultIndex },
+            currentDisplayedPostsLayout = { displayedPostsLayout },
+            currentNewPostIds = { newPostTracker.newPostIds },
             currentSearchQuery = { searchQueryState.value },
             setCurrentSearchIndex = { currentSearchResultIndex = it },
             currentSearchMatches = { searchMatches },
@@ -1236,6 +1296,7 @@ private fun ThreadScreenContent(
             lazyListState = lazyListState,
             searchScrollRequest = postScrollRequest,
             onDisplayedPostsChanged = { layout -> displayedPostsLayout = layout },
+            newPostIds = newPostTracker.newPostIds,
             saidaneOverrides = saidaneOverrides,
             selfPostIdentifierSet = selfPostIdentifierSet,
             postHighlightRanges = postHighlightRanges,
@@ -1369,6 +1430,28 @@ private fun ThreadScreenContent(
             ThreadScreenOverlayHost(
                 bindings = hostBindingsBundle.overlayBindings
             )
+            saveResultMessage?.let { result ->
+                SaveResultDialog(
+                    message = result,
+                    onDismiss = { saveResultMessage = null },
+                    onShare = savedFileToShare?.let { (saved, location) ->
+                        {
+                            coroutineScope.launch {
+                                try {
+                                    val path = fileSystem?.resolveSavedFile(location, saved.relativePath)?.getOrThrow()
+                                        ?: error("保存したファイルを開けません")
+                                    shareSavedFile("", if (saved.mediaType == com.valoser.futacha.shared.service.SavedMediaType.VIDEO) "video/*" else "image/*", path)
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (failure: Throwable) {
+                                    saveResultMessage = "共有できませんでした: ${failure.message}"
+                                }
+                            }
+                            Unit
+                        }
+                    }
+                )
+            }
             saveLocationGuideTarget?.let { target ->
                 ThreadSaveLocationGuideDialog(
                     target = target,

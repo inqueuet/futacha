@@ -359,7 +359,9 @@ class ThreadSaveServiceTest {
         val storageId = requireNotNull(saved.storageId)
         val metadata = readMetadata(fileSystem, "manual/$storageId/metadata.json")
 
-        assertEquals(SaveStatus.COMPLETED, saved.status)
+        assertEquals(SaveStatus.PARTIAL, saved.status)
+        assertTrue(saved.isHtmlMissing)
+        assertTrue(metadata.isHtmlMissing)
         assertEquals(saved.totalSize, metadata.totalSize)
         assertNull(metadata.rawHtmlPath)
         assertFalse(fileSystem.exists("manual/$storageId/999.htm"))

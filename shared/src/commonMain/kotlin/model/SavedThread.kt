@@ -19,7 +19,8 @@ data class SavedThread(
     val videoCount: Int,               // 動画数
     val totalSize: Long,               // 合計ファイルサイズ（bytes）
     val status: SaveStatus,            // 保存状態
-    val incompleteMediaCount: Int = 0  // 取得失敗または上限で省略したメディア数
+    val incompleteMediaCount: Int = 0, // 取得失敗または上限で省略したメディア数
+    val isHtmlMissing: Boolean = false // HTMLを指定した保存で取得／書込に失敗した
 )
 
 /**
@@ -52,7 +53,8 @@ data class SavedThreadMetadata(
     val strippedExternalResources: Boolean = false, // 外部JS/広告を除去したかどうか
     val isTruncated: Boolean = false,  // パーサ上限などで本文が一部のみかどうか
     val truncationReason: String? = null,
-    val version: Int = 1              // メタデータバージョン（将来の互換性）
+    val version: Int = 1,             // メタデータバージョン（将来の互換性）
+    val isHtmlMissing: Boolean = false
 )
 
 /**

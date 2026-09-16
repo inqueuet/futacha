@@ -1,5 +1,22 @@
 package com.valoser.futacha.shared.compat
 
+/** The toolbar stops at the visible new-reply marker before continuing to the footer. */
+fun resolveCompatThreadBottomScrollIndex(
+    visiblePosts: List<CompatPostSnapshot>,
+    newReplyNotice: CompatNewReplyNotice?,
+    firstVisibleItemIndex: Int,
+    lastItemIndex: Int
+): Int {
+    val newIndex = newReplyNotice?.let { notice ->
+        visiblePosts.indexOfFirst { it.position >= notice.firstNewPostPosition }
+    } ?: -1
+    return if (newIndex > firstVisibleItemIndex && newIndex <= lastItemIndex) {
+        newIndex
+    } else {
+        lastItemIndex.coerceAtLeast(0)
+    }
+}
+
 data class CompatScrollPosition(
     val index: Int,
     val offsetPx: Int

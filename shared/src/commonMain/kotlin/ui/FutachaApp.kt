@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui
 
+import com.valoser.futacha.shared.ui.compat.compatManualSaveLocation
+
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -258,12 +260,13 @@ fun FutachaApp(
         // The compatibility thread menu saves into the manual-save location,
         // so its saved-thread index must not point at the background auto-save
         // directory used by the modern history refresher.
-        val compatibilitySavedThreadRepository = remember(fileSystem) {
+        val compatibilityPreferences by compatibilityStore.preferences.collectAsState(emptyMap())
+        val compatibilitySaveLocation = compatibilityPreferences.compatManualSaveLocation()
+        val compatibilitySavedThreadRepository = remember(fileSystem, compatibilitySaveLocation) {
             fileSystem?.let {
-                SavedThreadRepository(it, baseDirectory = MANUAL_SAVE_DIRECTORY)
+                com.valoser.futacha.shared.ui.compat.createCompatSavedThreadRepository(it, compatibilitySaveLocation)
             }
         }
-        val compatibilityPreferences by compatibilityStore.preferences.collectAsState(emptyMap())
         val compatibilityImageCacheBytes = remember(
             compatibilityPreferences[COMPAT_IMAGE_CACHE_PREFERENCE_KEY]
         ) {

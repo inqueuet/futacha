@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.valoser.futacha.shared.ui.compat
 
 import androidx.compose.runtime.Composable
@@ -14,6 +16,9 @@ actual fun rememberCompatShareLauncher(): (
     absoluteFilePath: String?
 ) -> Unit = remember {
     { text, _, absoluteFilePath ->
+        val presenter = currentIosPresentationController() ?: return@remember
+        val scopedUrl = absoluteFilePath?.let { com.valoser.futacha.shared.util.bookmarkedMediaDirectoryForPath(it) }
+        val startedAccess = scopedUrl?.startAccessingSecurityScopedResource() == true
         val item: Any = absoluteFilePath?.let { NSURL.fileURLWithPath(it) } ?: text
         val controller = UIActivityViewController(listOf(item), null).apply {
             // A UIActivityViewController presented from Compose has no stable
@@ -21,7 +26,9 @@ actual fun rememberCompatShareLauncher(): (
             // adaptive substitute and avoids the popover-anchor crash.
             modalPresentationStyle = UIModalPresentationFullScreen
         }
-        val presenter = currentIosPresentationController() ?: return@remember
+        controller.completionWithItemsHandler = { _, _, _, _ ->
+            if (startedAccess) scopedUrl?.stopAccessingSecurityScopedResource()
+        }
         // Resolve the active Scene and top-most controller rather than the
         // deprecated global keyWindow/root controller.  UIKit picks the
         // appropriate adaptive presentation for the current size class.

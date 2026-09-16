@@ -116,7 +116,7 @@ internal fun resolveGlobalSettingsSaveText(
             preferredAppDescription = buildPreferredFileManagerDescription(true),
             preferredAppButtonLabel = "ファイラーを選択",
             pickerSelectionLabel = "ファイラーで選ぶ",
-            manualSaveDescription = "手入力ではプラットフォーム既定の保存領域を使います。「Documents」や「Download」は端末ごとの既定フォルダ系統に解決されます。絶対パス指定もできます。",
+            manualSaveDescription = "画像・動画はファイルとして保存します。Android の手入力 Documents／Download はアプリ専用領域です。外から開ける場所は「ファイラーで選ぶ」で指定してください。iOS の既定先は「ファイル > このiPhone内 > futacha」です。写真アプリへの追加は保存結果の「共有」を使います。",
             manualSaveInputLabel = "フォルダ名またはパス",
             resetManualSaveButtonLabel = "デフォルトに戻す",
             updateManualSaveButtonLabel = "保存先を更新",

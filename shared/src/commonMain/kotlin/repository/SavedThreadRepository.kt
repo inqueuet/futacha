@@ -66,6 +66,47 @@ class SavedThreadRepository(
         this@SavedThreadRepository.readSavedThreadIndexUnlocked()
     }
 
+    /** Explicit manual-save recovery; never run this for history auto-save repositories. */
+    suspend fun recoverUnindexedThreads(): Result<Int> = runSuspendCatchingNonCancellation {
+        withContext(AppDispatchers.io) {
+            deleteMutex.withLock {
+                mutationMutex.withLock {
+                    val existing = loadIndex().threads
+                    val indexedStorageIds = existing.map(::resolveSavedThreadStorageId).toSet()
+                    val recovered = mutableListOf<SavedThread>()
+                    for (child in listFilesAt("").take(MAX_ORPHAN_METADATA_SCAN_ENTRIES)) {
+                        // Some test/platform implementations return full paths; only accept direct children.
+                        val storageId = child.removePrefix(baseDirectory.trimEnd('/') + "/")
+                        if (!isRecoverableSavedThreadDirectory(storageId) || storageId in indexedStorageIds) continue
+                        val saved = ThreadStorageLockRegistry.withStorageLockOrNull(
+                            storageId = storageLockKey(storageId),
+                            waitTimeoutMillis = 1_000L
+                        ) {
+                            recoverSavedThreadMetadata(storageId)
+                        }
+                        if (saved != null) recovered += saved
+                    }
+                    withIndexLock {
+                        val current = readSavedThreadIndexUnlocked()
+                        val identities = current.threads.map { purgeIdentityKey(it.threadId, it.boardId) }.toMutableSet()
+                        val additions = recovered.sortedByDescending { it.savedAt }.filter { saved ->
+                            val identity = purgeIdentityKey(saved.threadId, saved.boardId)
+                            val cutoff = maxOf(rootPurgeCutoffMillis, threadPurgeCutoffMillis[identity] ?: Long.MIN_VALUE)
+                            saved.savedAt > cutoff && identities.add(identity)
+                        }
+                        if (additions.isNotEmpty()) {
+                            saveSavedThreadIndexUnlocked(buildSavedThreadIndex(
+                                (current.threads + additions).sortedByDescending { it.savedAt },
+                                Clock.System.now().toEpochMilliseconds()
+                            ))
+                        }
+                        additions.size
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * インデックスを保存
      */

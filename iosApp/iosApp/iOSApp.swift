@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             FirebaseApp.configure()
             FutachaFirebaseTelemetryBridge.install()
         }
+        IosFirebaseTelemetryBridge.shared.installKotlinExceptionHook()
         return true
     }
 }
@@ -102,13 +103,10 @@ private enum FutachaFirebaseTelemetryBridge {
             Crashlytics.crashlytics().log(message)
         }
 
-        bridge.recordCrashlyticsExceptionHandler = { name, message in
-            let userInfo: [String: Any] = [
-                NSLocalizedDescriptionKey: message.isEmpty ? name : message,
-                "exception_name": name
-            ]
-            let error = NSError(domain: "com.valoser.futacha.nonfatal", code: 0, userInfo: userInfo)
-            Crashlytics.crashlytics().record(error: error)
+        bridge.recordCrashlyticsExceptionHandler = { name, message, addresses in
+            let exception = ExceptionModel(name: name, reason: message)
+            exception.stackTrace = addresses.map { StackFrame(address: UInt(truncating: $0)) }
+            Crashlytics.crashlytics().record(exceptionModel: exception)
         }
 
         bridge.startTraceHandler = { name, keys, values in

@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared.util
 
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.concurrent.AtomicInt
 import platform.UIKit.UIAlertAction
 import platform.UIKit.UIAlertActionStyleCancel
 import platform.UIKit.UIAlertActionStyleDefault
@@ -64,51 +68,36 @@ internal fun presentIosAlert(
     }
 }
 
-internal fun presentIosTwoOptionAlert(
+/** Keeps source selection, cancellation and the following picker in one coroutine. */
+internal suspend fun awaitIosTwoOptionChoice(
     title: String,
     message: String,
     primaryLabel: String,
     secondaryLabel: String,
-    onPrimary: () -> Unit,
-    onSecondary: () -> Unit,
     cancelLabel: String = "キャンセル"
-): Boolean {
-    val controller = findIosTopViewController() ?: run {
-        Logger.w("IosUiFeedback", "Cannot present choice alert: top view controller is unavailable")
-        return false
+): Boolean? = suspendCancellableCoroutine { continuation ->
+    val completed = AtomicInt(0)
+    val alert = UIAlertController.alertControllerWithTitle(title, message, UIAlertControllerStyleAlert)
+    fun finish(value: Boolean?) {
+        if (!completed.compareAndSet(0, 1)) return
+        // Do not present the next sheet while this alert is still in UIKit's chain.
+        alert.dismissViewControllerAnimated(true) { continuation.resume(value) }
     }
-    dispatch_async(dispatch_get_main_queue()) {
-        val alert = UIAlertController.alertControllerWithTitle(
-            title = title,
-            message = message,
-            preferredStyle = UIAlertControllerStyleAlert
-        )
-        alert.addAction(
-            UIAlertAction.actionWithTitle(
-                title = primaryLabel,
-                style = UIAlertActionStyleDefault,
-                handler = { _ -> onPrimary() }
-            )
-        )
-        alert.addAction(
-            UIAlertAction.actionWithTitle(
-                title = secondaryLabel,
-                style = UIAlertActionStyleDefault,
-                handler = { _ -> onSecondary() }
-            )
-        )
-        alert.addAction(
-            UIAlertAction.actionWithTitle(
-                title = cancelLabel,
-                style = UIAlertActionStyleCancel,
-                handler = null
-            )
-        )
-        runCatching {
-            controller.presentViewController(alert, animated = true, completion = null)
-        }.onFailure { error ->
-            Logger.e("IosUiFeedback", "Failed to present choice alert", error)
+    alert.addAction(UIAlertAction.actionWithTitle(primaryLabel, UIAlertActionStyleDefault) { finish(true) })
+    alert.addAction(UIAlertAction.actionWithTitle(secondaryLabel, UIAlertActionStyleDefault) { finish(false) })
+    alert.addAction(UIAlertAction.actionWithTitle(cancelLabel, UIAlertActionStyleCancel) { finish(null) })
+    continuation.invokeOnCancellation {
+        completed.compareAndSet(0, 1)
+        dispatch_async(dispatch_get_main_queue()) {
+            if (alert.presentingViewController != null) alert.dismissViewControllerAnimated(true, null)
         }
     }
-    return true
+    dispatch_async(dispatch_get_main_queue()) {
+        if (!continuation.isActive) return@dispatch_async
+        presentPicker(alert, "attachment source chooser") {
+            if (completed.compareAndSet(0, 1)) {
+                continuation.resumeWithException(IllegalStateException("Cannot present attachment source chooser"))
+            }
+        }
+    }
 }

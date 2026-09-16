@@ -51,7 +51,8 @@ fun SavedThreadsScreen(
     onThreadClick: (SavedThread) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    recoverUnindexedThreads: Boolean = false
 ) {
     var threads by remember(repository) { mutableStateOf<List<SavedThread>>(emptyList()) }
     var isLoading by remember(repository) { mutableStateOf(true) }
@@ -69,6 +70,7 @@ fun SavedThreadsScreen(
             loadError = null
         }
         try {
+            if (recoverUnindexedThreads) repository.recoverUnindexedThreads().getOrThrow()
             loadSavedThreadsSnapshot(repository).getOrThrow().let { snapshot ->
                 threads = snapshot.threads
                 totalSize = snapshot.totalSize

@@ -3,13 +3,9 @@ package com.valoser.futacha.shared.service
 import com.valoser.futacha.shared.model.SaveLocation
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
+import com.valoser.futacha.shared.util.isSupportedMediaSaveSource
+import com.valoser.futacha.shared.util.withMediaSaveSource
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.HttpHeaders
-import io.ktor.http.isSuccess
-import io.ktor.utils.io.cancel
-import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
@@ -48,7 +44,7 @@ class ImageZipSaveService(
         var pendingOutputFileName: String? = null
         try {
             val urls = mediaUrls.map(String::trim)
-                .filter { it.startsWith("https://", true) || it.startsWith("http://", true) }
+                .filter(::isSupportedMediaSaveSource)
                 .distinct()
             require(urls.isNotEmpty()) { "保存するメディアがありません" }
             val suffix = fileNameSuffix?.let(::safeSegment)?.takeIf { it.isNotBlank() }
@@ -56,6 +52,10 @@ class ImageZipSaveService(
                 append(safeSegment(boardId)).append('_').append(safeSegment(threadId))
                 if (suffix != null) append('_').append(suffix)
                 append("_media.zip")
+            }
+            val destination = fileSystem.resolveSavedFile(baseSaveLocation ?: SaveLocation.Path(baseDirectory), fileName).getOrNull()
+            require(urls.none { com.valoser.futacha.shared.util.localMediaSavePath(it) == destination }) {
+                "元のファイルとZIP保存先が同じです"
             }
             pendingOutputFileName = fileName
             val relativePath = fileName
@@ -71,50 +71,34 @@ class ImageZipSaveService(
                     val requestedName = safeMediaName(url, index)
                     onProgress(index, urls.size, requestedName, 0L, 0L)
                     val entryName = uniqueName(requestedName, usedNames)
-                    val response = runCatching { httpClient.get(url) }.getOrNull()
-                    if (response == null || !response.status.isSuccess()) {
-                        response?.let { runCatching { it.bodyAsChannel().cancel() } }
-                        failedItems += 1
-                        failedUrls += url
-                        return@forEachIndexed
-                    }
+                    var entryStarted = false
                     try {
-                        val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                        if (declared != null && declared !in 1..MAX_ZIP_ENTRY_BYTES) {
-                            failedItems += 1
-                            failedUrls += url
-                            return@forEachIndexed
-                        }
-                        val channel = response.bodyAsChannel()
-                        var currentBytes = 0L
-                        val saved = zip.writeEntry(entryName, MAX_ZIP_ENTRY_BYTES) { buffer ->
-                            val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
-                                channel.readAvailable(buffer, 0, buffer.size)
-                            } ?: throw IllegalStateException("画像の読み込みがタイムアウトしました")
-                            if (read > 0) {
-                                currentBytes += read
-                                onProgress(
-                                    index,
-                                    urls.size,
-                                    requestedName,
-                                    currentBytes,
-                                    declared ?: 0L
-                                )
+                        withMediaSaveSource(httpClient, fileSystem, url) { source ->
+                            require(source.declaredSize <= MAX_ZIP_ENTRY_BYTES) { "ファイルが大きすぎます" }
+                            var currentBytes = 0L
+                            entryStarted = true
+                            val saved = zip.writeEntry(entryName, MAX_ZIP_ENTRY_BYTES) { buffer ->
+                                val read = withTimeoutOrNull(READ_IDLE_TIMEOUT_MILLIS) {
+                                    source.read(buffer)
+                                } ?: throw IllegalStateException("メディアの読み込みがタイムアウトしました")
+                                if (read > 0) {
+                                    currentBytes += read
+                                    onProgress(index, urls.size, requestedName, currentBytes, source.declaredSize)
+                                }
+                                read
                             }
-                            read
+                            check(saved > 0L) { "メディアが空です" }
+                            check(source.declaredSize <= 0L || saved == source.declaredSize) { "ファイルを最後まで読み込めませんでした" }
+                            savedItems += 1
+                            onProgress(index + 1, urls.size, requestedName, currentBytes, source.declaredSize)
                         }
-                        if (saved <= 0L) throw IllegalStateException("画像が空です")
-                        savedItems += 1
-                        onProgress(index + 1, urls.size, requestedName, currentBytes, declared ?: currentBytes)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (failure: Throwable) {
-                        // Once a local header has been written the archive
-                        // cannot safely skip that entry without seeking.
-                        // Abort so callers never receive a corrupt ZIP.
-                        throw failure
-                    } finally {
-                        runCatching { response.bodyAsChannel().cancel() }
+                        // A partially written entry cannot be skipped in a streaming archive.
+                        if (entryStarted) throw failure
+                        failedItems += 1
+                        failedUrls += url
                     }
                 }
                 require(savedItems > 0) { "メディアを保存できませんでした" }

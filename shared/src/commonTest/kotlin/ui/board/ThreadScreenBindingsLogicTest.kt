@@ -1333,7 +1333,7 @@ class ThreadScreenBindingsLogicTest {
         assertNull(manualSaveJob)
         assertNull(appliedErrorState)
         assertEquals(listOf(savedThread), indexedThreads)
-        assertEquals(listOf("スレッドを保存しました: /manual/storage"), shownMessages)
+        assertEquals(listOf("スレッドを保存しました\n保存先: /manual/storage"), shownMessages)
     }
 
     @Test
@@ -1427,7 +1427,7 @@ class ThreadScreenBindingsLogicTest {
         manualSaveJob?.join()
 
         assertEquals(
-            listOf(buildThreadManualSaveIndexWarningMessage("/manual/storage")),
+            listOf("スレッドを保存しました\n保存先: /manual/storage\n" + buildThreadManualSaveIndexWarningMessage("/manual/storage")),
             shownMessages
         )
     }
@@ -1575,7 +1575,7 @@ class ThreadScreenBindingsLogicTest {
         assertFalse(isSingleMediaSaveInProgress)
         assertNull(singleMediaSaveJob)
         assertNull(appliedErrorState)
-        assertEquals(listOf("画像を保存しました: /manual/images/a.jpg"), shownMessages)
+        assertEquals(listOf("画像を保存しました\n保存先: /manual/images/a.jpg\nファイルとして保存しました。写真アプリへ追加する場合は「共有」を使ってください。"), shownMessages)
     }
 
     @Test

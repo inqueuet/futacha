@@ -20,14 +20,14 @@ import kotlin.test.assertTrue
 
 class SingleMediaSaveServiceTest {
     @Test
-    fun saveMedia_rejectsNonHttpUrls() = runBlocking {
+    fun saveMedia_rejectsUnsupportedSchemes() = runBlocking {
         val service = SingleMediaSaveService(
             httpClient = createClient { error("network should not be used") },
             fileSystem = InMemoryFileSystem()
         )
 
         val result = service.saveMedia(
-            mediaUrl = "file:///tmp/test.jpg",
+            mediaUrl = "javascript:alert(1)",
             boardId = "b",
             threadId = "777",
             baseDirectory = "manual"

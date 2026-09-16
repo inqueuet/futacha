@@ -133,7 +133,7 @@ internal fun resolveDefaultAndroidSaveWarningText(
     if (manualSaveLocation !is SaveLocation.Path || !isDefaultManualSaveRoot(manualSaveDirectory)) {
         return null
     }
-    return "Android のデフォルト保存先はアプリ専用の Documents 系領域に解決され、端末上で見失いやすい状態です。保存前に「ファイラーで選ぶ」か、手入力で Download など分かる場所へ変更してください。"
+    return "Android のデフォルト保存先はアプリ専用の Documents 系領域に解決され、端末上で見失いやすい状態です。「ファイラーで選ぶ」で保存先フォルダを選択してください。手入力の Download もアプリ専用領域です。"
 }
 
 internal fun buildDisplayedSavePathValue(
