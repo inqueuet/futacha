@@ -45,6 +45,7 @@ internal actual fun createPlatformStateStorage(platformContext: Any?): PlatformS
 private class AndroidPlatformStateStorage(
     private val context: Context
 ) : PlatformStateStorage {
+    private val mediaFeatureSettingsKey = stringPreferencesKey(com.valoser.futacha.shared.media.MEDIA_FEATURE_SETTINGS_KEY)
     private val boardsKey = stringPreferencesKey("boards_json")
     private val historyKey = stringPreferencesKey("history_json")
     private val privacyFilterKey = booleanPreferencesKey("privacy_filter_enabled")
@@ -132,6 +133,11 @@ private class AndroidPlatformStateStorage(
                     else -> throw StorageException("Failed to read DataStore preferences", e)
                 }
             }
+
+    override val mediaFeatureSettingsJson: Flow<String?> = safeData.map { it[mediaFeatureSettingsKey] }
+    override suspend fun updateMediaFeatureSettingsJson(value: String) {
+        updateStringPreference(mediaFeatureSettingsKey, value, "media feature settings", "Failed to save media feature settings")
+    }
 
     override val boardsJson: Flow<String?> =
         safeData.map { prefs -> prefs[boardsKey] }

@@ -79,8 +79,8 @@ android {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 176
-        versionName = "11.0"
+        versionCode = 182
+        versionName = "11.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
@@ -118,6 +118,10 @@ android {
         // fixed build-directory path; merge*Assets is explicitly wired to the
         // producer task below.
         assets.directories.add(sharedComposeAndroidAssets.get().asFile.absolutePath)
+    }
+    sourceSets.named("androidTest") {
+        kotlin.directories.add(rootProject.file("shared/src/videoTestFixtures/kotlin").absolutePath)
+        kotlin.directories.add(rootProject.file("shared/src/inferenceTestFixtures/kotlin").absolutePath)
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -247,11 +251,15 @@ dependencies {
     implementation(libs.firebase.crashlytics)
     implementation(libs.firebase.performance)
     testImplementation(libs.junit)
+    testImplementation(libs.androidx.navigationevent)
     testImplementation(libs.ktor.client.mock)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.kotlin.test)
+    androidTestImplementation(libs.androidx.navigationevent)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.monitor)
+    androidTestImplementation(libs.androidx.exifinterface)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

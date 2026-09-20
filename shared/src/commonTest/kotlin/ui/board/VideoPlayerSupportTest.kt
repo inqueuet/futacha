@@ -83,7 +83,7 @@ class VideoPlayerSupportTest {
         assertTrue("%22" in html)
         assertTrue("%3C" in html)
         assertTrue("%3E" in html)
-        assertTrue("&y=2" in html)
+        assertTrue("&amp;y=2" in html)
         assertFalse("autoplay" in html)
         assertFalse("video<1>" in html)
         assertTrue("controls_visible" in html)

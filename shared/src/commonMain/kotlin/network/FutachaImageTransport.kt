@@ -13,7 +13,11 @@ import io.ktor.http.decodeURLPart
 
 /** Application-owned image transport. It cannot be passed to BoardApi as an HttpClient. */
 class FutachaImageTransport internal constructor(internal val client: HttpClient) {
-    fun close() = client.close()
+    val originalMediaSession = com.valoser.futacha.shared.media.source.createOriginalMediaSession(client)
+    fun close() {
+        originalMediaSession.close()
+        client.close()
+    }
 }
 
 internal class ImageRequestRejected : IllegalArgumentException("Not an image transport request")

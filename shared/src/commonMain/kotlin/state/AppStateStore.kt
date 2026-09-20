@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.media.MediaFeatureSettings
+
 import com.valoser.futacha.shared.model.AppIconVariant
 import com.valoser.futacha.shared.model.BoardSummary
 import com.valoser.futacha.shared.model.CatalogDisplayStyle
@@ -67,6 +69,7 @@ class AppStateStore internal constructor(
     // - 各Mutexは独立したデータを保護しており、ネストしたロックは避けること
     // - history 用のロックは historyCoordinator に閉じ込め、store 本体では
     //   boards / scroll / catalogMode / selfPostIdentifiers を個別に扱う
+    private val mediaFeatureSettingsMutex = Mutex()
     private val boardsMutex = Mutex()
     private val scrollPositionMutex = Mutex() // FIX: スクロール専用Mutex
     private val catalogModeMutex = Mutex()
@@ -205,6 +208,16 @@ class AppStateStore internal constructor(
             }
         }
     }.distinctUntilChanged()
+
+    val mediaFeatureSettings: Flow<MediaFeatureSettings> = storage.mediaFeatureSettingsJson
+        .map(MediaFeatureSettings::decode).distinctUntilChanged()
+
+    suspend fun updateMediaFeatureSettings(change: (MediaFeatureSettings) -> MediaFeatureSettings) {
+        mediaFeatureSettingsMutex.withLock {
+            val previous = MediaFeatureSettings.decode(storage.mediaFeatureSettingsJson.first())
+            storage.updateMediaFeatureSettingsJson(MediaFeatureSettings.encode(change(previous)))
+        }
+    }
 
     val isPrivacyFilterEnabled: Flow<Boolean> = storage.privacyFilterEnabled
     val isBackgroundRefreshEnabled: Flow<Boolean> = storage.backgroundRefreshEnabled
@@ -548,6 +561,7 @@ fun createAppStateStore(platformContext: Any? = null, fileSystem: FileSystem? = 
 }
 
 internal interface PlatformStateStorage {
+    val mediaFeatureSettingsJson: Flow<String?>
     val boardsJson: Flow<String?>
     val historyJson: Flow<String?>
     val privacyFilterEnabled: Flow<Boolean>
@@ -592,6 +606,7 @@ internal interface PlatformStateStorage {
     val threadMenuEntriesConfigJson: Flow<String?>
     val catalogNavEntriesConfigJson: Flow<String?>
 
+    suspend fun updateMediaFeatureSettingsJson(value: String)
     suspend fun updateBoardsJson(value: String)
     suspend fun updateHistoryJson(value: String)
     suspend fun updatePrivacyFilterEnabled(enabled: Boolean)

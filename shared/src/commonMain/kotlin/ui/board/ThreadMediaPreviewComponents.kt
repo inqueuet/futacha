@@ -160,7 +160,7 @@ internal fun ThreadMediaPreviewDialogFrame(
                 .fillMaxSize()
                 .background(Color.Black)
                 .onSizeChanged { previewSize = it }
-                .pointerInput(navigationKey, isSwipeNavigationEnabled) {
+                .pointerInput(navigationKey, isSwipeNavigationEnabled, swipeNavigationPadding) {
                     if (!isSwipeNavigationEnabled) return@pointerInput
                     awaitEachGesture {
                         val down = awaitFirstDown(

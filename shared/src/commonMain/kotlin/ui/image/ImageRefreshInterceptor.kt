@@ -7,6 +7,7 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
+import coil3.request.Options
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
@@ -17,6 +18,7 @@ private val RefreshOperation = Extras.Key(0L)
 internal fun ImageRequest.Builder.refreshImageOnce(operation: Long): ImageRequest.Builder = apply {
     extras[RefreshOperation] = operation
 }
+internal val Options.imageRefreshOperation: Long get() = getExtra(RefreshOperation)
 
 /** Bypass old data once per explicit operation, but write the successful replacement. */
 internal class ImageRefreshInterceptor : Interceptor {

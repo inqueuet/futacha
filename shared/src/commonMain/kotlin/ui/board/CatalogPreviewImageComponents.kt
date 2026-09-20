@@ -1,9 +1,15 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+
 import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -83,19 +89,24 @@ internal fun CatalogPreviewImage(
     val shouldShowFallback = activeUrl.isNullOrBlank() ||
         (imageState is AsyncImagePainter.State.Error && candidateIndex >= candidates.lastIndex)
 
-    if (shouldShowFallback) {
-        Icon(
-            imageVector = Icons.Outlined.Image,
-            contentDescription = null,
-            tint = fallbackTint
-        )
-    } else {
-        Image(
-            painter = imagePainter,
-            contentDescription = contentDescription,
-            contentScale = ContentScale.Crop,
-            modifier = modifier
-        )
+    val promptMetadata = rememberGenerationMetadata(fullImageUrl, imageState)
+    Box(modifier) {
+        if (shouldShowFallback) {
+            Icon(
+                imageVector = Icons.Outlined.Image,
+                contentDescription = null,
+                tint = fallbackTint,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        } else {
+            Image(
+                painter = imagePainter,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
     }
 }
 

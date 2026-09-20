@@ -96,8 +96,7 @@ internal fun buildThreadInitialLoadUiOutcome(
     )
     return ThreadLoadUiOutcome(
         uiState = successState.uiState,
-        historyEntry = successState.historyEntry,
-        snackbarMessage = if (usedOffline) "ローカルコピーを表示しています" else null
+        historyEntry = successState.historyEntry
     )
 }
 
@@ -112,9 +111,9 @@ internal fun buildThreadInitialLoadFailureUiOutcome(
     )
 }
 
-internal fun buildThreadRefreshSuccessMessage(usedOffline: Boolean): String {
+internal fun buildThreadRefreshSuccessMessage(usedOffline: Boolean): String? {
     return if (usedOffline) {
-        "ネットワーク接続不可: ローカルコピーを表示しています"
+        null
     } else {
         "スレッドを更新しました"
     }

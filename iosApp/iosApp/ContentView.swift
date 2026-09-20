@@ -141,11 +141,31 @@ struct ComposeView: UIViewControllerRepresentable {
 #endif
         }()
 
-        lazy var controller: UIViewController = FutachaComposeHostViewController(
-            content: MainViewControllerKt.MainViewController(
+        lazy var controller: UIViewController = {
+#if DEBUG
+            if let fixture = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FIXTURE_BASE64"],
+               let data = Data(base64Encoded: fixture),
+               let ext = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FIXTURE_EXTENSION"],
+               ["mp4", "webm"].contains(ext) {
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("video-validation.\(ext)")
+                if (try? data.write(to: file)) != nil {
+                    var fallbackPath: String?
+                    if let encoded = ProcessInfo.processInfo.environment["FUTACHA_VIDEO_FALLBACK_BASE64"], let bytes = Data(base64Encoded: encoded) {
+                        let fallback = FileManager.default.temporaryDirectory.appendingPathComponent("video-validation-fallback.mp4")
+                        if (try? bytes.write(to: fallback)) != nil { fallbackPath = fallback.path }
+                    }
+                    return FutachaComposeHostViewController(content:
+                        OriginalVideoValidationControllerKt.OriginalVideoValidationController(filePath: file.path, extension: ext,
+                            fallbackFilePath: fallbackPath, remoteUrl: ProcessInfo.processInfo.environment["FUTACHA_VIDEO_REMOTE_URL"],
+                            useLocalFile: ProcessInfo.processInfo.environment["FUTACHA_VIDEO_LOCAL_FILE"] == "1",
+                            muted: ProcessInfo.processInfo.environment["FUTACHA_VIDEO_MUTED"] == "1"))
+                }
+            }
+#endif
+            return FutachaComposeHostViewController(content: MainViewControllerKt.MainViewController(
                 issue78ArchiveFixture: Self.issue78ArchiveFixture
-            )
-        )
+            ))
+        }()
     }
 
     func makeCoordinator() -> Coordinator {

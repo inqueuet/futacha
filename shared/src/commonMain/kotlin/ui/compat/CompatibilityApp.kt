@@ -7,6 +7,10 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+import com.valoser.futacha.shared.ui.image.InlinePrompt
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.animation.core.Easing
@@ -3980,6 +3984,8 @@ private fun CompatMainOverflowPopup(
             shadowElevation = 8.dp
         ) {
             Column {
+            com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem(onDismiss)
+            com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem(onDismiss)
             // board_menu.xml in sample/1.apk labels the update action simply
             // "板一覧"; the action itself still refreshes the board list.
             listOf("板一覧", "新規追加", "並び替え", "削除", "保存済みスレッド", "設定", "ヘルプ").forEach { label ->
@@ -6143,12 +6149,9 @@ private fun CompatThreadScreen(
     var ascii2dRegistrationUrl by remember(tab.key) { mutableStateOf("") }
     var reverseSearchResult by remember(tab.key) { mutableStateOf<CompatImageSearchResult?>(null) }
     var archiveSearchOpen by remember(tab.key) { mutableStateOf(false) }
-    var toolbarItems by remember(tab.key, initialToolbarItems) {
-        mutableStateOf(
-            initialToolbarItems
-                ?: reconcileCompatToolbar(CompatToolbarSurface.THREAD, emptyList())
-        )
-    }
+    val toolbarItems = rememberCompatThreadToolbarItems(
+        tab.key, initialToolbarItems, toolbarRefreshToken, store
+    )
     var otherMenuRoute by remember { mutableStateOf<CompatOtherMenuRoute?>(null) }
     var scrollDialogOpen by remember(tab.key) { mutableStateOf(false) }
     var managedNgKinds by remember { mutableStateOf<Set<CompatNgKind>?>(null) }
@@ -7527,15 +7530,6 @@ private fun CompatThreadScreen(
             else -> Unit
         }
         onPlatformAiCommandConsumed(command)
-    }
-    LaunchedEffect(toolbarRefreshToken, initialToolbarItems) {
-        try {
-            toolbarItems = initialToolbarItems ?: store.loadToolbar(CompatToolbarSurface.THREAD)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            Logger.e("CompatibilityThread", "Failed to load thread toolbar", failure)
-        }
     }
     LaunchedEffect(scrollToBottomRequest) {
         if (scrollToBottomRequest != null && (visiblePosts.isNotEmpty() || threadFooterLabel != null)) {
@@ -9236,6 +9230,34 @@ private fun CompatThreadScreen(
 }
 
 
+// Keep this state/effect outside the large thread composable. D8's release
+// register allocation otherwise emitted an invalid continuation reference in
+// CompatThreadScreen, causing VerifyError before compatibility mode could open.
+@Composable
+private fun rememberCompatThreadToolbarItems(
+    tabKey: String,
+    initialToolbarItems: List<CompatToolbarItem>?,
+    toolbarRefreshToken: Long,
+    store: CompatibilityStore
+): List<CompatToolbarItem> {
+    var items by remember(tabKey, initialToolbarItems) {
+        mutableStateOf(
+            initialToolbarItems
+                ?: reconcileCompatToolbar(CompatToolbarSurface.THREAD, emptyList())
+        )
+    }
+    LaunchedEffect(toolbarRefreshToken, initialToolbarItems) {
+        try {
+            items = initialToolbarItems ?: store.loadToolbar(CompatToolbarSurface.THREAD)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            Logger.e("CompatibilityThread", "Failed to load thread toolbar", failure)
+        }
+    }
+    return items
+}
+
 @Composable
 private fun CompatTopBar(
     title: String,
@@ -9320,6 +9342,8 @@ private fun CompatTopBar(
                     tonalElevation = 0.dp,
                     shadowElevation = 8.dp
                 ) {
+                    com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem { overflowOpen = false }
+                    com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem { overflowOpen = false }
                     DropdownMenuItem(
                         text = { Text("表示オプション") },
                         colors = compatibilityMenuItemColors(),
@@ -9491,6 +9515,7 @@ private fun CompatCatalogGridItem(
         )
     }
     val imageState by imagePainter.state.collectAsState()
+    val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
     LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
         if (imageState is coil3.compose.AsyncImagePainter.State.Error &&
             imageCandidateIndex < imageCandidates.lastIndex
@@ -9576,6 +9601,7 @@ private fun CompatCatalogGridItem(
                     fontSize = 11.sp
                 )
             }
+            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
             if (matchedWatchWords.isNotEmpty()) {
                 Text(
                     text = matchedWatchWords.joinToString("・"),
@@ -9681,6 +9707,7 @@ private fun CompatCatalogListItem(
         )
     }
     val imageState by imagePainter.state.collectAsState()
+    val promptMetadata = rememberGenerationMetadata(item.fullImageUrl, imageState, visible = privacyAlpha >= 1f)
     LaunchedEffect(imageState, imageCandidateIndex, imageCandidates.size) {
         if (imageState is coil3.compose.AsyncImagePainter.State.Error &&
             imageCandidateIndex < imageCandidates.lastIndex
@@ -9718,6 +9745,7 @@ private fun CompatCatalogListItem(
                     }
                 )
             }
+            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
         }
         Column(modifier = Modifier.weight(1f).padding(horizontal = 6.dp)) {
             if (matchedWatchWords.isNotEmpty()) {
@@ -10408,6 +10436,10 @@ private fun CompatHierarchicalOtherMenuDialog(
         items
     }
     CompatBottomPopup(onDismiss = onDismiss) {
+        if (route == CompatOtherMenuRoute.CATALOG_ROOT || route == CompatOtherMenuRoute.THREAD_ROOT) {
+            com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem(onDismiss)
+            com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem(onDismiss)
+        }
         visibleItems.forEach { item ->
             TextButton(
                 enabled = item.enabled,
@@ -11651,6 +11683,7 @@ private fun CompatPostRow(
             }
             val painter = rememberAsyncImagePainter(model = imageModel, imageLoader = imageLoader)
             val painterState by painter.state.collectAsState()
+            val promptMetadata = rememberGenerationMetadata(originalMediaUrl, painterState, visible = privacyAlpha >= 1f)
             val requestStartedAtEpochMillis = remember(
                 previewUrl,
                 completedPreviewRetries,
@@ -11794,6 +11827,7 @@ private fun CompatPostRow(
                             }}"
                         )
                 )
+                PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
                 if (delayedLoadingVisible) {
                     CircularProgressIndicator(
                         modifier = Modifier
@@ -11811,6 +11845,7 @@ private fun CompatPostRow(
                     )
                 }
             }
+            InlinePrompt(promptMetadata)
         }
         // The reference client places generated あぷ小 previews above the
         // body.  The body itself must stay byte-for-byte represented as text;

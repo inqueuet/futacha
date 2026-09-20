@@ -6,6 +6,13 @@
 
 package com.valoser.futacha.shared.ui.compat
 
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+import com.valoser.futacha.shared.ui.image.PromptInfoAction
+
+import com.valoser.futacha.shared.ui.image.clearFutachaImageCaches
+import com.valoser.futacha.shared.ui.image.originalMediaCacheSizeBytes
+
 import com.valoser.futacha.shared.ui.image.rememberViewerImagePainter
 
 import androidx.compose.animation.core.Animatable
@@ -452,6 +459,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
             preferenceKey = "updateCheckEnabled"
         ),
         CompatSettingEntry("保存済みスレッド", "保存したスレッドを一覧表示"),
+        CompatSettingEntry("メディア機能", "画像編集、動画編集", "media"),
         CompatSettingEntry("旧版設定・NGの復元", "旧としあき(仮)の keyword.cfg / setting.cfg を読み込む"),
         CompatSettingEntry("@create_app_null", "Futacha作者の情報"),
         CompatSettingEntry("開発情報", "Futachaの正規情報へ移動"),
@@ -847,7 +855,7 @@ internal fun CompatSettingsScreen(
             }.getOrNull()
             imageCacheUsage = withContext(AppDispatchers.io) {
                 runCatching {
-                    val normalBytes = (imageLoader.diskCache?.size ?: 0L) +
+                    val normalBytes = imageLoader.originalMediaCacheSizeBytes() + (imageLoader.diskCache?.size ?: 0L) +
                         (imageLoader.memoryCache?.size ?: 0L)
                     val catalogBytes = if (catalogImageLoader === imageLoader) 0L else {
                         (catalogImageLoader.diskCache?.size ?: 0L) +
@@ -907,6 +915,13 @@ internal fun CompatSettingsScreen(
             state = settingsListState,
             modifier = Modifier.fillMaxSize().padding(padding).testTag("compat-settings-list-$path")
         ) {
+            if (path == "media") item(key = "media-settings") {
+                com.valoser.futacha.shared.ui.media.DeviceImageEditorSettings()
+                HorizontalDivider()
+                com.valoser.futacha.shared.ui.media.DeviceVideoEditorSettings()
+                HorizontalDivider()
+                com.valoser.futacha.shared.ui.media.MediaHelpButton()
+            }
             groups.forEach { (group, entries) ->
                 item(key = "group-$group") {
                     Text(
@@ -1285,13 +1300,10 @@ internal fun CompatSettingsScreen(
                         launchSettingsSafely {
                             val usage = withContext(AppDispatchers.io) {
                                 runCatching {
-                                    imageLoader.diskCache?.clear()
-                                    imageLoader.memoryCache?.clear()
-                                    catalogImageLoader.diskCache?.clear()
-                                    catalogImageLoader.memoryCache?.clear()
+                                    clearFutachaImageCaches(imageLoader, catalogImageLoader)
                                 }
                                 runCatching {
-                                    val normalBytes = (imageLoader.diskCache?.size ?: 0L) +
+                                    val normalBytes = imageLoader.originalMediaCacheSizeBytes() + (imageLoader.diskCache?.size ?: 0L) +
                                         (imageLoader.memoryCache?.size ?: 0L)
                                     val catalogBytes = if (catalogImageLoader === imageLoader) 0L else {
                                         (catalogImageLoader.diskCache?.size ?: 0L) +
@@ -1570,7 +1582,7 @@ internal fun CompatSettingsScreen(
                                                     clearOrdinaryImageCache = {
                                                         withContext(AppDispatchers.io) {
                                                             imageLoader.memoryCache?.clear()
-                                                            imageLoader.diskCache?.clear()
+                                                            clearFutachaImageCaches(imageLoader, clearMemory = false)
                                                         }
                                                     },
                                                     savePreference = { value ->
@@ -2200,7 +2212,7 @@ internal fun compatStorageDirectorySummary(preferenceKey: String, rawValue: Stri
     val defaultSummary = if (preferenceKey == "dummyDrawingDir") {
         "未設定時: 一時保存。残す場合は保存先を設定"
     } else {
-        if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha"
+        if (com.valoser.futacha.shared.util.isDesktop()) "未設定時：アプリのデータ保存先" else if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha"
     }
     val raw = rawValue?.trim().orEmpty()
     if (raw.isBlank()) return defaultSummary
@@ -2612,6 +2624,7 @@ internal fun String.compatSettingsTitle(): String = when (this) {
     "catalog" -> "カタログ設定"
     "thread" -> "スレッド設定"
     "viewer" -> "画像ビューア設定"
+    "media" -> "メディア機能"
     "ptmt" -> "ptmtクッキーの編集"
     else -> "設定"
 }
@@ -2640,7 +2653,7 @@ internal fun String.compatSettingsEntries(): List<CompatSettingEntry> = when (th
         CompatSettingEntry("下にスワイプして閉じる", "ON", preferenceKey = "controlViewerSwipeClose")
     )
     "storage" -> listOf(
-        CompatSettingEntry("保存ファイル", if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha", preferenceKey = "dummyDownloadDir"),
+        CompatSettingEntry("保存ファイル", if (com.valoser.futacha.shared.util.isDesktop()) "未設定時：アプリのデータ保存先" else if (com.valoser.futacha.shared.util.isAndroid()) "未設定時：保存時にフォルダを選択" else "未設定時：ファイル > このiPhone内 > futacha", preferenceKey = "dummyDownloadDir"),
         CompatSettingEntry("手書きファイル", "未設定時: 一時保存。残す場合は保存先を設定", preferenceKey = "dummyDrawingDir"),
         CompatSettingEntry("画像キャッシュ上限", "512MB", preferenceKey = "commonImageCache"),
         CompatSettingEntry("画像キャッシュの保存先", "端末ストレージ", preferenceKey = "dummyImageCacheLocation"),
@@ -2756,6 +2769,7 @@ private fun List<CompatSettingEntry>.compatKeys(vararg keys: String): List<Compa
 internal fun compatSettingsGroups(path: String): List<Pair<String, List<CompatSettingEntry>>> {
     val entries = path.compatSettingsEntries()
     return when (path) {
+        "media" -> emptyList()
         "design" -> listOf(
             "スタイル" to entries.compatKeys(
                 "designTheme", "designNavigationBar", "designLoading", "dummyCustomFont"
@@ -4586,6 +4600,10 @@ internal fun CompatGalleryScreen(
                             requestedPreviewUrl != originalMediaUrl
                         ) originalMediaUrl else requestedPreviewUrl
                         val reloadToken = thumbnailReloadTokens[mediaIdentity]
+                        var promptImageState by remember(previewUrl, reloadToken) {
+                            mutableStateOf<coil3.compose.AsyncImagePainter.State?>(null)
+                        }
+                        val promptMetadata = rememberGenerationMetadata(originalMediaUrl, promptImageState, visible = !threadPrivacyEnabled)
                         Box(
                             Modifier.fillMaxWidth()
                                 .aspectRatio(1f)
@@ -4596,6 +4614,7 @@ internal fun CompatGalleryScreen(
                                 model = if (reloadToken == null) previewUrl else "$previewUrl#compat-reload=$reloadToken",
                                 imageLoader = imageLoader,
                                 contentDescription = "No.${post.postNo}",
+                                onSuccess = { promptImageState = it },
                                 onError = {
                                     if (requestedPreviewUrl != originalMediaUrl) {
                                         thumbnailFallbackPostNos = thumbnailFallbackPostNos + mediaIdentity
@@ -4615,6 +4634,7 @@ internal fun CompatGalleryScreen(
                                 modifier = Modifier.align(Alignment.TopEnd)
                                     .background(palette.background).padding(horizontal = 2.dp)
                             )
+                            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
                             val mediaUrl = resolveCompatViewerMediaUrl(post)
                             val mediaBadge = when {
                                 apngMarkers[mediaIdentity] == true -> "APNG"
@@ -5648,6 +5668,9 @@ internal fun CompatViewerScreen(
                     var videoCandidateIndex by remember(mediaUrl, switchWebmToMp4) { mutableStateOf(0) }
                     var playbackState by remember(mediaUrl, switchWebmToMp4) { mutableStateOf(VideoPlayerState.Buffering) }
                     var playbackError by remember(mediaUrl, switchWebmToMp4) { mutableStateOf<VideoPlaybackError?>(null) }
+                    val playingUrl = videoCandidates[videoCandidateIndex.coerceIn(0, videoCandidates.lastIndex)]
+                    val videoPromptMetadata = rememberGenerationMetadata(playingUrl,
+                        visible = page == pagerState.currentPage && !threadPrivacyEnabled)
                     val posterUrl = post?.thumbnailUrl
                         ?.takeIf { it.isNotBlank() && it != mediaUrl }
                     val privacyOverlayAlpha = compatPrivacyOverlayAlpha(
@@ -5656,7 +5679,8 @@ internal fun CompatViewerScreen(
                     )
                     Box(modifier = Modifier.fillMaxSize()) {
                         PlatformVideoPlayer(
-                            videoUrl = videoCandidates[videoCandidateIndex.coerceIn(0, videoCandidates.lastIndex)] + reloadSuffix,
+                            videoUrl = playingUrl + reloadSuffix,
+                            isActive = page == pagerState.currentPage,
                             modifier = Modifier.fillMaxSize(),
                             onStateChanged = { state ->
                                 playbackState = state
@@ -5699,6 +5723,9 @@ internal fun CompatViewerScreen(
                                     .fillMaxSize()
                                     .background(Color.Black.copy(alpha = privacyOverlayAlpha))
                             )
+                        }
+                        if (page == pagerState.currentPage && !threadPrivacyEnabled) {
+                            PromptInfoAction(videoPromptMetadata, Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 72.dp))
                         }
                     }
                     if (playbackState == VideoPlayerState.Error) {
@@ -5955,6 +5982,7 @@ private fun CompatViewerImagePage(
         val sourcePainter = sourceImage.painter
         val thumbnailState = thumbnailImage.state
         val sourceState = sourceImage.state
+        val promptMetadata = rememberGenerationMetadata(mediaUrl, sourceState, visible = !privacyEnabled)
         val sourceReady = sourceState is coil3.compose.AsyncImagePainter.State.Success
         val sourceFailed = sourceState is coil3.compose.AsyncImagePainter.State.Error
         val sourceFailureDetail = formatMediaLoadFailure(
@@ -6177,6 +6205,9 @@ private fun CompatViewerImagePage(
                     }
                 }
             }
+        }
+        if (isCurrentPage && !privacyEnabled) {
+            PromptInfoAction(promptMetadata, Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 72.dp))
         }
     }
 }

@@ -163,6 +163,8 @@ internal fun CatalogTopBar(
                         tonalElevation = 0.dp,
                         shadowElevation = 8.dp
                     ) {
+                        com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem { isMenuExpanded = false }
+                        com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem { isMenuExpanded = false }
                         CatalogMenuAction.entries.forEach { action ->
                             DropdownMenuItem(
                                 text = { Text(action.label) },

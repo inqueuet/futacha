@@ -31,8 +31,19 @@ internal val FUTACHA_CHANGE_LOG_HTML: String = """
         </style>
     </head>
     <body>
+    <h2>11.1</h2>
+    <ul>
+        <li>プロンプト・AIラベルの表示、画像編集、動画編集を追加しました。それぞれ設定から個別に有効にでき、初期状態はすべてOFFです。</li>
+        <li>画像・動画の生成情報の表示、詳細、コピーに対応しました。表示・生成情報の読取・保存で取得済みの原本を共有し、保存済みファイルからも生成情報を確認できます。</li>
+        <li>スマホ内の画像・動画を選び、性器候補の自動検出、モザイク・黒塗り、輪郭の調整から新規保存まで行えるようにしました。動画では時間指定、前後追尾、編集中の再生、手修正後の再確認にも対応します。自動解析にはモデルの導入が必要です。</li>
+        <li>iOSのWebM再生で、再生能力の確認、読み込みや再生の失敗表示を改善しました。端末や動画の形式によっては再生できない場合があります。MP4への自動変換は行いません。</li>
+        <li>メディア機能の使い方と、使用するライブラリのライセンスを設定から読めるようにしました。</li>
+        <li>ふたちゃモードの履歴でURLを板名に置き換え、余白を縮めました。長いタイトルや大きな文字を折り返し、ブラックテーマでも文字や操作が見やすくなるよう修正しました。</li>
+    </ul>
     <h2>11.0</h2>
     <ul>
+        <li>Android 16などで、戻るジェスチャー中の画面切り替えや画面を閉じるタイミングによってアプリが終了する問題を修正しました。</li>
+        <li>Android版のとしあき（仮）モードで、ビルド条件によって起動時にアプリが終了する問題を修正しました。</li>
         <li>iOS版の両モードで、画像を選んでも添付されない、写真選択画面がキャンセルや下スワイプで閉じられない場合がある問題を修正しました。動画の選択処理も同様に見直しました。</li>
         <li>iOS版のとしあき（仮）モードで、画像の読み込み上限が正しく反映されず、圧縮できる画像も読み込めない問題を修正しました。「ファイル」から動画も選べるようにしました。</li>
         <li>HEIC／HEIF画像をJPEGへ、iOS版のMOV／M4V動画をMP4へ変換して添付できるようにしました。変換や添付の読み込みに失敗した場合はエラーを表示します。</li>
@@ -640,13 +651,16 @@ internal fun parseFutachaChangeLogEntries(html: String): List<FutachaChangeLogEn
 internal val FUTACHA_CHANGE_LOG_ENTRIES: List<FutachaChangeLogEntry> =
     parseFutachaChangeLogEntries(FUTACHA_CHANGE_LOG_HTML)
 
-internal data class FutachaLicenseAsset(val id: String, val text: String)
+internal data class FutachaLicenseAsset(val id: String, val text: String, val resourcePath: String? = null)
 
 /**
  * Notices for software used by Futacha itself.  This deliberately excludes
  * the reference application's dependency list (FFmpeg, Glide, Picasso, etc.).
  */
 internal val FUTACHA_LICENSE_ASSETS: List<FutachaLicenseAsset> = listOf(
+    FutachaLicenseAsset("onnxruntime-license", "ONNX Runtime 1.30.0 — MIT License", "files/licenses/onnxruntime-LICENSE.txt"),
+    FutachaLicenseAsset("onnxruntime-notices", "ONNX Runtime — Third-party notices", "files/licenses/onnxruntime-ThirdPartyNotices.txt"),
+    FutachaLicenseAsset("opencv-notices", "OpenCV 5.0.0 — Apache License 2.0 / Copyright / Third-party notices", "files/licenses/opencv-NOTICES.txt"),
     FutachaLicenseAsset(
         id = "futacha-open-source-notices",
         text = """ふたちゃが利用している主なオープンソースソフトウェア

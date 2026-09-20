@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+import com.valoser.futacha.shared.ui.image.InlinePrompt
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -12,6 +16,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -178,6 +183,7 @@ internal fun ThreadPostCard(
                 imageLoader = imageLoader
             )
             val thumbnailPainterState by thumbnailPainter.state.collectAsState()
+            val promptMetadata = rememberGenerationMetadata(resolvePostTargetMediaUrl(post), thumbnailPainterState)
             val shouldShowThumbnailFallback = thumbnailPainterState is AsyncImagePainter.State.Error
             BoxWithConstraints(
                 modifier = run {
@@ -226,18 +232,20 @@ internal fun ThreadPostCard(
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
-                        Image(
-                            painter = thumbnailPainter,
-                            contentDescription = "添付画像",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .width(thumbnailDisplayBounds.width)
-                                .height(thumbnailDisplayBounds.height)
-                        )
+                        Box(Modifier.align(Alignment.CenterStart)
+                            .width(thumbnailDisplayBounds.width).height(thumbnailDisplayBounds.height)) {
+                            Image(
+                                painter = thumbnailPainter,
+                                contentDescription = "添付画像",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd))
+                        }
                     }
                 }
             }
+            InlinePrompt(promptMetadata)
         }
         if (shouldCollapseDeletedBody) {
             DeletedPostBodyPlaceholder(

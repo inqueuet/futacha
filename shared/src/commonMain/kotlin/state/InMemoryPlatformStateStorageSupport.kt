@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     private val seedMutex = Mutex()
+    val mediaFeatureSettingsState = MutableStateFlow<String?>(null)
     val boardsState = MutableStateFlow<String?>(null)
     val historyState = MutableStateFlow<String?>(null)
     val privacyFilterState = MutableStateFlow(false)
@@ -51,6 +52,9 @@ internal open class BaseInMemoryPlatformStateStorage : PlatformStateStorage {
     val threadSettingsMenuConfigState = MutableStateFlow<String?>(null)
     val threadMenuEntriesConfigState = MutableStateFlow<String?>(null)
     val catalogNavEntriesConfigState = MutableStateFlow<String?>(null)
+
+    override val mediaFeatureSettingsJson: Flow<String?> = mediaFeatureSettingsState
+    override suspend fun updateMediaFeatureSettingsJson(value: String) { mediaFeatureSettingsState.value = value }
 
     override val boardsJson: Flow<String?> = boardsState
     override val historyJson: Flow<String?> = historyState

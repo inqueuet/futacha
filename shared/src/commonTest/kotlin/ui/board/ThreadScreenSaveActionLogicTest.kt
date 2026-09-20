@@ -409,10 +409,7 @@ class ThreadScreenSaveActionLogicTest {
 
     @Test
     fun threadRefreshAndLoadMessages_mapKnownCases() {
-        assertEquals(
-            "ネットワーク接続不可: ローカルコピーを表示しています",
-            buildThreadRefreshSuccessMessage(usedOffline = true)
-        )
+        assertNull(buildThreadRefreshSuccessMessage(usedOffline = true))
         assertEquals(
             "スレッドを更新しました",
             buildThreadRefreshSuccessMessage(usedOffline = false)

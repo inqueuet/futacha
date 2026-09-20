@@ -10,6 +10,8 @@ composeBom = "2026.08.01"
 composeFoundationGuard = { strictly = "1.13.0-alpha02" }
 asm = "9.10.1"
 activityCompose = "1.14.0-alpha01"
+# 1.2.0-alpha01+ ignores late predictive-back events after input removal (b/515890298).
+navigationEvent = "1.2.0-alpha04"
 composeMultiplatform = "1.12.0"
 composeMultiplatformMaterial3 = "1.12.0-alpha03"
 material-icons-extended = "1.7.3"
@@ -43,6 +45,9 @@ benchmark = "1.5.0-rc02"
 baselineProfilePlugin = "1.5.0-rc02"
 profileInstaller = "1.4.1"
 uiAutomator = "2.4.0"
+onnxRuntime = "1.30.0"
+opencv = "5.0.0.1"
+exifInterface = "1.4.2"
 
 # Direct API dependencies previously supplied only transitively.
 okhttp = "5.5.0"
@@ -57,6 +62,10 @@ mlkitCommon = "18.11.0"
 mlkitGenaiCommon = "1.0.0-beta4"
 
 [libraries]
+androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version.ref = "exifInterface" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxRuntime" }
+opencv = { module = "org.opencv:opencv", version.ref = "opencv" }
+onnxruntime-jvm = { module = "com.microsoft.onnxruntime:onnxruntime", version.ref = "onnxRuntime" }
 android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "agp" }
 kotlin-gradle-plugin-api = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin-api", version.ref = "kotlin" }
 asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
@@ -68,6 +77,7 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-navigationevent = { module = "androidx.navigationevent:navigationevent", version.ref = "navigationEvent" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom-alpha", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
@@ -146,6 +156,8 @@ mlkit-common = { module = "com.google.mlkit:common", version.ref = "mlkitCommon"
 mlkit-genai-common = { module = "com.google.mlkit:genai-common", version.ref = "mlkitGenaiCommon" }
 penfeizhou-animation-core = { module = "com.github.penfeizhou.android.animation:frameanimation", version.ref = "penfeizhouAnimation" }
 androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "media3" }
+androidx-media3-effect = { module = "androidx.media3:media3-effect", version.ref = "media3" }
+androidx-media3-transformer = { module = "androidx.media3:media3-transformer", version.ref = "media3" }
 androidx-media3-database = { module = "androidx.media3:media3-database", version.ref = "media3" }
 androidx-media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "media3" }
 coil3-core = { module = "io.coil-kt.coil3:coil-core", version.ref = "coil3" }

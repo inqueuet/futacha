@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,17 @@ import com.valoser.futacha.shared.ui.board.PlatformBackgroundLifecycleEffect
 import com.valoser.futacha.shared.ui.image.CATALOG_IMAGE_DISK_CACHE_DIR
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import com.valoser.futacha.shared.ui.image.rememberFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.ConfigureOriginalMediaCache
+import com.valoser.futacha.shared.ui.image.LocalOriginalMediaSource
+import com.valoser.futacha.shared.ui.image.CompatibilityCacheLocation
+import com.valoser.futacha.shared.ui.image.splitImageDiskBudget
+import com.valoser.futacha.shared.media.source.OriginalMediaSession
+import com.valoser.futacha.shared.media.MediaFeatureSettings
+import com.valoser.futacha.shared.media.MediaFeatureGate
+import com.valoser.futacha.shared.ui.image.LocalMediaFeatureSettings
+import com.valoser.futacha.shared.ui.image.LocalMediaFeatureUpdater
+import com.valoser.futacha.shared.media.prompt.PromptMediaSource
+import com.valoser.futacha.shared.ui.image.LocalMediaFeatureGate
 import com.valoser.futacha.shared.ui.theme.FutachaTheme
 import com.valoser.futacha.shared.compat.CompatibilityStore
 import com.valoser.futacha.shared.compat.ExperienceProfile
@@ -107,6 +119,7 @@ fun FutachaApp(
     versionChecker: VersionChecker? = null,
     httpClient: io.ktor.client.HttpClient? = null,
     imageTransport: com.valoser.futacha.shared.network.FutachaImageTransport? = null,
+    originalMediaSession: OriginalMediaSession? = imageTransport?.originalMediaSession,
     sharedRepository: BoardRepository? = null,
     sharedHistoryRefresher: HistoryRefresher? = null,
     fileSystem: com.valoser.futacha.shared.util.FileSystem? = null,
@@ -256,6 +269,29 @@ fun FutachaApp(
         )
     }
 
+    val promptPrivacyEnabled by stateStore.isPrivacyFilterEnabled.collectAsState(true)
+    val mediaFeatureSettings by stateStore.mediaFeatureSettings.collectAsState(MediaFeatureSettings.Disabled)
+    val mediaFeatureGate = remember(stateStore) { MediaFeatureGate() }
+    SideEffect { mediaFeatureGate.update(mediaFeatureSettings) }
+    val analysisModels = remember(mediaFeatureGate, platformContext) {
+        com.valoser.futacha.shared.media.analysis.ModelStore(mediaFeatureGate,
+            directory = { com.valoser.futacha.shared.media.analysis.modelStoreDirectory(platformContext) },
+            downloader = { com.valoser.futacha.shared.media.analysis.KtorModelDownloader() })
+    }
+    DisposableEffect(analysisModels) { onDispose { analysisModels.close() } }
+    val promptMediaSource = remember(originalMediaSession, mediaFeatureGate, platformContext) {
+        originalMediaSession?.let { PromptMediaSource(it, mediaFeatureGate,
+            readLocalMetadata = { url -> com.valoser.futacha.shared.media.prompt.readLocalGenerationMetadata(url, platformContext) }) }
+    }
+    DisposableEffect(promptMediaSource) { onDispose { promptMediaSource?.close() } }
+    val updateMediaFeatures: suspend ((MediaFeatureSettings) -> MediaFeatureSettings) -> Unit = { change ->
+        stateStore.updateMediaFeatureSettings(change)
+        mediaFeatureGate.update(stateStore.mediaFeatureSettings.first())
+    }
+    DisposableEffect(mediaFeatureGate) {
+        onDispose { mediaFeatureGate.update(MediaFeatureSettings.Disabled) }
+    }
+
     if (experienceProfile == ExperienceProfile.TOSHIAKI_COMPAT && compatibilityStore != null) {
         // The compatibility thread menu saves into the manual-save location,
         // so its saved-thread index must not point at the background auto-save
@@ -302,12 +338,15 @@ fun FutachaApp(
                 compatibilityPreferences[COMPAT_CATALOG_IMAGE_CACHE_LOCATION_PREFERENCE_KEY]
             )
         }
+        val diskBudget = splitImageDiskBudget(compatibilityImageCacheBytes)
+        ConfigureOriginalMediaCache(originalMediaSession, platformContext, diskBudget.originals, compatibilityCacheLocation)
         val compatibilityImageLoader = rememberFutachaImageLoader(
             lightweightMode = devicePerformanceProfile.isLowSpec,
             performanceProfile = devicePerformanceProfile,
             httpClient = httpClient,
             imageTransport = imageTransport,
-            diskCacheBytesOverride = compatibilityImageCacheBytes,
+            diskCacheBytesOverride = if (originalMediaSession == null) compatibilityImageCacheBytes else diskBudget.images,
+            originalMediaStore = promptMediaSource,
             cacheLocation = compatibilityCacheLocation,
             parallelismOverride = compatibilityImageParallelism
         )
@@ -316,6 +355,7 @@ fun FutachaApp(
             performanceProfile = devicePerformanceProfile,
             httpClient = httpClient,
             imageTransport = imageTransport,
+            originalMediaStore = promptMediaSource,
             diskCacheBytesOverride = compatibilityCatalogImageCacheBytes,
             cacheLocation = compatibilityCatalogCacheLocation,
             parallelismOverride = compatibilityImageParallelism,
@@ -333,7 +373,16 @@ fun FutachaApp(
                     .onFailure { error -> Logger.e(TAG, "Failed to shutdown catalog ImageLoader", error) }
             }
         }
-        CompositionLocalProvider(LocalFutachaImageLoader provides compatibilityImageLoader) {
+        CompositionLocalProvider(
+            LocalFutachaImageLoader provides compatibilityImageLoader,
+            LocalOriginalMediaSource provides promptMediaSource,
+            LocalMediaFeatureSettings provides mediaFeatureSettings,
+            LocalMediaFeatureUpdater provides updateMediaFeatures,
+            com.valoser.futacha.shared.ui.image.LocalPromptContentVisible provides !promptPrivacyEnabled,
+            LocalMediaFeatureGate provides mediaFeatureGate,
+            com.valoser.futacha.shared.ui.media.LocalAnalysisModelStore provides analysisModels
+        ) {
+            com.valoser.futacha.shared.ui.media.DeviceImageEditingHost(fileSystem, stateStore) {
             CompatibilityApp(
                 store = compatibilityStore,
                 repository = sharedRepository,
@@ -359,6 +408,7 @@ fun FutachaApp(
                 onArchiveReportEnabledChanged = onArchiveReportEnabledChanged,
                 onExitApplication = onExitApplication
             )
+            }
         }
         return
     }
@@ -414,11 +464,15 @@ fun FutachaApp(
             return@FutachaTheme
         }
         val shouldUseLightweightMode = persistedLightweightMode == true || devicePerformanceProfile.isLowSpec
+        val diskBudget = splitImageDiskBudget((if (shouldUseLightweightMode) 128L else 256L) * 1024 * 1024)
+        ConfigureOriginalMediaCache(originalMediaSession, platformContext, diskBudget.originals, CompatibilityCacheLocation.INTERNAL)
         val imageLoader = rememberFutachaImageLoader(
             lightweightMode = shouldUseLightweightMode,
             performanceProfile = devicePerformanceProfile,
             httpClient = httpClient,
-            imageTransport = imageTransport
+            imageTransport = imageTransport,
+            originalMediaStore = promptMediaSource,
+            diskCacheBytesOverride = if (originalMediaSession == null) null else diskBudget.images
         )
         DisposableEffect(imageLoader) {
             onDispose {
@@ -431,11 +485,18 @@ fun FutachaApp(
         }
         CompositionLocalProvider(
             LocalFutachaImageLoader provides imageLoader,
+            LocalOriginalMediaSource provides promptMediaSource,
+            LocalMediaFeatureSettings provides mediaFeatureSettings,
+            LocalMediaFeatureUpdater provides updateMediaFeatures,
+            com.valoser.futacha.shared.ui.image.LocalPromptContentVisible provides !promptPrivacyEnabled,
+            LocalMediaFeatureGate provides mediaFeatureGate,
+            com.valoser.futacha.shared.ui.media.LocalAnalysisModelStore provides analysisModels,
             LocalHistoryViewSettingsBinding provides HistoryViewSettingsBinding(
                 settings = historyViewSettings,
                 onSettingsChanged = { historyViewSettings = it }
             )
         ) {
+            com.valoser.futacha.shared.ui.media.DeviceImageEditingHost(fileSystem, stateStore) {
             Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
                 val coroutineScope = rememberCoroutineScope()
                 val saveableStateHolder = rememberSaveableStateHolder()
@@ -905,6 +966,7 @@ fun FutachaApp(
                 }
             }
         }
+    }
     }
 }
 

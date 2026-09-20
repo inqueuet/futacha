@@ -1,5 +1,10 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptInfoAction
+import com.valoser.futacha.shared.ui.image.LocalMediaFeatureSettings
+import com.valoser.futacha.shared.ui.image.LocalPromptContentVisible
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -33,6 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -61,6 +68,11 @@ internal fun ImagePreviewDialog(
     val platformContext = LocalPlatformContext.current
     val imageLoader = LocalFutachaImageLoader.current
     val urlLauncher = rememberUrlLauncher()
+    val promptActionVisible = LocalMediaFeatureSettings.current.promptDisplayEnabled && LocalPromptContentVisible.current
+    var promptPanelHeightPx by remember(entry.url) { mutableStateOf(0) }
+    val promptBottomPadding = if (promptActionVisible) {
+        with(LocalDensity.current) { promptPanelHeightPx.toDp() } + 32.dp
+    } else 0.dp
     var isZoomed by remember { mutableStateOf(false) }
     LaunchedEffect(entry.url) { isZoomed = false }
 
@@ -71,7 +83,9 @@ internal fun ImagePreviewDialog(
         onNavigatePrevious = onNavigatePrevious,
         isSwipeNavigationEnabled = !isZoomed,
         isTapNavigationEnabled = !isZoomed,
-        navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp, bottom = 8.dp),
+        navigationOverlayPadding = PaddingValues(start = 8.dp, top = 72.dp, end = 8.dp,
+            bottom = promptBottomPadding.coerceAtLeast(8.dp)),
+        swipeNavigationPadding = PaddingValues(bottom = promptBottomPadding),
     ) { previewSize ->
         val requestSize = remember(previewSize) {
             resolveImagePreviewRequestSize(previewSize)
@@ -112,6 +126,7 @@ internal fun ImagePreviewDialog(
         val painter = image.painter
         val thumbnailPainter = thumbnail.painter
         val painterState = image.state
+        val promptMetadata = rememberGenerationMetadata(entry.url, painterState)
         val thumbnailPainterState = thumbnail.state
         val isLoadingState = painterState is AsyncImagePainter.State.Empty || painterState is AsyncImagePainter.State.Loading
         val isErrorState = painterState is AsyncImagePainter.State.Error
@@ -196,6 +211,8 @@ internal fun ImagePreviewDialog(
                 totalCount = totalCount,
                 modifier = Modifier.align(Alignment.TopStart)
             )
+            PromptInfoAction(promptMetadata, Modifier.align(Alignment.BottomStart).padding(16.dp)
+                .onSizeChanged { promptPanelHeightPx = it.height })
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)

@@ -1237,7 +1237,7 @@ class ThreadScreenLoadLogicTest {
         assertEquals("body", initialOutcome.historyEntry?.title)
         assertEquals(500L, initialOutcome.historyEntry?.lastConfirmedAliveEpochMillis)
         assertTrue(initialOutcome.historyEntry?.isAutoRefreshDisabled == true)
-        assertEquals("ローカルコピーを表示しています", initialOutcome.snackbarMessage)
+        assertNull(initialOutcome.snackbarMessage)
 
         val refreshOutcome = buildThreadManualRefreshUiOutcome(
             page = page,

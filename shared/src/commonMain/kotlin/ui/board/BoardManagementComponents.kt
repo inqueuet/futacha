@@ -299,6 +299,8 @@ internal fun BoardManagementTopBar(
                 tonalElevation = 0.dp,
                 shadowElevation = 8.dp
             ) {
+                com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem(topBarCallbacks.onDismissMenu)
+                com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem(topBarCallbacks.onDismissMenu)
                 BoardManagementMenuAction.entries.forEach { action ->
                     DropdownMenuItem(
                         text = { Text(action.label) },

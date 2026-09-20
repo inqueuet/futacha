@@ -27,11 +27,20 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.datasource.DataSource
+import com.valoser.futacha.shared.media.source.AndroidOriginalMediaDataSource
+import com.valoser.futacha.shared.media.source.OriginalMediaPlayback
+import com.valoser.futacha.shared.media.video.VideoEditPlayback
+import com.valoser.futacha.shared.media.video.MosaicEffect
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @UnstableApi
 @Composable
-actual fun PlatformVideoPlayer(
+internal actual fun NativePlatformVideoPlayer(
     videoUrl: String,
+    playback: OriginalMediaPlayback?,
     modifier: Modifier,
     onStateChanged: (VideoPlayerState) -> Unit,
     onVideoSizeKnown: (width: Int, height: Int) -> Unit,
@@ -40,7 +49,8 @@ actual fun PlatformVideoPlayer(
     volume: Float,
     isMuted: Boolean,
     onMediaInfoKnown: (VideoMediaInfo) -> Unit,
-    onPlaybackError: (VideoPlaybackError) -> Unit
+    onPlaybackError: (VideoPlaybackError) -> Unit,
+    editing: VideoEditPlayback?
 ) {
     val context = LocalContext.current
     val currentCallback by rememberUpdatedState(onStateChanged)
@@ -50,7 +60,9 @@ actual fun PlatformVideoPlayer(
     val currentErrorCallback by rememberUpdatedState(onPlaybackError)
     var player by remember(context) { mutableStateOf<ExoPlayer?>(null) }
 
-    DisposableEffect(context) {
+    DisposableEffect(context, videoUrl, playback, editing) {
+        val pin = playback?.retain()
+        val editPin = editing?.retain()
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
             .apply {
@@ -62,10 +74,11 @@ actual fun PlatformVideoPlayer(
                     forceDisableMediaCodecAsynchronousQueueing()
                 }
             }
-        val createdPlayer = ExoPlayer.Builder(context, renderersFactory)
+        val createdPlayer = try { ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(
-                    AndroidVideoPlaybackCache.createDataSourceFactory(context)
+                    if (pin != null) DataSource.Factory { AndroidOriginalMediaDataSource(pin) }
+                    else AndroidVideoPlaybackCache.createDataSourceFactory(context)
                 )
             )
             // Media3 defaults to an asymmetric 5-second rewind and 15-second
@@ -76,28 +89,47 @@ actual fun PlatformVideoPlayer(
             .build()
             .apply {
             playWhenReady = FUTACHA_VIDEO_PREVIEW_AUTOPLAY
-        }
+        } } catch (failure: Throwable) { pin?.close(); editPin?.close(); throw failure }
         player = createdPlayer
         onDispose {
             if (player === createdPlayer) {
                 player = null
             }
-            createdPlayer.release()
+            try { createdPlayer.release() } finally { pin?.close(); editPin?.close() }
         }
     }
 
-    val mediaItem = remember(videoUrl) {
-        MediaItem.fromUri(videoUrl)
+    val mediaItem = remember(videoUrl, playback) {
+        val extension = videoUrl.substringBefore('#').substringBefore('?').substringAfterLast('.').lowercase()
+        MediaItem.fromUri(if (playback == null) videoUrl else "futacha-original://media/asset.$extension")
     }
 
-    LaunchedEffect(mediaItem, player) {
+    LaunchedEffect(mediaItem, player, editing) {
         val activePlayer = player ?: return@LaunchedEffect
         currentCallback(VideoPlayerState.Buffering)
         // The legacy viewer opens a video on its first frame.  Preparing the
         // player must not be interpreted as a request to start playback.
+        editing?.let { activePlayer.setVideoEffects(listOf(MosaicEffect(AtomicReference(it.document), it.info.frames.timeAt(0)))) }
         activePlayer.setMediaItem(mediaItem)
-        activePlayer.playWhenReady = FUTACHA_VIDEO_PREVIEW_AUTOPLAY
+        editing?.let { activePlayer.seekTo(((it.startUs - it.info.frames.timeAt(0)).coerceAtLeast(0)) / 1000) }
+        activePlayer.playWhenReady = editing != null || FUTACHA_VIDEO_PREVIEW_AUTOPLAY
         activePlayer.prepare()
+    }
+
+    LaunchedEffect(player, editing) {
+        val preview = editing ?: return@LaunchedEffect
+        val activePlayer = player ?: return@LaunchedEffect
+        preview.pausePlayer = {
+            activePlayer.pause()
+            preview.position(activePlayer.currentPosition * 1000 + 999 + preview.info.frames.timeAt(0))
+        }
+        try {
+            while (isActive && preview.isActive) {
+                preview.position(activePlayer.currentPosition * 1000 + 999 + preview.info.frames.timeAt(0))
+                if (activePlayer.playbackState == Player.STATE_ENDED) { preview.ended(); break }
+                delay(33)
+            }
+        } finally { preview.pausePlayer = null }
     }
 
     LaunchedEffect(volume, isMuted, player) {
@@ -128,7 +160,7 @@ actual fun PlatformVideoPlayer(
             )
             PlayerView(context).apply {
                 targetView = this
-                useController = true
+                useController = editing == null
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 this.player = player
                 setOnTouchListener { _, event ->

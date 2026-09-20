@@ -9,6 +9,8 @@ import com.valoser.futacha.shared.util.isSupportedMediaSaveSource
 import com.valoser.futacha.shared.util.hasEpochDurationExceeded
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
+import com.valoser.futacha.shared.media.source.OriginalMediaSource
+import com.valoser.futacha.shared.media.source.originalMediaSourceOrNull
 import io.ktor.client.HttpClient
 import io.ktor.http.ContentType
 import kotlinx.coroutines.delay
@@ -27,7 +29,8 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalTime::class)
 class SingleMediaSaveService(
     private val httpClient: HttpClient,
-    private val fileSystem: FileSystem
+    private val fileSystem: FileSystem,
+    private val originalMediaSource: OriginalMediaSource? = httpClient.originalMediaSourceOrNull()
 ) {
 
     suspend fun saveMedia(
@@ -62,7 +65,7 @@ class SingleMediaSaveService(
                 try {
                     Result.success(run {
                         val startedAtMillis = Clock.System.now().toEpochMilliseconds()
-                        withMediaSaveSource(httpClient, fileSystem, normalizedUrl) { source ->
+                        withMediaSaveSource(httpClient, fileSystem, normalizedUrl, originalMediaSource) { source ->
                             val headerContentLength = source.declaredSize
                             if (headerContentLength > MAX_FILE_SIZE_BYTES) {
                                 throw IllegalStateException(

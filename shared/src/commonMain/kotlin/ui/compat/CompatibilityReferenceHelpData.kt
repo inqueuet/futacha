@@ -9,11 +9,12 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         androidx.compose.ui.graphics.Color(0xFFE91E63) -> "#e91e63"
         else -> "#009688"
     }
-    return if (referenceAccent == "#009688") {
+    val html = if (referenceAccent == "#009688") {
         COMPAT_REFERENCE_HELP_HTML
     } else {
         COMPAT_REFERENCE_HELP_HTML.replace("#009688", referenceAccent)
     }
+    return html.replace("<body>", "<body>" + com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection())
 }
 
 // Exact sample/1.apk assets/help.html with its packaged drawable references inlined.

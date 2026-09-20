@@ -70,7 +70,9 @@ internal fun resolvePreferredFileManagerSummaryState(
 }
 
 internal fun buildBackgroundRefreshDescription(isAndroidPlatform: Boolean): String {
-    return if (isAndroidPlatform) {
+    return if (com.valoser.futacha.shared.util.isDesktop()) {
+        "アプリの起動中に約15分間隔で更新します。アプリ終了中やMacのスリープ中は更新しません。"
+    } else if (isAndroidPlatform) {
         "最短15分間隔の定期更新を要求します。実際の実行時刻は端末状態や OS により前後します。"
     } else {
         "OS が許可したタイミングでバックグラウンド更新します。実際の実行時刻は端末状態や OS により前後します。"
@@ -86,7 +88,9 @@ internal fun buildPreferredFileManagerDescription(isAndroidPlatform: Boolean): S
 }
 
 internal fun resolveAppIconSectionDescription(): String {
-    return "デフォルトとクラシックの 2 種類のアイコンを画像で見比べて選べます。"
+    return if (com.valoser.futacha.shared.util.isDesktop()) {
+        "Dockに表示するアイコンを選べます。Finderのアプリアイコンは変わりません。"
+    } else "デフォルトとクラシックの 2 種類のアイコンを画像で見比べて選べます。"
 }
 
 internal fun resolveAppIconVariantDescription(variant: AppIconVariant): String {

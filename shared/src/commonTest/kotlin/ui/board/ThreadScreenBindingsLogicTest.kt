@@ -906,7 +906,7 @@ class ThreadScreenBindingsLogicTest {
         assertFalse(isShowingOfflineCopy)
         assertNull(resolvedThreadUrlOverride)
         assertEquals(2, historyUpdates.size)
-        assertEquals(listOf("ローカルコピーを表示しています"), shownMessages)
+        assertTrue(shownMessages.isEmpty())
         assertNull(refreshThreadJob)
     }
 

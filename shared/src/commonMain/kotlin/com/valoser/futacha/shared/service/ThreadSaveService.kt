@@ -16,6 +16,8 @@ import com.valoser.futacha.shared.util.Logger
 import com.valoser.futacha.shared.util.runSuspendCatchingPreservingCancellation
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
+import com.valoser.futacha.shared.media.source.OriginalMediaSource
+import com.valoser.futacha.shared.media.source.originalMediaSourceOrNull
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -64,7 +66,8 @@ internal const val THREAD_SAVE_READ_IDLE_TIMEOUT_MILLIS = 30_000L
 @OptIn(ExperimentalTime::class)
 class ThreadSaveService(
     private val httpClient: HttpClient,
-    private val fileSystem: FileSystem
+    private val fileSystem: FileSystem,
+    private val originalMediaSource: OriginalMediaSource? = httpClient.originalMediaSourceOrNull()
 ) {
     private val _saveProgress = MutableStateFlow<SaveProgress?>(null)
     val saveProgress: StateFlow<SaveProgress?> = _saveProgress
@@ -766,6 +769,7 @@ class ThreadSaveService(
             httpClient = httpClient,
             fileSystem = fileSystem,
             logTag = "ThreadSaveService",
+            originalMediaSource = originalMediaSource,
             request = ThreadSaveMediaDownloadRequest(
                 url = url,
                 target = storageTarget,

@@ -27,6 +27,7 @@ import coil3.network.DeDupeConcurrentRequestStrategy
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_IMAGE_EXTENSIONS
 import com.valoser.futacha.shared.media.FUTABA_COMPAT_VIDEO_EXTENSIONS
 import com.valoser.futacha.shared.media.isFutabaVideoExtension
+import com.valoser.futacha.shared.media.source.OriginalMediaSource
 import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.DevicePerformanceProfile
 import com.valoser.futacha.shared.util.Logger
@@ -187,7 +188,25 @@ internal class StableImageLoaderDelegateState<T : Any>(
     }
 }
 
-internal class StableImageLoader(initialDelegate: ImageLoader) : ImageLoader {
+internal class StableImageLoader(
+    initialDelegate: ImageLoader,
+    val originalMediaSource: OriginalMediaSource? = null
+) : ImageLoader {
+    private var originalCacheRegistration: AutoCloseable? = null
+    private val diskCacheInitialized = kotlinx.coroutines.CompletableDeferred<Unit>().apply {
+        if (initialDelegate.diskCache != null) complete(Unit)
+    }
+    internal suspend fun awaitDiskCacheInitialization() { diskCacheInitialized.await() }
+    internal fun finishDiskCacheInitialization() { diskCacheInitialized.complete(Unit) }
+    internal fun registerOriginalCacheImporter(platformContext: coil3.PlatformContext) {
+        originalCacheRegistration?.close()
+        originalCacheRegistration = originalMediaSource
+            ?.registerCacheImporter(CoilOriginalCacheImporter(platformContext, this))
+    }
+    internal fun unregisterOriginalCacheImporter() {
+        originalCacheRegistration?.close()
+        originalCacheRegistration = null
+    }
     private val delegates = StableImageLoaderDelegateState(
         initialDelegate = initialDelegate,
         shutdownDelegate = ImageLoader::shutdown
@@ -209,7 +228,11 @@ internal class StableImageLoader(initialDelegate: ImageLoader) : ImageLoader {
 
     override fun newBuilder(): ImageLoader.Builder = delegates.current().newBuilder()
 
-    override fun shutdown() = delegates.shutdown()
+    override fun shutdown() {
+        unregisterOriginalCacheImporter()
+        finishDiskCacheInitialization()
+        delegates.shutdown()
+    }
 
     fun promote(nextDelegate: ImageLoader) = delegates.promote(nextDelegate)
 }
@@ -280,7 +303,8 @@ fun rememberFutachaImageLoader(
     cacheLocation: CompatibilityCacheLocation = CompatibilityCacheLocation.INTERNAL,
     parallelismOverride: Int? = null,
     diskCacheDirectoryName: String = IMAGE_DISK_CACHE_DIR,
-    imageTransport: FutachaImageTransport? = null
+    imageTransport: FutachaImageTransport? = null,
+    originalMediaStore: OriginalMediaSource? = null
 ): ImageLoader {
     val platformContext = LocalPlatformContext.current
     val imageHttpClient = remember(httpClient, imageTransport) {
@@ -322,12 +346,12 @@ fun rememberFutachaImageLoader(
     // Give each loader generation ownership of its MemoryCache. If the platform
     // context or injected HTTP client changes, disposing the old loader must not
     // clear a cache that the replacement loader is already using.
-    val memoryCache = remember(platformContext, imageHttpClient, configurationIdentity) {
+    val memoryCache = remember(platformContext, imageHttpClient, originalMediaStore, configurationIdentity) {
         MemoryCache.Builder()
             .maxSizeBytes(cacheConfig.memoryCacheBytes)
             .build()
     }
-    val refreshInterceptor = remember(imageHttpClient, configurationIdentity) { ImageRefreshInterceptor() }
+    val refreshInterceptor = remember(imageHttpClient, originalMediaStore, configurationIdentity) { ImageRefreshInterceptor() }
     val normalMemoryPolicy = remember(cacheConfig, performanceProfile.totalRamMb) {
         resolveImageMemoryPressurePolicy(
             baseParallelism = cacheConfig.parallelism,
@@ -387,6 +411,7 @@ fun rememberFutachaImageLoader(
         memoryCache,
         pressureGate,
         imageHttpClient,
+        originalMediaStore,
         configurationIdentity
     ) {
         StableImageLoader(
@@ -398,9 +423,15 @@ fun rememberFutachaImageLoader(
                 diskCache = null,
                 pressureGate = pressureGate,
                 imageHttpClient = imageHttpClient,
-                refreshInterceptor = refreshInterceptor
-            )
+                refreshInterceptor = refreshInterceptor,
+                originalMediaStore = originalMediaStore
+            ),
+            originalMediaSource = originalMediaStore
         )
+    }
+    DisposableEffect(stableImageLoader) {
+        stableImageLoader.registerOriginalCacheImporter(platformContext)
+        onDispose { stableImageLoader.unregisterOriginalCacheImporter() }
     }
     // Resolving Context.cacheDir/getExternalFilesDirs and opening Coil's DiskCache can
     // touch the filesystem.  Do not perform either operation from composition: on a
@@ -431,12 +462,14 @@ fun rememberFutachaImageLoader(
                         diskCache = readyDiskCache,
                         pressureGate = pressureGate,
                         imageHttpClient = imageHttpClient,
-                refreshInterceptor = refreshInterceptor
+                        refreshInterceptor = refreshInterceptor,
+                        originalMediaStore = originalMediaStore
                     )
                 )
                 handedOffToLoader = true
             }
         } finally {
+            stableImageLoader.finishDiskCacheInitialization()
             if (!handedOffToLoader) {
                 createdDiskCache?.shutdown()
             }
@@ -454,13 +487,15 @@ internal fun buildFutachaImageLoader(
     diskCache: DiskCache?,
     pressureGate: AdaptiveImageRequestGate,
     imageHttpClient: HttpClient?,
-    refreshInterceptor: ImageRefreshInterceptor = ImageRefreshInterceptor()
+    refreshInterceptor: ImageRefreshInterceptor = ImageRefreshInterceptor(),
+    originalMediaStore: OriginalMediaSource? = null
 ): ImageLoader = ImageLoader.Builder(platformContext)
     .components {
         add(refreshInterceptor)
         add(ImageMemoryPressureInterceptor(pressureGate))
         add(FutabaExtensionFallbackInterceptor())
         add(VisibleImageRequestInterceptor())
+        originalMediaStore?.let { addOriginalMediaSupport(it) }
         // A manually registered factory takes precedence over Coil's service-loaded
         // default. Reusing the app client also applies Android's main-thread-safe
         // response cleanup to image requests cancelled by Compose.

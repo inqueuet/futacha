@@ -1,5 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptAiBadge
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
@@ -168,6 +171,7 @@ private fun GalleryAttachmentItem(
         imageLoader = LocalFutachaImageLoader.current
     )
     val previewPainterState by previewPainter.state.collectAsState()
+    val promptMetadata = rememberGenerationMetadata(item.targetUrl, previewPainterState)
     val hasPreviewImage = item.previewUrl != null &&
         previewPainterState !is AsyncImagePainter.State.Error &&
         previewPainterState !is AsyncImagePainter.State.Empty
@@ -220,6 +224,7 @@ private fun GalleryAttachmentItem(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+                PromptAiBadge(promptMetadata, Modifier.align(Alignment.BottomEnd).padding(4.dp))
                 item.badge?.let { badge ->
                     Surface(
                         modifier = Modifier

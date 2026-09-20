@@ -7,3 +7,6 @@ expect fun isAndroid(): Boolean
 
 /** Android 8/10's legacy IME consumes an extra physical BACK before Compose sees it. */
 expect fun isLegacyCompatImeBackBehavior(): Boolean
+
+/** True only in the installed desktop application (not JVM logic tests). */
+expect fun isDesktop(): Boolean

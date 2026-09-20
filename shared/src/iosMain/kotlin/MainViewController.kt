@@ -1,5 +1,6 @@
 package com.valoser.futacha.shared
 
+import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.RememberObserver
@@ -141,6 +142,8 @@ private object IosAppGraph {
         }
     }
     private var httpClient: io.ktor.client.HttpClient? = null
+    private var originalMediaSession: com.valoser.futacha.shared.media.source.OriginalMediaSession? = null
+    private var previousMediaShutdown: kotlinx.coroutines.Deferred<Unit>? = null
     private var httpClientRefCount = 0
 
     private inline fun <T> withResourceLock(block: () -> T): T {
@@ -156,10 +159,20 @@ private object IosAppGraph {
         return withResourceLock {
             val client = httpClient ?: createHttpClient(cookieStorage = cookieStorage).also {
                 httpClient = it
+                val previousShutdown = previousMediaShutdown
+                originalMediaSession = com.valoser.futacha.shared.media.source.createOriginalMediaSession(it) {
+                    previousShutdown?.await()
+                }
+                it.bindOriginalMediaSource(checkNotNull(originalMediaSession))
             }
             httpClientRefCount += 1
             client
         }
+    }
+
+    fun originalMediaSessionFor(client: io.ktor.client.HttpClient) = withResourceLock {
+        check(httpClient === client)
+        checkNotNull(originalMediaSession)
     }
 
     fun releaseHttpClient() {
@@ -169,6 +182,11 @@ private object IosAppGraph {
             }
             if (httpClientRefCount == 0) {
                 httpClient.also {
+                    originalMediaSession?.let { session ->
+                        previousMediaShutdown = session.shutdownSignal
+                        session.close()
+                    }
+                    originalMediaSession = null
                     httpClient = null
                 }
             } else {
@@ -669,6 +687,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
         val profileStore = remember { IosAppGraph.experienceProfileStore }
         val modeSwitchCoordinator = remember { IosAppGraph.modeSwitchCoordinator }
         val httpClient = remember { IosHttpClientLease() }.client
+        val originalMediaSession = remember(httpClient) { IosAppGraph.originalMediaSessionFor(httpClient) }
         val profileScope = rememberCoroutineScope()
         val activeProfile by profileStore.activeProfile.collectAsState()
         val profileGeneration by profileStore.generation.collectAsState()
@@ -1025,6 +1044,7 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                     LocalIosReviewCompliance provides IosReviewCompliance(isEnabled = true)
                 ) {
                     FutachaApp(
+                        originalMediaSession = originalMediaSession,
                         stateStore = stateStore,
                         versionChecker = versionChecker,
                         httpClient = httpClient,
@@ -1118,6 +1138,12 @@ private suspend fun runIosBackgroundRefresh(
     val profileStore = IosAppGraph.experienceProfileStore
     val activeProfile = profileStore.readActiveProfile()
     val expectedGeneration = profileStore.readGeneration()
+    com.valoser.futacha.shared.ui.image.initializeOriginalMediaCache(
+        IosAppGraph.originalMediaSessionFor(httpClient),
+        platformContext = null,
+        lightweightMode = stateStore.isLightweightModeEnabled.first() ||
+            com.valoser.futacha.shared.util.detectDevicePerformanceProfile(null).isLowSpec
+    )
     val sharedClientApi = com.valoser.futacha.shared.network.HttpBoardApi(httpClient)
     // Keep shared HttpClient ownership in MainViewController. Background repo closes only its own state.
     val nonClosingApi = object : BoardApi by sharedClientApi {}

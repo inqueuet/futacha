@@ -5,6 +5,8 @@ import com.valoser.futacha.shared.util.AppDispatchers
 import com.valoser.futacha.shared.util.FileSystem
 import com.valoser.futacha.shared.util.isSupportedMediaSaveSource
 import com.valoser.futacha.shared.util.withMediaSaveSource
+import com.valoser.futacha.shared.media.source.OriginalMediaSource
+import com.valoser.futacha.shared.media.source.originalMediaSourceOrNull
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -24,7 +26,8 @@ data class ImageZipSaveResult(
 /** Writes an uncompressed, streaming ZIP without holding large media in memory. */
 class ImageZipSaveService(
     private val httpClient: HttpClient,
-    private val fileSystem: FileSystem
+    private val fileSystem: FileSystem,
+    private val originalMediaSource: OriginalMediaSource? = httpClient.originalMediaSourceOrNull()
 ) {
     suspend fun save(
         mediaUrls: List<String>,
@@ -73,7 +76,7 @@ class ImageZipSaveService(
                     val entryName = uniqueName(requestedName, usedNames)
                     var entryStarted = false
                     try {
-                        withMediaSaveSource(httpClient, fileSystem, url) { source ->
+                        withMediaSaveSource(httpClient, fileSystem, url, originalMediaSource) { source ->
                             require(source.declaredSize <= MAX_ZIP_ENTRY_BYTES) { "ファイルが大きすぎます" }
                             var currentBytes = 0L
                             entryStarted = true

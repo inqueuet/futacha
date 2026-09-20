@@ -9,12 +9,12 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
 
-private class JvmFileSystem : FileSystem {
-    private val rootDirectory = File(System.getProperty("java.io.tmpdir"), "futacha-jvm")
+internal class JvmFileSystem(private val rootDirectory: File) : FileSystem {
 
     override suspend fun createDirectory(path: String): Result<Unit> = runCatching {
         validateFileSystemPath(path)
-        File(resolveAbsolutePath(path)).mkdirs()
+        val directory = File(resolveAbsolutePath(path))
+        check(directory.isDirectory || directory.mkdirs()) { "フォルダを作成できません: $path" }
     }
 
     override suspend fun writeBytes(path: String, bytes: ByteArray): Result<Unit> = runCatching {
@@ -42,11 +42,12 @@ private class JvmFileSystem : FileSystem {
                 var totalWritten = 0L
                 val sink = object : FileWriteSink {
                     override suspend fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        coroutineContext.ensureActive()
                         require(offset >= 0 && length >= 0 && offset + length <= bytes.size) {
                             "Invalid write range: offset=$offset length=$length size=${bytes.size}"
                         }
                         val nextTotal = totalWritten + length
-                        validateFileSystemSize(nextTotal, "file")
+                        validateFileSystemStreamSize(nextTotal, "file")
                         if (length > 0) {
                             output.write(bytes, offset, length)
                             totalWritten = nextTotal
@@ -96,7 +97,8 @@ private class JvmFileSystem : FileSystem {
 
     override suspend fun delete(path: String): Result<Unit> = runCatching {
         validateFileSystemPath(path)
-        File(resolveAbsolutePath(path)).delete()
+        val file = File(resolveAbsolutePath(path))
+        check(!file.exists() || file.delete()) { "ファイルを削除できません: $path" }
     }
 
     override suspend fun deleteRecursively(path: String): Result<Unit> = try {
@@ -151,11 +153,12 @@ private class JvmFileSystem : FileSystem {
 
     override fun getAppDataDirectory(): String {
         rootDirectory.mkdirs()
-        return rootDirectory.absolutePath
+        return rootDirectory.absoluteFile.invariantSeparatorsPath
     }
 
     override fun resolveAbsolutePath(relativePath: String): String =
-        if (relativePath.startsWith("/")) relativePath else File(getAppDataDirectory(), relativePath).absolutePath
+        (if (File(relativePath).isAbsolute) File(relativePath) else File(getAppDataDirectory(), relativePath))
+            .absoluteFile.invariantSeparatorsPath
 
     override suspend fun createDirectory(base: SaveLocation, relativePath: String): Result<Unit> {
         validateRelativePathResult(relativePath, allowEmpty = true)?.let { return Result.failure(it) }
@@ -268,4 +271,8 @@ private class JvmFileSystem : FileSystem {
     }
 }
 
-actual fun createFileSystem(platformContext: Any?): FileSystem = JvmFileSystem()
+actual fun createFileSystem(platformContext: Any?): FileSystem = JvmFileSystem(
+    ((platformContext as? com.valoser.futacha.shared.desktop.DesktopEnvironment)
+        ?: com.valoser.futacha.shared.desktop.DesktopEnvironment.current)?.dataDirectory
+        ?: File(System.getProperty("java.io.tmpdir"), "futacha-jvm")
+)

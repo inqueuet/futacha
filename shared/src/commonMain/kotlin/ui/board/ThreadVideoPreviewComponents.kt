@@ -49,6 +49,8 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
+import com.valoser.futacha.shared.ui.image.rememberGenerationMetadata
+import com.valoser.futacha.shared.ui.image.PromptInfoAction
 import com.valoser.futacha.shared.util.rememberUrlLauncher
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -84,6 +86,7 @@ internal fun VideoPreviewDialog(
         }
     }
     val chromeState = resolveVideoPreviewChromeState(playbackState, areControlsVisible)
+    val promptMetadata = rememberGenerationMetadata(entry.url)
 
     LaunchedEffect(playbackState, areControlsVisible) {
         if (playbackState == VideoPlayerState.Ready && areControlsVisible) {
@@ -221,120 +224,126 @@ internal fun VideoPreviewDialog(
                         .padding(16.dp)
                 )
             }
-            if (chromeState.showsControlPanel) {
-                Surface(
-                    color = Color.Black.copy(alpha = 0.65f),
-                    shape = MaterialTheme.shapes.medium,
-                    tonalElevation = 8.dp,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(horizontal = 16.dp, vertical = 20.dp)
-                        .fillMaxWidth()
-                        .onSizeChanged { controlPanelHeightPx = it.height }
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp, vertical = 20.dp)
+                    .fillMaxWidth()
+                    .onSizeChanged { controlPanelHeightPx = it.height },
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PromptInfoAction(promptMetadata)
+                if (chromeState.showsControlPanel) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.65f),
+                        shape = MaterialTheme.shapes.medium,
+                        tonalElevation = 8.dp,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(
-                                    onClick = {
-                                        val enabled = isMuted
-                                        AnalyticsTracker.uiControl(
-                                            "video_preview_mute",
-                                            if (enabled) "動画のミュートを解除" else "動画をミュート",
-                                            mapOf("value" to if (enabled) "disabled" else "enabled")
-                                        )
-                                        isMuted = !isMuted
-                                    },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
-                                        contentColor = Color.White
-                                    )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = if (isMuted || volume <= 0f) {
-                                            Icons.AutoMirrored.Rounded.VolumeOff
-                                        } else {
-                                            Icons.AutoMirrored.Rounded.VolumeUp
+                                    IconButton(
+                                        onClick = {
+                                            val enabled = isMuted
+                                            AnalyticsTracker.uiControl(
+                                                "video_preview_mute",
+                                                if (enabled) "動画のミュートを解除" else "動画をミュート",
+                                                mapOf("value" to if (enabled) "disabled" else "enabled")
+                                            )
+                                            isMuted = !isMuted
                                         },
-                                        contentDescription = if (isMuted) "ミュート解除" else "ミュート",
-                                        tint = Color.White
+                                        colors = IconButtonDefaults.iconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.2f),
+                                            contentColor = Color.White
+                                        )
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isMuted || volume <= 0f) {
+                                                Icons.AutoMirrored.Rounded.VolumeOff
+                                            } else {
+                                                Icons.AutoMirrored.Rounded.VolumeUp
+                                            },
+                                            contentDescription = if (isMuted) "ミュート解除" else "ミュート",
+                                            tint = Color.White
+                                        )
+                                    }
+                                    Text(
+                                        text = if (isMuted) "ミュート中" else "音量 ${(volume * 100).roundToInt()}%",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodyMedium
                                     )
                                 }
-                                Text(
-                                    text = if (isMuted) "ミュート中" else "音量 ${(volume * 100).roundToInt()}%",
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                            TextButton(onClick = {
-                                AnalyticsTracker.uiControl("video_preview_volume_reset", "動画音量をリセット")
-                                volume = 1f
-                                isMuted = false
-                            }) {
-                                Text(
-                                    text = "リセット",
-                                    color = Color.White
-                                )
-                            }
-                        }
-                        Slider(
-                            value = volume,
-                            onValueChange = {
-                                volume = it
-                                if (isMuted && it > 0f) {
+                                TextButton(onClick = {
+                                    AnalyticsTracker.uiControl("video_preview_volume_reset", "動画音量をリセット")
+                                    volume = 1f
                                     isMuted = false
+                                }) {
+                                    Text(
+                                        text = "リセット",
+                                        color = Color.White
+                                    )
                                 }
-                            },
-                            onValueChangeFinished = {
-                                AnalyticsTracker.uiControl(
-                                    "video_preview_volume",
-                                    "動画音量を変更",
-                                    mapOf(
-                                        "volume_bucket" to when {
-                                            volume <= 0f -> "ミュート"
-                                            volume < 0.34f -> "小"
-                                            volume < 0.67f -> "中"
-                                            else -> "大"
-                                        }
+                            }
+                            Slider(
+                                value = volume,
+                                onValueChange = {
+                                    volume = it
+                                    if (isMuted && it > 0f) {
+                                        isMuted = false
+                                    }
+                                },
+                                onValueChangeFinished = {
+                                    AnalyticsTracker.uiControl(
+                                        "video_preview_volume",
+                                        "動画音量を変更",
+                                        mapOf(
+                                            "volume_bucket" to when {
+                                                volume <= 0f -> "ミュート"
+                                                volume < 0.34f -> "小"
+                                                volume < 0.67f -> "中"
+                                                else -> "大"
+                                            }
+                                        )
                                     )
+                                },
+                                valueRange = 0f..1f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.primary,
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)
                                 )
-                            },
-                            valueRange = 0f..1f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = MaterialTheme.colorScheme.primary,
-                                activeTrackColor = MaterialTheme.colorScheme.primary,
-                                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
                             )
-                        )
-                        if (onSave != null) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                TextButton(
-                                    onClick = {
-                                        AnalyticsTracker.uiControl("video_preview_save", "プレビュー動画を保存")
-                                        onSave()
-                                    },
-                                    enabled = isSaveEnabled && !isSaveInProgress,
-                                    colors = ButtonDefaults.textButtonColors(
-                                        contentColor = Color.White,
-                                        disabledContentColor = Color.White.copy(alpha = 0.5f)
-                                    )
+                            if (onSave != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
                                 ) {
-                                    Text(if (isSaveInProgress) "保存中..." else "この動画を保存")
+                                    TextButton(
+                                        onClick = {
+                                            AnalyticsTracker.uiControl("video_preview_save", "プレビュー動画を保存")
+                                            onSave()
+                                        },
+                                        enabled = isSaveEnabled && !isSaveInProgress,
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = Color.White,
+                                            disabledContentColor = Color.White.copy(alpha = 0.5f)
+                                        )
+                                    ) {
+                                        Text(if (isSaveInProgress) "保存中..." else "この動画を保存")
+                                    }
                                 }
                             }
                         }

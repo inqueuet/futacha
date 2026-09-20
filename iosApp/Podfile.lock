@@ -132,10 +132,12 @@ PODS:
     - nanopb/encode (= 3.30910.0)
   - nanopb/decode (3.30910.0)
   - nanopb/encode (3.30910.0)
+  - onnxruntime-c (1.30.0)
   - PromisesObjC (2.4.1)
   - PromisesSwift (2.4.1):
     - PromisesObjC (= 2.4.1)
-  - shared (1.8)
+  - shared (1.8):
+    - onnxruntime-c (= 1.30.0)
 
 DEPENDENCIES:
   - FirebaseAnalytics (= 12.18.0)
@@ -162,6 +164,7 @@ SPEC REPOS:
     - GoogleDataTransport
     - GoogleUtilities
     - nanopb
+    - onnxruntime-c
     - PromisesObjC
     - PromisesSwift
 
@@ -187,10 +190,11 @@ SPEC CHECKSUMS:
   GoogleDataTransport: a24e58982ab3ba2f64d79613e027fe7f57e88539
   GoogleUtilities: 4e0c2ad9fa0d0d18b5c4df8bf57b461cba35b0bb
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
+  onnxruntime-c: 36ca0f2cdbc89c6b330ec5287c3faf5ca6ed394d
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
   PromisesSwift: 217dea0fd5d2ad65222a109c48698add13cc1c5b
-  shared: c681fd6c9cd8cf9bfb184689d50992d5df295433
+  shared: fbab0e61849b2a654441917cb3a6b595b08d12c3
 
-PODFILE CHECKSUM: 46ae5ed725958739ceceea15233c2176b410c91e
+PODFILE CHECKSUM: e57412357f9e04b7c3957574e5e359d405563992
 
 COCOAPODS: 1.16.2

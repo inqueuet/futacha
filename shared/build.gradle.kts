@@ -1,5 +1,9 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+val desktopWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+val desktopNativeClassifier = if (desktopWindows) "windows-x86_64" else "macosx-arm64"
+val desktopResourcePlatform = if (desktopWindows) "windows" else "macos"
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kotlin.multiplatform.library)
@@ -40,16 +44,34 @@ kotlin {
         iosArm64(),
         iosSimulatorArm64()
     ).forEach {
+        val targetName = it.name
+        val trackingOutput = layout.buildDirectory.dir("nativeTracking/$targetName")
+        val buildTracking = tasks.register<Exec>("buildTracking${targetName.replaceFirstChar { name -> name.uppercaseChar() }}") {
+            inputs.dir("src/nativeInterop/tracking")
+            inputs.file(rootProject.file("tools/build-ios-tracking.py"))
+            inputs.property("sdk", providers.exec {
+                commandLine("xcrun", "--sdk", if (targetName == "iosArm64") "iphoneos" else "iphonesimulator", "--show-sdk-build-version")
+            }.standardOutput.asText)
+            outputs.file(trackingOutput.map { output -> output.file("libfutacha_tracking.a") })
+            commandLine("/usr/bin/python3", rootProject.file("tools/build-ios-tracking.py"), targetName)
+        }
+        val trackingInterop = it.compilations.getByName("main").cinterops.create("tracking") {
+            defFile(project.file("src/nativeInterop/cinterop/tracking.def"))
+            includeDirs(project.file("src/nativeInterop/tracking"))
+            extraOpts("-libraryPath", trackingOutput.get().asFile.absolutePath,
+                "-staticLibrary", "libfutacha_tracking.a")
+        }
+        tasks.named(trackingInterop.interopProcessingTaskName).configure { dependsOn(buildTracking) }
         it.compilations.getByName("main").cinterops.create("sqlite3") {
             defFile(project.file("src/nativeInterop/cinterop/sqlite3.def"))
         }
         it.compilerOptions {
             freeCompilerArgs.add("-Xklib-duplicated-unique-name-strategy=allow-first-with-warning")
         }
-        it.binaries.framework {
-            baseName = "shared"
-            isStatic = false
-            linkerOpts("-framework", "FileProvider", "-framework", "StoreKit", "-lsqlite3")
+        it.binaries.all {
+            // ORT's static XCFramework references Network even with the CPU provider.
+            // Native test executables do not inherit CocoaPods' Xcode linker flags.
+            linkerOpts("-framework", "Network", "-lc++", "-lz")
         }
     }
 
@@ -58,10 +80,26 @@ kotlin {
         homepage = "https://github.com/valoser/futacha"
         version = "1.8"
         podfile = project.file("../iosApp/Podfile")
-        ios.deploymentTarget = "15.0"
+        // The app already targets iOS 18.2; the CPU inference pod requires 15.1.
+        ios.deploymentTarget = "15.1"
+        // Use the same framework for command-line builds and Xcode. CocoaPods
+        // wires its libraries into pod frameworks and test executables only.
+        framework {
+            baseName = "shared"
+            isStatic = false
+            linkerOpts("-framework", "FileProvider", "-framework", "StoreKit", "-lsqlite3")
+        }
+        pod("onnxruntime-c") {
+            version = libs.versions.onnxRuntime.get()
+            packageName = "com.valoser.futacha.shared.ort"
+            moduleName = "onnxruntime"
+            headers = "onnxruntime/onnxruntime_c_api.h"
+        }
     }
 
     sourceSets {
+        // Identical small synthetic videos for native AVFoundation and Android codec tests.
+        val videoTestFixtures = "src/videoTestFixtures/kotlin"
         val commonMain by getting {
             dependencies {
                 implementation(libs.jetbrains.compose.runtime)
@@ -97,6 +135,7 @@ kotlin {
             }
         }
         val commonTest by getting {
+            kotlin.srcDir(videoTestFixtures)
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlinx.io.core)
@@ -104,7 +143,10 @@ kotlin {
             }
         }
         val androidMain by getting {
+            kotlin.srcDir("src/jvmAndAndroidMain/kotlin")
             dependencies {
+                implementation(libs.onnxruntime.android)
+                implementation(libs.opencv)
                 implementation(project.dependencies.platform(libs.androidx.compose.bom))
                 implementation(libs.androidx.datastore.preferences)
                 implementation(libs.androidx.core.ktx)
@@ -112,9 +154,14 @@ kotlin {
                 implementation(libs.guava)
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.androidx.activity.compose)
+                // Fix delayed Android back-animation callbacks after input removal/disposal.
+                // Navigation Event's atomic-group constraints also align its Compose artifact.
+                implementation(libs.androidx.navigationevent)
                 implementation(libs.jetbrains.compose.preview)
                 implementation(libs.androidx.media3.exoplayer)
                 implementation(libs.androidx.media3.common)
+                implementation(libs.androidx.media3.effect)
+                implementation(libs.androidx.media3.transformer)
                 implementation(libs.androidx.media3.database)
                 implementation(libs.androidx.media3.datasource)
                 implementation(libs.androidx.media3.ui)
@@ -149,10 +196,47 @@ kotlin {
         }
 
         val jvmMain by getting {
+            kotlin.srcDir("src/jvmAndAndroidMain/kotlin")
             dependencies {
+                implementation(libs.onnxruntime.jvm)
+                implementation(libs.androidx.datastore.preferences)
+                implementation("org.xerial:sqlite-jdbc:3.50.3.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:${libs.versions.kotlinxCoroutines.get()}")
+                implementation(compose.desktop.currentOs)
+                implementation("uk.co.caprica:vlcj:4.12.1")
+                implementation("org.bytedeco:javacv:1.5.12") { isTransitive = false }
+                implementation("org.bytedeco:ffmpeg:7.1.1-1.5.12")
+                runtimeOnly("org.bytedeco:ffmpeg:7.1.1-1.5.12:$desktopNativeClassifier")
+                runtimeOnly("org.bytedeco:javacpp:1.5.12:$desktopNativeClassifier")
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.okhttp)
             }
+        }
+        val jvmTest by getting {
+            kotlin.srcDir("src/inferenceTestFixtures/kotlin")
+            kotlin.srcDir("src/inferenceRuntimeTest/kotlin")
+            dependencies {
+                // Exercise the same Skia decode/encode path as iOS in codec tests.
+                runtimeOnly(compose.desktop.currentOs)
+            }
+        }
+        val iosTest by getting {
+            kotlin.srcDir("src/inferenceTestFixtures/kotlin")
+            kotlin.srcDir("src/inferenceRuntimeTest/kotlin")
+        }
+    }
+}
+
+// Keep the existing CLI entry points and artifact locations, without producing
+// a second framework that omits native Pod dependencies such as ONNX Runtime.
+for (target in listOf("iosArm64", "iosSimulatorArm64")) {
+    for (variant in listOf("Debug", "Release")) {
+        tasks.register<Sync>("link${variant}Framework${target.replaceFirstChar { it.uppercaseChar() }}") {
+            group = "build"
+            description = "Builds and copies the CocoaPods $variant framework for $target."
+            dependsOn("linkPod${variant}Framework${target.replaceFirstChar { it.uppercaseChar() }}")
+            from(layout.buildDirectory.dir("bin/$target/pod${variant}Framework"))
+            into(layout.buildDirectory.dir("bin/$target/${variant.lowercase()}Framework"))
         }
     }
 }
@@ -436,4 +520,27 @@ val validateAiActionCatalog by tasks.registering {
 
 tasks.named("check") {
     dependsOn(validateAiActionCatalog)
+}
+
+// Core Image/VideoToolbox export tests require the simulator's graphics services.
+// simctl's standalone launcher omits them; use a fully booted simulator for native tests.
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
+    standalone.set(false)
+    providers.gradleProperty("futacha.iosTestDevice").orNull?.let { device.set(it) }
+    doFirst {
+        val target = device.get()
+        val boot = ProcessBuilder("/usr/bin/xcrun", "simctl", "boot", target).redirectErrorStream(true).start()
+        boot.inputStream.bufferedReader().readText() // Already booted is harmless; bootstatus validates the device.
+        boot.waitFor()
+        val ready = ProcessBuilder("/usr/bin/xcrun", "simctl", "bootstatus", target, "-b").inheritIO().start()
+        check(ready.waitFor() == 0) { "Could not boot the iOS test simulator: $target" }
+    }
+}
+
+// Desktop integration tests load the same native resources as the packaged application.
+tasks.named<Test>("jvmTest") {
+    if (desktopWindows) javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
+    environment("ORT_DISABLE_TELEMETRY", "1")
+    dependsOn(":app-desktop:prepareDesktopResources")
+    systemProperty("futacha.resourcesDir", rootProject.file("app-desktop/resources/$desktopResourcePlatform").absolutePath)
 }

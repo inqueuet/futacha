@@ -26,3 +26,5 @@ include(":app-android")
 include(":app-wear")
 include(":baselineprofile")
 include(":shared")
+
+include(":app-desktop")

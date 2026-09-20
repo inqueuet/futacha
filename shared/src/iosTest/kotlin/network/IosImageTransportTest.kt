@@ -1,6 +1,12 @@
 @file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, coil3.annotation.ExperimentalCoilApi::class)
 package com.valoser.futacha.shared.network
 
+import com.valoser.futacha.shared.media.MediaFeatureGate
+import com.valoser.futacha.shared.media.MediaFeatureSettings
+import com.valoser.futacha.shared.media.prompt.PromptMediaSource
+import com.valoser.futacha.shared.media.prompt.MetadataCoverage
+import com.valoser.futacha.shared.media.prompt.GenerationImageFixtures
+
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.disk.DiskCache
@@ -15,6 +21,7 @@ import io.ktor.client.plugins.timeout
 import io.ktor.client.plugins.HttpRequestRetry
 import io.ktor.client.network.sockets.SocketTimeoutException
 import kotlinx.cinterop.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -27,6 +34,92 @@ import kotlin.test.*
 import kotlin.time.measureTime
 
 class IosImageTransportTest {
+    @Test fun jpegAndWebpGenerationMetadataShareOneDownloadWithNativeDecoders(): Unit = runBlocking(Dispatchers.Default) {
+        for ((bytes, mime, coverage) in listOf(
+            Triple(GenerationImageFixtures.jpeg, "image/jpeg", MetadataCoverage.JPEG_METADATA),
+            Triple(GenerationImageFixtures.webp, "image/webp", MetadataCoverage.WEBP_METADATA),
+            Triple(GenerationImageFixtures.jpegXmp, "image/jpeg", MetadataCoverage.JPEG_METADATA)
+        )) {
+            val started = CompletableDeferred<Unit>()
+            val respond = CompletableDeferred<Unit>()
+            val server = IosImageHttpServer { started.complete(Unit); respond.await(); Reply(bytes = bytes, mime = mime) }
+            val client = createHttpClient()
+            val session = com.valoser.futacha.shared.media.source.createOriginalMediaSession(client)
+            val directory = (NSTemporaryDirectory() + "futacha-format-native-${NSUUID().UUIDString}").toPath()
+            session.configure(com.valoser.futacha.shared.media.source.OriginalMediaCacheConfiguration(directory, 1024 * 1024))
+            val prompts = PromptMediaSource(session, MediaFeatureGate().apply { update(MediaFeatureSettings(promptDisplayEnabled = true)) })
+            fun loader() = ImageLoader.Builder(PlatformContext.INSTANCE).diskCache(null).mainCoroutineContext(Dispatchers.Default)
+                .components { addOriginalMediaSupport(prompts); addPlatformImageComponents() }.build()
+            val first = loader()
+            val second = loader()
+            val original = com.valoser.futacha.shared.media.source.OriginalMediaRequest(server.url("/original.jpg"))
+            val request = ImageRequest.Builder(PlatformContext.INSTANCE).data(OriginalMediaRef(original)).build()
+            try {
+                withTimeout(10000) {
+                    val a = async { first.execute(request) }
+                    started.await()
+                    val b = async { second.execute(request) }
+                    respond.complete(Unit)
+                    assertIs<SuccessResult>(a.await())
+                    assertIs<SuccessResult>(b.await())
+                    prompts.changes.first { prompts.metadata(original.url) != null }
+                    val result = prompts.metadata(original.url)!!
+                    assertEquals(coverage, result.coverage)
+                    assertEquals(if (bytes.contentEquals(GenerationImageFixtures.jpegXmp)) 2 else 1, result.candidates.size)
+                    assertTrue(result.candidates.all { it.positive == GenerationImageFixtures.positive && it.negative == "blurry" })
+                    assertEquals(1, server.total(), "Display and EXIF/XMP must share one original GET for $mime")
+                }
+            } finally {
+                respond.complete(Unit)
+                prompts.close(); first.shutdown(); second.shutdown()
+                withTimeout(5000) { session.closeAndAwait() }
+                client.close(); server.close()
+                okio.FileSystem.SYSTEM.deleteRecursively(directory)
+            }
+        }
+    }
+
+    @Test fun originalSessionSharesOneDarwinDownloadWithTwoNativeDecoders(): Unit = runBlocking(Dispatchers.Default) {
+        val started = CompletableDeferred<Unit>()
+        val respond = CompletableDeferred<Unit>()
+        val server = IosImageHttpServer { started.complete(Unit); respond.await(); Reply() }
+        val client = createHttpClient()
+        val session = com.valoser.futacha.shared.media.source.createOriginalMediaSession(client)
+        val directory = (NSTemporaryDirectory() + "futacha-original-native-${NSUUID().UUIDString}").toPath()
+        session.configure(com.valoser.futacha.shared.media.source.OriginalMediaCacheConfiguration(directory, 1024 * 1024))
+        val prompts = PromptMediaSource(session, MediaFeatureGate().apply { update(MediaFeatureSettings(promptDisplayEnabled = true)) })
+        fun originalLoader() = ImageLoader.Builder(PlatformContext.INSTANCE).diskCache(null).mainCoroutineContext(Dispatchers.Default)
+            .components { addOriginalMediaSupport(prompts); addPlatformImageComponents() }.build()
+        val first = originalLoader()
+        val second = originalLoader()
+        val original = com.valoser.futacha.shared.media.source.OriginalMediaRequest(server.url("/original.png"))
+        val request = ImageRequest.Builder(PlatformContext.INSTANCE).data(OriginalMediaRef(original)).size(64).build()
+        try {
+            withTimeout(10000) {
+                val a = async { first.execute(request) }
+                started.await()
+                val b = async { second.execute(request) }
+                val metadata = async(start = CoroutineStart.UNDISPATCHED) { session.acquire(original) }
+                respond.complete(Unit)
+                metadata.await().use { lease ->
+                    assertIs<SuccessResult>(a.await())
+                    assertIs<SuccessResult>(b.await())
+                    assertContentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10), lease.readAt(0, 8))
+                }
+                prompts.changes.first { prompts.metadata(original.url) != null }
+                assertEquals(MetadataCoverage.PNG_METADATA, prompts.metadata(original.url)!!.coverage)
+                assertEquals(1, server.total())
+            }
+        } finally {
+            respond.complete(Unit)
+            prompts.close()
+            first.shutdown(); second.shutdown()
+            withTimeout(5000) { session.closeAndAwait() }
+            client.close(); server.close()
+            okio.FileSystem.SYSTEM.deleteRecursively(directory)
+        }
+    }
+
     @Test fun requestSocketTimeoutIsNotOverwrittenByTheEngine(): Unit = runBlocking(Dispatchers.Default) {
         val server = IosImageHttpServer { delay(6000); Reply() }
         val client = createHttpClient()
@@ -109,7 +202,7 @@ class IosImageTransportTest {
     }
 }
 
-private data class Reply(val status: Int = 200, val truncated: Boolean = false)
+private data class Reply(val status: Int = 200, val truncated: Boolean = false, val bytes: ByteArray? = null, val mime: String = "image/png")
 
 private class IosImageHttpServer(private val reply: suspend (String) -> Reply) {
     private val listener = socket(AF_INET, SOCK_STREAM, 0)
@@ -152,8 +245,8 @@ private class IosImageHttpServer(private val reply: suspend (String) -> Reply) {
                             val path = header.toString().substringBefore("\r\n").split(' ')[1]
                             counts.update { it + (path to ((it[path] ?: 0) + 1)) }
                             val result = reply(path)
-                            val body = if (result.status == 200) png else "unavailable".encodeToByteArray()
-                            val output = "HTTP/1.1 ${result.status} Response\r\nContent-Type: image/png\r\nContent-Length: ${body.size + if (result.truncated) 100 else 0}\r\nConnection: keep-alive\r\n\r\n".encodeToByteArray() + body
+                            val body = if (result.status == 200) result.bytes ?: png else "unavailable".encodeToByteArray()
+                            val output = "HTTP/1.1 ${result.status} Response\r\nContent-Type: ${result.mime}\r\nContent-Length: ${body.size + if (result.truncated) 100 else 0}\r\nConnection: keep-alive\r\n\r\n".encodeToByteArray() + body
                             output.usePinned { buffer ->
                                 var offset = 0
                                 while (offset < output.size) {

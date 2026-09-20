@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.state
 
+import com.valoser.futacha.shared.media.MEDIA_FEATURE_SETTINGS_KEY
+
 import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -73,6 +75,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
     private val booleanReadCache = mutableMapOf<String, Boolean>()
     private val locallyUpdatedKeys = mutableSetOf<String>()
     private val deferredLoadScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mediaFeatureSettingsState = MutableStateFlow<String?>(null)
     private val boardsState = MutableStateFlow<String?>(null)
     private val historyState = MutableStateFlow<String?>(null)
     private val displayStyleState = MutableStateFlow<String?>(null)
@@ -123,6 +126,11 @@ private class IosPlatformStateStorage : PlatformStateStorage {
 
     private val deferredLoadJob = deferredLoadScope.launch {
         loadDeferredInitialState()
+    }
+
+    override val mediaFeatureSettingsJson: Flow<String?> = awaitDeferredInitialLoad(mediaFeatureSettingsState)
+    override suspend fun updateMediaFeatureSettingsJson(value: String) {
+        updateStringState(MEDIA_FEATURE_SETTINGS_KEY, value, mediaFeatureSettingsState)
     }
 
     override val boardsJson: Flow<String?> = awaitDeferredInitialLoad(boardsState)
@@ -193,6 +201,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
             THREAD_DISPLAY_MODE_KEY to readStringState(THREAD_DISPLAY_MODE_KEY),
             THREAD_BODY_TEXT_SIZE_KEY to readStringState(THREAD_BODY_TEXT_SIZE_KEY),
             THREAD_POST_IMAGE_SIZE_KEY to readStringState(THREAD_POST_IMAGE_SIZE_KEY),
+            MEDIA_FEATURE_SETTINGS_KEY to readStringState(MEDIA_FEATURE_SETTINGS_KEY),
             CATALOG_MODE_MAP_KEY to readStringState(CATALOG_MODE_MAP_KEY),
             NG_HEADERS_KEY to readStringState(NG_HEADERS_KEY),
             NG_WORDS_KEY to readStringState(NG_WORDS_KEY),
@@ -264,6 +273,7 @@ private class IosPlatformStateStorage : PlatformStateStorage {
         applyDeferredStringState(THREAD_DISPLAY_MODE_KEY, stringValues, threadDisplayModeState)
         applyDeferredStringState(THREAD_BODY_TEXT_SIZE_KEY, stringValues, threadBodyTextSizeState)
         applyDeferredStringState(THREAD_POST_IMAGE_SIZE_KEY, stringValues, threadPostImageSizeState)
+        applyDeferredStringState(MEDIA_FEATURE_SETTINGS_KEY, stringValues, mediaFeatureSettingsState)
         applyDeferredBooleanState(
             COMPACT_THREAD_HEADER_ENABLED_KEY,
             booleanValues,

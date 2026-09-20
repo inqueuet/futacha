@@ -1,5 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
+import com.valoser.futacha.shared.ui.image.clearFutachaImageCaches
+
 import coil3.compose.LocalPlatformContext
 import androidx.compose.runtime.getValue
 import androidx.compose.material3.SnackbarHostState
@@ -210,15 +212,10 @@ internal fun rememberGlobalSettingsScreenRuntime(
             coroutineScope = coroutineScope,
             showSnackbar = snackbarHostState::showSnackbar,
             clearImageCache = {
-                withContext(AppDispatchers.io) {
-                    imageLoader.diskCache?.clear()
-                    imageLoader.memoryCache?.clear()
-                }
+                clearFutachaImageCaches(imageLoader)
             },
             clearTemporaryCache = {
-                withContext(AppDispatchers.io) {
-                    imageLoader.diskCache?.clear()
-                }
+                clearFutachaImageCaches(imageLoader, clearMemory = false)
             },
             refreshAutoSavedStats = {
                 refreshAutoSavedStatsWithDiagnostics()

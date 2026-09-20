@@ -721,8 +721,17 @@ class CompatSettingsSchemaInstrumentedTest {
 
     @Test
     fun rootSettingsKeepReferenceRowsAndPutCurrentFeaturesInTheExtensionSection() {
+        val mediaSettings = mutableStateOf(
+            com.valoser.futacha.shared.media.MediaFeatureSettings.Disabled.copy(promptDisplayEnabled = true)
+        )
         rule.setContent {
-            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+            CompositionLocalProvider(
+                LocalFutachaImageLoader provides imageLoader,
+                com.valoser.futacha.shared.ui.image.LocalMediaFeatureSettings provides mediaSettings.value,
+                com.valoser.futacha.shared.ui.image.LocalMediaFeatureUpdater provides { transform ->
+                    mediaSettings.value = transform(mediaSettings.value)
+                }
+            ) {
                 MaterialTheme {
                     CompatibilityApp(store = store, repository = null, onExitApplication = {})
                 }
@@ -732,6 +741,9 @@ class CompatSettingsSchemaInstrumentedTest {
         rule.onNodeWithContentDescription("その他").performClick()
         rule.onNodeWithText("設定").performClick()
         val settingsList = rule.onNodeWithTag("compat-settings-list-root")
+        rule.onNodeWithTag("prompt-settings-toggle").assertDoesNotExist()
+        rule.onNodeWithTag("image-editor-settings-toggle").assertDoesNotExist()
+        rule.onNodeWithTag("video-editor-settings-toggle").assertDoesNotExist()
 
         listOf("基本設定", "表示オプション", "バックアップ", "その他").forEach { category ->
             settingsList.performScrollToNode(hasText(category))
@@ -750,6 +762,24 @@ class CompatSettingsSchemaInstrumentedTest {
             settingsList.performScrollToNode(hasText(row))
             rule.onNodeWithText(row).assertIsDisplayed()
         }
+
+        settingsList.performScrollToNode(hasText("メディア機能"))
+        rule.onNodeWithText("画像編集、動画編集").assertIsDisplayed()
+        rule.onNodeWithText("メディア機能").performClick()
+        val mediaList = rule.onNodeWithTag("compat-settings-list-media")
+        rule.onNodeWithTag("prompt-settings-toggle").assertDoesNotExist()
+        for (tag in listOf("image-editor-settings-toggle", "video-editor-settings-toggle", "media-help-open")) {
+            mediaList.performScrollToNode(hasTestTag(tag))
+            rule.onNodeWithTag(tag).assertIsDisplayed()
+        }
+        mediaList.performScrollToNode(hasTestTag("image-editor-settings-toggle"))
+        rule.onNodeWithTag("image-editor-settings-toggle").performClick().assertIsOn()
+        rule.onNodeWithContentDescription("戻る").performClick()
+        rule.onNodeWithText("メディア機能").assertIsDisplayed().performClick()
+        rule.onNodeWithTag("prompt-settings-toggle").assertDoesNotExist()
+        rule.onNodeWithTag("image-editor-settings-toggle").assertIsOn()
+        rule.runOnIdle { assertEquals(true, mediaSettings.value.promptDisplayEnabled) }
+        rule.onNodeWithContentDescription("戻る").performClick()
 
         settingsList.performScrollToNode(hasText("バージョン"))
         rule.onNodeWithText("バージョン").performClick()

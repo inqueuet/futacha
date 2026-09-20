@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Link
@@ -197,6 +198,21 @@ internal fun GlobalSettingsScaffold(
                     appIconVariant = bindings.behavior.appIconVariant,
                     onAppIconVariantChanged = bindings.behavior.onAppIconVariantChanged
                 )
+            }
+            item {
+                SettingsSection(
+                    title = "メディア機能",
+                    icon = Icons.Rounded.Image,
+                    description = "プロンプト・AIラベル、画像編集、動画編集の設定。"
+                ) {
+                    com.valoser.futacha.shared.ui.image.PromptSettingsSection()
+                    HorizontalDivider()
+                    com.valoser.futacha.shared.ui.media.DeviceImageEditorSettings()
+                    HorizontalDivider()
+                    com.valoser.futacha.shared.ui.media.DeviceVideoEditorSettings()
+                    HorizontalDivider()
+                    com.valoser.futacha.shared.ui.media.MediaHelpButton()
+                }
             }
             item {
                 GlobalSettingsThreadInteractionSection(

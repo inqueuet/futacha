@@ -1,5 +1,9 @@
 package com.valoser.futacha.shared.service
 
+import com.valoser.futacha.shared.media.source.OriginalMediaSource
+import com.valoser.futacha.shared.util.MediaSaveSource
+import com.valoser.futacha.shared.util.OriginalMediaSaveFailure
+import com.valoser.futacha.shared.util.withOriginalMediaSaveSourceOrElse
 import com.valoser.futacha.shared.network.BoardUrlResolver
 import com.valoser.futacha.shared.model.FileType
 import com.valoser.futacha.shared.util.AppDispatchers
@@ -135,13 +139,12 @@ internal suspend fun readThreadSaveResponseBytesWithLimit(
     )
 }
 
-internal suspend fun streamThreadSaveResponseToStorage(
-    response: HttpResponse,
+internal suspend fun streamThreadSaveSourceToStorage(
+    source: MediaSaveSource,
     fileSystem: FileSystem,
     request: ThreadSaveResponseStreamRequest
 ): Long {
     cleanupThreadSaveBinaryWriteTarget(fileSystem, request.binaryTarget)
-    val channel = response.bodyAsChannel()
     val buffer = ByteArray(request.streamReadBufferBytes)
     var totalBytesRead = 0L
     var zeroReadCount = 0
@@ -155,7 +158,7 @@ internal suspend fun streamThreadSaveResponseToStorage(
         while (true) {
             coroutineContext.ensureActive()
             val read = withTimeoutOrNull(request.readIdleTimeoutMillis) {
-                channel.readAvailable(buffer, 0, buffer.size)
+                source.read(buffer)
             } ?: throw IllegalStateException("Save aborted: media stream stalled")
 
             if (read == -1) break
@@ -198,6 +201,9 @@ internal suspend fun streamThreadSaveResponseToStorage(
         throw IllegalStateException("Downloaded media file is empty")
     }
 
+    if (source.declaredSize > 0 && totalBytesRead != source.declaredSize) {
+        throw IllegalStateException("Downloaded media file is incomplete")
+    }
     return totalBytesRead
 }
 
@@ -205,109 +211,86 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
     httpClient: HttpClient,
     fileSystem: FileSystem,
     logTag: String,
-    request: ThreadSaveMediaDownloadRequest
+    request: ThreadSaveMediaDownloadRequest,
+    originalMediaSource: OriginalMediaSource? = null
 ): Result<ThreadSaveLocalFileInfo> = withContext(AppDispatchers.io) {
     try {
         Result.success(
-            run {
-                val response: HttpResponse = withTimeoutOrNull(request.mediaRequestTimeoutMillis) {
-                    httpClient.get(request.url) {
-                        headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
-                        timeout {
-                            // The client-wide request timeout keeps counting while the
-                            // body streams and would abort large downloads; extend it to the
-                            // save-duration budget. Connect/socket timeouts stay at defaults.
-                            requestTimeoutMillis = request.maxSaveDurationMs
-                        }
-                    }
-                } ?: throw IllegalStateException(
-                    "Download request timed out after ${request.mediaRequestTimeoutMillis}ms (${describeUrlForLog(request.url)})"
-                )
-                try {
-                    if (!response.status.isSuccess()) {
-                        throw ThreadSaveMediaDownloadFailure(
-                            message = "Download failed: ${response.status}",
-                            retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value)
-                        )
-                    }
-
-                    val contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L
-                    if (contentLength > request.maxFileSizeBytes) {
-                        throw ThreadSaveMediaDownloadFailure(
-                            message = "File too large: ${contentLength / 1024}KB " +
-                                "(max: ${request.maxFileSizeBytes / 1024}KB)",
-                            retryable = false
-                        )
-                    }
-
-                    val extension = (
-                        getThreadSaveExtensionFromUrl(request.url)
-                            ?: getThreadSaveExtensionFromContentType(
-                                response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) }
-                            )
-                        ).lowercase()
-                    if (!isThreadSaveSupportedExtension(extension)) {
-                        throw ThreadSaveMediaDownloadFailure(
-                            message = "Unsupported file type: $extension",
-                            retryable = false
-                        )
-                    }
-
-                    val fileType = resolveThreadSaveFileType(request.requestType, extension)
-                    val fileName = resolveThreadSaveFileName(
-                        url = request.url,
-                        extension = extension,
-                        postId = request.postId,
-                        timestampMillis = request.nowMillis()
+            withThreadSaveMediaSource(httpClient, request, originalMediaSource) { source ->
+                val contentLength = source.declaredSize
+                if (contentLength > request.maxFileSizeBytes) {
+                    throw ThreadSaveMediaDownloadFailure(
+                        message = "File too large: ${contentLength / 1024}KB " +
+                            "(max: ${request.maxFileSizeBytes / 1024}KB)",
+                        retryable = false
                     )
-                    val relativePath = buildThreadSaveRelativePath(request.boardPath, fileType, fileName)
-
-                    if (hasEpochDurationExceeded(
-                            request.nowMillis(),
-                            request.startedAtMillis,
-                            request.maxSaveDurationMs
-                        )
-                    ) {
-                        throw IllegalStateException("Save aborted: exceeded time limit during download")
-                    }
-
-                    val totalBytesRead = request.withMediaWriteLock(relativePath) {
-                        val binaryTarget = resolveThreadSaveBinaryWriteTarget(request.target, relativePath)
-                        var completed = false
-                        try {
-                            val writtenBytes = streamThreadSaveResponseToStorage(
-                                response = response,
-                                fileSystem = fileSystem,
-                                request = ThreadSaveResponseStreamRequest(
-                                    binaryTarget = binaryTarget,
-                                    startedAtMillis = request.startedAtMillis,
-                                    streamReadBufferBytes = request.streamReadBufferBytes,
-                                    maxFileSizeBytes = request.maxFileSizeBytes,
-                                    maxZeroReadRetries = request.maxZeroReadRetries,
-                                    zeroReadBackoffMillis = request.zeroReadBackoffMillis,
-                                    readIdleTimeoutMillis = request.readIdleTimeoutMillis,
-                                    writeTimeoutMillis = request.writeTimeoutMillis,
-                                    maxSaveDurationMs = request.maxSaveDurationMs,
-                                    nowMillis = request.nowMillis
-                                )
-                            )
-                            completed = true
-                            writtenBytes
-                        } finally {
-                            if (!completed) {
-                                cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
-                            }
-                        }
-                    }
-
-                    ThreadSaveLocalFileInfo(
-                        relativePath = relativePath,
-                        fileType = fileType,
-                        byteSize = totalBytesRead
-                    )
-                } finally {
-                    runCatching { response.bodyAsChannel().cancel() }
                 }
+
+                val extension = (
+                    getThreadSaveExtensionFromUrl(request.url)
+                        ?: getThreadSaveExtensionFromContentType(
+                            source.contentType
+                        )
+                    ).lowercase()
+                if (!isThreadSaveSupportedExtension(extension)) {
+                    throw ThreadSaveMediaDownloadFailure(
+                        message = "Unsupported file type: $extension",
+                        retryable = false
+                    )
+                }
+
+                val fileType = resolveThreadSaveFileType(request.requestType, extension)
+                val fileName = resolveThreadSaveFileName(
+                    url = request.url,
+                    extension = extension,
+                    postId = request.postId,
+                    timestampMillis = request.nowMillis()
+                )
+                val relativePath = buildThreadSaveRelativePath(request.boardPath, fileType, fileName)
+
+                if (hasEpochDurationExceeded(
+                        request.nowMillis(),
+                        request.startedAtMillis,
+                        request.maxSaveDurationMs
+                    )
+                ) {
+                    throw IllegalStateException("Save aborted: exceeded time limit during download")
+                }
+
+                val totalBytesRead = request.withMediaWriteLock(relativePath) {
+                    val binaryTarget = resolveThreadSaveBinaryWriteTarget(request.target, relativePath)
+                    var completed = false
+                    try {
+                        val writtenBytes = streamThreadSaveSourceToStorage(
+                            source = source,
+                            fileSystem = fileSystem,
+                            request = ThreadSaveResponseStreamRequest(
+                                binaryTarget = binaryTarget,
+                                startedAtMillis = request.startedAtMillis,
+                                streamReadBufferBytes = request.streamReadBufferBytes,
+                                maxFileSizeBytes = request.maxFileSizeBytes,
+                                maxZeroReadRetries = request.maxZeroReadRetries,
+                                zeroReadBackoffMillis = request.zeroReadBackoffMillis,
+                                readIdleTimeoutMillis = request.readIdleTimeoutMillis,
+                                writeTimeoutMillis = request.writeTimeoutMillis,
+                                maxSaveDurationMs = request.maxSaveDurationMs,
+                                nowMillis = request.nowMillis
+                            )
+                        )
+                        completed = true
+                        writtenBytes
+                    } finally {
+                        if (!completed) {
+                            cleanupThreadSaveBinaryWriteTarget(fileSystem, binaryTarget)
+                        }
+                    }
+                }
+
+                ThreadSaveLocalFileInfo(
+                    relativePath = relativePath,
+                    fileType = fileType,
+                    byteSize = totalBytesRead
+                )
             }
         )
     } catch (e: CancellationException) {
@@ -317,6 +300,39 @@ internal suspend fun downloadAndStoreThreadSaveMedia(
             logTag,
             "Failed to download (${describeUrlForLog(request.url)}), type=${describeFailureForLog(t)}"
         )
-        Result.failure(t)
+        Result.failure(if (t is OriginalMediaSaveFailure) {
+            ThreadSaveMediaDownloadFailure(t.message ?: "Original media save failed", retryable = false, cause = t)
+        } else t)
+    }
+}
+
+/** Preserve the legacy request policy for thumbnails/videos and pre-network cache failures. */
+private suspend fun <T> withThreadSaveMediaSource(
+    httpClient: HttpClient,
+    request: ThreadSaveMediaDownloadRequest,
+    originalMediaSource: OriginalMediaSource?,
+    block: suspend (MediaSaveSource) -> T
+): T = withOriginalMediaSaveSourceOrElse(originalMediaSource, request.url, block) {
+    val response = withTimeoutOrNull(request.mediaRequestTimeoutMillis) {
+        httpClient.get(request.url) {
+            headers[HttpHeaders.Accept] = "image/*,video/*;q=0.8,*/*;q=0.2"
+            timeout { requestTimeoutMillis = request.maxSaveDurationMs }
+        }
+    } ?: throw IllegalStateException("Download request timed out after ${request.mediaRequestTimeoutMillis}ms")
+    try {
+        if (!response.status.isSuccess()) {
+            throw ThreadSaveMediaDownloadFailure(
+                message = "Download failed: ${response.status}",
+                retryable = isThreadSaveMediaHttpStatusRetryable(response.status.value)
+            )
+        }
+        val channel = response.bodyAsChannel()
+        block(MediaSaveSource(
+            contentType = response.headers[HttpHeaders.ContentType]?.let { ContentType.parse(it) },
+            declaredSize = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0L,
+            read = { channel.readAvailable(it, 0, it.size) }
+        ))
+    } finally {
+        runCatching { response.bodyAsChannel().cancel() }
     }
 }

@@ -10,6 +10,7 @@
 - Android 8.0（API 26）以降
 - iOS / iPadOS（Xcode プロジェクトと CocoaPods でホスト）
 - Wear OS（Android 版との連携アプリ）
+- Windows 10 / 11 x64（画像・動画編集を含む [デスクトップ版のビルド・利用方法](docs/windows-port-2026-09-20.md)）
 
 OS 固有機能を除き、画面、状態管理、通信、HTML 解析、保存処理は `shared/` に集約しています。
 
@@ -56,6 +57,7 @@ OS 固有機能を除き、画面、状態管理、通信、HTML 解析、保存
 .
 ├── app-android/   Android ホストアプリ、WorkManager、通知、端末連携
 ├── app-wear/      Wear OS アプリ、Tile、Data Layer 連携
+├── app-desktop/   Windows / Apple Silicon Mac の Compose Desktop ホスト
 ├── baselineprofile/ Android の起動最適化プロファイル生成・性能計測
 ├── buildSrc/      Android の文字選択補強などのビルド処理
 ├── iosApp/        SwiftUI ホスト、Xcode プロジェクト、watchOS ホスト
@@ -71,6 +73,7 @@ AndroidのReleaseビルドでは `baselineprofile/` を使い、専用のAPI 35�
 - `commonMain`: Compose UI、モデル、状態管理、通信、パーサー、Repository、Service
 - `androidMain`: Android のストレージ、メディア、通知、Activity 連携など
 - `iosMain`: iOS のストレージ、メディア、BGTask、UIKit / SwiftUI 連携など
+- `jvmMain`: Windows / Mac のファイル選択・永続化・動画再生・編集・推論・追尾
 - `commonTest` / `androidHostTest` / `iosTest` / `jvmTest`: 共通・プラットフォーム別テスト
 
 主な共通 UI エントリーポイントは `shared/src/commonMain/kotlin/ui/FutachaApp.kt` です。Android は `app-android/`、iOS は `iosApp/`、Wear OS は `app-wear/` が共通層をホストします。

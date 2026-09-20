@@ -1,5 +1,6 @@
 package com.valoser.futacha
 
+import com.valoser.futacha.shared.media.source.bindOriginalMediaSource
 import android.app.Application
 import android.app.ActivityManager
 import android.content.Context
@@ -249,6 +250,13 @@ class FutachaApplication : Application() {
                     initializingClient = it
                 }
                 val images = com.valoser.futacha.shared.network.createAndroidImageTransport(cookieStorage).also { initializingImages = it }
+                com.valoser.futacha.shared.ui.image.initializeOriginalMediaCache(
+                    images.originalMediaSession,
+                    applicationContext,
+                    appStateStore.isLightweightModeEnabled.first() ||
+                        com.valoser.futacha.shared.util.detectDevicePerformanceProfile(applicationContext).isLowSpec
+                )
+                client.bindOriginalMediaSource(images.originalMediaSession)
                 val repository = DefaultBoardRepository(
                     api = HttpBoardApi(client),
                     parser = createHtmlParser(),

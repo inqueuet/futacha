@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -103,7 +104,6 @@ internal fun HistoryDrawerContent(
     bodyTextSize: ThreadBodyTextSize? = null
 ) {
     val content: @Composable () -> Unit = {
-    val drawerWidth = 320.dp
     val coroutineScope = rememberCoroutineScope()
     var archiveActionDialog by remember { mutableStateOf<HistoryArchiveAction?>(null) }
     var isExportSelectionVisible by remember { mutableStateOf(false) }
@@ -134,7 +134,7 @@ internal fun HistoryDrawerContent(
     }
     ModalDrawerSheet(
         modifier = Modifier
-            .width(drawerWidth)
+            .width(320.dp)
             .fillMaxHeight()
             .testTag("history-drawer"),
         drawerShape = MaterialTheme.shapes.extraLarge,
@@ -146,9 +146,9 @@ internal fun HistoryDrawerContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 16.dp)
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 item {
                     HistoryListHeader(
@@ -409,38 +409,41 @@ private fun HistoryBottomBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                HistoryBottomIcon(Icons.Rounded.Home, "板", onBoardClick)
+                HistoryBottomIcon(Icons.Rounded.Home, "板", onBoardClick, modifier = Modifier.weight(1f))
                 HistoryBottomIcon(
                     icon = Icons.Rounded.Refresh,
                     label = if (isRefreshing) "更新中" else "更新",
                     onClick = onRefreshClick,
+                    modifier = Modifier.weight(1f),
                     enabled = !isRefreshing,
                     showProgress = isRefreshing
                 )
                 HistoryBottomIcon(
                     icon = Icons.Rounded.FilterList,
                     label = "フィルター",
+                    displayLabel = "絞込",
                     onClick = onFilterClick,
+                    modifier = Modifier.weight(1f),
                     badgeCount = activeFilterCount
                 )
-                HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick)
-                HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick)
+                HistoryBottomIcon(Icons.Rounded.DeleteSweep, "一括削除", onBatchDeleteClick, modifier = Modifier.weight(1f))
+                HistoryBottomIcon(Icons.Rounded.Settings, "設定", onSettingsClick, modifier = Modifier.weight(1f))
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                HistoryBottomIcon(Icons.Rounded.FileUpload, "エクスポート", onExportClick)
-                HistoryBottomIcon(Icons.Rounded.FileDownload, "インポート", onImportClick)
+                HistoryBottomIcon(Icons.Rounded.FileUpload, "エクスポート", onExportClick, modifier = Modifier.weight(1f))
+                HistoryBottomIcon(Icons.Rounded.FileDownload, "インポート", onImportClick, modifier = Modifier.weight(1f))
             }
         }
     }
@@ -451,19 +454,21 @@ private fun HistoryBottomIcon(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit = {},
+    modifier: Modifier = Modifier,
     badgeCount: Int = 0,
     enabled: Boolean = true,
-    showProgress: Boolean = false
+    showProgress: Boolean = false,
+    displayLabel: String = label
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable(enabled = enabled) {
+        modifier = modifier.heightIn(min = 48.dp).clickable(enabled = enabled) {
             AnalyticsTracker.uiControl(
                 control = "history_bottom_bar",
                 label = "履歴下部メニュー: $label"
             )
             onClick()
-        }
+        }.padding(vertical = 4.dp)
     ) {
         Box {
             if (showProgress) {
@@ -501,7 +506,8 @@ private fun HistoryBottomIcon(
             }
         }
         Text(
-            text = label,
+            text = displayLabel,
+            textAlign = TextAlign.Center,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onPrimary
         )
@@ -1013,6 +1019,7 @@ private fun HistoryEntryCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .testTag("history-entry-${entry.threadId}")
             .clip(MaterialTheme.shapes.medium)
             .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
@@ -1021,9 +1028,9 @@ private fun HistoryEntryCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
                 modifier = Modifier
@@ -1052,21 +1059,25 @@ private fun HistoryEntryCard(
             }
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
-                    text = entry.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    text = entry.title.ifBlank { "無題" },
+                    modifier = Modifier.testTag("history-title-${entry.threadId}"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Text(
-                    text = entry.boardUrl,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(entry.boardName.ifBlank { "板名未取得" }, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${entry.replyCount}レス", style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (entry.hasSelfPost) Text("投稿済", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (entry.hasAutoSave) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Folder, contentDescription = "自動保存あり", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                        Text("保存済", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 Text(
                     text = "最終閲覧: $formattedLastVisited",
                     style = MaterialTheme.typography.bodySmall,
@@ -1085,64 +1096,8 @@ private fun HistoryEntryCard(
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    }
                 )
-            }
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.Center
-            ) {
-                if (entry.hasSelfPost) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            text = "投稿済",
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                if (entry.hasAutoSave) {
-                    Icon(
-                        imageVector = Icons.Rounded.Folder,
-                        contentDescription = "自動保存あり",
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "保存済",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        horizontalAlignment = Alignment.End
-                    ) {
-                        Text(
-                            text = entry.replyCount.toString(),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "レス",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
             }
         }
     }

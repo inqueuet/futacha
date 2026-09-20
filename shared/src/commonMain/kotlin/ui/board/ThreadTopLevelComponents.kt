@@ -303,6 +303,8 @@ internal fun ThreadTopBar(
                     tonalElevation = 0.dp,
                     shadowElevation = 8.dp
                 ) {
+                    com.valoser.futacha.shared.ui.media.DeviceImageEditorMenuItem { isMenuExpanded = false }
+                    com.valoser.futacha.shared.ui.media.DeviceVideoEditorMenuItem { isMenuExpanded = false }
                     DropdownMenuItem(
                         text = { Text("設定") },
                         onClick = {
