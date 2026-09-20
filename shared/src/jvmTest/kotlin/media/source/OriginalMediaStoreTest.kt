@@ -8,8 +8,15 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.*
+import okio.FileHandle
+import okio.FileSystem
+import okio.ForwardingFileSystem
+import okio.IOException
+import okio.Path
 import okio.Path.Companion.toPath
 import java.nio.file.Files
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
@@ -19,11 +26,14 @@ class OriginalMediaStoreTest {
     private class Fixture(
         namespace: String = "test-profile-1",
         val directory: java.io.File = Files.createTempDirectory("original-media").toFile(),
+        fileSystem: FileSystem = FileSystem.SYSTEM,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+        decorateCache: (DiskCache) -> DiskCache = { it },
         downloader: OriginalMediaDownloader
     ) {
         val store = OriginalMediaStore(namespace, {
-            DiskCache.Builder().directory(directory.path.toPath()).maxSizeBytes(1024 * 1024).build()
-        }, downloader, Dispatchers.IO)
+            decorateCache(DiskCache.Builder().directory(directory.path.toPath()).fileSystem(fileSystem).maxSizeBytes(1024 * 1024).build())
+        }, downloader, dispatcher)
 
         suspend fun finish() {
             withTimeout(5000) { store.closeAndAwait() }
@@ -34,6 +44,183 @@ class OriginalMediaStoreTest {
     private fun info(size: Int, cacheable: Boolean = true) = OriginalMediaInfo(
         mimeType = "image/png", sizeBytes = size.toLong(), resolvedUrl = request.url, cacheable = cacheable
     )
+
+    private class CloseFailingFileSystem : ForwardingFileSystem(FileSystem.SYSTEM) {
+        val closeAttempts = AtomicInteger()
+
+        override fun openReadOnly(file: Path): FileHandle {
+            val handle = super.openReadOnly(file)
+            return object : FileHandle(readWrite = false) {
+                override fun protectedRead(fileOffset: Long, array: ByteArray, arrayOffset: Int, byteCount: Int) =
+                    handle.read(fileOffset, array, arrayOffset, byteCount)
+                override fun protectedSize() = handle.size()
+                override fun protectedWrite(fileOffset: Long, array: ByteArray, arrayOffset: Int, byteCount: Int) =
+                    error("Read-only handle")
+                override fun protectedResize(size: Long) = error("Read-only handle")
+                override fun protectedFlush() = error("Read-only handle")
+                override fun protectedClose() {
+                    handle.close()
+                    closeAttempts.incrementAndGet()
+                    throw IOException("close failed: EIO (I/O error)")
+                }
+            }
+        }
+    }
+
+    private suspend fun withCloseFailure(
+        downloader: OriginalMediaDownloader,
+        block: suspend (Fixture, CloseFailingFileSystem) -> Unit
+    ) {
+        val uncaught = ConcurrentLinkedQueue<Throwable>()
+        val dispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "original-media-close-test").apply {
+                uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, failure -> uncaught.add(failure) }
+            }
+        }.asCoroutineDispatcher()
+        val fileSystem = CloseFailingFileSystem()
+        val fixture = Fixture(fileSystem = fileSystem, dispatcher = dispatcher, downloader = downloader)
+        try {
+            withTimeout(5000) { block(fixture, fileSystem) }
+        } finally {
+            try { fixture.finish() } finally { dispatcher.close() }
+        }
+        assertTrue(uncaught.isEmpty(), "Cleanup must not leak uncaught exceptions: $uncaught")
+    }
+
+    @Test fun readHandleCloseFailureStillReleasesSnapshotAndFinishesShutdown(): Unit = runBlocking {
+        withCloseFailure({ _, sink -> sink.writeUtf8("data"); info(4, cacheable = false) }) { fixture, fileSystem ->
+            val lease = fixture.store.acquire(request)
+            val retained = lease.retain()
+            val file = lease.file
+            fixture.store.close()
+            lease.close()
+            lease.close()
+            assertEquals(0, fileSystem.closeAttempts.get(), "The retained lease still pins the reader")
+            assertTrue(FileSystem.SYSTEM.exists(file))
+            retained.close()
+            fixture.store.closeAndAwait()
+            assertEquals(1, fileSystem.closeAttempts.get())
+            assertFalse(FileSystem.SYSTEM.exists(file), "No-store data must be unpinned and removed")
+        }
+    }
+
+    @Test fun cancelledDownloadCloseFailureDoesNotPreventShutdown(): Unit = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        withCloseFailure({ _, sink ->
+            sink.writeUtf8("partial")
+            started.complete(Unit)
+            awaitCancellation()
+        }) { fixture, fileSystem ->
+            val acquire = async { fixture.store.acquire(request) }
+            started.await()
+            acquire.cancelAndJoin()
+            assertTrue(acquire.isCancelled)
+            fixture.store.closeAndAwait()
+            assertEquals(1, fileSystem.closeAttempts.get())
+            assertEquals(0, fixture.store.sizeBytes())
+        }
+    }
+
+    @Test fun readHandleCloseFailureDoesNotStopDownloadRetry(): Unit = runBlocking {
+        val calls = AtomicInteger()
+        val interrupted = java.net.ProtocolException("interrupted body")
+        withCloseFailure(object : OriginalMediaDownloader {
+            override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo {
+                if (calls.incrementAndGet() == 1) {
+                    sink.writeUtf8("partial")
+                    throw interrupted
+                }
+                sink.writeUtf8("complete")
+                return info(8, cacheable = false)
+            }
+            override suspend fun retryAfter(retry: Int, failure: Throwable): Boolean {
+                assertSame(interrupted, failure)
+                return true
+            }
+        }) { fixture, fileSystem ->
+            fixture.store.acquire(request).use { lease ->
+                assertEquals("complete", FileSystem.SYSTEM.read(lease.file) { readUtf8() })
+            }
+            fixture.store.closeAndAwait()
+            assertEquals(2, calls.get())
+            assertEquals(2, fileSystem.closeAttempts.get())
+            assertEquals(0, fixture.store.sizeBytes())
+        }
+    }
+
+    @Test fun failedDownloadSnapshotCloseFailurePreservesCauseAndStillRemovesFile(): Unit = runBlocking {
+        val indexFailure = IOException("Original media index write failed")
+        val closes = AtomicInteger()
+        val removals = AtomicInteger()
+        val fixture = Fixture(decorateCache = { disk ->
+            object : DiskCache by disk {
+                override fun openEditor(key: String): DiskCache.Editor? {
+                    if (key.startsWith("original-media-v1-")) throw indexFailure
+                    val editor = disk.openEditor(key) ?: return null
+                    return object : DiskCache.Editor by editor {
+                        override fun commitAndOpenSnapshot(): DiskCache.Snapshot? {
+                            val snapshot = editor.commitAndOpenSnapshot() ?: return null
+                            return object : DiskCache.Snapshot by snapshot {
+                                override fun close() {
+                                    closes.incrementAndGet()
+                                    snapshot.close()
+                                    throw IOException("Snapshot close failed: EIO")
+                                }
+                            }
+                        }
+                    }
+                }
+                override fun remove(key: String): Boolean {
+                    removals.incrementAndGet()
+                    return disk.remove(key)
+                }
+            }
+        }) { _, sink -> sink.writeUtf8("data"); info(4) }
+        try {
+            val failure = assertFailsWith<IOException> { fixture.store.acquire(request) }
+            // Coroutine stack-trace recovery may copy the exception, keeping the original as its cause.
+            assertEquals(indexFailure.message, failure.message)
+            assertSame(indexFailure, failure.cause ?: failure)
+            withTimeout(5000) { fixture.store.closeAndAwait() }
+            assertEquals(1, closes.get(), "A failed close must not be attempted again in finally")
+            assertEquals(1, removals.get(), "Discard must continue after snapshot close fails")
+            assertEquals(0, fixture.store.sizeBytes())
+        } finally { fixture.finish() }
+    }
+
+    @Test fun failedDownloadRemovalFailurePreservesCauseAndStopsRetry(): Unit = runBlocking {
+        val interrupted = java.net.ProtocolException("Interrupted original media body")
+        val downloads = AtomicInteger()
+        val retries = AtomicInteger()
+        val removals = AtomicInteger()
+        val fixture = Fixture(decorateCache = { disk ->
+            object : DiskCache by disk {
+                override fun remove(key: String): Boolean {
+                    removals.incrementAndGet()
+                    throw IOException("Remove failed: EIO")
+                }
+            }
+        }, downloader = object : OriginalMediaDownloader {
+            override suspend fun download(request: OriginalMediaRequest, sink: okio.BufferedSink): OriginalMediaInfo {
+                downloads.incrementAndGet()
+                sink.writeUtf8("partial")
+                throw interrupted
+            }
+            override suspend fun retryAfter(retry: Int, failure: Throwable): Boolean {
+                retries.incrementAndGet()
+                return true
+            }
+        })
+        try {
+            val failure = assertFailsWith<java.net.ProtocolException> { fixture.store.acquire(request) }
+            assertEquals(interrupted.message, failure.message)
+            assertSame(interrupted, failure.cause ?: failure)
+            withTimeout(5000) { fixture.store.closeAndAwait() }
+            assertEquals(1, downloads.get())
+            assertEquals(1, removals.get())
+            assertEquals(0, retries.get(), "Cannot retry before the failed file is discarded")
+        } finally { fixture.finish() }
+    }
 
     @Test fun concurrentReadersShareDownloadAndCancellingMetadataKeepsDisplayAlive(): Unit = runBlocking {
         val started = CompletableDeferred<Unit>()

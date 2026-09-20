@@ -1,6 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.Sync
 import java.util.Properties
+import groovy.json.JsonOutput
 
 val localProperties = Properties().apply {
     val localPropertiesFile = rootProject.file("local.properties")
@@ -74,16 +75,44 @@ configurations.configureEach {
 android {
     namespace = "com.valoser.futacha"
     compileSdk = 37
+    ndkVersion = "29.0.14206865"
+
+    externalNativeBuild {
+        cmake {
+            path = rootProject.file("shared/src/nativeInterop/tracking/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    splits {
+        abi {
+            // AGP cannot package an AAB with multiple shrunk APK resource sets.
+            // Enable CPU-specific APKs explicitly; keep normal bundle builds valid.
+            isEnable = providers.gradleProperty("futacha.splitApks").map { it.toBooleanStrict() }.getOrElse(false)
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
+        }
+    }
 
     defaultConfig {
         applicationId = "com.valoser.futacha"
         minSdk = 26
         targetSdk = 37
-        versionCode = 182
-        versionName = "11.1"
+        versionCode = 183
+        versionName = "11.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["benchmarkFixtureEnabled"] = "false"
+        externalNativeBuild {
+            cmake {
+                arguments += listOf(
+                    "-DOPENCV_SOURCE=${rootProject.file("build/android-tracking/opencv").invariantSeparatorsPath}",
+                    "-DANDROID_STL=c++_static", "-DWITH_KLEIDICV=OFF", "-DWITH_CAROTENE=OFF"
+                )
+                targets += "futacha_tracking_bridge"
+            }
+        }
     }
 
     signingConfigs {
@@ -118,6 +147,7 @@ android {
         // fixed build-directory path; merge*Assets is explicitly wired to the
         // producer task below.
         assets.directories.add(sharedComposeAndroidAssets.get().asFile.absolutePath)
+        assets.directories.add(rootProject.layout.buildDirectory.dir("android-tracking/licenses").get().asFile.absolutePath)
     }
     sourceSets.named("androidTest") {
         kotlin.directories.add(rootProject.file("shared/src/videoTestFixtures/kotlin").absolutePath)
@@ -126,6 +156,46 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+}
+
+val prepareAndroidTracking = tasks.register<Exec>("prepareAndroidTracking") {
+    inputs.file(rootProject.file("tools/prepare-android-tracking.py"))
+    outputs.dir(rootProject.layout.buildDirectory.dir("android-tracking/opencv"))
+    outputs.dir(rootProject.layout.buildDirectory.dir("android-tracking/licenses"))
+    commandLine(if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3",
+        rootProject.file("tools/prepare-android-tracking.py"))
+}
+val testNativeSymbolPackaging = tasks.register<Exec>("testNativeSymbolPackaging") {
+    group = "verification"
+    commandLine(if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3",
+        "-m", "unittest", "discover", "-s", rootProject.file("tools/tests"), "-p", "test_android_symbols.py", "-v")
+}
+tasks.matching { it.name == "testDebugUnitTest" }.configureEach { dependsOn(testNativeSymbolPackaging) }
+tasks.matching { it.name.startsWith("configureCMake") || it.name == "preBuild" }.configureEach {
+    dependsOn(prepareAndroidTracking)
+}
+
+// AGP's SYMBOL_TABLE extraction also copies stripped third-party binaries.
+// Remove only copies without private/debug symbols, keeping a complete archive.
+// Finalize the producer's own outputs so Gradle tracks the actual packaged data.
+tasks.matching { it.name == "extractReleaseNativeSymbolTables" }.configureEach {
+    val optimizer = rootProject.file("tools/optimize-android-symbols.py")
+    val archive = layout.buildDirectory.file("outputs/native-symbols/release/all-native-symbols.zip")
+    inputs.file(optimizer)
+    outputs.file(archive)
+    doLast {
+        val directories = outputs.files.files.filter { it.isDirectory }
+        check(directories.size == 1) { "Expected one native symbol directory: $directories" }
+        val inputList = temporaryDir.resolve("symbol-inputs.json")
+        inputList.writeText(JsonOutput.toJson(directories.map { it.absolutePath }), Charsets.UTF_8)
+        val result = providers.exec {
+            commandLine(if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3",
+                optimizer, "--inputs", inputList, "--output", directories.single(),
+                "--archive", archive.get().asFile)
+        }
+        logger.lifecycle(result.standardOutput.asText.get().trim())
+        result.result.get().assertNormalExitValue()
     }
 }
 
@@ -145,7 +215,7 @@ androidComponents {
 }
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
-    dependsOn(syncSharedComposeResourcesForAndroid)
+    dependsOn(syncSharedComposeResourcesForAndroid, prepareAndroidTracking)
 }
 
 // Lint model and analysis tasks read the asset source set directly instead of
@@ -153,7 +223,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
 tasks.matching {
     it.name.contains("lint", ignoreCase = true)
 }.configureEach {
-    dependsOn(syncSharedComposeResourcesForAndroid)
+    dependsOn(syncSharedComposeResourcesForAndroid, prepareAndroidTracking)
 }
 
 // Android Studio redirects every APK-producing project to one directory. Preserve

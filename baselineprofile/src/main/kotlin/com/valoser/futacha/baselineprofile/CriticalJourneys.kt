@@ -165,8 +165,18 @@ private fun clickText(device: UiDevice, text: String) {
 }
 
 private fun click(device: UiDevice, selector: androidx.test.uiautomator.BySelector, label: String) {
-    waitFor(device, selector, label).click()
-    device.waitForIdle()
+    repeat(3) { attempt ->
+        try {
+            waitFor(device, selector, label).click()
+            device.waitForIdle()
+            return
+        } catch (stale: androidx.test.uiautomator.StaleObjectException) {
+            // Compose can replace a semantics node between lookup and click.
+            // Look up the same control again; keep every journey assertion.
+            if (attempt == 2) throw stale
+            device.waitForIdle()
+        }
+    }
 }
 
 private fun waitFor(

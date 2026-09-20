@@ -2,6 +2,7 @@ package com.valoser.futacha.shared.media.source
 
 import coil3.disk.DiskCache
 import com.valoser.futacha.shared.util.AppDispatchers
+import com.valoser.futacha.shared.util.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -347,17 +348,21 @@ class OriginalMediaStore(
                         }
                     } catch (failure: Throwable) {
                         runCatching { editor.abort() }
-                        pending?.snapshot?.close()
+                        val failedAsset = pending
                         pending = null
-                        disk.remove(revision)
-                        if (!downloading || failure is CancellationException || entry.playbackRequested.value || retries >= 2 || !downloader.retryAfter(retries++, failure)) {
+                        if (failedAsset != null) {
+                            cleanupIo("close failed original media snapshot") { failedAsset.snapshot.close() }
+                        }
+                        val discarded = cleanupIo("remove failed original media") { disk.remove(revision) }
+                        // Keep the original failure and do not retry if its file could not be discarded.
+                        if (!discarded || !downloading || failure is CancellationException || entry.playbackRequested.value || retries >= 2 || !downloader.retryAfter(retries++, failure)) {
                             throw failure
                         }
                         mutex.withLock {
                             // A player may have joined while retryAfter was suspended. Never splice a
                             // replacement HTTP response into bytes a decoder has already consumed.
                             if (entry.playbackRequested.value) throw failure
-                            entry.readHandle?.close(); entry.readHandle = null
+                            closeReadHandleLocked(entry)
                             entry.progress.value = OriginalMediaReadState()
                         }
                     }
@@ -376,8 +381,8 @@ class OriginalMediaStore(
         } finally {
             withContext(NonCancellable) {
                 pending?.let {
-                    it.snapshot.close()
-                    it.disk.remove(it.identity)
+                    cleanupIo("close pending original media snapshot") { it.snapshot.close() }
+                    cleanupIo("remove pending original media") { it.disk.remove(it.identity) }
                 }
             }
         }
@@ -428,17 +433,37 @@ class OriginalMediaStore(
 
     private fun disposeIfUnusedLocked(entry: Entry) {
         if (entry.users == 0 && entry.finished) {
-            entry.readHandle?.close()
-            entry.readHandle = null
-            entry.asset?.let {
-                it.snapshot.close()
-                if (!it.info.cacheable) it.disk.remove(it.identity)
-            }
+            closeReadHandleLocked(entry)
+            val asset = entry.asset
             entry.asset = null
+            if (asset != null) {
+                cleanupIo("close original media snapshot") { asset.snapshot.close() }
+                if (!asset.info.cacheable) {
+                    cleanupIo("remove transient original media") { asset.disk.remove(asset.identity) }
+                }
+            }
             live.remove(entry)
         }
         finishShutdownLocked()
     }
+
+    private fun closeReadHandleLocked(entry: Entry) {
+        val handle = entry.readHandle ?: return
+        // Detach before closing: a failed close must not leave an owned handle or be retried.
+        entry.readHandle = null
+        cleanupIo("close original media reader") { handle.close() }
+    }
+
+    private inline fun cleanupIo(operation: String, block: () -> Unit): Boolean =
+        try {
+            block()
+            true
+        } catch (failure: IOException) {
+            // Cleanup runs in standalone coroutines; an I/O error must not crash the app
+            // or prevent releasing the remaining resources and completing shutdown.
+            Logger.e("OriginalMediaStore", "Failed to $operation", failure)
+            false
+        }
 
     /** Does not delete files pinned by a decoder until its lease is released. */
     override suspend fun clear() = withContext(dispatcher) {

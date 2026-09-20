@@ -38,3 +38,4 @@
 -keep class com.valoser.futacha.shared.analytics.PlatformPerformance { *; }
 -keep class com.valoser.futacha.shared.analytics.PlatformPerformanceTrace { *; }
 -keep class com.valoser.futacha.shared.analytics.PlatformCrashReporter { *; }
+-keep class com.valoser.futacha.shared.media.analysis.TrackingNative { *; }

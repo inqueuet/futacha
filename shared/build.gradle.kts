@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 
 val desktopWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 val desktopNativeClassifier = if (desktopWindows) "windows-x86_64" else "macosx-arm64"
@@ -72,6 +73,9 @@ kotlin {
             // ORT's static XCFramework references Network even with the CPU provider.
             // Native test executables do not inherit CocoaPods' Xcode linker flags.
             linkerOpts("-framework", "Network", "-lc++", "-lz")
+            if (buildType == NativeBuildType.RELEASE) {
+                binaryOption("smallBinary", "true")
+            }
         }
     }
 
@@ -146,7 +150,6 @@ kotlin {
             kotlin.srcDir("src/jvmAndAndroidMain/kotlin")
             dependencies {
                 implementation(libs.onnxruntime.android)
-                implementation(libs.opencv)
                 implementation(project.dependencies.platform(libs.androidx.compose.bom))
                 implementation(libs.androidx.datastore.preferences)
                 implementation(libs.androidx.core.ktx)
@@ -230,6 +233,14 @@ kotlin {
 // Keep the existing CLI entry points and artifact locations, without producing
 // a second framework that omits native Pod dependencies such as ONNX Runtime.
 for (target in listOf("iosArm64", "iosSimulatorArm64")) {
+    tasks.matching { it.name == "linkPodReleaseFramework${target.replaceFirstChar { it.uppercaseChar() }}" }.configureEach {
+        inputs.property("stripReleaseLocalSymbols", true)
+        doLast {
+            // Preserve exported APIs and the separate dSYM/UUID; Xcode signs later.
+            val binary = layout.buildDirectory.file("bin/$target/podReleaseFramework/shared.framework/shared").get().asFile
+            providers.exec { commandLine("xcrun", "strip", "-S", "-x", binary) }.result.get().assertNormalExitValue()
+        }
+    }
     for (variant in listOf("Debug", "Release")) {
         tasks.register<Sync>("link${variant}Framework${target.replaceFirstChar { it.uppercaseChar() }}") {
             group = "build"
