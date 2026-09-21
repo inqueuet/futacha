@@ -56,7 +56,7 @@ internal data class CompatibilityPalette(
     /** Material dark AlertDialog surface used by the black reference theme. */
     val dialogSurface: Color = Color.White,
     val uiPrimaryText: Color = Color(0xFF4C4C4C),
-    val uiSecondaryText: Color = Color(0xFF757575),
+    val uiSecondaryText: Color = Color(0xFF555555),
     /** Target getBackgroundColorHighlightByThemeKey(). */
     val searchResultBackground: Color = Color(0xFFE0F2F1),
     /** Target getBackgroundColorSearchHighlightByThemeKey(). */
@@ -109,7 +109,7 @@ internal fun compatibilityPopupSurface(palette: CompatibilityPalette): Color =
 internal fun compatibilityPopupContent(palette: CompatibilityPalette): Color =
     palette.uiPrimaryText
 
-internal fun compatibilitySettingsCategoryColor(palette: CompatibilityPalette): Color = palette.accent
+internal fun compatibilitySettingsCategoryColor(palette: CompatibilityPalette): Color = palette.uiPrimaryText
 
 @Composable
 internal fun compatibilityMenuItemColors(): MenuItemColors {
@@ -283,7 +283,7 @@ internal fun compatibilityPaletteFor(theme: String?, textColor: String? = null):
             menuSurface = Color(0xFF1E1E1E),
             dialogSurface = Color(0xFF424242),
             uiPrimaryText = Color(0xFFDDDDDD),
-            uiSecondaryText = Color(0xFFAAAAAA),
+            uiSecondaryText = Color(0xFFBEBEBE),
             searchResultBackground = Color(0xFF3C3030),
             searchTextHighlight = Color(0xFF005AA1),
             statusBarChrome = Color(0xFF1E1E1E),

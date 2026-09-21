@@ -74,7 +74,9 @@ data class CompatHistoryEntry(
     val thumbnailUrl: String? = null,
     val replyCount: Int = 0,
     val contentUpdatedAtEpochMillis: Long,
-    val scrollAnchor: ScrollAnchor = ScrollAnchor()
+    val scrollAnchor: ScrollAnchor = ScrollAnchor(),
+    /** Legacy records retain their previous order until the next actual visit. */
+    val lastVisitedEpochMillis: Long = contentUpdatedAtEpochMillis
 )
 
 @Serializable

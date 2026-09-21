@@ -23,6 +23,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
@@ -55,6 +56,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.valoser.futacha.shared.ui.theme.LocalFutachaChromeColors
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import com.valoser.futacha.shared.model.HistoryArchivePayloadStatus
@@ -406,7 +408,8 @@ private fun HistoryBottomBar(
     onImportClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
-    Surface(color = MaterialTheme.colorScheme.primary) {
+    val chrome = LocalFutachaChromeColors.current
+    Surface(color = chrome.bottomBar, contentColor = chrome.onBar) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -476,7 +479,7 @@ private fun HistoryBottomIcon(
                 CircularProgressIndicator(
                     modifier = Modifier.size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary
+                    color = LocalContentColor.current
                 )
             } else {
                 Icon(
@@ -485,7 +488,7 @@ private fun HistoryBottomIcon(
                     tint = if (badgeCount > 0) {
                         MaterialTheme.colorScheme.tertiaryContainer
                     } else {
-                        MaterialTheme.colorScheme.onPrimary
+                        LocalContentColor.current
                     }
                 )
             }
@@ -510,7 +513,7 @@ private fun HistoryBottomIcon(
             text = displayLabel,
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onPrimary
+            color = LocalContentColor.current
         )
     }
 }

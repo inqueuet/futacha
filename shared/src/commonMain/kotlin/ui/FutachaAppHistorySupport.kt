@@ -143,7 +143,7 @@ internal fun shouldSkipFutachaVisitedHistoryUpdate(
     existingEntry: ThreadHistoryEntry?,
     boardId: String,
     currentTimeMillis: Long,
-    minimumIntervalMillis: Long = 60_000L
+    minimumIntervalMillis: Long = 0L
 ): Boolean {
     return existingEntry != null &&
         existingEntry.boardId == boardId &&
@@ -185,7 +185,7 @@ internal suspend fun recordFutachaVisitedThread(
     board: BoardSummary,
     context: FutachaThreadHistoryContext,
     currentTimeMillis: Long,
-    minimumIntervalMillis: Long = 60_000L
+    minimumIntervalMillis: Long = 0L
 ): Boolean {
     val existingEntry = findFutachaVisitedHistoryEntry(
         history = history,

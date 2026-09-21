@@ -282,7 +282,7 @@ private fun ThreadMediaPreviewNavigationZone(
             onClick = onNavigate,
             colors = IconButtonDefaults.iconButtonColors(
                 containerColor = Color.Black.copy(alpha = 0.28f),
-                contentColor = Color.White.copy(alpha = 0.88f)
+                contentColor = Color.White
             )
         ) {
             Icon(
@@ -333,7 +333,7 @@ internal fun ThreadMediaPreviewHeader(
             )
             Text(
                 text = "${currentIndex + 1}/${totalCount}",
-                color = Color.White.copy(alpha = 0.7f),
+                color = Color.White,
                 style = MaterialTheme.typography.bodySmall
             )
         }

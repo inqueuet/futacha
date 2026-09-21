@@ -23,11 +23,11 @@ class WindowsMediaPathTest {
             assertEquals("C:/画像 #50%+test.png", localMediaSavePath(uri))
         }
         assertEquals("//server/共有/image.png", localMediaSavePath("file://server/%E5%85%B1%E6%9C%89/image.png"))
-        assertEquals("/Users/test/画像.png", localMediaSavePath("file:///Users/test/%E7%94%BB%E5%83%8F.png"))
+        assertEquals("/tmp/media/画像.png", localMediaSavePath("file:///tmp/media/%E7%94%BB%E5%83%8F.png"))
     }
 
     @Test fun videoPreviewUriRoundTripsNativePaths() {
-        for (path in listOf("C:/動画 #50%+test.mp4", "//server/共有/a.webm", "/Users/test/動画 #50%.mp4")) {
+        for (path in listOf("C:/動画 #50%+test.mp4", "//server/共有/a.webm", "/tmp/media/動画 #50%.mp4")) {
             assertEquals(path, localMediaSavePath(localMediaFileUri(path)))
         }
         assertEquals("C:/動画/a.mp4", localMediaSavePath(localMediaFileUri("C:\\動画\\a.mp4")))

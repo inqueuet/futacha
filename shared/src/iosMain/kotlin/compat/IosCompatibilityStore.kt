@@ -222,9 +222,9 @@ internal class IosCompatibilityStore(
             .filter { entry -> entry.boardKey in boardKeys }
             .forEach { entry ->
                 val tombstone = it.historyTombstones[entry.canonicalUrl]
-                if (tombstone != null && entry.contentUpdatedAtEpochMillis <= tombstone) return@forEach
+                if (tombstone != null && entry.lastVisitedEpochMillis <= tombstone) return@forEach
                 val old = existing[entry.canonicalUrl]
-                val durable = old?.let { current -> entry.copy(scrollAnchor = current.scrollAnchor) } ?: entry
+                val durable = mergeCompatHistoryEntry(entry, old, recordVisit = true)
                 if (old != durable) {
                     next.removeAll { candidate -> candidate.canonicalUrl == entry.canonicalUrl }
                     next += durable
@@ -299,8 +299,8 @@ internal class IosCompatibilityStore(
         val durableTab = currentAnchor?.let { anchor -> tab.copy(scrollAnchor = anchor) } ?: tab
         val nextTabs = replaceTab(it.tabs, durableTab)
         val nextHistory = historyEntry?.let { entry ->
-            val anchor = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }?.scrollAnchor
-            replaceHistory(it.history, anchor?.let { entry.copy(scrollAnchor = it) } ?: entry)
+            val current = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }
+            replaceHistory(it.history, mergeCompatHistoryEntry(entry, current, recordVisit = true))
         } ?: it.history
         state = it.copy(
             tabs = trimTabs(nextTabs),
@@ -385,8 +385,16 @@ internal class IosCompatibilityStore(
 
     override suspend fun upsertHistory(entry: CompatHistoryEntry) = mutate {
         if (entry.canonicalUrl in it.historyTombstones) return@mutate
-        val anchor = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }?.scrollAnchor
-        state = it.copy(history = trimHistory(replaceHistory(it.history, anchor?.let { entry.copy(scrollAnchor = it) } ?: entry)))
+        val current = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }
+        state = it.copy(history = trimHistory(replaceHistory(it.history, mergeCompatHistoryEntry(entry, current))))
+    }
+
+    override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate {
+        val current = it.history.firstOrNull { current -> current.canonicalUrl == entry.canonicalUrl }
+        state = it.copy(
+            history = trimHistory(replaceHistory(it.history, mergeCompatHistoryEntry(entry, current, recordVisit = true))),
+            historyTombstones = it.historyTombstones - entry.canonicalUrl
+        )
     }
 
     override suspend fun deleteHistory(canonicalUrl: String) = mutate {
@@ -517,7 +525,7 @@ internal class IosCompatibilityStore(
                 )
                 state = state.copy(tabs = nextTabs, history = nextHistory)
                 tabsState.value = state.tabs.sortedByDescending(CompatTab::insertedAtEpochMillis)
-                historyState.value = state.history.sortedByDescending(CompatHistoryEntry::contentUpdatedAtEpochMillis)
+                historyState.value = state.history.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
             }
         }
 
@@ -1202,7 +1210,7 @@ internal class IosCompatibilityStore(
     private fun publishLocked() {
         boardsState.value = state.boards.sortedBy(CompatBoard::sortOrder)
         tabsState.value = state.tabs.sortedByDescending(CompatTab::insertedAtEpochMillis)
-        historyState.value = state.history.sortedByDescending(CompatHistoryEntry::contentUpdatedAtEpochMillis)
+        historyState.value = state.history.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
         workspaceState.value = state.workspace
         preferencesState.value = state.preferences
         ngRulesState.value = state.ngRules.sortedByDescending(CompatNgRule::createdAtEpochMillis)
@@ -1327,7 +1335,7 @@ internal class IosCompatibilityStore(
     }
 
     private fun trimHistory(items: List<CompatHistoryEntry>): List<CompatHistoryEntry> {
-        val sorted = items.sortedByDescending(CompatHistoryEntry::contentUpdatedAtEpochMillis)
+        val sorted = items.sortedByDescending(CompatHistoryEntry::lastVisitedEpochMillis)
         return if (sorted.size > HISTORY_LIMIT_TRIGGER) sorted.take(HISTORY_LIMIT_AFTER_TRIM) else sorted
     }
 

@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
+import com.valoser.futacha.shared.util.isAndroid
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -22,9 +25,10 @@ internal fun FutachaDrawerTools(onOpenThread: (ThreadHistoryEntry) -> Unit) {
     val features = LocalFutachaSharedFeatures.current ?: return
     var tabsOpen by remember { mutableStateOf(false) }
     var watcherOpen by remember { mutableStateOf(false) }
+    val colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onBackground)
     Row(Modifier.fillMaxWidth()) {
-        TextButton(onClick = { tabsOpen = true }, modifier = Modifier.weight(1f)) { Text("タブ一覧") }
-        TextButton(onClick = { watcherOpen = true }, modifier = Modifier.weight(1f)) { Text("巡回") }
+        TextButton(onClick = { tabsOpen = true }, colors = colors, modifier = Modifier.weight(1f)) { Text("タブ一覧") }
+        TextButton(onClick = { watcherOpen = true }, colors = colors, modifier = Modifier.weight(1f)) { Text("巡回") }
     }
     if (tabsOpen) FutachaTabsDialog(features, features.repository, onOpenThread, onDismiss = { tabsOpen = false })
     if (watcherOpen) FutachaWatcherDialog(features, onOpenThread, onDismiss = { watcherOpen = false })
@@ -150,10 +154,12 @@ private fun FutachaWatcherDialog(features: FutachaSharedFeatures, onOpenThread: 
                 }
             }
             if (snapshot.entries.isEmpty()) Text("巡回管理からキーワードを登録できます")
-            TextButton(onClick = { managing = true }) { Text("巡回管理") }
-            TextButton(onClick = { refresh++ }) { Text("結果を更新") }
+            TextButton(onClick = { managing = true }) { Icon(Icons.Filled.Settings, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("巡回管理") }
+            TextButton(onClick = { refresh++ }) { Text("保存済み結果を再読込") }
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } })
     if (managing) CompatWatcherManager(features.store, features.repository,
-        onDismiss = { managing = false; refresh++ }, onResultsChanged = { refresh++ }, onOpenExternal = watcher::openManager)
+        onDismiss = { managing = false; refresh++ }, onResultsChanged = { refresh++ },
+        onOpenExternal = if (isAndroid()) watcher::openManager else null,
+        onOpenHelp = { managing = false; onDismiss(); features.openSettings("help") })
 }

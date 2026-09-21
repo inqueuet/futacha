@@ -2487,6 +2487,28 @@ class CompatSettingsSchemaInstrumentedTest {
     }
 
     @Test
+    fun patrolSettingsOpenFromSettingsAndHelpSearchesHiddenSections() {
+        rule.setContent {
+            CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {
+                MaterialTheme { CompatibilityApp(store = store, repository = null, onExitApplication = {}) }
+            }
+        }
+        rule.onNodeWithContentDescription("その他").performClick()
+        rule.onNodeWithText("設定").performClick()
+        rule.onNodeWithText("巡回管理").performScrollTo().performClick()
+        rule.onNodeWithText("履歴・巡回のヘルプ").performScrollTo().performClick()
+        rule.onNodeWithTag("help-search-field").performTextInput("強制停止")
+        rule.onNodeWithText("標準のアプリ内巡回に、にじろぐのインストールや起動は不要です。", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("help-search-field").performTextReplacement("missing-help-word-114")
+        rule.onNodeWithText("一致する項目がありません").assertIsDisplayed()
+        rule.onNodeWithText("クリア").performClick()
+        closeSoftKeyboard()
+        rule.onNodeWithTag("compat-help-content").assertIsDisplayed()
+        rule.onNodeWithContentDescription("戻る").performClick()
+        rule.onNodeWithTag("compat-settings-list-root").assertIsDisplayed()
+    }
+
+    @Test
     fun settingsRootScrollPositionSurvivesReturningFromChildPage() {
         rule.setContent {
             CompositionLocalProvider(LocalFutachaImageLoader provides imageLoader) {

@@ -32,6 +32,7 @@ import com.valoser.futacha.shared.compat.CompatCatalogDroppedClass
 import com.valoser.futacha.shared.compat.CompatDroppedCatalogItem
 import com.valoser.futacha.shared.compat.buildCompatCatalogItemStates
 import com.valoser.futacha.shared.compat.diffCompatCatalogGenerations
+import com.valoser.futacha.shared.compat.mergeCompatHistoryEntry
 import com.valoser.futacha.shared.compat.CompatHistoryEntry
 import com.valoser.futacha.shared.compat.CompatNgKind
 import com.valoser.futacha.shared.compat.CompatNgRule
@@ -199,7 +200,7 @@ class AndroidCompatibilityStore(
             .filter { it.boardKey in knownBoardKeys }
             .count { entry ->
             val deletedAt = db.historyTombstoneAt(entry.canonicalUrl)
-            if (deletedAt != null && entry.contentUpdatedAtEpochMillis <= deletedAt) {
+            if (deletedAt != null && entry.lastVisitedEpochMillis <= deletedAt) {
                 return@count false
             }
             if (existing[entry.canonicalUrl] == entry) {
@@ -209,10 +210,7 @@ class AndroidCompatibilityStore(
                 // Modern and compatibility lists have different item
                 // layouts. Import metadata, but keep an existing
                 // compatibility-local anchor intact.
-                val currentAnchor = existing[entry.canonicalUrl]?.scrollAnchor
-                db.upsertHistory(
-                    if (currentAnchor != null) entry.copy(scrollAnchor = currentAnchor) else entry
-                )
+                db.upsertHistory(mergeCompatHistoryEntry(entry, existing[entry.canonicalUrl], recordVisit = true))
                 true
             }
         }.also { changed ->
@@ -331,12 +329,8 @@ class AndroidCompatibilityStore(
             db.upsertTab(durableTab)
             historyEntry?.let { entry ->
                 db.deleteHistoryTombstone(entry.canonicalUrl)
-                val currentHistoryAnchor = db.readHistory()
-                    .firstOrNull { it.canonicalUrl == entry.canonicalUrl }
-                    ?.scrollAnchor
-                db.upsertHistory(
-                    currentHistoryAnchor?.let { entry.copy(scrollAnchor = it) } ?: entry
-                )
+                val current = db.readHistory().firstOrNull { it.canonicalUrl == entry.canonicalUrl }
+                db.upsertHistory(mergeCompatHistoryEntry(entry, current, recordVisit = true))
             }
             db.updateWorkspace(db.readWorkspace().copy(activeTabKey = tab.key, generation = db.readWorkspace().generation + 1))
             val trimmedAttachments = db.trimTabs()
@@ -473,15 +467,17 @@ class AndroidCompatibilityStore(
         refresh = setOf(CompatObservableState.HISTORY)
     ) { db ->
         if (db.hasHistoryTombstone(entry.canonicalUrl)) return@mutate
-        // History metadata updates have the same stale-snapshot hazard as
-        // tab updates. The dedicated updateScrollAnchor() operation is the
-        // only normal path allowed to replace an existing anchor.
-        val currentAnchor = db.readHistory()
-            .firstOrNull { it.canonicalUrl == entry.canonicalUrl }
-            ?.scrollAnchor
-        db.upsertHistory(
-            if (currentAnchor != null) entry.copy(scrollAnchor = currentAnchor) else entry
-        )
+        val current = db.readHistory().firstOrNull { it.canonicalUrl == entry.canonicalUrl }
+        db.upsertHistory(mergeCompatHistoryEntry(entry, current))
+        db.trimHistory()
+    }
+
+    override suspend fun recordHistoryVisit(entry: CompatHistoryEntry) = mutate(
+        refresh = setOf(CompatObservableState.HISTORY)
+    ) { db ->
+        db.deleteHistoryTombstone(entry.canonicalUrl)
+        val current = db.readHistory().firstOrNull { it.canonicalUrl == entry.canonicalUrl }
+        db.upsertHistory(mergeCompatHistoryEntry(entry, current, recordVisit = true))
         db.trimHistory()
     }
 
@@ -2263,6 +2259,7 @@ class AndroidCompatibilityStore(
             put("thumbnail_url", entry.thumbnailUrl)
             put("reply_count", entry.replyCount)
             put("content_updated_at", entry.contentUpdatedAtEpochMillis)
+            put("last_visited_at", entry.lastVisitedEpochMillis)
             put("scroll_anchor_json", json.encodeToString(anchorSerializer, entry.scrollAnchor))
         }
         if (update("compat_history", values, "canonical_url=?", arrayOf(entry.canonicalUrl)) == 0) {
@@ -2272,12 +2269,12 @@ class AndroidCompatibilityStore(
 
     private fun SQLiteDatabase.readHistory(): List<CompatHistoryEntry> = query(
         "compat_history",
-        arrayOf("canonical_url", "original_url", "board_key", "board_name", "thread_no", "title", "thumbnail_url", "reply_count", "content_updated_at", "scroll_anchor_json"),
+        arrayOf("canonical_url", "original_url", "board_key", "board_name", "thread_no", "title", "thumbnail_url", "reply_count", "content_updated_at", "scroll_anchor_json", "last_visited_at"),
         null,
         null,
         null,
         null,
-        "content_updated_at DESC, canonical_url ASC",
+        "last_visited_at DESC, canonical_url ASC",
         (HISTORY_LIMIT_TRIGGER + 1).toString()
     ).use { cursor ->
         buildList {
@@ -2293,6 +2290,7 @@ class AndroidCompatibilityStore(
                         thumbnailUrl = cursor.getNullableString(6),
                         replyCount = cursor.getInt(7),
                         contentUpdatedAtEpochMillis = cursor.getLong(8),
+                        lastVisitedEpochMillis = cursor.getLong(10),
                         scrollAnchor = runCatching { json.decodeFromString(anchorSerializer, cursor.getString(9)) }.getOrDefault(ScrollAnchor())
                     )
                 )
@@ -2304,7 +2302,7 @@ class AndroidCompatibilityStore(
         val count = longForQuery("SELECT COUNT(*) FROM compat_history").coerceAtLeast(0L)
         if (count <= HISTORY_LIMIT_TRIGGER.toLong()) return
         execSQL(
-            "DELETE FROM compat_history WHERE canonical_url IN (SELECT canonical_url FROM compat_history ORDER BY content_updated_at ASC, canonical_url ASC LIMIT ?)",
+            "DELETE FROM compat_history WHERE canonical_url IN (SELECT canonical_url FROM compat_history ORDER BY last_visited_at ASC, canonical_url ASC LIMIT ?)",
             arrayOf((count - HISTORY_LIMIT_AFTER_TRIM.toLong()).coerceAtLeast(0L))
         )
     }
@@ -2729,6 +2727,10 @@ private class CompatibilityDatabaseHelper(context: Context, databaseName: String
             CompatibilityDatabaseSchema.migration8To9.forEach(db::execSQL)
             version = 9
         }
+        if (version == 9 && newVersion >= 10) {
+            CompatibilityDatabaseSchema.migration9To10.forEach(db::execSQL)
+            version = 10
+        }
         check(version == newVersion) {
             "Unsupported compatibility DB migration $oldVersion -> $newVersion (stopped at $version)"
         }
@@ -2742,7 +2744,7 @@ private fun CompatNgRule.compatPayloadJson(): String = JSONObject().apply {
 }.toString()
 
 internal object CompatibilityDatabaseSchema {
-    const val version = 9
+    const val version = 10
     const val initialWorkspaceStatement =
         "INSERT INTO compat_workspace(singleton_id, selector_presentation, generation) VALUES(1, 'ABOVE', 0)"
     val migration1To2 = listOf(
@@ -2782,6 +2784,11 @@ internal object CompatibilityDatabaseSchema {
     val migration7To8 = listOf(
         "CREATE TABLE IF NOT EXISTS compat_history_tombstone(canonical_url TEXT PRIMARY KEY NOT NULL, deleted_at INTEGER NOT NULL)"
     )
+    val migration9To10 = listOf(
+        "ALTER TABLE compat_history ADD COLUMN last_visited_at INTEGER NOT NULL DEFAULT 0",
+        "UPDATE compat_history SET last_visited_at = content_updated_at",
+        "CREATE INDEX compat_history_visited_idx ON compat_history(last_visited_at DESC)"
+    )
     val migration8To9 = listOf(
         "ALTER TABLE compat_catalog_preference ADD COLUMN show_non_priority INTEGER NOT NULL DEFAULT 1"
     )
@@ -2793,8 +2800,9 @@ internal object CompatibilityDatabaseSchema {
         "CREATE INDEX compat_tab_inserted_idx ON compat_tab(inserted_at DESC)",
         "CREATE TABLE compat_reply_draft(tab_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, delete_key TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY(tab_key) REFERENCES compat_tab(tab_key) ON DELETE CASCADE)",
         "CREATE TABLE compat_build_draft(board_key TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, subject TEXT NOT NULL, comment TEXT NOT NULL, attachment_uri TEXT, delete_key TEXT NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
-        "CREATE TABLE compat_history(canonical_url TEXT PRIMARY KEY NOT NULL, original_url TEXT NOT NULL, board_key TEXT NOT NULL, board_name TEXT NOT NULL, thread_no TEXT NOT NULL, title TEXT NOT NULL, thumbnail_url TEXT, reply_count INTEGER NOT NULL, content_updated_at INTEGER NOT NULL, scroll_anchor_json TEXT NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
+        "CREATE TABLE compat_history(canonical_url TEXT PRIMARY KEY NOT NULL, original_url TEXT NOT NULL, board_key TEXT NOT NULL, board_name TEXT NOT NULL, thread_no TEXT NOT NULL, title TEXT NOT NULL, thumbnail_url TEXT, reply_count INTEGER NOT NULL, content_updated_at INTEGER NOT NULL, last_visited_at INTEGER NOT NULL, scroll_anchor_json TEXT NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",
         "CREATE INDEX compat_history_updated_idx ON compat_history(content_updated_at DESC)",
+        "CREATE INDEX compat_history_visited_idx ON compat_history(last_visited_at DESC)",
         "CREATE TABLE compat_thread_snapshot(tab_key TEXT PRIMARY KEY NOT NULL, revision INTEGER NOT NULL, fetched_at INTEGER NOT NULL, board_title TEXT, expires_label TEXT, deleted_notice TEXT)",
         "CREATE TABLE compat_post(tab_key TEXT NOT NULL, revision INTEGER NOT NULL, position INTEGER NOT NULL, post_json TEXT NOT NULL, PRIMARY KEY(tab_key, revision, position))",
         "CREATE TABLE compat_catalog_preference(board_key TEXT PRIMARY KEY NOT NULL, sort_mode TEXT NOT NULL, layout_mode TEXT NOT NULL, reply_priority_enabled INTEGER NOT NULL, show_non_priority INTEGER NOT NULL, few_replies_delay INTEGER NOT NULL, FOREIGN KEY(board_key) REFERENCES compat_board(board_key) ON DELETE CASCADE)",

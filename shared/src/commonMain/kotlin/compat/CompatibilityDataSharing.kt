@@ -11,7 +11,8 @@ data class CompatHistorySharedMetadata(
     val title: String,
     val thumbnailUrl: String?,
     val replyCount: Int,
-    val contentUpdatedAtEpochMillis: Long
+    val contentUpdatedAtEpochMillis: Long,
+    val lastVisitedEpochMillis: Long
 )
 
 fun compatibilityHistorySharedMetadata(
@@ -24,7 +25,8 @@ fun compatibilityHistorySharedMetadata(
         title = entry.title,
         thumbnailUrl = entry.thumbnailUrl,
         replyCount = entry.replyCount,
-        contentUpdatedAtEpochMillis = entry.contentUpdatedAtEpochMillis
+        contentUpdatedAtEpochMillis = entry.contentUpdatedAtEpochMillis,
+        lastVisitedEpochMillis = entry.lastVisitedEpochMillis
     )
 }
 
@@ -38,7 +40,7 @@ fun CompatHistoryEntry.toModernThreadHistoryEntry(): ThreadHistoryEntry? {
         titleImageUrl = thumbnailUrl.orEmpty(),
         boardName = boardName,
         boardUrl = parsed.canonicalBoardUrl,
-        lastVisitedEpochMillis = contentUpdatedAtEpochMillis,
+        lastVisitedEpochMillis = lastVisitedEpochMillis,
         replyCount = replyCount,
         lastReadItemIndex = scrollAnchor.fallbackIndex.coerceAtLeast(0),
         lastReadItemOffset = scrollAnchor.offsetPx.coerceAtLeast(0)
@@ -63,6 +65,7 @@ fun ThreadHistoryEntry.toCompatHistoryEntry(): CompatHistoryEntry? {
         thumbnailUrl = titleImageUrl.takeIf { it.isNotBlank() },
         replyCount = replyCount.coerceAtLeast(0),
         contentUpdatedAtEpochMillis = lastVisitedEpochMillis,
+        lastVisitedEpochMillis = lastVisitedEpochMillis,
         scrollAnchor = ScrollAnchor(
             fallbackIndex = lastReadItemIndex.coerceAtLeast(0),
             offsetPx = lastReadItemOffset.coerceAtLeast(0)
@@ -150,11 +153,8 @@ fun mergeCompatibilityHistory(
         if (current == null) {
             merged[key] = candidate
         } else {
-            // Compatibility contentUpdatedAt is a network/content timestamp,
-            // not a reading timestamp. The two UIs also use different list
-            // layouts, so their numeric positions are not interchangeable.
-            // Merge shared metadata only and keep modern-local visit/read
-            // state intact for an existing entry.
+            // Share explicit visit times, but keep mode-local scroll positions:
+            // the two UIs have different list layouts.
             merged[key] = current.copy(
                 boardId = current.boardId.ifBlank { candidate.boardId },
                 title = candidate.title.ifBlank { current.title },
@@ -162,6 +162,7 @@ fun mergeCompatibilityHistory(
                 boardName = candidate.boardName.ifBlank { current.boardName },
                 boardUrl = candidate.boardUrl.ifBlank { current.boardUrl },
                 replyCount = maxOf(current.replyCount, candidate.replyCount),
+                lastVisitedEpochMillis = maxOf(current.lastVisitedEpochMillis, candidate.lastVisitedEpochMillis),
                 hasAutoSave = current.hasAutoSave || candidate.hasAutoSave,
                 isAutoRefreshDisabled = current.isAutoRefreshDisabled || candidate.isAutoRefreshDisabled,
                 hasSelfPost = current.hasSelfPost || candidate.hasSelfPost,

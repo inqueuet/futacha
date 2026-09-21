@@ -146,17 +146,17 @@ internal fun ThreadTopBar(
                             keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { onSearchSubmit() }),
                             colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
-                                unfocusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
+                                focusedContainerColor = chromeColors.onBar.copy(alpha = 0.12f),
+                                unfocusedContainerColor = chromeColors.onBar.copy(alpha = 0.12f),
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent,
-                                cursorColor = MaterialTheme.colorScheme.onPrimary,
-                                focusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-                                unfocusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-                                focusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
-                                unfocusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
-                                focusedTextColor = MaterialTheme.colorScheme.onPrimary,
-                                unfocusedTextColor = MaterialTheme.colorScheme.onPrimary
+                                cursorColor = chromeColors.onBar,
+                                focusedLeadingIconColor = chromeColors.onBar,
+                                unfocusedLeadingIconColor = chromeColors.onBar,
+                                focusedPlaceholderColor = chromeColors.onBar,
+                                unfocusedPlaceholderColor = chromeColors.onBar,
+                                focusedTextColor = chromeColors.onBar,
+                                unfocusedTextColor = chromeColors.onBar
                             ),
                             trailingIcon = {
                                 IconButton(onClick = {
@@ -176,7 +176,7 @@ internal fun ThreadTopBar(
                         Text(
                             text = "$displayIndex / $totalSearchMatches",
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                            color = chromeColors.onBar
                         )
                         Spacer(modifier = Modifier.weight(1f))
                         IconButton(onClick = {
@@ -226,7 +226,7 @@ internal fun ThreadTopBar(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(0.4f),
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                            color = chromeColors.onBar
                         )
                     }
                 } else {
@@ -241,14 +241,14 @@ internal fun ThreadTopBar(
                             Text(
                                 text = boardName,
                                 style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                                color = chromeColors.onBar
                             )
                             if (statusLabel == null) {
                                 replyCount?.let {
                                     Text(
                                         text = "  /  ${it}レス",
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                                        color = chromeColors.onBar
                                     )
                                 }
                             }
@@ -257,7 +257,7 @@ internal fun ThreadTopBar(
                             Text(
                                 text = it,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                                color = chromeColors.onBar
                             )
                         }
                     }
@@ -423,7 +423,7 @@ internal fun ThreadActionBar(
                     Icon(
                         imageVector = meta.icon,
                         contentDescription = meta.label,
-                        tint = chromeColors.onBar.copy(alpha = 0.84f)
+                        tint = chromeColors.onBar
                     )
                 }
             }

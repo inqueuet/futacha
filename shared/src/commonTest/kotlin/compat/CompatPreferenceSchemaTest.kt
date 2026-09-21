@@ -35,7 +35,7 @@ class CompatPreferenceSchemaTest {
             groups.map { it.first }
         )
         assertEquals(
-            listOf("デザイン", "コントロール", "ストレージ", "バックグラウンド", "ネットワーク", "画像検索"),
+            listOf("デザイン", "コントロール", "ストレージ", "バックグラウンド", "巡回管理", "ネットワーク", "画像検索"),
             groups[0].second.map { it.title }
         )
         assertEquals(
@@ -137,8 +137,8 @@ class CompatPreferenceSchemaTest {
 
         assertTrue(compatibilityReferenceHelpHtml(compatibilityPaletteFor("futaba")).contains("#542d24"))
         assertTrue(compatibilityReferenceHelpHtml(compatibilityPaletteFor("black")).contains("#222222"))
-        assertTrue(compatibilityReferenceHelpHtml(compatibilityPaletteFor("blue")).contains("#03a9f4"))
-        assertTrue(compatibilityReferenceHelpHtml(compatibilityPaletteFor("pink")).contains("#e91e63"))
+        assertTrue(compatibilityReferenceHelpHtml(compatibilityPaletteFor("blue")).contains("#006b96"))
+        assertTrue(compatibilityReferenceHelpHtml(compatibilityPaletteFor("pink")).contains("#ad1457"))
     }
 
     @Test

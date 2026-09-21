@@ -5,19 +5,19 @@ internal fun compatibilityReferenceHelpHtml(palette: CompatibilityPalette): Stri
         androidx.compose.ui.graphics.Color(0xFF222222),
         androidx.compose.ui.graphics.Color.Black -> "#222222"
         androidx.compose.ui.graphics.Color(0xFF542D24) -> "#542d24"
-        androidx.compose.ui.graphics.Color(0xFF03A9F4) -> "#03a9f4"
-        androidx.compose.ui.graphics.Color(0xFFE91E63) -> "#e91e63"
-        else -> "#009688"
+        androidx.compose.ui.graphics.Color(0xFF03A9F4) -> "#006b96"
+        androidx.compose.ui.graphics.Color(0xFFE91E63) -> "#ad1457"
+        else -> "#00695c"
     }
     val html = if (referenceAccent == "#009688") {
         COMPAT_REFERENCE_HELP_HTML
     } else {
         COMPAT_REFERENCE_HELP_HTML.replace("#009688", referenceAccent)
     }
-    return html.replace("<body>", "<body>" + com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection())
+    return html.replace("<body>", "<body>" + watcherHelpHtmlSection() + com.valoser.futacha.shared.ui.media.mediaHelpHtmlSection())
 }
 
-// Exact sample/1.apk assets/help.html with its packaged drawable references inlined.
+// Reference help with current history/patrol guidance and inlined images.
 internal val COMPAT_REFERENCE_HELP_HTML: String = listOf(
     """
 <!DOCTYPE html>
@@ -209,7 +209,7 @@ hr { width: 100%; height: 1px; border: none; background-color: #eeeeee; }
 		<p class="explain">単語にマッチしたスレを表示しません</p>
 
 		<p class="title">巡回検索</p>
-		<p class="explain">バックグラウンドで定期的にスレッドを検索します<br />別アプリ にじろぐ(仮)が行います</p>
+		<p class="explain">アプリ内でカタログのタイトルを検索します。設定の「巡回管理」でキーワードを登録してください。標準機能ににじろぐは不要です。詳しくは上の「履歴・巡回の使い方」を参照してください。</p>
 
 		<p class="title">過去スレ検索</p>
 		<p class="explain">キャッシュサーバーに残っている落ちたスレッドを検索します<br />見そびれた前スレや特定の日時に立てられたスレを探し出せます</p>
@@ -678,13 +678,13 @@ hr { width: 100%; height: 1px; border: none; background-color: #eeeeee; }
 
 		<p class="midashi">履歴</p>
 
-		<p class="title">操作</p>
-		<p class="explain">閲覧中のスレッドと同じです</p>
+		<p class="title">表示順と操作</p>
+		<p class="explain">最後にスレッドを開いた順に表示します。通信完了や自動更新では順序は変わりません。タッチで開き、スワイプで削除できます。</p>
 
 		<p class="midashi">巡回結果</p>
 
 		<p class="title">導入方法</p>
-		<p class="explain">にじろぐ(仮) バージョン1.0.5以上が必要です</p>
+		<p class="explain">標準はアプリ内巡回です。Androidのみ、任意で外部にじろぐの結果表示に切り替えられます。</p>
 
 		<p class="title">操作</p>
 		<p class="explain">閲覧中のスレッドと同じです</p>

@@ -1271,7 +1271,7 @@ class FutachaAppTest {
     }
 
     @Test
-    fun recordFutachaVisitedThread_recordsAndSkipsUsingHistoryPolicy() = runBlocking {
+    fun recordFutachaVisitedThread_recordsShortRevisitsAndPreservesScroll() = runBlocking {
         val store = AppStateStore(FakePlatformStateStorage())
         val board = board(id = "img-b", name = "img", url = "https://may.2chan.net/img/futaba.php")
         val context = FutachaThreadHistoryContext(
@@ -1292,7 +1292,7 @@ class FutachaAppTest {
         )
         store.setHistory(listOf(existing))
 
-        assertFalse(
+        assertTrue(
             recordFutachaVisitedThread(
                 stateStore = store,
                 history = store.history.first(),
@@ -1302,7 +1302,8 @@ class FutachaAppTest {
                 currentTimeMillis = 120_000L
             )
         )
-        assertEquals(existing, store.history.first().first())
+        assertEquals(120_000L, store.history.first().first().lastVisitedEpochMillis)
+        assertEquals(existing.lastReadItemIndex, store.history.first().first().lastReadItemIndex)
 
         assertTrue(
             recordFutachaVisitedThread(
@@ -1617,7 +1618,7 @@ class FutachaAppTest {
                 boardUrl = "https://may.2chan.net/img/res/123.htm"
             )
         )
-        assertTrue(
+        assertFalse(
             shouldSkipFutachaVisitedHistoryUpdate(
                 existingEntry = existing,
                 boardId = "img-b",

@@ -132,6 +132,7 @@ class CompatWatcherRepositoryTest {
         } as BoardRepository
         val result = refreshCompatTabsInBackground(f.store, repository, 100, checkUpdates = false, checkExistence = false, checkWatchWords = true)
         assertEquals(1, result.newWatchMatches.size)
+        assertTrue(f.history.value.isEmpty(), "巡回で閲覧履歴を作らない")
         val entries = r.load(100).associateBy { it.history.threadNo }
         assertTrue(entries.getValue("1").active)
         assertFalse(entries.getValue("2").active)

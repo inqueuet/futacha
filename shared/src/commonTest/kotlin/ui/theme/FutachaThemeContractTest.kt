@@ -39,6 +39,43 @@ class FutachaThemeContractTest {
         }
     }
 
+    @Test
+    fun everyPaletteForbidsLowContrastUiTextOnAppAndThreadSurfaces() {
+        ThemePalette.entries.forEach { palette ->
+            listOf(false, true).forEach { dark ->
+                val base = resolveFutachaColorScheme(dark, palette)
+                listOf(base, resolveFutabaThreadColorScheme(palette, base)).forEach { colors ->
+                    val surfaces = listOf(colors.background, colors.surface, colors.surfaceVariant,
+                        colors.surfaceContainerLow, colors.surfaceContainer, colors.surfaceContainerHigh,
+                        colors.surfaceContainerHighest)
+                    for ((role, text) in mapOf("action" to colors.primary, "body" to colors.onSurface,
+                        "supporting" to colors.onSurfaceVariant)) {
+                        assertEquals(1f, text.alpha, "$palette dark=$dark $role must be opaque")
+                        surfaces.forEach { background ->
+                            assertTrue(contrastRatio(text, background) >= 4.5f,
+                                "$palette dark=$dark $role: ${contrastRatio(text, background)} on $background")
+                        }
+                    }
+                    listOf(colors.primary to colors.onPrimary,
+                        colors.primaryContainer to colors.onPrimaryContainer,
+                        colors.secondary to colors.onSecondary,
+                        colors.secondaryContainer to colors.onSecondaryContainer,
+                        colors.tertiary to colors.onTertiary,
+                        colors.tertiaryContainer to colors.onTertiaryContainer,
+                        colors.error to colors.onError,
+                        colors.errorContainer to colors.onErrorContainer,
+                        colors.inverseSurface to colors.inversePrimary).forEach { (background, text) ->
+                        assertTrue(contrastRatio(text, background) >= 4.5f,
+                            "$palette dark=$dark filled control: ${contrastRatio(text, background)}")
+                    }
+                }
+                val chrome = resolveFutachaChromeColors(base, dark, palette)
+                assertTrue(contrastRatio(chrome.onBar, chrome.topBar) >= 4.5f,
+                    "$palette dark=$dark toolbar text")
+            }
+        }
+    }
+
     private fun contrastRatio(foreground: Color, background: Color): Float {
         val lighter = maxOf(foreground.luminance(), background.luminance())
         val darker = minOf(foreground.luminance(), background.luminance())

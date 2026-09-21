@@ -48,24 +48,10 @@ internal fun applyHistoryScrollUpdate(
     postId: String?,
     nowMillis: Long
 ): ThreadHistoryEntry {
-    val shouldUpdateVisitedAt =
-        entry.lastReadItemIndex != index ||
-            absoluteIntDistance(entry.lastReadItemOffset, offset) >= HISTORY_SCROLL_OFFSET_WRITE_THRESHOLD_PX.toLong() ||
-            hasEpochIntervalElapsed(
-                nowMillis,
-                entry.lastVisitedEpochMillis,
-                HISTORY_SCROLL_VISITED_UPDATE_INTERVAL_MS
-            )
-
     return entry.copy(
         lastReadItemIndex = index,
         lastReadItemOffset = offset,
-        lastReadPostId = postId,
-        lastVisitedEpochMillis = if (shouldUpdateVisitedAt) {
-            nowMillis
-        } else {
-            entry.lastVisitedEpochMillis
-        }
+        lastReadPostId = postId
     )
 }
 

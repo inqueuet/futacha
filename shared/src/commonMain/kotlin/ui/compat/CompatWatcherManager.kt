@@ -21,7 +21,8 @@ internal fun CompatWatcherManager(
     repository: BoardRepository?,
     onDismiss: () -> Unit,
     onResultsChanged: () -> Unit,
-    onOpenExternal: (() -> Result<Unit>)? = null
+    onOpenExternal: (() -> Result<Unit>)? = null,
+    onOpenHelp: (() -> Unit)? = null
 ) {
     val preferences by store.preferences.collectAsState(emptyMap())
     val boards by store.boards.collectAsState(emptyList())
@@ -59,7 +60,10 @@ internal fun CompatWatcherManager(
         title = { Text("巡回管理") },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-                Text("カタログのタイトルを監視します。結果は閲覧履歴と別に保存されます。自動巡回の実行時刻はOSに依存します。")
+                Text("キーワードを含むカタログのタイトルを探します。結果はドロワーの「巡回」に保存され、開いたスレッドだけが閲覧履歴に入ります。")
+                Text("標準はアプリ内巡回です。にじろぐのインストールや起動は不要です。自動巡回は画面を閉じてもOSの判断で実行されますが、省電力・強制停止などで遅延・停止します。")
+                onOpenHelp?.let { openHelp -> TextButton(onClick = openHelp) { Text("履歴・巡回のヘルプ") } }
+                Text("1. キーワードと板を選んで追加　2. 今すぐ巡回　3. ドロワーの巡回で結果を確認")
                 Row {
                     Checkbox(preferences[COMPAT_WATCH_ENABLED_KEY] != "OFF", enabled = !busy,
                         onCheckedChange = { runAction { store.savePreference(COMPAT_WATCH_ENABLED_KEY, if (it) "ON" else "OFF") } })
@@ -136,8 +140,9 @@ internal fun CompatWatcherManager(
                         Checkbox(preferences[COMPAT_WATCH_EXTERNAL_KEY] == "ON", enabled = !busy, onCheckedChange = {
                             runAction { store.savePreference(COMPAT_WATCH_EXTERNAL_KEY, if (it) "ON" else "OFF"); onResultsChanged() }
                         })
-                        Text("外部にじろぐの結果を表示")
+                        Text("外部にじろぐの結果を表示（Android）")
                     }
+                    Text("この画面の設定と「今すぐ巡回」はアプリ内巡回用です。外部の巡回は、にじろぐ側で設定・開始してください。")
                     TextButton(onClick = { onOpenExternal().onFailure { message = it.message } }) { Text("外部にじろぐを開く") }
                 }
                 message?.let { Text(it) }

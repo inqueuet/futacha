@@ -166,7 +166,9 @@ internal fun ProvideFutachaSharedFeatures(
             content()
             if (closedBatch != null || notification != null) Snackbar(
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(8.dp),
-                action = { if (closedBatch != null) TextButton(onClick = {
+                action = { if (closedBatch != null) TextButton(
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.inversePrimary),
+                    onClick = {
                     val batch = closedBatch ?: return@TextButton
                     scope.launch {
                         try { store.restoreClosedTabs(batch); closedBatch = null }
@@ -178,14 +180,24 @@ internal fun ProvideFutachaSharedFeatures(
         }
         settingsPaths.lastOrNull()?.let { path ->
             val close = { settingsPaths = settingsPaths.dropLast(1) }
-            Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            if (path == "watcher") {
+                val watcher = rememberCompatExternalWatcher(store)
+                CompatWatcherManager(store, activeRepository, onDismiss = close, onResultsChanged = {},
+                    onOpenExternal = if (com.valoser.futacha.shared.util.isAndroid()) watcher::openManager else null,
+                    onOpenHelp = { settingsPaths = settingsPaths + "help" })
+            } else Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
                     com.valoser.futacha.shared.ui.util.PlatformBackHandler(onBack = close)
-                    CompatSettingsScreen(
+                    if (path == "help") CompatHelpScreen(onBack = close,
+                        onOpenChangeLog = { settingsPaths = settingsPaths + "changelog" })
+                    else if (path == "changelog") CompatChangeLogScreen(appVersion = appVersion, store = store,
+                        onOpenHelp = { settingsPaths = settingsPaths + "help" }, onBack = close)
+                    else CompatSettingsScreen(
                         path = path, store = store, preferences = preferences,
                         fileSystem = fileSystem, httpClient = httpClient,
                         cookieRepository = cookieRepository, appVersion = appVersion,
                         modernPresentation = true,
+                        onOpenHelp = { settingsPaths = settingsPaths + "help" },
                         onNavigate = { settingsPaths = settingsPaths + it }, onBack = close
                     )
                 }

@@ -89,6 +89,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -236,6 +237,7 @@ import com.valoser.futacha.shared.compat.truncateCompatCatalogSourceTitle
 import com.valoser.futacha.shared.compat.CompatCatalogSort
 import com.valoser.futacha.shared.compat.CanonicalThreadUrl
 import com.valoser.futacha.shared.compat.ClosedTabBatch
+import com.valoser.futacha.shared.compat.toVisitedHistoryEntry
 import com.valoser.futacha.shared.compat.CompatHistoryEntry
 import com.valoser.futacha.shared.compat.CompatExtractionKind
 import com.valoser.futacha.shared.compat.CompatNgExtractionAction
@@ -1302,7 +1304,6 @@ private fun CompatibilityAppContent(
                                 ).forEach { match ->
                                     persistStoreSafely("foreground watch history refresh") {
                                         CompatWatcherRepository(store).record(match)
-                                        store.upsertHistory(match.history)
                                     }
                                 }
                             }
@@ -1327,7 +1328,6 @@ private fun CompatibilityAppContent(
                                     ).forEach { match ->
                                         persistStoreSafely("foreground watch history refresh") {
                                             CompatWatcherRepository(store).record(match)
-                                            store.upsertHistory(match.history)
                                         }
                                     }
                                 }
@@ -1596,7 +1596,11 @@ private fun CompatibilityAppContent(
             store = store, repository = repository,
             onDismiss = { watcherManagerOpen = false; refreshExternalWatcher() },
             onResultsChanged = ::refreshExternalWatcher,
-            onOpenExternal = if (isAndroid()) ({ externalWatcher.openManager() }) else null
+            onOpenExternal = if (isAndroid()) ({ externalWatcher.openManager() }) else null,
+            onOpenHelp = {
+                watcherManagerOpen = false
+                dispatch(CompatibilityEvent.OpenHost(CompatHost.Help(state.host)))
+            }
         )
     }
 
@@ -2598,7 +2602,7 @@ private fun CompatibilityAppContent(
                         state = state.copy(tabs = previousTabs.prependCompatTab(durableTab))
                         scope.launch {
                             try {
-                                store.openTab(durableTab, entry)
+                                store.openTab(durableTab, entry.takeIf { navigate })
                                 if (navigate) {
                                     dispatch(CompatibilityEvent.OpenThread(tab.key, CompatThreadOrigin.CATALOG))
                                 }
@@ -2630,7 +2634,7 @@ private fun CompatibilityAppContent(
                                             }
                                         )
                                         store.updateTab(repairedTab)
-                                        store.upsertHistory(entry.copy(title = resolvedTitle))
+                                        if (navigate) store.upsertHistory(entry.copy(title = resolvedTitle))
                                     }
                                 }
                             } catch (cancelled: CancellationException) {
@@ -2741,6 +2745,14 @@ private fun CompatibilityAppContent(
             }
             is CompatHost.ThreadWorkspace -> {
                 val tab = state.tabs.firstOrNull { it.key == state.activeTabKey }
+                LaunchedEffect(tab?.key) {
+                    tab?.let { visibleTab ->
+                        val visit = visibleTab.toVisitedHistoryEntry(Clock.System.now().toEpochMilliseconds())
+                        persistStoreSafely("history visit") {
+                            store.recordHistoryVisit(visit)
+                        }
+                    }
+                }
                 if (tab == null) {
                     LaunchedEffect(state.activeTabKey) { dispatch(CompatibilityEvent.OpenHost(CompatHost.Main)) }
                 } else if (toolbarItemsBySurface.isEmpty()) {
@@ -3360,7 +3372,10 @@ private fun CompatibilityAppContent(
                 onOpenLicense = {
                     dispatch(CompatibilityEvent.OpenHost(CompatHost.License(host)))
                 },
-                onNavigate = { path -> dispatch(CompatibilityEvent.OpenHost(host.copy(path = path))) },
+                onNavigate = { path ->
+                    if (path == "watcher") watcherManagerOpen = true
+                    else dispatch(CompatibilityEvent.OpenHost(host.copy(path = path)))
+                },
                 onBack = { dispatch(CompatibilityEvent.Back) },
                 initialScrollPosition = settingsRootScrollPosition[0].takeIf { host.path == "root" },
                 onScrollPositionChanged = { position ->
@@ -4602,7 +4617,6 @@ private fun CompatCatalogScreen(
                 watchMatches.forEach { match ->
                     launchCatalogStoreSafely("watch history persistence", "監視履歴の保存に失敗しました") {
                         CompatWatcherRepository(store).record(match)
-                        store.upsertHistory(match.history)
                     }
                 }
                 val activeDroppedThreadIds = previousSnapshot?.takeIf { catalogDroppedTrackingEnabled }?.let { previous ->
@@ -9584,7 +9598,7 @@ private fun CompatCatalogGridItem(
                             "+${indicator.count}",
                             color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) {
                                 Color.Red
-                            } else Color.Gray,
+                            } else palette.uiSecondaryText,
                             fontSize = 12.sp
                         )
                     }
@@ -9643,7 +9657,7 @@ private fun CompatCatalogGridItem(
                 replyIndicator?.let { indicator ->
                     Text(
                         "+${indicator.count}",
-                        color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) Color.Red else Color.Gray,
+                        color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) Color.Red else palette.uiSecondaryText,
                         fontSize = 12.sp
                     )
                 }
@@ -9779,7 +9793,7 @@ private fun CompatCatalogListItem(
                     "+${indicator.count}",
                     color = if (indicator.kind == CompatCatalogReplyIndicatorKind.UNREAD) {
                         Color.Red
-                    } else Color.Gray,
+                    } else palette.uiSecondaryText,
                     fontSize = fontSize.sp
                 )
             }
@@ -10000,7 +10014,7 @@ private fun CompatThreadPagerNeighborPreview(
     Column(modifier = modifier.background(palette.background)) {
         if (snapshot == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("読み込み中…", color = palette.text.copy(alpha = 0.72f))
+                Text("読み込み中…", color = palette.uiPrimaryText)
             }
         } else {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -10587,8 +10601,8 @@ internal fun CompatNgRuleManagementDialog(
                                         unfocusedContainerColor = Color.Transparent,
                                         focusedTextColor = Color.White,
                                         unfocusedTextColor = Color.White,
-                                        focusedPlaceholderColor = Color.White.copy(alpha = 0.72f),
-                                        unfocusedPlaceholderColor = Color.White.copy(alpha = 0.72f),
+                                        focusedPlaceholderColor = Color.White,
+                                        unfocusedPlaceholderColor = Color.White,
                                         focusedIndicatorColor = Color.Transparent,
                                         unfocusedIndicatorColor = Color.Transparent
                                     )
@@ -12418,7 +12432,7 @@ private fun CompatPostSelectionDialog(
                                 Text(item.value, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             } else {
                                 Column {
-                                    Text(item.label, fontSize = 11.sp, color = Color.Gray)
+                                    Text(item.label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text(item.value, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
                             }
@@ -12755,7 +12769,7 @@ private fun CompatHistoryMetadataRow(
         Column(Modifier.weight(1f)) {
             Text(entry.title.lineSequence().firstOrNull().orEmpty(), maxLines = 1, fontSize = 16.sp, color = palette.text)
             Text(
-                compatDrawerThreadSubtitle(entry.contentUpdatedAtEpochMillis, entry.boardName),
+                compatDrawerThreadSubtitle(entry.lastVisitedEpochMillis, entry.boardName),
                 maxLines = 1,
                 fontSize = 12.sp,
                 color = palette.uiSecondaryText
@@ -12838,6 +12852,8 @@ private fun CompatNavigationDrawer(
                     HorizontalDivider()
                     if (page == CompatDrawerPage.WATCHER) {
                         TextButton(onClick = onOpenExternalWatcherManager, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Filled.Settings, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
                             Text("巡回管理")
                         }
                     }
@@ -12880,7 +12896,7 @@ private fun CompatNavigationDrawer(
                                         Text(
                                             externalWatcherSnapshot.message,
                                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            color = Color.Gray,
+                                            color = LocalCompatibilityPalette.current.uiSecondaryText,
                                             fontSize = 12.sp
                                         )
                                     }

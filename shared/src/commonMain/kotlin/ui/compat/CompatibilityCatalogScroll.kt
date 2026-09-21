@@ -508,7 +508,7 @@ internal fun CompatBidirectionalPullRefresh(
                 }
                 Text(
                     text = label,
-                    color = Color.DarkGray,
+                    color = LocalCompatibilityPalette.current.uiPrimaryText,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )

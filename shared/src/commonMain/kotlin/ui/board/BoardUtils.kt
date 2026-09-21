@@ -74,7 +74,6 @@ internal fun buildHistoryEntryFromPageAt(
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
         replyCount = page.resolveHistoryReplyCount(existingEntry.replyCount),
-        lastVisitedEpochMillis = timestampMillis,
         lastConfirmedAliveEpochMillis = if (confirmAlive) {
             timestampMillis
         } else {
@@ -88,7 +87,9 @@ internal fun buildHistoryEntryFromPageAt(
         titleImageUrl = resolvedImageUrl,
         boardName = board.name,
         boardUrl = resolvedBoardUrl,
-        lastVisitedEpochMillis = timestampMillis,
+        // This is a response timestamp. The destination records the actual visit
+        // separately; a load may still hold the history snapshot from before it.
+        lastVisitedEpochMillis = 0L,
         lastConfirmedAliveEpochMillis = timestampMillis.takeIf { confirmAlive },
         replyCount = page.resolveHistoryReplyCount()
     )

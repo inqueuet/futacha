@@ -123,7 +123,6 @@ suspend fun refreshCompatTabsInBackground(
                             var isNewResult = false
                             if (commitGate {
                                 isNewResult = watcher.record(match)
-                                store.upsertHistory(match.history)
                             } && isNewResult) {
                                 newWatchMatches += match
                             }

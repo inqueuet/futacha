@@ -107,7 +107,7 @@ class HistoryScrollSupportTest {
     }
 
     @Test
-    fun applyHistoryScrollUpdate_updatesVisitedTimeOnlyWhenNeeded() {
+    fun applyHistoryScrollUpdate_preservesVisitTimeWhenSavingPosition() {
         val existing = historyEntry(
             lastVisitedEpochMillis = 10_000L,
             lastReadItemIndex = 5,
@@ -130,7 +130,7 @@ class HistoryScrollSupportTest {
             postId = "106",
             nowMillis = 20_000L
         )
-        assertEquals(20_000L, visitedUpdate.lastVisitedEpochMillis)
+        assertEquals(10_000L, visitedUpdate.lastVisitedEpochMillis)
     }
 
     @Test

@@ -62,7 +62,7 @@ class BoardUtilsTest {
         assertEquals("body", updated.title)
         assertEquals("https://example.com/existing.jpg", updated.titleImageUrl)
         assertEquals("二次元裏", updated.boardName)
-        assertEquals(999L, updated.lastVisitedEpochMillis)
+        assertEquals(1L, updated.lastVisitedEpochMillis)
         assertEquals(999L, updated.lastConfirmedAliveEpochMillis)
         assertEquals(false, updated.isAutoRefreshDisabled)
         assertEquals(1, updated.replyCount)
@@ -122,8 +122,14 @@ class BoardUtilsTest {
         assertEquals("body", created.title)
         assertEquals("https://example.com/thumb.jpg", created.titleImageUrl)
         assertEquals("https://dec.2chan.net/50/res/555.htm", created.boardUrl)
-        assertEquals(1234L, created.lastVisitedEpochMillis)
+        assertEquals(0L, created.lastVisitedEpochMillis)
         assertEquals(1234L, created.lastConfirmedAliveEpochMillis)
+        // The load began with an empty history snapshot; a visit was persisted
+        // while the request was in flight. Its completion must not move it.
+        val visited = created.copy(lastVisitedEpochMillis = 1_000L, lastReadItemIndex = 7)
+        val merged = com.valoser.futacha.shared.state.mergeAppStateHistoryEntry(visited, created)
+        assertEquals(1_000L, merged.lastVisitedEpochMillis)
+        assertEquals(7, merged.lastReadItemIndex)
     }
 
     @Test

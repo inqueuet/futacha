@@ -1,6 +1,7 @@
 package compat
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import com.valoser.futacha.shared.compat.CompatPostSnapshot
 import com.valoser.futacha.shared.ui.compat.compatPostQuotesOwnPost
 import com.valoser.futacha.shared.ui.compat.compatibilityPaletteFor
@@ -15,8 +16,27 @@ import com.valoser.futacha.shared.ui.compat.statusBarColor
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CompatibilityThemeTest {
+    @Test
+    fun settingsAndDialogTextRemainOpaqueAndReadableWithEveryLegacyTextPreference() {
+        listOf(null, "モノクロ", "ふたば", "ブルー", "ピンク", "ブラック").forEach { theme ->
+            listOf(null, "白", "薄い灰", "濃い灰", "黒").forEach { preference ->
+                val palette = compatibilityPaletteFor(theme, preference)
+                listOf(palette.uiPrimaryText, palette.uiSecondaryText,
+                    compatibilitySettingsCategoryColor(palette)).forEach { text ->
+                    assertEquals(1f, text.alpha)
+                    listOf(palette.background, palette.menuSurface, palette.dialogSurface).forEach { background ->
+                        val contrast = (maxOf(text.luminance(), background.luminance()) + 0.05f) /
+                            (minOf(text.luminance(), background.luminance()) + 0.05f)
+                        assertTrue(contrast >= 4.5f, "$theme / $preference UI text contrast: $contrast")
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     fun selfPostAndSelfQuoteClassificationMatchesReferenceHeaderPositions() {
         val own = setOf("123")
@@ -82,7 +102,7 @@ class CompatibilityThemeTest {
         )
         assertEquals(Color(0xFF424242), black.dialogSurface)
         assertEquals(Color.White, light.dialogSurface)
-        assertEquals(Color.White, compatibilitySettingsCategoryColor(black))
+        assertEquals(black.uiPrimaryText, compatibilitySettingsCategoryColor(black))
     }
 
     @Test

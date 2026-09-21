@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lock
@@ -336,6 +337,7 @@ internal fun SharedSettingsLink(path: String, title: String, description: String
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = { Text(description) },
+        leadingContent = if (path == "watcher") ({ Icon(Icons.Rounded.Settings, contentDescription = null) }) else null,
         modifier = Modifier.fillMaxWidth().clickable { features.openSettings(path) }
     )
 }
@@ -666,7 +668,8 @@ internal fun GlobalSettingsBackgroundSection(
         description = "自動更新、通信量、匿名の品質改善データに関わる動作をまとめています。"
     ) {
         SharedSettingsLink("network", "ネットワーク", "キャッシュサーバー・画像の同時取得")
-        SharedSettingsLink("background", "タブの自動確認", "生存確認・更新確認・巡回の通信条件")
+        SharedSettingsLink("background", "タブの自動確認", "生存確認・更新確認の通信条件")
+        SharedSettingsLink("watcher", "巡回管理", "キーワード・自動巡回・通知・にじろぐ連携")
         ListItem(
             headlineContent = { Text("アップデート確認") },
             supportingContent = {

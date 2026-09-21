@@ -47,6 +47,8 @@ interface CompatibilityStore {
     suspend fun loadPendingClosedTabs(nowEpochMillis: Long): ClosedTabBatch?
 
     suspend fun upsertHistory(entry: CompatHistoryEntry)
+    /** Called on thread activation, before any network request completes. */
+    suspend fun recordHistoryVisit(entry: CompatHistoryEntry)
     suspend fun deleteHistory(canonicalUrl: String)
     suspend fun clearHistory()
 

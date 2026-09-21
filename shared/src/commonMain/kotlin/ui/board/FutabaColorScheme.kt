@@ -75,15 +75,17 @@ internal fun resolveFutabaThreadColorScheme(
         base
     } else {
         base.copy(
-            primary = FutabaSurface,
-            onPrimary = FutabaText,
+            // TextButton, selected labels and focused fields inherit primary.
+            // Never put the pale thread background in a foreground role.
+            primary = FutabaText,
+            onPrimary = FutabaBackground,
             primaryContainer = FutabaLabelSurface,
             onPrimaryContainer = FutabaText,
-            inversePrimary = FutabaAccentRed,
+            inversePrimary = base.inversePrimary,
             secondary = FutabaNameGreen,
             onSecondary = FutabaBackground,
             secondaryContainer = FutabaSurface,
-            onSecondaryContainer = FutabaNameGreen,
+            onSecondaryContainer = base.onSecondaryContainer,
             tertiary = FutabaAccentRed,
             onTertiary = FutabaBackground,
             tertiaryContainer = FutabaSurfaceVariant,

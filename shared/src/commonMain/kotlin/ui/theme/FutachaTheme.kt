@@ -26,7 +26,7 @@ import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.model.ThemePalette
 
 private val CurrentLightColors = lightColorScheme(
-    primary = Color(0xFF008D63),
+    primary = Color(0xFF006C4B),
     onPrimary = Color.White,
     primaryContainer = Color(0xFFE0F2E7),
     onPrimaryContainer = Color(0xFF004229),
@@ -138,8 +138,10 @@ private val FutabaBlackLightColors = lightColorScheme(
 )
 
 private val FutabaBlackDarkColors = darkColorScheme(
-    primary = Color(0xFF050505),
-    onPrimary = Color(0xFFF4EFE6),
+    // Material uses primary as text on surfaces as well as a button fill.
+    // Black toolbar backgrounds belong to FutachaChromeColors, not this role.
+    primary = Color(0xFFF4EFE6),
+    onPrimary = Color(0xFF211816),
     primaryContainer = Color(0xFF202020),
     onPrimaryContainer = Color(0xFFF4EFE6),
     secondary = Color(0xFF70D49B),

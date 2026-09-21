@@ -55,7 +55,7 @@ internal fun AiPostModerationProgressCard(
                             hiddenPostCount = hiddenPostCount
                         ),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
             }
@@ -128,7 +128,7 @@ internal fun AiHiddenPostsSummaryCard(
                 Text(
                     text = "必要なレスは個別に表示できます。",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f)
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
                 )
             }
             OutlinedButton(onClick = {

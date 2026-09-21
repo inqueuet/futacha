@@ -9,6 +9,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import coil3.ImageLoader
@@ -136,12 +141,79 @@ class FutachaSharedFeaturesInstrumentedTest {
         assertTheme()
     }
 
+    @Test fun historyTabsWatcherAndDialogActionsUseReadableTextInLightAndBlackDarkThemes() {
+        openThread()
+        for ((palette, mode) in listOf(ThemePalette.FutabaClassic to ThemeMode.Light,
+            ThemePalette.FutabaBlack to ThemeMode.Dark)) {
+            rule.runOnIdle { themePalette = palette; themeMode = mode }
+            val colors = resolveFutabaThreadColorScheme(palette,
+                resolveFutachaColorScheme(mode == ThemeMode.Dark, palette))
+            rule.onNodeWithContentDescription("履歴を開く").performClick()
+            assertReadableText("タブ一覧", colors.background)
+            assertReadableText("巡回", colors.background)
+            saveScreenshot("readable-history-$palette.png")
+            rule.onNodeWithText("タブ一覧").performClick()
+            rule.onNodeWithText("タブ一覧 (1)").assertIsDisplayed()
+            assertReadableText("整理", colors.surface)
+            assertReadableText("閉じる", colors.surfaceContainerHigh)
+            saveScreenshot("readable-tabs-$palette.png")
+            rule.onNodeWithText("閉じる").performClick()
+            rule.onNodeWithText("巡回").performClick()
+            assertReadableText("巡回管理", colors.surfaceContainerHigh)
+            assertReadableText("保存済み結果を再読込", colors.surfaceContainerHigh)
+            rule.onNodeWithText("巡回管理").performClick()
+            rule.onNodeWithText("キーワード").performScrollTo()
+            assertReadableText("キーワード", colors.surfaceVariant)
+            rule.onNodeWithText("端末の通知を許可").performScrollTo()
+            assertReadableText("端末の通知を許可", colors.surfaceContainerHigh)
+            saveScreenshot("readable-watcher-$palette.png")
+            androidx.test.espresso.Espresso.pressBack()
+            androidx.test.espresso.Espresso.pressBack()
+            androidx.test.espresso.Espresso.pressBack()
+        }
+    }
+
+    private fun assertReadableText(label: String, background: Color) {
+        val node = rule.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode()
+        val layouts = mutableListOf<TextLayoutResult>()
+        rule.runOnIdle { node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts) }
+        assertTrue("Missing text layout: $label", layouts.isNotEmpty())
+        layouts.forEach { layout ->
+            val foreground = layout.layoutInput.style.color
+            assertEquals("Translucent text: $label", 1f, foreground.alpha)
+            val luminance = foreground.compositeOver(background).luminance()
+            val contrast = (maxOf(luminance, background.luminance()) + 0.05f) /
+                (minOf(luminance, background.luminance()) + 0.05f)
+            assertTrue("Low contrast: $label ($contrast)", contrast >= 4.5f)
+        }
+    }
+
     private fun saveScreenshot(name: String) {
         val screenshot = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         java.io.File(rule.activity.filesDir, name).outputStream().use {
             screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
         }
         screenshot.recycle()
+    }
+
+    @Test fun watcherSettingsAndSearchableHelpOpenFromFutachaSettings() {
+        openThread()
+        rule.onNodeWithText("共通設定を開く").performClick()
+        rule.onAllNodes(hasScrollToIndexAction()).onLast().performScrollToNode(hasText("バックグラウンド・通信"))
+        rule.onNodeWithText("バックグラウンド・通信").performClick()
+        rule.onNodeWithText("巡回管理").performScrollTo().performClick()
+        rule.onNodeWithText("履歴・巡回のヘルプ").performScrollTo().performClick()
+        rule.onNodeWithTag("help-search-field").performTextInput("にじろぐ")
+        rule.onNodeWithTag("help-search-results").assertIsDisplayed()
+        rule.onNodeWithText("標準のアプリ内巡回に、にじろぐのインストールや起動は不要です。", substring = true).performScrollTo().assertIsDisplayed()
+        saveScreenshot("v11.4-help-search.png")
+        rule.onNodeWithTag("help-search-field").performTextReplacement("no-such-help-word-114")
+        rule.onNodeWithText("一致する項目がありません").assertIsDisplayed()
+        rule.onNodeWithText("クリア").performClick()
+        rule.onNodeWithTag("compat-help-content").assertIsDisplayed()
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        rule.onAllNodesWithContentDescription("戻る").onLast().performClick()
+        rule.onNodeWithText("履歴・巡回のヘルプ").assertExists()
     }
 
     @Test fun commonSettingUpdatesTheSameStoredValueWhileFutachaRemainsOpen() {

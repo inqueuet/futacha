@@ -26,6 +26,35 @@ import kotlin.test.assertTrue
 
 class IosExperienceProfileStoreTest {
     @Test
+    fun historyVisitsSurviveLateRefreshQuickRevisitAndReopen() = runBlocking {
+        val fs = createFileSystem()
+        fs.deleteRecursively("compatibility").getOrThrow()
+        try {
+            val store = IosCompatibilityStore(fs)
+            store.initialize()
+            store.upsertBoard(CompatBoard("may-b", "虹裏", "https://may.2chan.net/b/", "https://may.2chan.net/b/", 0))
+            fun entry(id: String, time: Long) = CompatHistoryEntry(
+                "https://may.2chan.net/b/res/$id.htm", "https://may.2chan.net/b/res/$id.htm",
+                "may-b", "虹裏", id, id, contentUpdatedAtEpochMillis = time)
+            val a = entry("1", 100)
+            val b = entry("2", 200)
+            store.recordHistoryVisit(a)
+            store.recordHistoryVisit(b)
+            store.upsertHistory(a.copy(contentUpdatedAtEpochMillis = 300, replyCount = 42))
+            assertEquals(listOf("2", "1"), store.history.first().map { it.threadNo })
+            store.recordHistoryVisit(a.copy(lastVisitedEpochMillis = 201))
+            store.upsertHistory(b.copy(contentUpdatedAtEpochMillis = 400))
+            val reopened = IosCompatibilityStore(fs)
+            reopened.initialize()
+            assertEquals(listOf("1", "2"), reopened.history.first().map { it.threadNo })
+            assertEquals(listOf(201L, 200L), reopened.history.first().map { it.lastVisitedEpochMillis })
+            reopened.deleteHistory(a.canonicalUrl)
+            reopened.upsertHistory(a.copy(contentUpdatedAtEpochMillis = 500))
+            assertEquals(listOf("2"), reopened.history.first().map { it.threadNo })
+        } finally { fs.deleteRecursively("compatibility").getOrThrow() }
+    }
+
+    @Test
     fun oversizedUnlimitedCacheEvictsOldBodiesAndPreservesUserDataAcrossReopen() = runBlocking {
         val fileSystem = createFileSystem()
         fileSystem.deleteRecursively("compatibility").getOrThrow()

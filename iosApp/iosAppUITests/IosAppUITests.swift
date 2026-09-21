@@ -215,7 +215,7 @@ final class IosAppUITests: XCTestCase {
         try verifyFutachaHistoryAndMediaHelp(black: true)
     }
 
-    private func verifyFutachaHistoryAndMediaHelp(black: Bool) throws {
+    private func openFutachaHistoryForInspection(black: Bool) throws -> XCUIApplication {
         let app = makeApplication()
         let boards = [["id": "t", "name": "チュートリアル＠ふたちゃ", "category": "チュートリアル",
             "url": "https://www.example.com/t/futaba.php", "description": "チュートリアル"]]
@@ -247,6 +247,39 @@ final class IosAppUITests: XCTestCase {
         screenshot.name = black ? "futacha-history-black-large-text" : "futacha-history-large-text"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+        return app
+    }
+
+    func testFutachaHistoryTabsAndWatcherKeepReadableColors() throws {
+        for black in [false, true] {
+            let app = try openFutachaHistoryForInspection(black: black)
+            let tabs = app.buttons["タブ一覧"].firstMatch
+            let watcher = app.buttons["巡回"].firstMatch
+            XCTAssertTrue(tabs.isHittable)
+            XCTAssertTrue(watcher.isHittable)
+            tabs.tap()
+            let close = app.buttons["閉じる"].firstMatch
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            let tabsScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            tabsScreenshot.name = black ? "readable-tabs-black" : "readable-tabs-classic"
+            tabsScreenshot.lifetime = .keepAlways
+            add(tabsScreenshot)
+            close.tap()
+            watcher.tap()
+            let manage = app.buttons["巡回管理"].firstMatch
+            XCTAssertTrue(manage.waitForExistence(timeout: 5))
+            XCTAssertTrue(manage.isHittable)
+            let watcherScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            watcherScreenshot.name = black ? "readable-watcher-black" : "readable-watcher-classic"
+            watcherScreenshot.lifetime = .keepAlways
+            add(watcherScreenshot)
+            close.tap()
+            app.terminate()
+        }
+    }
+
+    private func verifyFutachaHistoryAndMediaHelp(black: Bool) throws {
+        let app = try openFutachaHistoryForInspection(black: black)
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "設定")).firstMatch.tap()
         func reveal(_ target: XCUIElement) {
             let window = app.windows.firstMatch.frame
@@ -3524,6 +3557,58 @@ final class IosAppUITests: XCTestCase {
             app.staticTexts["チュートリアル＠ふたちゃ"].waitForExistence(timeout: 10),
             "Returning from saved threads did not restore the board list."
         )
+    }
+
+    func testBothModesOpenPatrolSettingsAndSearchHelp() throws {
+        for compat in [false, true] {
+            let app = makeApplication()
+            app.launchArguments += ["-experience.active_profile", compat ? "toshiaki_compat" : "futacha",
+                                    "-experience.profile_generation", "1140"]
+            app.launch()
+            if compat {
+                XCTAssertTrue(compatibilityBoardListAfterUnwinding(in: app).waitForExistence(timeout: 15))
+                app.buttons["その他"].firstMatch.tap()
+            } else {
+                XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 20))
+                app.buttons["メニュー"].tap()
+            }
+            let settings = app.staticTexts["設定"].firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 10))
+            settings.tap()
+            func reveal(_ text: String) -> XCUIElement {
+                let target = app.staticTexts[text].firstMatch
+                for _ in 0..<18 {
+                    if target.exists && target.isHittable { return target }
+                    let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+                    start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+                }
+                XCTAssertTrue(target.isHittable, "Missing settings row: \(text)")
+                return target
+            }
+            if !compat { reveal("バックグラウンド・通信").tap() }
+            reveal("巡回管理").tap()
+            let help = app.buttons["履歴・巡回のヘルプ"].firstMatch
+            XCTAssertTrue(help.waitForExistence(timeout: 10))
+            XCTAssertTrue(help.isHittable)
+            help.tap()
+            let field = app.textViews["help-search-field"].firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 10))
+            field.tap()
+            field.typeText("Wi-Fi")
+            XCTAssertTrue(app.otherElements["help-search-results"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "今すぐ巡回・結果の再読込")).firstMatch.exists)
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = compat ? "v11.4-toshiaki-help-search" : "v11.4-futacha-help-search"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            app.buttons["クリア"].firstMatch.tap()
+            field.tap()
+            field.typeText("no-such-help-word-114")
+            XCTAssertTrue(app.staticTexts["一致する項目がありません"].waitForExistence(timeout: 10))
+            app.buttons["クリア"].firstMatch.tap()
+            XCTAssertTrue(app.otherElements["compat-help-content"].waitForExistence(timeout: 10))
+            app.terminate()
+        }
     }
 
     func testFutachaSharedDetailedSettingsOpenWithoutChangingMode() {

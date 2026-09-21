@@ -124,6 +124,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -427,6 +428,7 @@ internal fun compatRootSettingsGroups(appVersion: String): List<Pair<String, Lis
         CompatSettingEntry("コントロール", "メニュー・操作・送信確認", "control"),
         CompatSettingEntry("ストレージ", "保存先・キャッシュ", "storage"),
         CompatSettingEntry("バックグラウンド", "スレッドの更新確認", "background"),
+        CompatSettingEntry("巡回管理", "キーワード・自動巡回・通知", "watcher"),
         CompatSettingEntry("ネットワーク", "サーバー機能", "network"),
         compatImageSearchRootEntry()
     ),
@@ -1621,7 +1623,7 @@ internal fun CompatSettingsScreen(
                                             cacheAvailableBytes[compatCacheLocation(option)]
                                         ),
                                         fontSize = 11.sp,
-                                        color = LocalCompatibilityPalette.current.text.copy(alpha = 0.65f)
+                                        color = LocalCompatibilityPalette.current.uiSecondaryText
                                     )
                                 }
                             }
@@ -2113,12 +2115,12 @@ internal fun CompatHelpScreen(
             )
         }
     ) { padding ->
-        CompatReferenceChangeLogView(
+        SearchableHelpContent(
             html = helpHtml,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .testTag("compat-help-content"),
+                .testTag("help-screen"),
             onLinkClicked = openUrl
         )
     }
@@ -2597,12 +2599,12 @@ private fun CompatPreferenceRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 16.sp, color = if (enabled) palette.text else Color.Gray)
+            Text(title, fontSize = 16.sp, color = if (enabled) palette.uiPrimaryText else palette.uiSecondaryText)
             if (summary.isNotBlank()) {
                 Text(
                     summary,
                     fontSize = 12.sp,
-                    color = if (enabled) palette.text.copy(alpha = 0.72f) else Color.Gray
+                    color = palette.uiSecondaryText
                 )
             }
         }
@@ -2613,7 +2615,7 @@ private fun CompatPreferenceRow(
                 modifier = Modifier.size(32.dp),
                 colors = CheckboxDefaults.colors(
                     checkedColor = SecondaryTeal,
-                    uncheckedColor = palette.text.copy(alpha = 0.62f),
+                    uncheckedColor = palette.uiPrimaryText,
                     checkmarkColor = SecondaryChromeContent
                 )
             )
@@ -3527,10 +3529,10 @@ internal fun CompatPostScreen(
         cursorColor = palette.inputCursor,
         focusedTextColor = palette.text,
         unfocusedTextColor = palette.text,
-        focusedLabelColor = palette.text.copy(alpha = 0.78f),
-        unfocusedLabelColor = palette.text.copy(alpha = 0.78f),
-        focusedPlaceholderColor = palette.text.copy(alpha = 0.62f),
-        unfocusedPlaceholderColor = palette.text.copy(alpha = 0.62f)
+        focusedLabelColor = palette.uiPrimaryText,
+        unfocusedLabelColor = palette.uiPrimaryText,
+        focusedPlaceholderColor = palette.uiPrimaryText,
+        unfocusedPlaceholderColor = palette.uiPrimaryText
     )
 
     CompatPostImePolicyEffect()
@@ -3666,7 +3668,8 @@ internal fun CompatPostScreen(
                         preset,
                         fontSize = 16.sp,
                         textAlign = TextAlign.Center,
-                        color = if (selected) palette.inputCursor else palette.text.copy(alpha = 0.82f),
+                        color = palette.uiPrimaryText,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         modifier = Modifier
                             .width(80.dp)
                             .fillMaxHeight()

@@ -111,7 +111,7 @@ internal fun CatalogTopBar(
                     Text(
                         text = mode.label,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                        color = chromeColors.onBar,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -247,8 +247,8 @@ internal fun CatalogNavigationBar(
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = chromeColors.onBar,
                     selectedTextColor = chromeColors.onBar,
-                    unselectedIconColor = chromeColors.onBar.copy(alpha = 0.82f),
-                    unselectedTextColor = chromeColors.onBar.copy(alpha = 0.82f),
+                    unselectedIconColor = chromeColors.onBar,
+                    unselectedTextColor = chromeColors.onBar,
                     indicatorColor = chromeColors.onBar.copy(alpha = 0.14f)
                 )
             )
@@ -263,6 +263,7 @@ private fun CatalogSearchTextField(
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
+    val chromeColors = LocalFutachaChromeColors.current
     val focusManager = LocalFocusManager.current
     val queryInputState = rememberStableTextInputState(
         text = query,
@@ -288,19 +289,19 @@ private fun CatalogSearchTextField(
         keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
         shape = RoundedCornerShape(28.dp),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
-            unfocusedContainerColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.1f),
+            focusedContainerColor = chromeColors.onBar.copy(alpha = 0.14f),
+            unfocusedContainerColor = chromeColors.onBar.copy(alpha = 0.1f),
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
-            focusedTextColor = MaterialTheme.colorScheme.onPrimary,
-            unfocusedTextColor = MaterialTheme.colorScheme.onPrimary,
-            cursorColor = MaterialTheme.colorScheme.onPrimary,
-            focusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
-            unfocusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
-            focusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-            unfocusedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-            focusedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
-            unfocusedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
+            focusedTextColor = chromeColors.onBar,
+            unfocusedTextColor = chromeColors.onBar,
+            cursorColor = chromeColors.onBar,
+            focusedPlaceholderColor = chromeColors.onBar,
+            unfocusedPlaceholderColor = chromeColors.onBar,
+            focusedLeadingIconColor = chromeColors.onBar,
+            unfocusedLeadingIconColor = chromeColors.onBar,
+            focusedTrailingIconColor = chromeColors.onBar,
+            unfocusedTrailingIconColor = chromeColors.onBar
         )
     )
 }
