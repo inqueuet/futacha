@@ -156,6 +156,7 @@ internal fun HistoryDrawerContent(
                         totalCount = history.size
                     )
                 }
+                item(key = "shared-tabs-watcher") { FutachaDrawerTools(onHistoryEntrySelected) }
                 if (!appliedViewSettings.isDefault) {
                     item(key = "history-active-view-settings") {
                         HistoryActiveSettingsBanner(

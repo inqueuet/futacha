@@ -464,16 +464,31 @@ fun FutachaApp(
             return@FutachaTheme
         }
         val shouldUseLightweightMode = persistedLightweightMode == true || devicePerformanceProfile.isLowSpec
-        val diskBudget = splitImageDiskBudget((if (shouldUseLightweightMode) 128L else 256L) * 1024 * 1024)
-        ConfigureOriginalMediaCache(originalMediaSession, platformContext, diskBudget.originals, CompatibilityCacheLocation.INTERNAL)
+        val sharedFeaturePreferences by (compatibilityStore?.preferences ?: kotlinx.coroutines.flow.flowOf(emptyMap<String, String>())).collectAsState(emptyMap())
+        val sharedImageCacheBytes = sharedFeaturePreferences[COMPAT_IMAGE_CACHE_PREFERENCE_KEY]?.let(::parseCompatImageCacheQuotaBytes)
+            ?: (if (shouldUseLightweightMode) 128L else 256L) * 1024 * 1024
+        val sharedCacheLocation = parseCompatCacheLocation(sharedFeaturePreferences[COMPAT_IMAGE_CACHE_LOCATION_PREFERENCE_KEY])
+        val sharedImageParallelism = parseCompatImageParallelism(sharedFeaturePreferences[COMPAT_IMAGE_PARALLEL_PREFERENCE_KEY])
+        val diskBudget = splitImageDiskBudget(sharedImageCacheBytes)
+        ConfigureOriginalMediaCache(originalMediaSession, platformContext, diskBudget.originals, sharedCacheLocation)
         val imageLoader = rememberFutachaImageLoader(
             lightweightMode = shouldUseLightweightMode,
             performanceProfile = devicePerformanceProfile,
             httpClient = httpClient,
             imageTransport = imageTransport,
             originalMediaStore = promptMediaSource,
-            diskCacheBytesOverride = if (originalMediaSession == null) null else diskBudget.images
+            diskCacheBytesOverride = if (originalMediaSession == null) sharedImageCacheBytes else diskBudget.images,
+            cacheLocation = sharedCacheLocation,
+            parallelismOverride = sharedImageParallelism
         )
+        val catalogImageLoader = rememberFutachaImageLoader(
+            lightweightMode = shouldUseLightweightMode, performanceProfile = devicePerformanceProfile,
+            httpClient = httpClient, imageTransport = imageTransport, originalMediaStore = promptMediaSource,
+            diskCacheBytesOverride = parseCompatCatalogImageCacheQuotaBytes(sharedFeaturePreferences[COMPAT_CATALOG_IMAGE_CACHE_PREFERENCE_KEY]),
+            cacheLocation = parseCompatCacheLocation(sharedFeaturePreferences[COMPAT_CATALOG_IMAGE_CACHE_LOCATION_PREFERENCE_KEY]),
+            parallelismOverride = sharedImageParallelism, diskCacheDirectoryName = CATALOG_IMAGE_DISK_CACHE_DIR
+        )
+        DisposableEffect(catalogImageLoader) { onDispose { catalogImageLoader.shutdown() } }
         DisposableEffect(imageLoader) {
             onDispose {
                 runCatching {
@@ -497,6 +512,13 @@ fun FutachaApp(
             )
         ) {
             com.valoser.futacha.shared.ui.media.DeviceImageEditingHost(fileSystem, stateStore) {
+            com.valoser.futacha.shared.ui.board.ProvideFutachaSharedFeatures(
+                store = compatibilityStore, httpClient = httpClient, repository = sharedRepository,
+                fileSystem = fileSystem, cookieRepository = cookieRepository,
+                appStateStore = stateStore,
+                catalogImageLoader = catalogImageLoader,
+                appVersion = remember(versionChecker) { versionChecker?.getCurrentVersion() ?: "1.0" }
+            ) {
             Surface(modifier = Modifier.fillMaxSize().analyticsGestureSurface()) {
                 val coroutineScope = rememberCoroutineScope()
                 val saveableStateHolder = rememberSaveableStateHolder()
@@ -964,6 +986,7 @@ fun FutachaApp(
                         openFileManagerPickerRequest = aiFileManagerPickerRequest
                     )
                 }
+            }
             }
         }
     }

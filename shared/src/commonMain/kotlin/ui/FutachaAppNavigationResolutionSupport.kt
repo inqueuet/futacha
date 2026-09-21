@@ -11,7 +11,8 @@ internal fun resolveHistoryEntrySelection(
     entry: ThreadHistoryEntry,
     boards: List<BoardSummary>
 ): FutachaThreadSelection? {
-    val entryBoardUrlKey = entry.boardUrl
+    val entryBoardUrlKey = (com.valoser.futacha.shared.compat.canonicalizeThreadUrl(entry.boardUrl)?.canonicalBoardUrl
+        ?: entry.boardUrl)
         .trim()
         .substringBefore('?')
         .trimEnd('/')

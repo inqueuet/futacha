@@ -8,6 +8,12 @@ private val BOARD_MANAGEMENT_IPV4_REGEX = Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
 internal const val BOARD_MANAGEMENT_NAME_MAX_CHARS = 200
 internal const val BOARD_MANAGEMENT_URL_MAX_CHARS = 8_192
 
+internal fun renameBoardSummary(boards: List<BoardSummary>, boardId: String, name: String): List<BoardSummary> {
+    val normalized = name.trim()
+    require(normalized.isNotEmpty() && normalized.length <= BOARD_MANAGEMENT_NAME_MAX_CHARS)
+    return boards.map { if (it.id == boardId) it.copy(name = normalized) else it }
+}
+
 internal data class AddBoardValidationState(
     val trimmedName: String,
     val trimmedUrl: String,

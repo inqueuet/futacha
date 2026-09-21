@@ -334,6 +334,8 @@ internal fun BoardManagementBoardList(
 ) {
     val listState = rememberLazyListState()
     var draggedBoardId by remember { mutableStateOf<String?>(null) }
+    var renamingBoardId by rememberSaveable { mutableStateOf<String?>(null) }
+    var renamedBoardName by rememberSaveable { mutableStateOf("") }
     val currentBoards = rememberUpdatedState(boards)
     val currentBoardListCallbacks = rememberUpdatedState(boardListCallbacks)
 
@@ -412,12 +414,34 @@ internal fun BoardManagementBoardList(
                         BoardSummaryCard(
                             board = board,
                             onClick = { boardListCallbacks.onBoardClick(board) },
-                            onPinToggle = { boardListCallbacks.onPinClick(boards, index) }
+                            onPinToggle = { boardListCallbacks.onPinClick(boards, index) },
+                            onRename = { renamedBoardName = board.name; renamingBoardId = board.id }
                         )
                     }
                 }
             }
         }
+    }
+    renamingBoardId?.let { boardId ->
+        AlertDialog(
+            onDismissRequest = { renamingBoardId = null },
+            title = { Text("板の名前を変更") },
+            text = {
+                OutlinedTextField(
+                    value = renamedBoardName,
+                    onValueChange = { renamedBoardName = it.take(BOARD_MANAGEMENT_NAME_MAX_CHARS) },
+                    label = { Text("板の名前") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = renamedBoardName.isNotBlank(), onClick = {
+                    currentBoardListCallbacks.value.onRename(currentBoards.value, boardId, renamedBoardName)
+                    renamingBoardId = null
+                }) { Text("変更") }
+            },
+            dismissButton = { TextButton(onClick = { renamingBoardId = null }) { Text("キャンセル") } }
+        )
     }
 }
 

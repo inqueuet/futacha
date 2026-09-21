@@ -375,7 +375,8 @@ class FutachaApplication : Application() {
                     experienceProfileStore.activeProfile
                 ) { backgroundEnabled, watchAlertEnabled, compatPreferences, activeProfile ->
                     val enabled = when (activeProfile) {
-                        ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled
+                        ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled ||
+                            com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
                         ExperienceProfile.TOSHIAKI_COMPAT -> {
                             val update = compatPreferences["compat.background.backgroundThreadUpdateCheck"]
                             val existence = compatPreferences["compat.background.backgroundThreadExistCheck"]

@@ -16,6 +16,18 @@ import kotlin.test.assertFails
 
 class CompatPreferenceSchemaTest {
     @Test
+    fun futachaDesignSettingsKeepSharedControlsWithoutOfferingToshiakiColorOverrides() {
+        val legacy = compatSettingsGroups("design").flatMap { it.second }.map { it.preferenceKey }.toSet()
+        val modern = compatSettingsGroups("design", modernPresentation = true)
+            .flatMap { it.second }.map { it.preferenceKey }.toSet()
+        val colorKeys = setOf("designTheme", "designTextColor", "designNavigationBar")
+        assertTrue(legacy.containsAll(colorKeys))
+        assertEquals(legacy - colorKeys, modern)
+        assertTrue(modern.containsAll(setOf("dummyCustomFont", "designTabSelectorOpened", "designTabSelectorLocation")))
+        assertEquals(compatSettingsGroups("control"), compatSettingsGroups("control", modernPresentation = true))
+    }
+
+    @Test
     fun rootSettingsKeepTheReferenceCoreExactAndIsolateCurrentExtensions() {
         val groups = compatRootSettingsGroups("8.5")
         assertEquals(

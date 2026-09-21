@@ -331,7 +331,9 @@ internal fun ThreadLoading(modifier: Modifier = Modifier) {
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        androidx.compose.material3.CircularProgressIndicator()
+        val style = LocalFutachaSharedFeatures.current?.value("design", "designLoading")
+        if (style == null) androidx.compose.material3.CircularProgressIndicator()
+        else com.valoser.futacha.shared.ui.compat.CompatLoadingIndicator(style, Modifier, 48.dp)
     }
 }
 

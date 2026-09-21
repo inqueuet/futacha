@@ -42,14 +42,20 @@ internal fun CatalogPreviewImage(
     fallbackTint: Color = Color.Gray
 ) {
     val platformContext = LocalPlatformContext.current
-    val imageLoader = LocalFutachaImageLoader.current
-    val candidates = remember(thumbnailUrl, fullImageUrl) {
+    val features = LocalFutachaSharedFeatures.current
+    val imageLoader = if (features == null) LocalFutachaImageLoader.current
+        else com.valoser.futacha.shared.ui.image.LocalFutachaCatalogImageLoader.current
+    val lowQuality = features?.value("catalog", "catalogEco") == "ON" ||
+        (features?.value("catalog", "catalogMobileEco") == "ON" && !com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext))
+    val crop = features?.value("catalog", "catalogThumbCrop")?.let { it == "ON" } ?: true
+    val candidates = remember(thumbnailUrl, fullImageUrl, lowQuality) {
         buildList {
+            if (!lowQuality) fullImageUrl?.takeIf { it.isNotBlank() }?.let(::add)
             thumbnailUrl?.takeIf { it.isNotBlank() }?.let(::add)
             fullImageUrl
                 ?.takeIf { it.isNotBlank() && it != thumbnailUrl }
                 ?.let(::add)
-        }
+        }.distinct()
     }
     var candidateIndex by remember(candidates) { mutableIntStateOf(0) }
     val activeUrl = candidates.getOrNull(candidateIndex)
@@ -102,7 +108,7 @@ internal fun CatalogPreviewImage(
             Image(
                 painter = imagePainter,
                 contentDescription = contentDescription,
-                contentScale = ContentScale.Crop,
+                contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
             )
         }

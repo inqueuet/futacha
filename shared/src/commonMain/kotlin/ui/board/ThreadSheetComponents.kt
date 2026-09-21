@@ -65,6 +65,7 @@ internal fun ThreadSettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -89,6 +90,17 @@ internal fun ThreadSettingsSheet(
                             onAction(menuItem.id)
                         }
                 )
+            }
+            val extraTools = LocalFutachaThreadTools.current
+            if (extraTools.isNotEmpty()) {
+                HorizontalDivider()
+                extraTools.forEach { tool ->
+                    ListItem(headlineContent = { Text(tool.label) },
+                        modifier = Modifier.fillMaxWidth().clickable(enabled = tool.enabled) {
+                            onDismiss()
+                            tool.action()
+                        })
+                }
             }
         }
     }

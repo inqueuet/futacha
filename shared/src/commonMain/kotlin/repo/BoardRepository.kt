@@ -51,6 +51,8 @@ interface BoardRepository {
         mode: CatalogMode = CatalogMode.default,
         settings: CatalogFetchSettings
     ): List<CatalogItem> = getCatalog(board, mode)
+    suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): CatalogPageContent =
+        CatalogPageContent(getCatalogWithSettings(board, mode, settings))
     suspend fun getCatalogPage(
         board: String,
         mode: CatalogMode = CatalogMode.default
@@ -289,26 +291,21 @@ class DefaultBoardRepository(
         mode: CatalogMode,
         settings: CatalogFetchSettings
     ): List<CatalogItem> {
-        return withRetryOnAuthFailure(board, settingsOverride = settings) {
-            val html = withContext(AppDispatchers.io) {
-                api.fetchCatalog(board, mode)
-            }
-            val baseUrl = BoardUrlResolver.resolveBoardBaseUrl(board)
-            withContext(AppDispatchers.parsing) {
-                attachCatalogDiagnostics(
-                    html = html,
-                    parsed = parser.parseCatalogPage(html, baseUrl),
-                    fileSystem = diagnosticFileSystem
-                ).items
-            }
-        }
+        return getCatalogPageWithSettings(board, mode, settings).items
     }
+
+    override suspend fun getCatalogPageWithSettings(board: String, mode: CatalogMode, settings: CatalogFetchSettings): CatalogPageContent =
+        loadCatalogPage(board, mode, settings)
 
     override suspend fun getCatalogPage(
         board: String,
         mode: CatalogMode
     ): CatalogPageContent {
-        return withRetryOnAuthFailure(board) {
+        return loadCatalogPage(board, mode, null)
+    }
+
+    private suspend fun loadCatalogPage(board: String, mode: CatalogMode, settings: CatalogFetchSettings?): CatalogPageContent {
+        return withRetryOnAuthFailure(board, settingsOverride = settings) {
             val html = withContext(AppDispatchers.io) {
                 api.fetchCatalog(board, mode)
             }

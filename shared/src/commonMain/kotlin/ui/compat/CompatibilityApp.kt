@@ -10031,7 +10031,7 @@ private fun CompatThreadPagerNeighborPreview(
 }
 
 @Composable
-private fun CompatTabSelector(
+internal fun CompatTabSelector(
     tabs: List<CompatTab>,
     currentTabKey: String?,
     threadContext: Boolean,
@@ -10460,7 +10460,7 @@ private fun CompatHierarchicalOtherMenuDialog(
 }
 
 @Composable
-private fun CompatNgRuleManagementDialog(
+internal fun CompatNgRuleManagementDialog(
     title: String,
     rules: List<CompatNgRule>,
     imageReferenceBoardName: String? = null,
@@ -11557,18 +11557,7 @@ private fun CompatPostRow(
             .background(if (searchHit) palette.searchResultBackground else Color.Transparent)
     ) {
         newReplyCount?.takeIf { it > 0 }?.let { count ->
-            Text(
-                text = "新着レス ${count}件",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(palette.newReplyBackground)
-                    .testTag("compat-new-replies-divider")
-                    .padding(vertical = 1.dp),
-                color = palette.newReplyContent,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center
-            )
+            CompatNewRepliesDivider(count, Modifier.testTag("compat-new-replies-divider"))
         }
         Row(
             modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -11885,7 +11874,7 @@ private fun CompatPostRow(
  * visible without replacing the board attachment.
  */
 @Composable
-private fun CompatInlineApuSmallPreviews(
+internal fun CompatInlineApuSmallPreviews(
     urls: List<String>,
     thumbnailSize: Int,
     privacyAlpha: Float,

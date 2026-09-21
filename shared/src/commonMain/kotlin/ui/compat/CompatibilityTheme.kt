@@ -200,8 +200,7 @@ internal fun CompatibilityProfileTheme(
 }
 
 /** Apply the selected legacy font to every Material text role used by compat UI. */
-private fun compatibilityTypography(fontFamily: FontFamily?) : androidx.compose.material3.Typography {
-    val base = androidx.compose.material3.Typography()
+internal fun compatibilityTypography(fontFamily: FontFamily?, base: androidx.compose.material3.Typography = androidx.compose.material3.Typography()) : androidx.compose.material3.Typography {
     if (fontFamily == null) return base
     return base.copy(
         displayLarge = base.displayLarge.copy(fontFamily = fontFamily),

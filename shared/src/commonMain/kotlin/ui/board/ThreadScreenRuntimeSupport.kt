@@ -11,6 +11,7 @@ internal const val THREAD_SINGLE_MEDIA_SAVE_TIMEOUT_MS = 150_000L
 internal const val THREAD_REMOTE_LOAD_TIMEOUT_MS = 75_000L
 internal const val THREAD_LOCAL_STALE_LOAD_TIMEOUT_MS = 500L
 internal const val THREAD_AUTO_SAVE_TAG = "ThreadAutoSave"
+// Keep archive lookup inside the existing load budget before trying the local copy.
 internal const val ARCHIVE_FALLBACK_TIMEOUT_MS = 8_000L
 internal const val OFFLINE_FALLBACK_TIMEOUT_MS = 5_000L
 internal const val THREAD_SEARCH_DEBOUNCE_MILLIS = 180L

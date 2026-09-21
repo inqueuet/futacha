@@ -33,6 +33,9 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,8 +94,10 @@ internal fun ThreadFormDialog(
     sendDescription: String,
     showSubject: Boolean = true,
     showPassword: Boolean = true,
-    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard
+    bodyTextSize: ThreadBodyTextSize = ThreadBodyTextSize.Standard,
+    boardUrl: String = ""
 ) {
+    val sharedFeatures = LocalFutachaSharedFeatures.current
     val commentLineCount = remember(comment) {
         if (comment.isBlank()) 0 else comment.count { it == '\n' } + 1
     }
@@ -114,7 +119,16 @@ internal fun ThreadFormDialog(
     var stripImageMetadata by rememberSaveable { mutableStateOf(true) }
     var attachmentProcessingError by remember { mutableStateOf<String?>(null) }
     var isSanitizingAttachment by remember { mutableStateOf(false) }
-    fun acceptPickedImage(image: ImageData) {
+    var pendingCompression by remember { mutableStateOf<ImageData?>(null) }
+    val postingCapabilities by produceState(com.valoser.futacha.shared.network.defaultBoardPostingCapabilities(boardUrl), boardUrl) {
+        val repository = sharedFeatures?.repository
+        if (repository != null && com.valoser.futacha.shared.compat.canonicalizeBoardUrl(boardUrl) != null) {
+            try { value = repository.getPostingCapabilities(boardUrl) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Keep the board's known fallback limits. */ }
+        }
+    }
+    fun finishPickedImage(image: ImageData) {
         attachmentProcessingError = null
         if (!stripImageMetadata || image.fileName.isVideoAttachmentName()) {
             onImageSelected(image)
@@ -122,16 +136,36 @@ internal fun ThreadFormDialog(
         }
         isSanitizingAttachment = true
         scope.launch {
-            compressCompatPostImage(
+            try { compressCompatPostImage(
                 attachment = image,
                 maxBytes = max(image.bytes.size, 8 * 1024 * 1024)
             ).onSuccess(onImageSelected)
                 .onFailure { error ->
                     attachmentProcessingError = error.message ?: "画像の位置情報を削除できませんでした"
                 }
-            isSanitizingAttachment = false
+            } finally { isSanitizingAttachment = false }
         }
     }
+    fun acceptPickedImage(image: ImageData) {
+        if (sharedFeatures == null) { finishPickedImage(image); return }
+        val limit = postingCapabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        val decision = com.valoser.futacha.shared.ui.compat.decideCompatPostAttachment(image, limit, postingCapabilities.supportedExtensions)
+        when (decision) {
+            com.valoser.futacha.shared.ui.compat.CompatPostAttachmentDecision.Accept -> finishPickedImage(image)
+            com.valoser.futacha.shared.ui.compat.CompatPostAttachmentDecision.AskImageCompression -> pendingCompression = image
+            else -> attachmentProcessingError = com.valoser.futacha.shared.ui.compat.compatPostAttachmentDecisionMessage(decision, image.fileName, limit)
+        }
+    }
+    pendingCompression?.let { image -> AlertDialog(onDismissRequest = { pendingCompression = null },
+        title = { Text("画像を圧縮しますか？") }, text = { Text("この板の添付上限を超えています。上限に収まるよう圧縮します。") },
+        confirmButton = { TextButton(onClick = {
+            pendingCompression = null; isSanitizingAttachment = true
+            scope.launch {
+                try { compressCompatPostImage(image, postingCapabilities.maxFileSizeBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+                    .onSuccess(onImageSelected).onFailure { attachmentProcessingError = it.message ?: "圧縮できませんでした" }
+                } finally { isSanitizingAttachment = false }
+            }
+        }) { Text("圧縮") } }, dismissButton = { TextButton(onClick = { pendingCompression = null }) { Text("キャンセル") } }) }
     val imagePickerLauncher = rememberAttachmentPickerLauncher(
         preference = attachmentPickerPreference,
         preferredFileManagerPackage = preferredFileManagerPackage,
@@ -157,7 +191,7 @@ internal fun ThreadFormDialog(
                 mapOf("attachment_kind" to "動画", "selection_result" to "選択")
             )
             attachmentProcessingError = null
-            onImageSelected(image)
+            acceptPickedImage(image)
         }
     )
     var overflowMenuExpanded by remember { mutableStateOf(false) }
@@ -475,7 +509,18 @@ internal fun ThreadFormDialog(
                     color = barColorScheme.surfaceVariant,
                     contentColor = barColorScheme.onSurfaceVariant
                 ) {
-                    Row(
+                    if (sharedFeatures != null) {
+                        FutachaPostToolbar(
+                            features = sharedFeatures, boardUrl = boardUrl, comment = comment,
+                            onCommentChange = onCommentChange, password = password,
+                            onImageSelected = ::acceptPickedImage, onChooseImage = imagePickerLauncher,
+                            onChooseVideo = videoPickerLauncher, onSubmit = onSubmit,
+                            onClear = onClear, onDismiss = onDismiss,
+                            enabled = isSubmitEnabled && !isSanitizingAttachment,
+                            attachmentPickerPreference = attachmentPickerPreference,
+                            preferredFileManagerPackage = preferredFileManagerPackage
+                        )
+                    } else Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 56.dp)

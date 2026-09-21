@@ -32,6 +32,7 @@ import com.valoser.futacha.shared.model.CatalogMode
 import com.valoser.futacha.shared.util.inferCatalogTitleCompletionPolicy
 import com.valoser.futacha.shared.util.resolveCatalogTitleCompletionPolicy
 import kotlinx.coroutines.launch
+import com.valoser.futacha.shared.ui.compat.CompatFastScrollbar
 
 @Composable
 internal fun CatalogScreenScaffold(
@@ -78,11 +79,13 @@ internal fun CatalogScreenScaffold(
                 )
             },
             bottomBar = {
+                FutachaBottomBar {
                 CatalogNavigationBar(
                     menuEntries = bindings.catalogNavEntries,
                     onNavigate = bindings.navigationCallbacks.onNavigate,
                     isRefreshing = bindings.isRefreshing
                 )
+                }
             }
         ) { innerPadding ->
             val contentModifier = Modifier
@@ -114,6 +117,7 @@ internal fun CatalogScreenScaffold(
                         inferCatalogTitleCompletionPolicy(state.content.items)
                             ?: resolveCatalogTitleCompletionPolicy(bindings.board?.url)
                     }
+                    Box(contentModifier) {
                     CatalogSuccessContent(
                         items = visibleItems,
                         embeddedHtml = state.content.embeddedHtml,
@@ -130,8 +134,13 @@ internal fun CatalogScreenScaffold(
                         gridState = bindings.catalogGridState,
                         listState = bindings.catalogListState,
                         resolveHeadMetadata = bindings.resolveCatalogHeadMetadata,
-                        modifier = contentModifier
+                        modifier = Modifier.fillMaxSize()
                     )
+                    val fastScroll = LocalFutachaSharedFeatures.current?.value("catalog", "catalogFastScroll") == "ON"
+                    if (bindings.catalogDisplayStyle == com.valoser.futacha.shared.model.CatalogDisplayStyle.Grid)
+                        CompatFastScrollbar(fastScroll, visibleItems.size, bindings.catalogGridState)
+                    else CompatFastScrollbar(fastScroll, visibleItems.size, bindings.catalogListState)
+                    }
                 }
             }
         }
@@ -157,6 +166,7 @@ internal fun CatalogScreenOverlayHost(
         )
         CreateThreadDialog(
             boardName = bindings.board?.name,
+            boardUrl = bindings.board?.url.orEmpty(),
             attachmentPickerPreference = bindings.preferencesState.attachmentPickerPreference,
             preferredFileManagerPackage = bindings.preferencesState.preferredFileManagerPackage,
             name = bindings.createThreadDraft.name,
@@ -180,8 +190,9 @@ internal fun CatalogScreenOverlayHost(
     }
 
     if (bindings.isPrivacyFilterEnabled) {
+        val opacity = LocalFutachaSharedFeatures.current?.intValue("catalog", "commonPrivacyAlpha", 0..100)?.let { 1f - it / 100f } ?: 0.5f
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawRect(color = Color.White.copy(alpha = 0.5f))
+            drawRect(color = Color.White.copy(alpha = opacity))
         }
     }
 

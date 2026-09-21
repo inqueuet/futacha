@@ -2,6 +2,8 @@ package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +15,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -21,6 +24,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
@@ -33,9 +37,16 @@ internal fun ThreadAttachmentActionSheet(
     onPreview: () -> Unit,
     onJumpToPost: () -> Unit,
     onSave: () -> Unit,
-    onOpenExternal: () -> Unit
+    onOpenExternal: () -> Unit,
+    onImageSearch: (() -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val features = LocalFutachaSharedFeatures.current
+    val context = LocalFutachaThreadProjection.current
+    var imageNgOpen by remember { mutableStateOf(false) }
+    if (imageNgOpen && features != null && context != null) FutachaImageNgRegistration(features,
+        context.boardKey, com.valoser.futacha.shared.compat.CompatImageNgSource.THREAD, target.url,
+        "No.${target.post.id}", { imageNgOpen = false })
     ModalBottomSheet(
         onDismissRequest = {
             AnalyticsTracker.uiControl("attachment_action_sheet_dismiss", "添付メニューを閉じる")
@@ -46,6 +57,7 @@ internal fun ThreadAttachmentActionSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -95,6 +107,16 @@ internal fun ThreadAttachmentActionSheet(
                     onSave()
                 }
             )
+            if (onImageSearch != null && threadImageSearchTargets(target.url).isNotEmpty()) {
+                ListItem(
+                    leadingContent = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                    headlineContent = { Text("画像検索") },
+                    modifier = Modifier.clickable(onClick = onImageSearch)
+                )
+            }
+            if (features != null && context != null) {
+                ListItem(headlineContent = { Text("NG画像に登録") }, modifier = Modifier.clickable { imageNgOpen = true })
+            }
             ListItem(
                 leadingContent = {
                     Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null)

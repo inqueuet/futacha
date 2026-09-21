@@ -257,6 +257,7 @@ import kotlin.random.Random
 import kotlin.time.Clock
 
 private val SecondaryTeal: Color @Composable get() = LocalCompatibilityPalette.current.chrome
+private val SecondaryChromeContent: Color @Composable get() = LocalCompatibilityPalette.current.chromeContent
 private val SecondaryAccent: Color @Composable get() =
     compatibilitySettingsCategoryColor(LocalCompatibilityPalette.current)
 private val SecondaryBackground: Color @Composable get() = LocalCompatibilityPalette.current.background
@@ -500,12 +501,18 @@ internal fun CompatSettingsScreen(
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     initialScrollPosition: Pair<Int, Int>? = null,
-    onScrollPositionChanged: (Pair<Int, Int>) -> Unit = {}
+    onScrollPositionChanged: (Pair<Int, Int>) -> Unit = {},
+    modernPresentation: Boolean = false
 ) {
     val profileController = LocalExperienceProfileUiController.current
     val scope = rememberCoroutineScope()
-    val groups = remember(path, appVersion) {
-        if (path == "root") compatRootSettingsGroups(appVersion) else compatSettingsGroups(path)
+    val groups = remember(path, appVersion, modernPresentation) {
+        if (path == "backup" && modernPresentation) {
+            listOf("バックアップ" to (compatRootSettingsGroups(appVersion).first { it.first == "バックアップ" }.second +
+                CompatSettingEntry("旧版設定・NGの復元", "keyword.cfg / setting.cfg を読み込む")))
+        } else if (path == "ptmt" && modernPresentation) {
+            listOf("Cookie" to listOf(CompatSettingEntry("ptmtクッキーの編集", "", preferenceKey = "ptmtEditor")))
+        } else if (path == "root") compatRootSettingsGroups(appVersion) else compatSettingsGroups(path, modernPresentation)
     }
     var modeDialog by remember { mutableStateOf(false) }
     var editingEntry by remember(path) { mutableStateOf<CompatSettingEntry?>(null) }
@@ -832,7 +839,7 @@ internal fun CompatSettingsScreen(
         }
     }
     LaunchedEffect(path, groups) {
-        if (path == "root") {
+        if (path in setOf("root", "backup", "ptmt")) {
             archiveReportStats = runSuspendCatchingPreservingCancellation {
                 store.archiveReportOutboxStats()
             }.getOrNull()
@@ -878,26 +885,26 @@ internal fun CompatSettingsScreen(
         topBar = {
             TopAppBar(
                 expandedHeight = 56.dp,
-                title = { Text(if (path == "root") "設定" else path.compatSettingsTitle(), modifier = Modifier.padding(start = 16.dp)) },
+                title = { Text(if (path == "root") "設定" else if (path == "backup") "バックアップ・復元" else if (path == "design" && modernPresentation) "フォント・タブ一覧" else path.compatSettingsTitle(), modifier = Modifier.padding(start = 16.dp)) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "戻る") } },
                 actions = {
                     if (path == "root") {
                         Row {
                             Box(Modifier.width(56.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
                                 IconButton(onClick = onOpenChangeLog) {
-                                    Icon(Icons.Filled.History, contentDescription = "更新情報", tint = Color.White)
+                                    Icon(Icons.Filled.History, contentDescription = "更新情報", tint = SecondaryChromeContent)
                                 }
                             }
                             Box(Modifier.width(56.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
                                 IconButton(onClick = {
                                     openUrl(compatCurrentStoreUrl())
                                 }) {
-                                    Icon(Icons.Filled.BusinessCenter, contentDescription = "ストア", tint = Color.White)
+                                    Icon(Icons.Filled.BusinessCenter, contentDescription = "ストア", tint = SecondaryChromeContent)
                                 }
                             }
                             Box(Modifier.width(56.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
                                 IconButton(onClick = onOpenHelp) {
-                                    Icon(Icons.Filled.HelpOutline, contentDescription = "ヘルプ", tint = Color.White)
+                                    Icon(Icons.Filled.HelpOutline, contentDescription = "ヘルプ", tint = SecondaryChromeContent)
                                 }
                             }
                         }
@@ -905,8 +912,8 @@ internal fun CompatSettingsScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = SecondaryTeal,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
+                    titleContentColor = SecondaryChromeContent,
+                    navigationIconContentColor = SecondaryChromeContent
                 )
             )
         }
@@ -951,10 +958,10 @@ internal fun CompatSettingsScreen(
                     val isCacheStatus = path == "network" && entry.preferenceKey == COMPAT_CACHE_STATUS_KEY
                     val isCustomImageSearch = path == "image_search" &&
                         entry.preferenceKey.startsWith("customSearchUriMulti.")
-                    val isSettingsRestore = path == "root" && entry.title == "基本的な設定の復元"
-                    val isSettingsSave = path == "root" && entry.title == "基本的な設定の保存"
-                    val isNgRestore = path == "root" && entry.title == "監視･ＮＧワードの復元"
-                    val isNgSave = path == "root" && entry.title == "監視･ＮＧワードの保存"
+                    val isSettingsRestore = path in setOf("root", "backup") && entry.title == "基本的な設定の復元"
+                    val isSettingsSave = path in setOf("root", "backup") && entry.title == "基本的な設定の保存"
+                    val isNgRestore = path in setOf("root", "backup") && entry.title == "監視･ＮＧワードの復元"
+                    val isNgSave = path in setOf("root", "backup") && entry.title == "監視･ＮＧワードの保存"
                     val backupDateKey = when {
                         isSettingsRestore -> COMPAT_BACKUP_SETTING_IMPORT_DATE_KEY
                         isSettingsSave -> COMPAT_BACKUP_SETTING_EXPORT_DATE_KEY
@@ -962,8 +969,8 @@ internal fun CompatSettingsScreen(
                         isNgSave -> COMPAT_BACKUP_KEYWORD_EXPORT_DATE_KEY
                         else -> null
                     }
-                    val isLegacyRestore = path == "root" && entry.title == "旧版設定・NGの復元"
-                    val isPtmtEditor = path == "root" && entry.preferenceKey == "ptmtEditor"
+                    val isLegacyRestore = path in setOf("root", "backup") && entry.title == "旧版設定・NGの復元"
+                    val isPtmtEditor = path in setOf("root", "backup", "ptmt") && entry.preferenceKey == "ptmtEditor"
                     val isCustomFont = path == "design" && entry.preferenceKey == "dummyCustomFont"
                     val dependencyEnabled = !(
                         path == "catalog" && entry.preferenceKey == "catalogAppendDropped" &&
@@ -2099,9 +2106,9 @@ internal fun CompatHelpScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = SecondaryTeal,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
+                    titleContentColor = SecondaryChromeContent,
+                    navigationIconContentColor = SecondaryChromeContent,
+                    actionIconContentColor = SecondaryChromeContent
                 )
             )
         }
@@ -2607,7 +2614,7 @@ private fun CompatPreferenceRow(
                 colors = CheckboxDefaults.colors(
                     checkedColor = SecondaryTeal,
                     uncheckedColor = palette.text.copy(alpha = 0.62f),
-                    checkmarkColor = Color.White
+                    checkmarkColor = SecondaryChromeContent
                 )
             )
         }
@@ -2766,8 +2773,11 @@ private fun List<CompatSettingEntry>.compatKeys(vararg keys: String): List<Compa
  * is Compose-based.  Extra Futacha-only switches are deliberately placed in a
  * separate section so the sample-compatible surface is not silently changed.
  */
-internal fun compatSettingsGroups(path: String): List<Pair<String, List<CompatSettingEntry>>> {
-    val entries = path.compatSettingsEntries()
+internal fun compatSettingsGroups(path: String, modernPresentation: Boolean = false): List<Pair<String, List<CompatSettingEntry>>> {
+    val entries = path.compatSettingsEntries().filterNot {
+        modernPresentation && path == "design" &&
+            it.preferenceKey in setOf("designTheme", "designTextColor", "designNavigationBar")
+    }
     return when (path) {
         "media" -> emptyList()
         "design" -> listOf(
@@ -3558,9 +3568,9 @@ internal fun CompatPostScreen(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = SecondaryTeal,
-                        titleContentColor = Color.White,
-                        navigationIconContentColor = Color.White,
-                        actionIconContentColor = Color.White
+                        titleContentColor = SecondaryChromeContent,
+                        navigationIconContentColor = SecondaryChromeContent,
+                        actionIconContentColor = SecondaryChromeContent
                     )
                 )
             }
@@ -4481,7 +4491,7 @@ internal fun CompatGalleryScreen(
                         }) {
                             Text(
                                 if (selectedMediaKeys.size == posts.size) "全解除" else "全選択",
-                                color = Color.White
+                                color = SecondaryChromeContent
                             )
                         }
                         IconButton(
@@ -4504,7 +4514,7 @@ internal fun CompatGalleryScreen(
                             Icon(
                                 Icons.Filled.Download,
                                 contentDescription = "一括保存",
-                                tint = Color.White.copy(alpha = 0.62f)
+                                tint = SecondaryChromeContent.copy(alpha = 0.62f)
                             )
                         }
                     }
@@ -4535,9 +4545,9 @@ internal fun CompatGalleryScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = SecondaryTeal,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
+                    titleContentColor = SecondaryChromeContent,
+                    navigationIconContentColor = SecondaryChromeContent,
+                    actionIconContentColor = SecondaryChromeContent
                 )
             )
         },
@@ -4647,7 +4657,7 @@ internal fun CompatGalleryScreen(
                             if (mediaBadge != null) {
                                 Text(
                                     mediaBadge,
-                                    color = Color.White,
+                                    color = palette.chromeContent,
                                     fontSize = 12.sp,
                                     modifier = Modifier.align(Alignment.BottomStart)
                                         .background(palette.chrome).padding(horizontal = 2.dp)
@@ -4661,6 +4671,7 @@ internal fun CompatGalleryScreen(
                                         .testTag("compat-gallery-selection-${post.postNo}"),
                                     colors = CheckboxDefaults.colors(
                                         checkedColor = palette.chrome,
+                                        checkmarkColor = palette.chromeContent,
                                         uncheckedColor = Color.White
                                     )
                                 )

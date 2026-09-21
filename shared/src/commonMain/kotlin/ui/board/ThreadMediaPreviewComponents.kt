@@ -55,7 +55,8 @@ internal fun ThreadMediaPreviewDialog(
     onDismiss: () -> Unit,
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
-    onSave: (MediaPreviewEntry) -> Unit
+    onSave: (MediaPreviewEntry) -> Unit,
+    onImageSearch: ((MediaPreviewEntry) -> Unit)? = null
 ) {
     val trackedDismiss = {
         AnalyticsTracker.uiControl("media_preview", "画像・動画プレビューを閉じる")
@@ -81,6 +82,7 @@ internal fun ThreadMediaPreviewDialog(
                 onNavigateNext = trackedNext,
                 onNavigatePrevious = trackedPrevious,
                 onSave = { onSave(state.entry) },
+                onImageSearch = onImageSearch?.let { search -> { search(state.entry) } },
                 isSaveEnabled = state.isSaveEnabled,
                 isSaveInProgress = state.isSaveInProgress
             )

@@ -136,11 +136,13 @@ internal fun ThreadScreenScaffoldHost(
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
                         ) {
+                            FutachaBottomBar {
                             ThreadActionBar(
                                 menuEntries = bindings.threadMenuEntries,
                                 onAction = bindings.actionBarCallbacks.onAction,
                                 applyNavigationBarsPadding = false
                             )
+                            }
                         }
                     }
                 }

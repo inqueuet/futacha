@@ -273,7 +273,7 @@ private fun ThreadScreenContent(
         onResolvedThreadUrlOverrideChanged = { resolvedThreadUrlOverride = it }
     )
     val screenSetupHandles = setupHandles.setupHandles
-    val activeRepository = screenSetupHandles.activeRepository
+    val activeRepository = rememberFutachaSharedRepository(screenSetupHandles.activeRepository)
     val effectiveBoardUrl = screenSetupHandles.effectiveBoardUrl
     val uiState = runtimeStateRefs.uiState
     val runtimeHandles = setupHandles.runtimeHandles
@@ -1413,6 +1413,14 @@ private fun ThreadScreenContent(
         )
     )
 
+    FutachaThreadFeatureHost(
+        board = board, threadId = threadId, threadTitle = resolvedThreadTitle, currentState = currentState,
+        listState = lazyListState, repository = activeRepository,
+        onRestore = { uiState.value = it }, onRefresh = refreshThread,
+        onOpenThread = onHistoryEntrySelected, onShowPost = scrollToPost, onClose = onBack,
+        onOpenDrawer = { coroutineScope.launch { drawerState.open() } },
+        onReply = { hostBindingsBundle.scaffoldBindings.actionBarCallbacks.onAction(com.valoser.futacha.shared.model.ThreadMenuEntryId.Reply) }
+    ) {
     CompositionLocalProvider(LocalFutabaThreadColors provides futabaThreadColors) {
         MaterialTheme(
             colorScheme = futabaThreadColorScheme,
@@ -1428,7 +1436,8 @@ private fun ThreadScreenContent(
                 )
             }
             ThreadScreenOverlayHost(
-                bindings = hostBindingsBundle.overlayBindings
+                bindings = hostBindingsBundle.overlayBindings,
+                httpClient = httpClient
             )
             saveResultMessage?.let { result ->
                 SaveResultDialog(
@@ -1469,6 +1478,8 @@ private fun ThreadScreenContent(
             }
         }
     }
+}
+
 }
 
 private enum class ThreadSaveLocationGuideTarget {

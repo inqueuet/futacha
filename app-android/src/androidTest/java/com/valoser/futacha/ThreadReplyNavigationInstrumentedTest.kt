@@ -4,6 +4,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -19,6 +21,7 @@ import com.valoser.futacha.shared.ui.compat.CompatibilityApp
 import com.valoser.futacha.shared.ui.image.LocalFutachaImageLoader
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicReference
@@ -132,14 +135,25 @@ class ThreadReplyNavigationInstrumentedTest {
 
     private fun bottom(compat: Boolean, tree: Boolean = false) {
         open(compat, tree)
-        rule.onAllNodesWithText(if (compat) "新着レス 20件" else "ここから新着（20件）").assertCountEquals(0)
+        rule.onAllNodesWithText("新着レス 20件").assertCountEquals(0)
         currentPage.set(page(40))
         rule.onAllNodesWithContentDescription(if (compat) "リロード" else "更新").onFirst().performClick()
         rule.waitForIdle()
         val bottomLabel = if (compat) "ページ最下部へ" else "最下部"
         rule.onNodeWithContentDescription(bottomLabel).performClick()
         rule.waitForIdle()
-        rule.onNodeWithText(if (compat) "新着レス 20件" else "ここから新着（20件）").assertIsDisplayed()
+        rule.onNodeWithText("新着レス 20件").assertIsDisplayed()
+        val divider = rule.onNodeWithTag(
+            if (compat) "compat-new-replies-divider" else "thread-new-replies-divider",
+            useUnmergedTree = true
+        ).assertIsDisplayed()
+        val pixels = divider.captureToImage().toPixelMap()
+        assertEquals(Color(0xFF91CAC3), pixels[0, 0])
+        val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        val mode = if (compat) "toshiaki" else if (tree) "futacha-tree" else "futacha"
+        java.io.File(rule.activity.filesDir, "new-replies-$mode.png").outputStream().use {
+            screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
         rule.onAllNodesWithText("POST-21-LINE-1", substring = true).onFirst().assertIsDisplayed()
         rule.onNodeWithText("POST-40-LINE-1", substring = true).assertIsNotDisplayed()
         rule.onNodeWithContentDescription(bottomLabel).performClick()

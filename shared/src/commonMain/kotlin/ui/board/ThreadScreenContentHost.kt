@@ -137,7 +137,7 @@ internal fun ThreadScreenContentHost(
                 }
             }
             var lastVisibleFilteredPage by remember(state.page) { mutableStateOf(state.page) }
-            val filteredPage by produceState(
+            val normallyFilteredPage by produceState(
                 initialValue = cachedFilteredPage ?: lastVisibleFilteredPage,
                 key1 = filterCacheKey
             ) {
@@ -184,6 +184,8 @@ internal fun ThreadScreenContentHost(
                 value = filterResult.toThreadPage(state.page)
                 lastVisibleFilteredPage = value
             }
+            val filteredPage = rememberFutachaFilteredThreadPage(state.page, normallyFilteredPage,
+                bindings.ngHeaders, bindings.ngWords)
             val onPostLongPress: (Post) -> Unit = { post ->
                 bindings.setPostOverlayState(
                     openThreadPostActionOverlay(

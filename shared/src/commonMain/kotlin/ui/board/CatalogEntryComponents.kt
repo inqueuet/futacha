@@ -1,6 +1,7 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,6 +34,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.valoser.futacha.shared.analytics.AnalyticsTracker
 import com.valoser.futacha.shared.analytics.analyticsCountBucket
 import com.valoser.futacha.shared.analytics.analyticsPresentValue
@@ -48,6 +51,10 @@ internal fun CatalogCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val features = LocalFutachaSharedFeatures.current
+    val titleLength = features?.intValue("catalog", "catalogGridViewTitleLength", 0..30)
+    val titleSize = features?.intValue("catalog", "catalogGridViewTitleFontSize", 6..30)
+    val countOnImage = features?.value("catalog", "catalogGridViewResCountOnThumb") != "OFF"
     val isWatchWordMatch = matchedWatchWords.isNotEmpty()
     val density = LocalDensity.current
     val targetSizePx = with(density) { 50.dp.toPx().toInt() }
@@ -59,6 +66,7 @@ internal fun CatalogCard(
         resolveHeadMetadata = resolveHeadMetadata
     )
 
+    val onLongPress = LocalFutachaCatalogLongPress.current
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
@@ -68,15 +76,14 @@ internal fun CatalogCard(
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                 ),
                 shape = MaterialTheme.shapes.small
-            ),
-        onClick = {
+            ).combinedClickable(onLongClick = onLongPress?.let { { it(item) } }, onClick = {
             AnalyticsTracker.uiControl(
                 "catalog_card",
                 "カタログのグリッドカードを開く",
                 catalogItemAnalyticsParams(item, boardUrl, matchedWatchWords.size)
             )
             onClick()
-        },
+        }),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -103,7 +110,7 @@ internal fun CatalogCard(
                         fallbackTint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                CatalogReplyCountBadge(
+                if (countOnImage) CatalogReplyCountBadge(
                     replyCount = item.replyCount,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -115,9 +122,10 @@ internal fun CatalogCard(
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp, vertical = 4.dp)
             ) {
+                if (!countOnImage) Text("${item.replyCount}レス", style = MaterialTheme.typography.labelSmall)
                 Text(
-                    text = displayTitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    text = titleLength?.let(displayTitle::take) ?: displayTitle,
+                    style = titleSize?.let { MaterialTheme.typography.bodySmall.copy(fontSize = it.sp) } ?: MaterialTheme.typography.bodySmall,
                     color = if (isWatchWordMatch) MaterialTheme.colorScheme.error else Color.Unspecified,
                     fontWeight = if (isWatchWordMatch) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
@@ -150,6 +158,12 @@ internal fun CatalogListItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val features = LocalFutachaSharedFeatures.current
+    val titleLength = features?.intValue("catalog", "catalogListViewTitleLength", 0..30)
+    val titleSize = features?.intValue("catalog", "catalogListViewTitleFontSize", 6..30)
+    val window = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+    val rows = features?.intValue("catalog", "catalogListViewLineNum", 3..20)
+    val minimumRowHeight = rows?.let { with(LocalDensity.current) { (maxOf(window.width, window.height).toFloat() / it).toDp() } } ?: 0.dp
     val isWatchWordMatch = matchedWatchWords.isNotEmpty()
     val density = LocalDensity.current
     val targetSizePx = with(density) { 72.dp.toPx().toInt() }
@@ -161,16 +175,16 @@ internal fun CatalogListItem(
         resolveHeadMetadata = resolveHeadMetadata
     )
 
+    val onLongPress = LocalFutachaCatalogLongPress.current
     ElevatedCard(
-        modifier = modifier.fillMaxWidth(),
-        onClick = {
+        modifier = modifier.fillMaxWidth().heightIn(min = minimumRowHeight).combinedClickable(onLongClick = onLongPress?.let { { it(item) } }, onClick = {
             AnalyticsTracker.uiControl(
                 "catalog_card",
                 "カタログのリストカードを開く",
                 catalogItemAnalyticsParams(item, boardUrl, matchedWatchWords.size)
             )
             onClick()
-        },
+        }),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Row(
@@ -206,8 +220,8 @@ internal fun CatalogListItem(
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = displayTitle,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = titleLength?.let(displayTitle::take) ?: displayTitle,
+                    style = titleSize?.let { MaterialTheme.typography.titleMedium.copy(fontSize = it.sp) } ?: MaterialTheme.typography.titleMedium,
                     color = if (isWatchWordMatch) MaterialTheme.colorScheme.error else Color.Unspecified,
                     fontWeight = if (isWatchWordMatch) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 2,

@@ -245,8 +245,8 @@ fun CompatToolbarEditorScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = palette.chrome,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
+                    titleContentColor = palette.chromeContent,
+                    navigationIconContentColor = palette.chromeContent
                 )
             )
         }

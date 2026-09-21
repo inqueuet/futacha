@@ -7,6 +7,9 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.valoser.futacha.shared.model.Post
@@ -71,9 +74,11 @@ internal data class ThreadScreenOverlayHostBindings(
 
 @Composable
 internal fun ThreadScreenOverlayHost(
-    bindings: ThreadScreenOverlayHostBindings
+    bindings: ThreadScreenOverlayHostBindings,
+    httpClient: io.ktor.client.HttpClient? = null
 ) {
     val galleryGridState = rememberLazyGridState()
+    var imageSearchUrl by remember { mutableStateOf<String?>(null) }
 
     val sheetTarget = bindings.postOverlayState.actionSheetState.targetPost
     if (bindings.postOverlayState.actionSheetState.isActionSheetVisible && sheetTarget != null) {
@@ -97,7 +102,11 @@ internal fun ThreadScreenOverlayHost(
             onPreview = { bindings.onPreviewAttachment(attachmentTarget) },
             onJumpToPost = { bindings.onJumpToAttachmentPost(attachmentTarget) },
             onSave = { bindings.onSaveAttachment(attachmentTarget) },
-            onOpenExternal = { bindings.onOpenAttachmentExternally(attachmentTarget) }
+            onOpenExternal = { bindings.onOpenAttachmentExternally(attachmentTarget) },
+            onImageSearch = {
+                bindings.onDismissAttachmentActionSheet()
+                imageSearchUrl = attachmentTarget.url
+            }
         )
     }
 
@@ -138,6 +147,7 @@ internal fun ThreadScreenOverlayHost(
         ) {
             ThreadFormDialog(
                 title = "返信",
+                boardUrl = bindings.effectiveBoardUrl,
                 subtitle = subtitle,
                 barColorScheme = bindings.appColorScheme,
                 attachmentPickerPreference = bindings.preferencesState.attachmentPickerPreference,
@@ -179,7 +189,8 @@ internal fun ThreadScreenOverlayHost(
             onDismiss = bindings.uiBindings.mediaPreviewDialogCallbacks.onDismiss,
             onNavigateNext = bindings.uiBindings.mediaPreviewDialogCallbacks.onNavigateNext,
             onNavigatePrevious = bindings.uiBindings.mediaPreviewDialogCallbacks.onNavigatePrevious,
-            onSave = bindings.uiBindings.mediaPreviewDialogCallbacks.onSave
+            onSave = bindings.uiBindings.mediaPreviewDialogCallbacks.onSave,
+            onImageSearch = { imageSearchUrl = it.url }
         )
     }
 
@@ -195,6 +206,15 @@ internal fun ThreadScreenOverlayHost(
                 gridState = galleryGridState
             )
         }
+    }
+
+    imageSearchUrl?.let { url ->
+        ThreadImageSearchDialog(
+            imageUrl = url,
+            httpClient = httpClient,
+            cookieRepository = bindings.cookieRepository,
+            onDismiss = { imageSearchUrl = null }
+        )
     }
 
     if (bindings.sheetOverlayState.isSettingsVisible) {
@@ -249,10 +269,11 @@ internal fun ThreadScreenOverlayHost(
     }
 
     if (bindings.isPrivacyFilterEnabled) {
+        val opacity = LocalFutachaSharedFeatures.current?.intValue("thread", "commonPrivacyAlpha", 0..100)?.let { 1f - it / 100f } ?: 0.5f
         Canvas(
             modifier = Modifier.fillMaxSize()
         ) {
-            drawRect(color = Color.White.copy(alpha = 0.5f))
+            drawRect(color = Color.White.copy(alpha = opacity))
         }
     }
 

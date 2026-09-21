@@ -182,7 +182,7 @@ private fun CatalogScreenContent(
     val httpClient = contextHandles.httpClient
     val modifier = contextHandles.modifier
     val screenSetupHandles = setupHandles.setupHandles
-    val activeRepository = screenSetupHandles.activeRepository
+    val activeRepository = rememberFutachaSharedRepository(screenSetupHandles.activeRepository)
     val archiveSearchScope = screenSetupHandles.archiveSearchScope
     val runtimeHandles = setupHandles.runtimeHandles
     val snackbarHostState = runtimeHandles.snackbarHostState
@@ -608,7 +608,22 @@ private fun CatalogScreenContent(
         )
     )
 
-    CatalogScreenScaffold(bindings = scaffoldBindings, modifier = modifier)
-
-    CatalogScreenOverlayHost(bindings = overlayHostBindings)
+    FutachaCatalogFeatureHost(board, catalogMode, uiState.value, activeRepository, onThreadSelected,
+        onRestore = { uiState.value = it },
+        onScrollPage = { direction -> coroutineScope.launch {
+            if (catalogDisplayStyle == com.valoser.futacha.shared.model.CatalogDisplayStyle.Grid) {
+                catalogGridState.animateScrollToItem((catalogGridState.firstVisibleItemIndex + direction * catalogGridColumns * 4)
+                    .coerceIn(0, (catalogGridState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+            } else {
+                catalogListState.animateScrollToItem((catalogListState.firstVisibleItemIndex + direction * 5)
+                    .coerceIn(0, (catalogListState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+            }
+        } }, onScrollTop = { coroutineScope.launch {
+            catalogGridState.scrollToItem(0); catalogListState.scrollToItem(0)
+        } }, onRefresh = performRefresh, onOpenHistoryThread = onHistoryEntrySelected,
+        ngFilteringEnabled = scaffoldBindings.catalogNgFilteringEnabled
+    ) { projectedState ->
+        CatalogScreenScaffold(bindings = scaffoldBindings.copy(uiState = projectedState), modifier = modifier)
+        CatalogScreenOverlayHost(bindings = overlayHostBindings)
+    }
 }

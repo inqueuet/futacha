@@ -101,13 +101,23 @@ internal fun ThreadPostCard(
         post.isDeleted || post.isIsolated -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
         else -> MaterialTheme.colorScheme.surface
     }
-    val saidaneLabel = saidaneLabelOverride ?: post.saidaneLabel
-    var showDeletedBody by remember(post.id, post.messageHtml, post.isDeleted, post.isIsolated) {
-        mutableStateOf(false)
+    val features = LocalFutachaSharedFeatures.current
+    val rawSaidane = saidaneLabelOverride ?: post.saidaneLabel
+    val saidaneStyle = features?.value("thread", "threadHeaderSoudaneDisplay")
+    val saidaneLabel = when (saidaneStyle?.substringBefore('|')) {
+        "hide" -> null
+        "simple" -> parseSaidaneCount(rawSaidane)?.toString()
+        else -> rawSaidane
     }
-    val cardModifier = if (onLongPress != null) {
-        modifier.pointerInput(onLongPress) {
-            detectTapGestures(onLongPress = { onLongPress() })
+    val sharedShowDeleted = features?.value("thread", "threadAdminDeleteShow") == "ON"
+    var showDeletedBody by remember(post.id, post.messageHtml, post.isDeleted, post.isIsolated, sharedShowDeleted) {
+        mutableStateOf(sharedShowDeleted)
+    }
+    val onPostTap = LocalFutachaPostTap.current
+    val cardModifier = if (onLongPress != null || onPostTap != null) {
+        modifier.pointerInput(onLongPress, onPostTap) {
+            detectTapGestures(onLongPress = onLongPress?.let { { _: androidx.compose.ui.geometry.Offset -> it() } },
+                onTap = onPostTap?.let { { _: androidx.compose.ui.geometry.Offset -> it() } })
         }
     } else {
         modifier
@@ -157,9 +167,8 @@ internal fun ThreadPostCard(
         val thumbnailForDisplay = if (shouldCollapseDeletedBody) null else resolvePostDisplayMediaUrl(post)
         thumbnailForDisplay?.let { displayUrl ->
             val imageLoader = LocalFutachaImageLoader.current
-            val thumbnailMaxHeight = remember(postImageSize) {
-                resolveThreadPostThumbnailMaxHeight(postImageSize)
-            }
+            val thumbnailMaxHeight = features?.intValue("thread", "threadThumbSize", 150..1200)?.dp
+                ?: resolveThreadPostThumbnailMaxHeight(postImageSize)
             val thumbnailTargetWidthPx = remember(density) {
                 with(density) { ThreadPostThumbnailMaxWidth.roundToPx() }
             }
@@ -258,6 +267,17 @@ internal fun ThreadPostCard(
                 bodyTextSize = bodyTextSize
             )
         } else {
+            if (features != null) {
+                val method = features.value("thread", "threadUpsThumbMethod") ?: com.valoser.futacha.shared.ui.compat.COMPAT_DEFAULT_APU_SMALL_THUMB_METHOD
+                val wifi = com.valoser.futacha.shared.ui.compat.isCompatWifiConnected(platformContext)
+                val urls = remember(post.messageHtml, method, wifi) {
+                    com.valoser.futacha.shared.ui.compat.compatVisibleInlineApuSmallMediaUrls(post.messageHtml, method, wifi)
+                        .filterNot { it == post.imageUrl || it == post.thumbnailUrl }
+                }
+                com.valoser.futacha.shared.ui.compat.CompatInlineApuSmallPreviews(urls,
+                    features.intValue("thread", "threadUpsThumbSize", 150..1200) ?: 250, 1f,
+                    { url -> if (onMediaClick != null) onMediaClick(url, determineMediaType(url)) else onUrlClick(url) })
+            }
             ThreadMessageText(
                 messageHtml = post.messageHtml,
                 isDeleted = post.isDeleted || post.isIsolated,
@@ -426,8 +446,9 @@ internal fun ThreadPostMetadata(
         modifier = Modifier.fillMaxWidth().testTag("futacha-post-header-${post.id}"),
         verticalArrangement = Arrangement.spacedBy(if (compactHeader) 2.dp else 6.dp)
     ) {
-        val subjectText = post.subject?.ifBlank { "無題" } ?: "無題"
-        val authorText = post.author?.ifBlank { "名無し" } ?: "名無し"
+        val hideDefaults = LocalFutachaSharedFeatures.current?.value("thread", "threadHideDefaultNameAndSubject") == "ON"
+        val subjectText = (post.subject?.ifBlank { "無題" } ?: "無題").let { if (hideDefaults && it in setOf("無題", "無念")) "" else it }
+        val authorText = (post.author?.ifBlank { "名無し" } ?: "名無し").let { if (hideDefaults && it in setOf("名無し", "としあき")) "" else it }
         val timestampText = remember(post.timestamp) {
             extractTimestampWithoutId(post.timestamp)
         }
@@ -605,7 +626,7 @@ private fun ReplyCountLabel(
     val labelModifier = onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
     Text(
         modifier = labelModifier,
-        text = "${count}レス",
+        text = if (LocalFutachaSharedFeatures.current?.value("thread", "threadHeaderQuoteSimple") == "ON") "+$count" else "${count}レス",
         style = MaterialTheme.typography.labelMedium.withThreadTextSize(
             bodyTextSize = bodyTextSize,
             fallbackFontSize = 12.sp,

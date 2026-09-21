@@ -55,6 +55,7 @@ import com.valoser.futacha.shared.util.ImageData
 @Composable
 internal fun CreateThreadDialog(
     boardName: String?,
+    boardUrl: String = "",
     attachmentPickerPreference: AttachmentPickerPreference,
     preferredFileManagerPackage: String?,
     name: String,
@@ -79,6 +80,7 @@ internal fun CreateThreadDialog(
 
     ThreadFormDialog(
         title = "スレ立て",
+        boardUrl = boardUrl,
         subtitle = boardName?.takeIf { it.isNotBlank() },
         barColorScheme = MaterialTheme.colorScheme,
         attachmentPickerPreference = attachmentPickerPreference,

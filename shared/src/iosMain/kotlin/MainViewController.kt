@@ -878,7 +878,8 @@ fun MainViewController(issue78ArchiveFixture: Boolean): UIViewController {
                         profile = profile,
                         generation = generation,
                         enabled = when (profile) {
-                            ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled || archiveReportEnabled
+                            ExperienceProfile.FUTACHA -> backgroundEnabled || watchAlertEnabled || archiveReportEnabled ||
+                                com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(compatPreferences)
                             ExperienceProfile.TOSHIAKI_COMPAT -> compatEnabled
                         }
                     )
@@ -1271,12 +1272,27 @@ private suspend fun runIosBackgroundRefresh(
         val archiveStore = IosAppGraph.compatibilityStore
         archiveStore.initialize()
         val archiveReportEnabled = archiveStore.loadPreference(ARCHIVE_REPORT_ENABLED_PREFERENCE_KEY) != "OFF"
-        if (!backgroundEnabled && !watchAlertEnabled && !archiveReportEnabled) {
+        val sharedFeaturesEnabled = com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(archiveStore.preferences.first())
+        if (!backgroundEnabled && !watchAlertEnabled && !archiveReportEnabled && !sharedFeaturesEnabled) {
             Logger.d("BackgroundRefresh", "iOS background refresh disabled; skipping run")
             return
         }
         Logger.d("BackgroundRefresh", "Starting iOS background refresh run (maxThreadsPerRun=$maxThreadsPerRun, watchAlert=$watchAlertEnabled)")
         withTimeout(refreshTimeoutMillis) {
+            if (sharedFeaturesEnabled) {
+                com.valoser.futacha.shared.compat.refreshSharedFeatures(archiveStore, repo, isCompatWifiConnected(null),
+                    maxTabs = maxThreadsPerRun, onNewMatches = { matches ->
+                        val alerts = matches.map { match -> com.valoser.futacha.shared.service.CatalogWatchAlertMatch(
+                            threadId = match.history.threadNo, boardId = match.history.boardKey,
+                            boardName = match.history.boardName, boardUrl = match.history.originalUrl.substringBefore("/res/"),
+                            title = match.history.title, titleImageUrl = match.history.thumbnailUrl.orEmpty(),
+                            replyCount = match.history.replyCount, detectedAtEpochMillis = match.history.contentUpdatedAtEpochMillis) }
+                        val fresh = filterNewIosWatchAlertMatches(alerts)
+                        if (fresh.isNotEmpty()) { notifyIosWatchAlertMatches(fresh); markIosWatchAlertMatchesNotified(fresh) }
+                    }, commitGate = { commit ->
+                        profileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
+                    })
+            }
             if (backgroundEnabled) {
                 refresher.refresh(
                     autoSaveBudgetMillis = autoSaveBudgetMillis,

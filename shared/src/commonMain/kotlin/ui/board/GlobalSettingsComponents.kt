@@ -200,6 +200,14 @@ internal fun GlobalSettingsScaffold(
                 )
             }
             item {
+                if (LocalFutachaSharedFeatures.current != null) SettingsSection(
+                    title = "操作", icon = Icons.Rounded.History,
+                    description = "スクロール・長押し・音量キー・投稿時の確認。両モードで共通です。"
+                ) {
+                    SharedSettingsLink("control", "コントロール", "画面操作と投稿時の確認")
+                }
+            }
+            item {
                 SettingsSection(
                     title = "メディア機能",
                     icon = Icons.Rounded.Image,
@@ -212,6 +220,8 @@ internal fun GlobalSettingsScaffold(
                     com.valoser.futacha.shared.ui.media.DeviceVideoEditorSettings()
                     HorizontalDivider()
                     com.valoser.futacha.shared.ui.media.MediaHelpButton()
+                    SharedSettingsLink("viewer", "画像ビューア", "列数・画像の先読み")
+                    SharedSettingsLink("image_search", "画像検索", "メニューに表示する検索先")
                 }
             }
             item {
@@ -229,7 +239,12 @@ internal fun GlobalSettingsScaffold(
                 )
             }
             item {
-                GlobalSettingsCatalogFetchSection(
+                if (LocalFutachaSharedFeatures.current != null) SettingsSection(
+                    title = "カタログ", icon = Icons.Rounded.History,
+                    description = "表示・取得件数・更新を両モードで共有します。"
+                ) {
+                    SharedSettingsLink("catalog", "カタログの表示・取得", "列数・文字・画像・スレッド数・消えたスレ")
+                } else GlobalSettingsCatalogFetchSection(
                     catalogFetchRows = bindings.behavior.catalogFetchRows,
                     onCatalogFetchRowsChanged = bindings.behavior.onCatalogFetchRowsChanged
                 )
@@ -266,6 +281,14 @@ internal fun GlobalSettingsScaffold(
                     isLightweightModeEnabled = bindings.behavior.isLightweightModeEnabled,
                     onLightweightModeChanged = bindings.behavior.onLightweightModeChanged
                 )
+            }
+            item {
+                if (LocalFutachaSharedFeatures.current != null) SettingsSection(
+                    title = "バックアップ・復元", icon = Icons.Rounded.History,
+                    description = "設定・監視ワード・NGの保存と復元。"
+                ) {
+                    SharedSettingsLink("backup", "バックアップを開く", "設定の保存・復元、旧版データの取り込み")
+                }
             }
             item {
                 GlobalSettingsAiSection(
@@ -305,6 +328,16 @@ internal fun GlobalSettingsScaffold(
             }
         }
     }
+}
+
+@Composable
+internal fun SharedSettingsLink(path: String, title: String, description: String) {
+    val features = LocalFutachaSharedFeatures.current ?: return
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(description) },
+        modifier = Modifier.fillMaxWidth().clickable { features.openSettings(path) }
+    )
 }
 
 @Composable
@@ -428,11 +461,14 @@ internal fun GlobalSettingsDisplaySection(
     appIconVariant: AppIconVariant,
     onAppIconVariantChanged: (AppIconVariant) -> Unit
 ) {
+    val sharedFeatures = LocalFutachaSharedFeatures.current
     SettingsSection(
         title = "表示",
         icon = Icons.Rounded.Palette,
         description = "テーマ、文字、画像、スレッドの見え方をまとめています。"
     ) {
+        SharedSettingsLink("design", "フォント・タブ一覧", "フォントとタブ一覧の設定を両モードで共有します。配色はふたちゃのテーマに従います。")
+        SharedSettingsLink("thread", "スレッドの表示・画像サイズ", "レスの文字・画像・NG・抽出・スクロール")
         ListItem(
             headlineContent = { Text("テーマモード") },
             supportingContent = {
@@ -541,6 +577,7 @@ internal fun GlobalSettingsDisplaySection(
                 )
         )
         HorizontalDivider()
+        if (sharedFeatures == null) {
         ListItem(
             headlineContent = { Text("レス画像サイズ") },
             supportingContent = {
@@ -564,6 +601,7 @@ internal fun GlobalSettingsDisplaySection(
                 selected = threadPostImageSize == size,
                 onClick = { onThreadPostImageSizeChanged(size) }
             )
+        }
         }
         HorizontalDivider()
         ListItem(
@@ -627,6 +665,8 @@ internal fun GlobalSettingsBackgroundSection(
         icon = Icons.Rounded.History,
         description = "自動更新、通信量、匿名の品質改善データに関わる動作をまとめています。"
     ) {
+        SharedSettingsLink("network", "ネットワーク", "キャッシュサーバー・画像の同時取得")
+        SharedSettingsLink("background", "タブの自動確認", "生存確認・更新確認・巡回の通信条件")
         ListItem(
             headlineContent = { Text("アップデート確認") },
             supportingContent = {

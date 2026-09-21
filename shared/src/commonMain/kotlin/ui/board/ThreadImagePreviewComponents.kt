@@ -62,6 +62,7 @@ internal fun ImagePreviewDialog(
     onNavigateNext: () -> Unit,
     onNavigatePrevious: () -> Unit,
     onSave: (() -> Unit)? = null,
+    onImageSearch: (() -> Unit)? = null,
     isSaveEnabled: Boolean = true,
     isSaveInProgress: Boolean = false
 ) {
@@ -220,6 +221,16 @@ internal fun ImagePreviewDialog(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (onImageSearch != null && threadImageSearchTargets(entry.url).isNotEmpty()) {
+                    FilledTonalButton(
+                        onClick = onImageSearch,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color.Black.copy(alpha = 0.5f),
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) { Text("画像検索") }
+                }
                 if (onSave != null) {
                     FilledTonalButton(
                         onClick = {

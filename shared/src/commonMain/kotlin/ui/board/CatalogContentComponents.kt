@@ -25,7 +25,9 @@ internal fun LoadingCatalog(modifier: Modifier = Modifier) {
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        androidx.compose.material3.CircularProgressIndicator()
+        val style = LocalFutachaSharedFeatures.current?.value("design", "designLoading")
+        if (style == null) androidx.compose.material3.CircularProgressIndicator()
+        else com.valoser.futacha.shared.ui.compat.CompatLoadingIndicator(style, Modifier, 48.dp)
     }
 }
 
@@ -67,6 +69,10 @@ internal fun CatalogSuccessContent(
     resolveHeadMetadata: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val features = LocalFutachaSharedFeatures.current
+    val window = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+    val landscape = window.width > window.height
+    val sharedColumns = features?.intValue("catalog", if (landscape) "catalogGridViewLandscapeClmNum" else "catalogGridViewPortraitClmNum", 2..12)
     if (items.isEmpty()) {
         CatalogEmptyContent(
             isSearching = isSearching,
@@ -75,7 +81,7 @@ internal fun CatalogSuccessContent(
     } else {
         val shouldResolveHeadMetadata = resolveHeadMetadata &&
             titleCompletionPolicy.enabled &&
-            (displayStyle != CatalogDisplayStyle.Grid || gridColumns <= 6)
+            (displayStyle != CatalogDisplayStyle.Grid || (sharedColumns ?: gridColumns) <= 6)
         val resolvedHeadTitles = rememberCatalogHeadMetadataTitles(
             items = items,
             embeddedHtml = embeddedHtml,
@@ -96,7 +102,7 @@ internal fun CatalogSuccessContent(
                 onThreadSelected = onThreadSelected,
                 onRefresh = onRefresh,
                 isRefreshing = isRefreshing,
-                gridColumns = gridColumns,
+                gridColumns = sharedColumns ?: gridColumns,
                 gridState = gridState,
                 resolvedHeadTitles = resolvedHeadTitles,
                 resolveHeadMetadata = shouldResolveHeadMetadata,

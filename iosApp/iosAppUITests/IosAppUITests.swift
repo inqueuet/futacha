@@ -2281,6 +2281,45 @@ final class IosAppUITests: XCTestCase {
         XCTAssertTrue(threadContent.waitForExistence(timeout: 5), "Closing the filter left the thread screen.")
     }
 
+    func testFutachaImageSearchOpensFromPreviewAndAttachmentMenu() throws {
+        let app = makeApplication()
+        // Give the bundled tutorial its own board so an earlier test's offline
+        // snapshot cannot replace its original image with a missing thumbnail.
+        let boardId = "image-search-\(UUID().uuidString)"
+        let boardUrl = "https://www.example.com/\(boardId)/futaba.php"
+        let boards = [["id": boardId, "name": "チュートリアル", "category": "テスト",
+                       "url": boardUrl, "description": "画像検索テスト"]]
+        let boardJson = String(data: try JSONEncoder().encode(boards), encoding: .utf8)!
+        let boardArgument = String(data: try JSONEncoder().encode(boardJson), encoding: .utf8)!
+        app.launchArguments += ["-experience.active_profile", "futacha", "-update_check_enabled", "false",
+                                "-boards_json", boardArgument]
+        app.launch()
+        let board = boardCard(in: app, url: boardUrl)
+        XCTAssertTrue(board.waitForExistence(timeout: 15))
+        board.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "チュートリアル")).firstMatch.tap()
+        let attachment = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "1762576973515")).firstMatch
+        XCTAssertTrue(attachment.waitForExistence(timeout: 10), app.debugDescription)
+        attachment.tap()
+        XCTAssertTrue(app.buttons["画像検索"].waitForExistence(timeout: 5))
+        app.buttons["画像検索"].tap()
+        XCTAssertTrue(app.buttons["Google画像検索 (File)"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Google Lens (URL)"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "futacha-image-search-providers"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.buttons["閉じる"].firstMatch.tap()
+        app.buttons["プレビューを閉じる"].tap()
+        attachment.press(forDuration: 1.0)
+        let search = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "画像検索")).firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5), app.debugDescription)
+        search.tap()
+        XCTAssertTrue(app.buttons["Google画像検索 (File)"].waitForExistence(timeout: 5))
+        app.buttons["閉じる"].firstMatch.tap()
+        XCTAssertTrue(app.otherElements["futacha-thread-content"].waitForExistence(timeout: 5))
+    }
+
     func testToshiakiThreadSearchAndGalleryOpenAndReturnToPager() {
         let app = makeApplication()
         app.launchArguments += [
@@ -3485,6 +3524,50 @@ final class IosAppUITests: XCTestCase {
             app.staticTexts["チュートリアル＠ふたちゃ"].waitForExistence(timeout: 10),
             "Returning from saved threads did not restore the board list."
         )
+    }
+
+    func testFutachaSharedDetailedSettingsOpenWithoutChangingMode() {
+        let app = makeApplication()
+        app.launchArguments += ["-experience.active_profile", "futacha", "-experience.profile_generation", "1020"]
+        app.launch()
+        XCTAssertTrue(app.buttons["メニュー"].waitForExistence(timeout: 20))
+        app.buttons["メニュー"].tap()
+        let settings = app.staticTexts["設定"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        let shared = app.staticTexts["操作"].firstMatch
+        for _ in 0..<6 where !shared.isHittable { app.swipeUp() }
+        XCTAssertTrue(shared.waitForExistence(timeout: 10))
+        shared.tap()
+        let control = app.staticTexts["コントロール"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 10))
+        control.tap()
+        let confirmation = app.staticTexts["送信時の確認"].firstMatch
+        for _ in 0..<8 where !confirmation.isHittable { app.swipeUp() }
+        XCTAssertTrue(confirmation.isHittable)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "futacha-shared-control-settings"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.buttons["戻る"].firstMatch.tap()
+        XCTAssertFalse(app.staticTexts["共通の詳細設定"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["モード"].firstMatch.waitForExistence(timeout: 10))
+        let display = app.staticTexts["表示"].firstMatch
+        for _ in 0..<6 where !display.isHittable { app.swipeUp() }
+        XCTAssertTrue(display.isHittable)
+        display.tap()
+        let fontAndTabs = app.staticTexts["フォント・タブ一覧"].firstMatch
+        for _ in 0..<6 where !fontAndTabs.isHittable { app.swipeUp() }
+        XCTAssertTrue(fontAndTabs.isHittable)
+        fontAndTabs.tap()
+        XCTAssertTrue(app.staticTexts["カスタムフォント"].waitForExistence(timeout: 10))
+        for legacyColorSetting in ["カラーテーマ", "文字色", "ナビゲーションバー背景色"] {
+            XCTAssertFalse(app.staticTexts[legacyColorSetting].exists)
+        }
+        let themeScreenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        themeScreenshot.name = "futacha-shared-design-follows-modern-theme"
+        themeScreenshot.lifetime = .keepAlways
+        add(themeScreenshot)
     }
 
     func testFutachaModeSwitchDialogExplainsCompatibilityProfile() {

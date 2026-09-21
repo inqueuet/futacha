@@ -31,7 +31,8 @@ import com.valoser.futacha.shared.model.BoardSummary
 internal fun BoardSummaryCard(
     board: BoardSummary,
     onClick: () -> Unit,
-    onPinToggle: (() -> Unit)? = null
+    onPinToggle: (() -> Unit)? = null,
+    onRename: (() -> Unit)? = null
 ) {
     Card(
         onClick = {
@@ -50,7 +51,14 @@ internal fun BoardSummaryCard(
             leadingContent = { BoardSummaryLeadingIcon(board = board) },
             trailingContent = onPinToggle?.let { toggle ->
                 {
-                    BoardPinToggleButton(board = board, onToggle = toggle)
+                    androidx.compose.foundation.layout.Row {
+                        if (onRename != null) {
+                            IconButton(onClick = onRename) {
+                                Text("改名", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        BoardPinToggleButton(board = board, onToggle = toggle)
+                    }
                 }
             }
         )

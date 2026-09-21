@@ -6,6 +6,7 @@ import com.valoser.futacha.shared.model.ThemePalette
 import com.valoser.futacha.shared.model.ThemeMode
 import com.valoser.futacha.shared.ui.board.resolveFutabaThreadColorScheme
 import com.valoser.futacha.shared.ui.board.resolveFutabaThreadColors
+import com.valoser.futacha.shared.ui.board.futachaSharedPalette
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -13,6 +14,31 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class FutachaThemeContractTest {
+    @Test
+    fun reusedFeatureControlsFollowEveryFutachaPaletteAndKeepTheRequestedNewReplyBand() {
+        ThemePalette.entries.forEach { theme ->
+            listOf(false, true).forEach { dark ->
+                val colors = resolveFutachaColorScheme(dark, theme)
+                val chrome = resolveFutachaChromeColors(colors, dark, theme)
+                val shared = futachaSharedPalette(colors, chrome, theme)
+                val thread = resolveFutabaThreadColors(theme, colors)
+                assertEquals(chrome.topBar, shared.chrome)
+                assertEquals(chrome.onBar, shared.chromeContent)
+                assertEquals(chrome.systemBar, shared.statusBarChrome)
+                assertEquals(colors.background, shared.background)
+                assertEquals(colors.surface, shared.menuSurface)
+                assertEquals(colors.surface, shared.dialogSurface)
+                assertEquals(thread.link, shared.bodyLink)
+                assertEquals(thread.quote, shared.bodyQuote)
+                assertTrue(contrastRatio(shared.uiPrimaryText, shared.dialogSurface) >= 4.5f)
+                assertTrue(contrastRatio(shared.text, shared.background) >= 4.5f)
+                assertTrue(contrastRatio(shared.accent, shared.background) >= 2.5f)
+                assertEquals(Color(0xFF91CAC3), shared.newReplyBackground)
+                assertEquals(Color.White, shared.newReplyContent)
+            }
+        }
+    }
+
     private fun contrastRatio(foreground: Color, background: Color): Float {
         val lighter = maxOf(foreground.luminance(), background.luminance())
         val darker = minOf(foreground.luminance(), background.luminance())

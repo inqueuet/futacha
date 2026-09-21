@@ -268,6 +268,7 @@ internal fun Modifier.edgeSwipeRefresh(
     onOverscrollTargetChanged: (Float) -> Unit,
     onRefresh: () -> Unit
 ): Modifier = composed {
+    if (!LocalFutachaScrollRefreshEnabled.current) return@composed this
     val latestIsRefreshing by rememberUpdatedState(isRefreshing)
     val latestIsAtTop by rememberUpdatedState(isAtTop)
     val latestIsAtBottom by rememberUpdatedState(isAtBottom)

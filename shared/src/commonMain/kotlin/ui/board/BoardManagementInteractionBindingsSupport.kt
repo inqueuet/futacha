@@ -75,7 +75,8 @@ internal data class BoardManagementBoardListCallbacks(
     val onDeleteClick: (BoardSummary) -> Unit,
     val onPinClick: (boards: List<BoardSummary>, index: Int) -> Unit,
     val onMoveUp: (boards: List<BoardSummary>, index: Int) -> Unit,
-    val onMoveDown: (boards: List<BoardSummary>, index: Int) -> Unit
+    val onMoveDown: (boards: List<BoardSummary>, index: Int) -> Unit,
+    val onRename: (boards: List<BoardSummary>, boardId: String, name: String) -> Unit = { _, _, _ -> }
 )
 
 internal fun mutateBoardManagementOverlayState(
@@ -182,6 +183,9 @@ internal fun buildBoardManagementInteractionBindingsBundle(
         },
         onMoveDown = { boards, index ->
             boardInputs.onBoardsReordered(moveBoardSummary(boards, index, moveUp = false))
+        },
+        onRename = { boards, boardId, name ->
+            boardInputs.onBoardsReordered(renameBoardSummary(boards, boardId, name))
         }
     )
     return BoardManagementInteractionBindingsBundle(

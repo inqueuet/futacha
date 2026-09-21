@@ -1,6 +1,8 @@
 package com.valoser.futacha.shared.ui.board
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -45,6 +47,7 @@ internal fun CatalogSettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -76,6 +79,10 @@ internal fun CatalogSettingsSheet(
                             onAction(menuItem)
                         }
                 )
+            }
+            LocalFutachaCatalogTools.current.forEach { tool ->
+                ListItem(headlineContent = { Text(tool.label) }, modifier = Modifier
+                    .fillMaxWidth().clickable(enabled = tool.enabled) { onDismiss(); tool.action() })
             }
         }
     }
@@ -361,7 +368,9 @@ internal fun DisplayStyleDialog(
                         )
                     }
                 }
-                if (currentStyle == CatalogDisplayStyle.Grid) {
+                if (currentStyle == CatalogDisplayStyle.Grid && LocalFutachaSharedFeatures.current != null) {
+                    SharedSettingsLink("catalog", "列数・文字・画像", "縦持ち・横持ちの列数を共通設定で変更")
+                } else if (currentStyle == CatalogDisplayStyle.Grid) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "列数",

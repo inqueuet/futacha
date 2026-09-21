@@ -49,7 +49,9 @@ class OriginalMediaStoreTest {
         val closeAttempts = AtomicInteger()
 
         override fun openReadOnly(file: Path): FileHandle {
-            val handle = super.openReadOnly(file)
+            // Match production's share-delete handle so Windows can commit the
+            // download before this wrapper injects the close failure.
+            val handle = FileSystem.SYSTEM.openOriginalMediaReadHandle(file)
             return object : FileHandle(readWrite = false) {
                 override fun protectedRead(fileOffset: Long, array: ByteArray, arrayOffset: Int, byteCount: Int) =
                     handle.read(fileOffset, array, arrayOffset, byteCount)

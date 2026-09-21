@@ -1,4 +1,5 @@
 package com.valoser.futacha.shared.ui.board
+import com.valoser.futacha.shared.ui.compat.CompatFastScrollbar
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -221,6 +222,7 @@ internal fun ThreadTreeContent(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
+                    .futachaTouchScroll(listState)
                     .offset { IntOffset(0, edgeSwipeRefreshBinding.visualState.overscrollOffset.value.toInt()) }
                     .edgeSwipeRefresh(
                         isRefreshing = isRefreshing,
@@ -384,6 +386,9 @@ internal fun ThreadTreeContent(
                 }
             }
 
+            if (LocalFutachaSharedFeatures.current?.value("thread", "threadFastScroll") == "ON") {
+                CompatFastScrollbar(true, listState.layoutInfo.totalItemsCount, listState)
+            }
             ThreadScrollbar(
                 listState = listState,
                 modifier = Modifier

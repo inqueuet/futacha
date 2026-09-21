@@ -101,6 +101,9 @@ internal fun GlobalSettingsSaveSection(
             modifier = Modifier.fillMaxWidth()
         )
         HorizontalDivider()
+        if (LocalFutachaSharedFeatures.current != null) {
+            SharedSettingsLink("storage", "保存先・キャッシュ", "通常保存と一括保存の保存先、容量・保存場所・キャッシュ削除")
+        } else {
         ListItem(
             headlineContent = { Text("スレ保存先") },
             supportingContent = {
@@ -242,6 +245,7 @@ internal fun GlobalSettingsSaveSection(
             },
             modifier = Modifier.fillMaxWidth()
         )
+        }
     }
 }
 
@@ -254,6 +258,7 @@ internal fun GlobalSettingsCacheSection(
         icon = Icons.Rounded.DeleteSweep,
         description = "表示用キャッシュを一括で掃除します。保存データは消えません。"
     ) {
+        if (LocalFutachaSharedFeatures.current == null) {
         ListItem(
             headlineContent = { Text("画像キャッシュ") },
             supportingContent = {
@@ -277,6 +282,7 @@ internal fun GlobalSettingsCacheSection(
             modifier = Modifier.fillMaxWidth()
         )
         HorizontalDivider()
+        }
         ListItem(
             headlineContent = { Text("一時キャッシュを掃除") },
             supportingContent = {

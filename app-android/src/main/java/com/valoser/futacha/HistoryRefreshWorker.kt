@@ -81,7 +81,8 @@ class HistoryRefreshWorker(
                 Result.failure()
             }
         }
-        if (!enabledState.hasAnyEnabled) {
+        val sharedFeaturesEnabled = com.valoser.futacha.shared.compat.sharedFeatureRefreshEnabled(app.compatibilityStore.preferences.first())
+        if (!enabledState.hasAnyEnabled && !sharedFeaturesEnabled) {
             Logger.d(TAG, "Background refresh disabled; skipping work")
             AnalyticsTracker.event(
                 "background_refresh_result",
@@ -94,6 +95,16 @@ class HistoryRefreshWorker(
             AnalyticsTracker.event("background_refresh_started", mapOf("source" to "workmanager"))
             CrashReporter.log("background_refresh_started source=workmanager")
             withTimeout(REFRESH_TIMEOUT_MILLIS) {
+                if (sharedFeaturesEnabled) {
+                    com.valoser.futacha.shared.compat.refreshSharedFeatures(app.compatibilityStore,
+                        app.boardRepository, isWifiConnected(), onNewMatches = { matches ->
+                            val fresh = filterNewWatchAlertMatches(applicationContext, matches.map { it.toCatalogWatchAlertMatch() })
+                            if (fresh.isNotEmpty() && isCurrentModernGeneration() && WatchAlertNotifier(applicationContext).notifyMatches(fresh))
+                                markWatchAlertMatchesNotified(applicationContext, fresh)
+                        }, commitGate = { commit ->
+                            app.experienceProfileStore.runIfGenerationCurrent(ExperienceProfile.FUTACHA, expectedGeneration, commit)
+                        })
+                }
                 if (enabledState.isBackgroundRefreshEnabled) {
                     app.historyRefresher.refresh(
                         autoSaveBudgetMillis = AUTO_SAVE_BUDGET_MILLIS,
